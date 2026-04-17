@@ -1,0 +1,109 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap");
+
+:root {
+  --bg-0: #0a131f;
+  --bg-1: #0f2437;
+  --panel: rgba(7, 23, 37, 0.8);
+  --panel-border: rgba(125, 205, 247, 0.22);
+  --text-main: #e8f7ff;
+  --text-soft: #95bccd;
+  --accent: #45d8b9;
+  --accent-2: #ffb469;
+  --danger: #ff7676;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: "Noto Sans SC", sans-serif;
+  background:
+    radial-gradient(45rem 24rem at 8% 12%, rgba(70, 170, 230, 0.17), transparent 70%),
+    radial-gradient(34rem 20rem at 86% 80%, rgba(255, 182, 112, 0.16), transparent 72%),
+    linear-gradient(165deg, var(--bg-0), var(--bg-1));
+  color: var(--text-main);
+}
+
+a {
+  color: inherit;
+}
+
+.page-shell {
+  min-height: 100dvh;
+  padding: 1rem;
+}
+
+.panel {
+  border: 1px solid var(--panel-border);
+  border-radius: 1rem;
+  background: var(--panel);
+  box-shadow:
+    0 22px 56px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(10px);
+}
+
+.btn {
+  border: 1px solid transparent;
+  border-radius: 0.62rem;
+  padding: 0.56rem 0.8rem;
+  background: linear-gradient(135deg, var(--accent), #6de8d0);
+  color: #07211e;
+  font-weight: 700;
+  cursor: pointer;
+  font: inherit;
+}
+
+.btn.secondary {
+  color: #2b1400;
+  background: linear-gradient(135deg, var(--accent-2), #ffd085);
+}
+
+.btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  border: 1px solid rgba(151, 210, 239, 0.34);
+  background: rgba(5, 15, 23, 0.85);
+  color: var(--text-main);
+  border-radius: 0.6rem;
+  padding: 0.55rem 0.65rem;
+  outline: none;
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(66, 217, 184, 0.2);
+}
+
+.muted {
+  color: var(--text-soft);
+}
+
+.companion-grid {
+  display: grid;
+  grid-template-columns: minmax(380px, 1fr) 430px;
+  gap: 1rem;
+}
+
+@media (max-width: 1024px) {
+  .companion-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: 50vh auto;
+  }
+}
