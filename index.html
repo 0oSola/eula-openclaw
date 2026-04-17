@@ -1,0 +1,108 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MMD Virtual Companion</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <section class="stage-panel">
+        <div class="stage-head">
+          <h1>MMD Virtual Companion</h1>
+          <p>Browser-based virtual companion with an MMD stage (OpenClaw chat integration).</p>
+        </div>
+        <div id="stage" class="stage"></div>
+        <p id="stage-status" class="stage-status">Initializing...</p>
+      </section>
+
+      <section class="chat-panel">
+        <details class="settings" open>
+          <summary>Connection & Persona</summary>
+          <form id="settings-form" class="settings-form">
+            <label>
+              Transport
+              <select name="transport">
+                <option value="direct">Direct</option>
+                <option value="proxy">Proxy</option>
+              </select>
+            </label>
+            <label>
+              OpenClaw Base URL
+              <input name="baseUrl" type="text" placeholder="http://127.0.0.1:8443" />
+            </label>
+            <label>
+              Gateway Token
+              <input name="token" type="password" placeholder="Optional (depends on your gateway config)" />
+            </label>
+            <label>
+              API Surface
+              <select name="endpoint">
+                <option value="chat_completions">/v1/chat/completions</option>
+                <option value="responses">/v1/responses</option>
+              </select>
+            </label>
+            <label>
+              Agent Model
+              <input name="model" type="text" placeholder="openclaw/default" />
+            </label>
+            <label>
+              Agent ID Header
+              <input name="agentId" type="text" placeholder="main (optional)" />
+            </label>
+            <label>
+              Session Key
+              <input name="sessionKey" type="text" placeholder="session id" />
+            </label>
+            <label>
+              Message Channel Header
+              <input name="messageChannel" type="text" placeholder="feishu" />
+            </label>
+            <label>
+              Temperature
+              <input name="temperature" type="number" min="0" max="2" step="0.1" />
+            </label>
+            <label>
+              Persona (system prompt)
+              <textarea
+                name="persona"
+                rows="4"
+                placeholder="Example: You are warm, witty, and supportive. Respond concisely."
+              ></textarea>
+            </label>
+            <label>
+              MMD Model URL
+              <input name="modelUrl" type="text" />
+            </label>
+            <label>
+              MMD Motion URL
+              <input name="motionUrl" type="text" placeholder="Optional (leave blank for no motion file)" />
+            </label>
+            <label class="checkbox">
+              <input name="ttsEnabled" type="checkbox" />
+              Enable browser TTS
+            </label>
+            <div class="settings-actions">
+              <button type="submit">Save settings</button>
+              <button type="button" id="reload-model-btn">Reload model</button>
+            </div>
+          </form>
+        </details>
+
+        <div id="messages" class="messages"></div>
+
+        <form id="chat-form" class="chat-form">
+          <textarea
+            id="chat-input"
+            rows="2"
+            placeholder="Chat with your companion..."
+            required
+          ></textarea>
+          <button id="send-btn" type="submit">Send</button>
+        </form>
+      </section>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
+
