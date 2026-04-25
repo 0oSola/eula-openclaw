@@ -3,7 +3,7 @@
 import { ChangeEvent, useEffect, useRef } from "react";
 
 import { getModelDisplayLabel } from "@/features/stage/modelCatalog.js";
-import { MMDCompanionRuntime } from "@/features/stage/mmdCompanionRuntime.js";
+import { applyStageRuntimeState, MMDCompanionRuntime } from "@/features/stage/mmdCompanionRuntime.js";
 import type { MmdModelAsset } from "@/lib/types";
 
 type StageInteraction = {
@@ -11,6 +11,8 @@ type StageInteraction = {
   action: string;
   mode?: "procedural" | "vmd";
   vmdUrl?: string;
+  vmdLoopUrls?: string[];
+  playbackRate?: number;
   sequence?: Array<{
     template: string;
     action: string;
@@ -34,6 +36,8 @@ export function MMDStage({
   modelUrl,
   modelLabel,
   onModelChange,
+  renderPipeline = "classic",
+  chrome = "panel",
 }: {
   interaction: StageInteraction;
   speaking: boolean;
@@ -42,10 +46,17 @@ export function MMDStage({
   modelUrl: string;
   modelLabel: string;
   onModelChange: (nextPath: string) => void;
+  renderPipeline?: "classic" | "genshin";
+  chrome?: "panel" | "bare";
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const statusRef = useRef<HTMLParagraphElement | null>(null);
   const runtimeRef = useRef<any>(null);
+  const currentInteractionRef = useRef(interaction);
+  const currentSpeakingRef = useRef(speaking);
+
+  currentInteractionRef.current = interaction;
+  currentSpeakingRef.current = speaking;
 
   useEffect(() => {
     if (!containerRef.current || !statusRef.current) return;
@@ -54,16 +65,37 @@ export function MMDStage({
       statusRef.current.textContent = "No MMD models found.";
       return;
     }
+    let disposed = false;
     const runtime = new MMDCompanionRuntime({
       container: containerRef.current,
       statusElement: statusRef.current,
+      renderPipeline,
     });
     runtimeRef.current = runtime;
-    runtime.init(toAbsolute(modelUrl)).catch((error: Error) => {
-      statusRef.current!.textContent = `Model load failed: ${error.message}`;
+    applyStageRuntimeState(runtime, {
+      interaction: currentInteractionRef.current,
+      speaking: currentSpeakingRef.current,
+      resolveUrl: toAbsolute,
     });
-    return () => runtime.dispose();
-  }, [modelUrl]);
+    runtime
+      .init(toAbsolute(modelUrl))
+      .then(() => {
+        if (disposed) return;
+        applyStageRuntimeState(runtime, {
+          interaction: currentInteractionRef.current,
+          speaking: currentSpeakingRef.current,
+          resolveUrl: toAbsolute,
+        });
+      })
+      .catch((error: Error) => {
+        if (disposed) return;
+        statusRef.current!.textContent = `Model load failed: ${error.message}`;
+      });
+    return () => {
+      disposed = true;
+      runtime.dispose();
+    };
+  }, [modelUrl, renderPipeline]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -75,7 +107,11 @@ export function MMDStage({
     const runtime = runtimeRef.current;
     if (!runtime) return;
     if (interaction.mode === "vmd" && interaction.vmdUrl) {
-      runtime.playVmd(toAbsolute(interaction.vmdUrl));
+      runtime.playVmd(
+        toAbsolute(interaction.vmdUrl),
+        interaction.playbackRate,
+        interaction.vmdLoopUrls?.map((url) => toAbsolute(url)),
+      );
       return;
     }
     runtime.applyInteraction(interaction);
@@ -83,6 +119,17 @@ export function MMDStage({
 
   function handleModelChange(event: ChangeEvent<HTMLSelectElement>) {
     onModelChange(event.target.value);
+  }
+
+  if (chrome === "bare") {
+    return (
+      <section className="mio-stage" aria-label="MMD companion stage">
+        <div ref={containerRef} className="mio-stage-canvas" />
+        <p ref={statusRef} className="mio-stage-status mio-stage-status--sr-only" aria-live="polite" hidden>
+          Initializing stage...
+        </p>
+      </section>
+    );
   }
 
   return (

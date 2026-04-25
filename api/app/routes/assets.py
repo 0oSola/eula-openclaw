@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
@@ -14,6 +15,7 @@ router = APIRouter(prefix="/assets", tags=["assets"])
 
 ALLOWED_SLOTS = {"neutral", "happy", "sad", "thinking", "excited", "caring"}
 MMD_MODEL_EXTENSIONS = {".pmx", ".pmd"}
+MMD_MOTION_EXTENSIONS = {".vmd"}
 
 
 def _asset_public(item: dict) -> dict:
@@ -46,6 +48,18 @@ def _iter_mmd_models(root: Path) -> list[Path]:
     return sorted(models, key=lambda item: item.relative_to(root).as_posix().lower())
 
 
+def _iter_mmd_vmds(root: Path) -> list[Path]:
+    motion_root = root / "vmd"
+    if not motion_root.exists() or not motion_root.is_dir():
+        return []
+    motions = [
+        item
+        for item in motion_root.rglob("*")
+        if item.is_file() and item.suffix.lower() in MMD_MOTION_EXTENSIONS
+    ]
+    return sorted(motions, key=lambda item: item.relative_to(root).as_posix().lower())
+
+
 def _encode_url_path(relative_path: str) -> str:
     return "/".join(quote(part) for part in relative_path.split("/"))
 
@@ -57,11 +71,27 @@ def _mmd_model_label(path: Path, root: Path) -> str:
     return path.parent.name or path.stem or path.name
 
 
+def _humanize_motion_label(name: str) -> str:
+    label = re.sub(r"[_-]+", " ", name).strip()
+    return re.sub(r"\s+", " ", label)
+
+
 def _mmd_model_public(path: Path, root: Path) -> dict:
     relative_path = path.relative_to(root).as_posix()
     return {
         "name": path.name,
         "label": _mmd_model_label(path, root),
+        "relative_path": relative_path,
+        "size_bytes": path.stat().st_size,
+        "url": f"/assets/mmd/{_encode_url_path(relative_path)}",
+    }
+
+
+def _mmd_motion_public(path: Path, root: Path) -> dict:
+    relative_path = path.relative_to(root).as_posix()
+    return {
+        "name": path.name,
+        "label": _humanize_motion_label(path.stem or path.name),
         "relative_path": relative_path,
         "size_bytes": path.stat().st_size,
         "url": f"/assets/mmd/{_encode_url_path(relative_path)}",
@@ -164,6 +194,20 @@ def list_mmd_models(request: Request):
         "root_exists": root.exists() and root.is_dir(),
         "count": len(models),
         "items": [_mmd_model_public(model, root) for model in models],
+    }
+
+
+@router.get("/mmd/vmds")
+def list_mmd_vmds(request: Request):
+    settings = request.app.state.settings
+    root = settings.mmd_root_dir.resolve()
+    motions = _iter_mmd_vmds(root)
+    motion_root = root / "vmd"
+    return {
+        "root_dir": str(motion_root),
+        "root_exists": motion_root.exists() and motion_root.is_dir(),
+        "count": len(motions),
+        "items": [_mmd_motion_public(motion, root) for motion in motions],
     }
 
 

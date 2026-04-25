@@ -18,10 +18,10 @@ export default function TracePage() {
     return (
       <main className="page-shell" style={{ display: "grid", placeItems: "center" }}>
         <section className="panel" style={{ width: "min(520px, 92vw)", padding: "1.2rem" }}>
-          <h2 style={{ marginTop: 0 }}>未登录</h2>
-          <p className="muted">请先登录后再查看链路日志。</p>
+          <h2 style={{ marginTop: 0 }}>{"\u672a\u767b\u5f55"}</h2>
+          <p className="muted">{"\u8bf7\u5148\u767b\u5f55\u540e\u518d\u67e5\u770b\u94fe\u8def\u65e5\u5fd7\u3002"}</p>
           <Link className="btn" href="/">
-            去登录
+            {"\u53bb\u767b\u5f55"}
           </Link>
         </section>
       </main>
@@ -32,13 +32,16 @@ export default function TracePage() {
     <main className="page-shell" style={{ display: "grid", gap: "1rem" }}>
       <section className="panel" style={{ padding: "0.9rem", display: "flex", justifyContent: "space-between" }}>
         <div>
-          <h2 style={{ margin: 0, fontFamily: "Space Grotesk, sans-serif" }}>全链路追踪</h2>
+          <h2 style={{ margin: 0, fontFamily: "Space Grotesk, sans-serif" }}>
+            {"\u5168\u94fe\u8def\u8ffd\u8e2a"}
+          </h2>
           <p className="muted" style={{ margin: "0.35rem 0 0" }}>
-            当前 user_id: {session.userId}
+            {"\u5f53\u524d user_id: "}
+            {session.userId}
           </p>
         </div>
         <Link className="btn secondary" href="/companion">
-          返回聊天页
+          {"\u8fd4\u56de\u804a\u5929\u9875"}
         </Link>
       </section>
       <TraceViewer userId={session.userId} />
