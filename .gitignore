@@ -18,3 +18,4 @@ __pycache__
 pytest-cache-files-*
 web/test-results
 MMD
+.worktrees/

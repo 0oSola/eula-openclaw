@@ -69,6 +69,14 @@ export type MmdModelAsset = {
   url: string;
 };
 
+export type MmdMotionAsset = {
+  name: string;
+  label: string;
+  relative_path: string;
+  size_bytes: number;
+  url: string;
+};
+
 export type TraceEvent = {
   trace_id: string;
   user_id: string;
@@ -94,4 +102,5 @@ export type TraceMirror = {
 
 export type UserSession = {
   userId: string;
+  renderPipeline?: "classic" | "genshin";
 };

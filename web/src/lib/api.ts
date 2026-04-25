@@ -2,6 +2,7 @@ import { buildTraceHeaders } from "@/lib/trace.js";
 import type {
   ChatResponse,
   MappingConfig,
+  MmdMotionAsset,
   MmdModelAsset,
   TraceEvent,
   TraceMirror,
@@ -90,6 +91,13 @@ export async function listVmdAssets(userId: string): Promise<VmdAsset[]> {
 
 export async function listMmdModels(): Promise<MmdModelAsset[]> {
   const payload = await requestJSON<{ items: MmdModelAsset[] }>("/assets/mmd/models", {
+    method: "GET",
+  });
+  return payload.items || [];
+}
+
+export async function listMmdMotions(): Promise<MmdMotionAsset[]> {
+  const payload = await requestJSON<{ items: MmdMotionAsset[] }>("/assets/mmd/vmds", {
     method: "GET",
   });
   return payload.items || [];

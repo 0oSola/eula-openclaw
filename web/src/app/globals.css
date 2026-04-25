@@ -107,3 +107,977 @@ a {
     grid-template-rows: 50vh auto;
   }
 }
+
+.mio-hud {
+  position: relative;
+  min-height: 100dvh;
+  overflow: hidden;
+  color: #e8f6ff;
+  background:
+    linear-gradient(180deg, rgba(3, 12, 27, 0.22), rgba(3, 10, 24, 0.34)),
+    url("/images/background.png") center / cover no-repeat,
+    #06142b;
+  font-family: "Noto Sans SC", "Space Grotesk", sans-serif;
+}
+
+.mio-hud::before,
+.mio-hud::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.mio-hud::before {
+  background:
+    linear-gradient(90deg, rgba(3, 10, 21, 0.44), transparent 28%, transparent 72%, rgba(4, 13, 28, 0.5)),
+    radial-gradient(circle at 50% 72%, rgba(94, 208, 255, 0.25), transparent 24%);
+}
+
+.mio-hud::after {
+  border: 1px solid rgba(125, 213, 255, 0.08);
+  box-shadow: inset 0 0 90px rgba(5, 15, 34, 0.48);
+}
+
+.mio-topbar {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 68px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 18px;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(143, 214, 255, 0.16);
+  background: linear-gradient(180deg, rgba(4, 13, 31, 0.74), rgba(4, 13, 31, 0.16));
+  backdrop-filter: blur(14px);
+}
+
+.mio-brand,
+.mio-system-state,
+.mio-session,
+.mio-dialogue-head,
+.mio-card h2,
+.mio-command-bar,
+.mio-tts,
+.mio-mode {
+  display: flex;
+  align-items: center;
+}
+
+.mio-brand {
+  gap: 12px;
+}
+
+.mio-brand img {
+  width: 48px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.mio-brand h1 {
+  margin: 0;
+  font: 500 30px/1 "Space Grotesk", sans-serif;
+  letter-spacing: 0;
+}
+
+.mio-brand span,
+.mio-system-state,
+.mio-session {
+  color: rgba(223, 238, 255, 0.82);
+  font-size: 14px;
+}
+
+.mio-system-state {
+  gap: 18px;
+  color: #75f5e6;
+}
+
+.mio-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #48f7df;
+  box-shadow: 0 0 12px rgba(72, 247, 223, 0.88);
+}
+
+.mio-session {
+  justify-content: end;
+  gap: 12px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.mio-trace-button,
+.mio-icon-button,
+.mio-card button,
+.mio-trace-card a {
+  border: 1px solid rgba(137, 212, 255, 0.34);
+  background: rgba(5, 20, 42, 0.56);
+  color: #eef8ff;
+  text-decoration: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.mio-trace-button {
+  padding: 9px 16px;
+  border-radius: 8px;
+}
+
+.mio-icon-button {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.mio-icon-button img,
+.mio-nav-button img,
+.mio-mic img,
+.mio-mode img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.mio-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 1px solid rgba(142, 214, 255, 0.44);
+}
+
+.mio-avatar-stack {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mio-avatar-meta {
+  display: grid;
+  gap: 2px;
+}
+
+.mio-avatar-meta strong {
+  max-width: 144px;
+  overflow: hidden;
+  color: #eef9ff;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mio-avatar-meta span {
+  color: rgba(209, 231, 245, 0.68);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.mio-sidebar {
+  position: absolute;
+  z-index: 7;
+  top: 162px;
+  left: 18px;
+  width: 64px;
+  height: 568px;
+  padding: 16px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(140, 213, 255, 0.28);
+  border-radius: 12px;
+  background: rgba(15, 43, 76, 0.45);
+  backdrop-filter: blur(14px);
+}
+
+.mio-nav-button {
+  width: 56px;
+  height: 56px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.mio-nav-button.is-active {
+  background: rgba(71, 171, 247, 0.2);
+  box-shadow: inset 3px 0 0 #57e4ff, 0 0 24px rgba(84, 204, 255, 0.18);
+}
+
+.mio-character-trigger {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(142, 214, 255, 0.26);
+  background: rgba(34, 78, 132, 0.42);
+}
+
+.mio-motion-trigger {
+  border: 1px solid rgba(142, 214, 255, 0.22);
+  background: rgba(18, 55, 95, 0.38);
+}
+
+.mio-character-trigger::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 42%);
+  pointer-events: none;
+}
+
+.mio-character-trigger img {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(170, 231, 255, 0.45);
+}
+
+.mio-character-trigger.is-open {
+  background: rgba(84, 171, 255, 0.24);
+  box-shadow: inset 3px 0 0 #57e4ff, 0 0 24px rgba(84, 204, 255, 0.26);
+}
+
+.mio-motion-trigger.is-open {
+  background: rgba(84, 171, 255, 0.2);
+  box-shadow: inset 3px 0 0 #57e4ff, 0 0 24px rgba(84, 204, 255, 0.22);
+}
+
+.mio-nav-button.is-bottom {
+  margin-top: auto;
+}
+
+.mio-character-panel,
+.mio-motion-panel {
+  position: absolute;
+  z-index: 8;
+  left: 86px;
+  width: 276px;
+  padding: 14px;
+  border: 1px solid rgba(139, 219, 255, 0.34);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(18, 54, 92, 0.9), rgba(9, 31, 60, 0.88));
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px);
+}
+
+.mio-character-panel {
+  top: 238px;
+}
+
+.mio-motion-panel {
+  top: 316px;
+  max-height: 320px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.mio-character-panel::before,
+.mio-motion-panel::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(154, 225, 255, 0.9), transparent);
+}
+
+.mio-character-panel header,
+.mio-motion-panel header {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.mio-character-panel header strong,
+.mio-motion-panel header strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: #eef8ff;
+}
+
+.mio-character-panel header span,
+.mio-motion-panel header span {
+  font-size: 12px;
+  color: rgba(209, 231, 245, 0.72);
+}
+
+.mio-character-list,
+.mio-motion-list {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.mio-character-option,
+.mio-motion-option {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(137, 212, 255, 0.24);
+  border-radius: 12px;
+  background: rgba(5, 20, 42, 0.46);
+  color: #eef8ff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mio-character-option.is-selected,
+.mio-motion-option.is-selected {
+  border-color: rgba(121, 224, 255, 0.62);
+  background: rgba(60, 121, 197, 0.36);
+  box-shadow: 0 0 20px rgba(84, 204, 255, 0.14);
+}
+
+.mio-character-avatar {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid rgba(142, 214, 255, 0.32);
+  background: rgba(23, 64, 109, 0.72);
+}
+
+.mio-character-avatar img {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+}
+
+.mio-character-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.mio-motion-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.mio-character-copy strong,
+.mio-character-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mio-motion-copy strong,
+.mio-motion-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mio-character-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mio-motion-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.mio-character-copy small {
+  color: rgba(209, 231, 245, 0.72);
+  font-size: 11px;
+}
+
+.mio-motion-copy small {
+  color: rgba(209, 231, 245, 0.72);
+  font-size: 11px;
+}
+
+.mio-character-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 30px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(84, 171, 255, 0.18);
+  color: #9be6ff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.mio-motion-chip {
+  display: inline-grid;
+  place-items: center;
+  min-width: 42px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(84, 171, 255, 0.18);
+  color: #9be6ff;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.mio-character-empty,
+.mio-motion-empty {
+  margin: 0;
+  padding: 8px 4px;
+  color: rgba(209, 231, 245, 0.72);
+  font-size: 12px;
+}
+
+.mio-character-panel-footer,
+.mio-motion-panel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(132, 202, 245, 0.14);
+  color: rgba(209, 231, 245, 0.68);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.mio-character-panel-footer strong,
+.mio-motion-panel-footer strong {
+  color: #a5edff;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.mio-dialogue {
+  position: absolute;
+  z-index: 4;
+  top: clamp(24px, 4vh, 52px);
+  left: clamp(18px, 2.4vw, 34px);
+  width: clamp(250px, 25vw, 410px);
+  max-width: calc(42% - 24px);
+  min-height: clamp(168px, 18vh, 222px);
+  padding: clamp(18px, 2vw, 24px) clamp(18px, 2vw, 26px);
+  border: 1px solid rgba(163, 225, 255, 0.58);
+  border-radius: 26px;
+  background: linear-gradient(180deg, rgba(18, 54, 92, 0.66), rgba(8, 27, 53, 0.72));
+  box-shadow: 0 24px 54px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(16px);
+}
+
+.mio-dialogue::after {
+  content: "";
+  position: absolute;
+  right: -24px;
+  top: 72px;
+  width: 44px;
+  height: 40px;
+  border-right: 1px solid rgba(163, 225, 255, 0.58);
+  border-bottom: 1px solid rgba(163, 225, 255, 0.58);
+  transform: skewX(44deg);
+  background: rgba(10, 34, 62, 0.46);
+}
+
+.mio-dialogue-head {
+  gap: 16px;
+  color: #eff8ff;
+  font-size: clamp(16px, 1.2vw, 18px);
+  margin-bottom: 18px;
+}
+
+.mio-dialogue-head img {
+  width: 108px;
+  height: 22px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.mio-dialogue p {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  color: #f1f9ff;
+  font-size: clamp(15px, 1.15vw, 19px);
+  line-height: 1.62;
+  white-space: pre-wrap;
+}
+
+.mio-typing {
+  display: block;
+  margin-top: 18px;
+  color: #a9d4f4;
+  letter-spacing: 6px;
+}
+
+.mio-stage-wrap {
+  position: absolute;
+  z-index: 2;
+  inset: 60px clamp(260px, 20vw, 300px) 118px 96px;
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+}
+
+.mio-stage-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  display: none;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.mio-orbit {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid rgba(112, 200, 255, 0.17);
+  pointer-events: none;
+}
+
+.mio-orbit-one {
+  width: min(58vw, 820px);
+  aspect-ratio: 1;
+}
+
+.mio-orbit-two {
+  width: min(43vw, 610px);
+  aspect-ratio: 1;
+  border-color: rgba(203, 125, 255, 0.14);
+}
+
+.mio-hud[data-render-pipeline="genshin"] .mio-orbit,
+.mio-hud[data-render-pipeline="genshin"] .mio-stage-bottom-fade {
+  display: none;
+}
+
+.mio-hud[data-render-pipeline="genshin"] {
+  background:
+    url("/images/background.png") center / cover no-repeat,
+    #06142b;
+}
+
+.mio-hud[data-render-pipeline="genshin"]::before,
+.mio-hud[data-render-pipeline="genshin"]::after,
+.mio-hud[data-render-pipeline="genshin"] .mio-stage-wrap::before {
+  display: none;
+}
+
+.mio-stage {
+  position: relative;
+  z-index: 2;
+  width: min(70vw, 1100px);
+  height: 100%;
+  min-height: 600px;
+}
+
+.mio-stage-bottom-fade {
+  position: absolute;
+  z-index: 5;
+  left: 30px;
+  right: 30px;
+  bottom: calc(42px + 76px);
+  height: 44px;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at center bottom, rgba(98, 196, 255, 0.22) 0%, rgba(98, 196, 255, 0.1) 34%, rgba(98, 196, 255, 0) 72%),
+    linear-gradient(180deg, rgba(69, 146, 255, 0) 0%, rgba(69, 146, 255, 0.08) 38%, rgba(33, 102, 223, 0.24) 68%, rgba(7, 34, 92, 0.46) 100%);
+  filter: blur(6px);
+}
+
+.mio-stage-canvas {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.mio-stage-status {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  margin: 0;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 999px;
+  color: rgba(230, 246, 255, 0.82);
+  background: rgba(4, 18, 38, 0.56);
+  border: 1px solid rgba(126, 211, 255, 0.18);
+}
+
+.mio-stage-status--sr-only {
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mio-model-select {
+  position: absolute;
+  left: 18px;
+  top: 120px;
+  display: grid;
+  gap: 6px;
+  width: 154px;
+  padding: 12px;
+  border-radius: 8px;
+  color: rgba(159, 231, 255, 0.82);
+  background: rgba(8, 34, 64, 0.46);
+  border: 1px solid rgba(116, 207, 255, 0.22);
+  backdrop-filter: blur(10px);
+}
+
+.mio-model-select select {
+  min-width: 0;
+  border: 1px solid rgba(116, 207, 255, 0.24);
+  border-radius: 6px;
+  background: rgba(4, 19, 38, 0.72);
+  color: #dff6ff;
+  padding: 6px;
+}
+
+.mio-right-rail {
+  position: absolute;
+  z-index: 4;
+  right: clamp(20px, 3vw, 42px);
+  top: 156px;
+  width: clamp(248px, 22vw, 304px);
+  display: grid;
+  gap: 18px;
+}
+
+.mio-card {
+  padding: 18px 18px 16px;
+  border: 1px solid rgba(139, 219, 255, 0.34);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(22, 58, 96, 0.68), rgba(9, 31, 60, 0.74));
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(14px);
+}
+
+.mio-card h2 {
+  gap: 10px;
+  margin: 0 0 12px;
+  color: #effaff;
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.mio-card h2 img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.mio-card small {
+  color: rgba(209, 231, 245, 0.7);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.mio-card p,
+.mio-check-list {
+  margin: 0;
+  color: rgba(238, 248, 255, 0.9);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.mio-check-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.mio-check-list li::before {
+  content: "✓";
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 10px;
+  border-radius: 50%;
+  background: rgba(177, 211, 242, 0.32);
+  color: #d9edff;
+  font-size: 12px;
+}
+
+.mio-card button,
+.mio-trace-card a {
+  width: 100%;
+  display: block;
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+
+.mio-trace-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mio-trace-list div {
+  display: grid;
+  grid-template-columns: 48px 1fr 38px 36px;
+  gap: 8px;
+  align-items: center;
+  color: rgba(233, 245, 255, 0.88);
+  font-size: 12px;
+}
+
+.mio-trace-list strong {
+  color: #72e0b9;
+  font-size: 12px;
+}
+
+.mio-command-bar {
+  position: absolute;
+  z-index: 6;
+  left: 30px;
+  right: 30px;
+  bottom: 42px;
+  min-height: 76px;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid rgba(140, 213, 255, 0.32);
+  border-radius: 18px;
+  background: rgba(8, 26, 54, 0.76);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.mio-tts,
+.mio-mic,
+.mio-send,
+.mio-mode {
+  height: 48px;
+  border: 1px solid rgba(136, 211, 255, 0.3);
+  border-radius: 10px;
+  background: rgba(10, 34, 67, 0.72);
+  color: #eef8ff;
+  font: inherit;
+}
+
+.mio-tts {
+  gap: 10px;
+  padding: 0 14px;
+  min-width: 136px;
+}
+
+.mio-tts img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.mio-tts input {
+  accent-color: #45b8ff;
+  width: 42px;
+  height: 22px;
+}
+
+.mio-mic {
+  width: 72px;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 0 24px rgba(134, 88, 255, 0.42);
+}
+
+.mio-command-input {
+  min-width: 0;
+  flex: 1;
+  height: 48px;
+  border: 1px solid rgba(96, 181, 242, 0.48);
+  border-radius: 24px;
+  padding: 0 30px;
+  background: rgba(5, 20, 43, 0.72);
+  color: #eef8ff;
+  font: inherit;
+  outline: none;
+}
+
+.mio-command-bar input::placeholder {
+  color: rgba(206, 225, 241, 0.58);
+}
+
+.mio-send {
+  width: 86px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #167cff, #7047f2);
+  box-shadow: 0 0 26px rgba(91, 115, 255, 0.5);
+  cursor: pointer;
+}
+
+.mio-send img {
+  width: 58px;
+  height: 44px;
+  object-fit: contain;
+}
+
+.mio-send span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.mio-mode {
+  gap: 10px;
+  padding: 0 14px;
+  min-width: 132px;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.mio-mode select {
+  width: 1px;
+  border: 0;
+  opacity: 0;
+}
+
+.mio-error {
+  position: absolute;
+  left: 20px;
+  bottom: 84px;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  color: #ffd6d6;
+  background: rgba(80, 17, 24, 0.72);
+}
+
+@media (max-width: 1180px) {
+  .mio-topbar {
+    grid-template-columns: auto 1fr;
+  }
+
+  .mio-session {
+    display: none;
+  }
+
+  .mio-dialogue {
+    top: 28px;
+    left: 18px;
+    width: min(330px, calc(40% - 18px));
+    max-width: calc(40% - 18px);
+  }
+
+  .mio-stage-wrap {
+    inset: 88px 300px 112px 96px;
+  }
+
+  .mio-stage {
+    width: min(60vw, 780px);
+  }
+
+  .mio-right-rail {
+    top: 132px;
+    width: 248px;
+    right: 20px;
+    gap: 14px;
+  }
+}
+
+@media (max-width: 860px) {
+  .mio-hud {
+    min-height: 1000px;
+    overflow: auto;
+  }
+
+  .mio-topbar {
+    position: fixed;
+    grid-template-columns: 1fr;
+    height: auto;
+    gap: 8px;
+    padding: 12px 18px;
+  }
+
+  .mio-system-state {
+    font-size: 12px;
+  }
+
+  .mio-sidebar {
+    top: 108px;
+    left: 10px;
+  }
+
+  .mio-character-panel {
+    left: 76px;
+    width: min(276px, calc(100vw - 110px));
+  }
+
+  .mio-motion-panel {
+    left: 76px;
+    width: min(276px, calc(100vw - 110px));
+    top: 386px;
+  }
+
+  .mio-dialogue {
+    top: 16px;
+    left: 16px;
+    width: min(286px, calc(42vw - 18px));
+    max-width: calc(42vw - 18px);
+  }
+
+  .mio-stage-wrap {
+    inset: 330px 0 300px 0;
+  }
+
+  .mio-stage {
+    width: 100vw;
+    min-height: 420px;
+  }
+
+  .mio-right-rail {
+    top: 700px;
+    left: 86px;
+    right: 14px;
+    width: auto;
+  }
+
+  .mio-command-bar {
+      position: fixed;
+      left: 10px;
+      right: 10px;
+      bottom: 10px;
+      flex-wrap: wrap;
+    }
+
+    .mio-stage-bottom-fade {
+      left: 10px;
+      right: 10px;
+      bottom: calc(10px + 76px);
+    }
+
+  .mio-avatar-meta {
+    display: none;
+  }
+
+  .mio-command-input {
+    order: -1;
+    flex-basis: 100%;
+  }
+
+  .mio-mode {
+    flex: 1;
+  }
+}

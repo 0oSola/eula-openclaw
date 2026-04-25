@@ -35,26 +35,29 @@ test("companion stage loads model assets without MMD request failures @critical"
   });
 
   await page.addInitScript(() => {
-    window.localStorage.setItem("mmd_companion_session_v1", JSON.stringify({ userId: "playwright-user" }));
+    window.localStorage.setItem(
+      "mmd_companion_session_v1",
+      JSON.stringify({ userId: "playwright-user", renderPipeline: "classic" }),
+    );
   });
 
   await page.goto("/companion");
 
-  const stageHeading = page.getByRole("heading", { name: "Companion Stage" });
-  await expect(stageHeading).toBeVisible();
+  const stageWrap = page.getByTestId("mio-stage-wrap");
+  await expect(stageWrap).toBeVisible();
+  await expect(page.getByRole("button", { name: "角色切换" })).toBeVisible();
 
-  const modelSelector = page.getByRole("combobox", { name: "Model" });
-  await expect(modelSelector).toBeVisible();
-  await expect(modelSelector.locator("option")).not.toHaveCount(0);
-  await expect(modelSelector.locator("option:checked")).not.toContainText(/\.pm[dx]$/i);
-
-  const status = page
-    .locator("p")
-    .filter({ hasText: /Initializing stage|Loading MMD model|Model ready|Model load failed/ })
-    .last();
+  const status = page.locator(".mio-stage-status").first();
   await expect(status).toContainText(/Model ready|Model load failed/, { timeout: 30_000 });
 
   const canvas = page.locator("canvas").first();
+  await expect(canvas).toBeVisible();
+
+  const pipelineSelect = page.getByRole("combobox", { name: "Render pipeline" });
+  await expect(pipelineSelect).toBeVisible();
+  await pipelineSelect.selectOption("genshin");
+  await expect(pipelineSelect).toHaveValue("genshin");
+  await expect(status).toContainText(/Loading MMD model|Model ready/, { timeout: 30_000 });
   await expect(canvas).toBeVisible();
 
   await page.waitForTimeout(1500);

@@ -235,6 +235,43 @@ def test_mmd_models_list_and_serving_url():
     assert fetched.content == b"pmx"
 
 
+def test_mmd_vmds_list_and_serving_url():
+    case_dir = _make_case_dir()
+    mmd_root = case_dir / "mmd"
+    motion_rel = Path("vmd/idle/standing_idle.vmd")
+    motion_abs = mmd_root / motion_rel
+    motion_abs.parent.mkdir(parents=True, exist_ok=True)
+    motion_abs.write_bytes(b"vmd")
+    ignored_zip = mmd_root / "vmd/idle/pack.zip"
+    ignored_zip.write_bytes(b"zip")
+
+    app = create_app(
+        {
+            "data_dir": str(case_dir / "data"),
+            "admin_user_ids": [],
+            "mmd_root_dir": str(mmd_root),
+        }
+    )
+    client = TestClient(app)
+
+    listed = client.get("/assets/mmd/vmds")
+    assert listed.status_code == 200
+    payload = listed.json()
+    assert payload["count"] == 1
+    items = {item["relative_path"]: item for item in payload["items"]}
+
+    item = items[motion_rel.as_posix()]
+    assert item["name"] == "standing_idle.vmd"
+    assert item["label"] == "standing idle"
+    assert item["relative_path"] == motion_rel.as_posix()
+    assert item["url"].startswith("/assets/mmd/")
+    assert item["url"].endswith("standing_idle.vmd")
+
+    fetched = client.get(item["url"])
+    assert fetched.status_code == 200
+    assert fetched.content == b"vmd"
+
+
 def test_mmd_validate_all_models():
     case_dir = _make_case_dir()
     mmd_root = case_dir / "mmd"
