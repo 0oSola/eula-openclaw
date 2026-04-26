@@ -4,7 +4,12 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-import { createVmdPreviewInteraction } from "@/features/mapping/vmdPreview.js";
+import {
+  buildAutoFavoriteInteraction,
+  buildAutoplayResumeInteraction,
+  createVmdPreviewInteraction,
+  resolveVmdPlaybackRate,
+} from "@/features/mapping/vmdPreview.js";
 import { resolvePlaybackPlan } from "@/features/mapping/resolveAction.js";
 import { MMDStage } from "@/features/stage/MMDStage";
 import {
@@ -37,8 +42,17 @@ type InteractionState = {
   mode: "procedural" | "vmd";
   vmdUrl: string;
   vmdLoopUrls?: string[];
+  standbyVmdUrl?: string;
+  loopMode?: "random" | "sequential";
   playbackRate?: number;
   sequence: InteractionStep[];
+};
+
+type InteractionSource = "default" | "autoplay" | "manual-preview" | "chat";
+type FavoriteCapableVmdAsset = VmdAsset & {
+  display_name?: string;
+  is_favorite?: boolean;
+  favorite_model_relative_path?: string | null;
 };
 
 const SPRITE = "/images/sprite-sliced";
@@ -119,6 +133,8 @@ export default function CompanionPage() {
   const [renderPipeline, setRenderPipeline] = useState<"classic" | "genshin">("classic");
   const [isCharacterPickerOpen, setIsCharacterPickerOpen] = useState(false);
   const [isMotionPickerOpen, setIsMotionPickerOpen] = useState(false);
+  const [interactionSource, setInteractionSource] = useState<InteractionSource>("default");
+  const [pendingAutoResume, setPendingAutoResume] = useState(false);
   const autoIdlePresetKeyRef = useRef("");
 
   useEffect(() => {
@@ -159,12 +175,37 @@ export default function CompanionPage() {
     return next;
   }, [assets]);
 
+  const recentVmdAssets = useMemo(() => {
+    return [...assets].sort((left, right) => {
+      const leftTime = Date.parse(left.created_at || "") || 0;
+      const rightTime = Date.parse(right.created_at || "") || 0;
+      return rightTime - leftTime;
+    });
+  }, [assets]);
+
   const selectedModel = useMemo(() => {
     return (
       models.find((item) => item.relative_path === selectedModelPath) ||
       pickInitialModelSelection(models, DEFAULT_MODEL_RELATIVE_PATH)
     );
   }, [models, selectedModelPath]);
+
+  const currentModelFavoriteAssets = useMemo(() => {
+    if (!selectedModel?.relative_path) return [];
+    return recentVmdAssets.filter(
+      (asset) =>
+        (asset as FavoriteCapableVmdAsset).is_favorite &&
+        (asset as FavoriteCapableVmdAsset).favorite_model_relative_path === selectedModel.relative_path,
+    );
+  }, [recentVmdAssets, selectedModel?.relative_path]);
+
+  const autoFavoriteInteraction = useMemo<InteractionState | null>(() => {
+    return buildAutoFavoriteInteraction(currentModelFavoriteAssets) as InteractionState | null;
+  }, [currentModelFavoriteAssets]);
+
+  const autoplayResumeInteraction = useMemo<InteractionState | null>(() => {
+    return buildAutoplayResumeInteraction(currentModelFavoriteAssets) as InteractionState | null;
+  }, [currentModelFavoriteAssets]);
 
   const characterOptions = useMemo(() => {
     return models.map((model, index) => ({
@@ -182,10 +223,14 @@ export default function CompanionPage() {
 
   useEffect(() => {
     autoIdlePresetKeyRef.current = "";
+    setInteractionSource("default");
+    setPendingAutoResume(false);
   }, [selectedModel?.relative_path]);
 
   useEffect(() => {
+    if (autoFavoriteInteraction) return;
     if (!defaultBuiltInMotionPreset || !selectedModel?.relative_path) return;
+    if (interactionSource !== "default") return;
     const applyKey = `${selectedModel.relative_path}:${defaultBuiltInMotionPreset.key}`;
     if (autoIdlePresetKeyRef.current === applyKey) return;
     const defaultMotion = pickMotionFromPreset(defaultBuiltInMotionPreset);
@@ -199,35 +244,62 @@ export default function CompanionPage() {
         mode: "vmd",
         vmdUrl: defaultMotion.url,
         vmdLoopUrls: defaultBuiltInMotionPreset.motions.map((motion: MmdMotionAsset) => motion.url),
+        standbyVmdUrl: "",
+        loopMode: "random",
         playbackRate: defaultBuiltInMotionPreset.playbackRate,
         sequence: [],
       };
     });
-  }, [defaultBuiltInMotionPreset, selectedModel]);
+  }, [autoFavoriteInteraction, defaultBuiltInMotionPreset, interactionSource, selectedModel]);
+
+  useEffect(() => {
+    if (!autoFavoriteInteraction) return;
+    if (!selectedModel?.relative_path) return;
+    if (interactionSource !== "default" && interactionSource !== "autoplay") return;
+    autoIdlePresetKeyRef.current = "";
+    setInteraction(autoFavoriteInteraction);
+    setInteractionSource("autoplay");
+    setPendingAutoResume(false);
+  }, [autoFavoriteInteraction, interactionSource, selectedModel?.relative_path]);
+
+  useEffect(() => {
+    if (autoFavoriteInteraction || interactionSource !== "autoplay") return;
+    autoIdlePresetKeyRef.current = "";
+    setInteractionSource("default");
+    setPendingAutoResume(false);
+  }, [autoFavoriteInteraction, interactionSource]);
 
   const latestAssistantMessage =
     [...messages].reverse().find((item) => item.role === "assistant")?.content || DEFAULT_ASSISTANT_COPY;
 
   function previewVmdAsset(asset: VmdAsset) {
     const preview = createVmdPreviewInteraction(asset);
+    setInteractionSource("manual-preview");
+    setPendingAutoResume(Boolean(autoplayResumeInteraction));
     setInteraction({
       emotion: preview.emotion,
       action: preview.action,
       mode: "vmd",
       vmdUrl: preview.vmdUrl,
       vmdLoopUrls: [],
-      playbackRate: 1,
+      standbyVmdUrl: "",
+      loopMode: "random",
+      playbackRate: resolveVmdPlaybackRate(),
       sequence: preview.sequence,
     });
   }
 
   function previewBuiltInMotion(motion: MmdMotionAsset) {
+    setInteractionSource("manual-preview");
+    setPendingAutoResume(Boolean(autoplayResumeInteraction));
     setInteraction({
       emotion: interaction.emotion || "neutral",
       action: motion.label,
       mode: "vmd",
       vmdUrl: motion.url,
       vmdLoopUrls: [],
+      standbyVmdUrl: "",
+      loopMode: "random",
       playbackRate: BUILT_IN_VMD_PLAYBACK_RATE,
       sequence: [],
     });
@@ -307,16 +379,22 @@ export default function CompanionPage() {
       });
 
       if (plan.mode === "vmd") {
+        setInteractionSource("chat");
+        setPendingAutoResume(Boolean(autoplayResumeInteraction));
         setInteraction({
           emotion: response.emotion,
           action: response.action,
           mode: "vmd",
           vmdUrl: plan.url,
           vmdLoopUrls: [],
+          standbyVmdUrl: "",
+          loopMode: "random",
           playbackRate: 1,
           sequence: [],
         });
       } else {
+        setInteractionSource("chat");
+        setPendingAutoResume(Boolean(autoplayResumeInteraction));
         setInteraction({
           emotion: response.emotion,
           action: plan.action,
@@ -351,8 +429,24 @@ export default function CompanionPage() {
   }
 
   function handleCharacterSwitch(nextPath: string) {
+    autoIdlePresetKeyRef.current = "";
+    setInteractionSource("default");
+    setPendingAutoResume(false);
     setSelectedModelPath(nextPath);
     setIsCharacterPickerOpen(false);
+  }
+
+  function handleStageInteractionComplete() {
+    if (pendingAutoResume && autoplayResumeInteraction) {
+      setInteraction(autoplayResumeInteraction);
+      setInteractionSource("autoplay");
+      setPendingAutoResume(false);
+      return;
+    }
+
+    autoIdlePresetKeyRef.current = "";
+    setInteractionSource("default");
+    setPendingAutoResume(false);
   }
 
   const activeMotionPath =
@@ -587,6 +681,7 @@ export default function CompanionPage() {
           chrome="bare"
           interaction={interaction}
           speaking={speaking}
+          onInteractionComplete={handleStageInteractionComplete}
           models={models}
           selectedModelPath={selectedModelPath}
           modelUrl={selectedModel?.url || ""}

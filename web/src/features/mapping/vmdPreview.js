@@ -44,3 +44,17 @@ export function createDefaultFavoriteLoopInteraction(assets = [], { loopMode = "
     sequence: [],
   };
 }
+
+export function buildAutoFavoriteInteraction(assets = [], options = {}) {
+  return createDefaultFavoriteLoopInteraction(assets, options);
+}
+
+export function buildAutoplayResumeInteraction(assets = [], options = {}) {
+  const autoInteraction = buildAutoFavoriteInteraction(assets, options);
+  if (!autoInteraction) return null;
+  if (!autoInteraction.standbyVmdUrl) return autoInteraction;
+  return {
+    ...autoInteraction,
+    vmdUrl: autoInteraction.standbyVmdUrl,
+  };
+}
