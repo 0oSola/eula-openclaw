@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 
+import { createDefaultFavoriteLoopInteraction } from "../src/features/mapping/vmdPreview.js";
 import { resolveActionConfig, resolvePlaybackPlan } from "../src/features/mapping/resolveAction.js";
 import { buildTraceHeaders } from "../src/lib/trace.js";
 
@@ -51,6 +52,42 @@ function run() {
       { action: "wave", durationMs: 1200, intensity: 0.8, template: "greet_wave" },
       { action: "lean_in", durationMs: 1800, intensity: 0.4, template: "listen_lean" },
     ]);
+  }
+
+  {
+    const loopInteraction = createDefaultFavoriteLoopInteraction([
+      { display_name: "杩涘満寰呮満.vmd", filename: "杩涘満寰呮満.vmd", slot: "neutral", url: "/standby.vmd" },
+      { display_name: "wave.vmd", filename: "wave.vmd", slot: "happy", url: "/wave.vmd" },
+      { display_name: "nod.vmd", filename: "nod.vmd", slot: "happy", url: "/nod.vmd" },
+    ]);
+    assert.deepEqual(loopInteraction, {
+      emotion: "happy",
+      action: "idle",
+      mode: "vmd",
+      vmdUrl: "/wave.vmd",
+      vmdLoopUrls: ["/wave.vmd", "/nod.vmd"],
+      standbyVmdUrl: "/standby.vmd",
+      loopMode: "random",
+      playbackRate: 1.2,
+      sequence: [],
+    });
+  }
+
+  {
+    const loopInteraction = createDefaultFavoriteLoopInteraction([
+      { display_name: "杩涘満寰呮満.vmd", filename: "杩涘満寰呮満.vmd", slot: "neutral", url: "/standby.vmd" },
+    ]);
+    assert.deepEqual(loopInteraction, {
+      emotion: "neutral",
+      action: "idle",
+      mode: "vmd",
+      vmdUrl: "/standby.vmd",
+      vmdLoopUrls: [],
+      standbyVmdUrl: "/standby.vmd",
+      loopMode: "random",
+      playbackRate: 1.2,
+      sequence: [],
+    });
   }
 
   {
