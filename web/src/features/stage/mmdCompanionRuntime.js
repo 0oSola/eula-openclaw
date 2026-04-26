@@ -169,11 +169,43 @@ export function pickNextLoopMotionUrl(urls, currentUrl, randomValue = Math.rando
   return pool[index] || pool[0] || "";
 }
 
+function pickSequentialLoopMotionUrl(urls, currentUrl) {
+  const uniqueUrls = Array.from(new Set((Array.isArray(urls) ? urls : []).filter(Boolean)));
+  if (!uniqueUrls.length) return "";
+  if (!currentUrl) return uniqueUrls[0];
+
+  const currentIndex = uniqueUrls.indexOf(currentUrl);
+  if (currentIndex < 0) return uniqueUrls[0];
+  return uniqueUrls[(currentIndex + 1) % uniqueUrls.length] || uniqueUrls[0];
+}
+
+function resolveVmdLoopPhase({ url, loopUrls, standbyUrl, resumePhase }) {
+  if (resumePhase === "standby" || resumePhase === "standby-only" || resumePhase === "loop") {
+    return resumePhase;
+  }
+  if (standbyUrl && url === standbyUrl) {
+    return loopUrls.length ? "standby" : "standby-only";
+  }
+  return "loop";
+}
+
+function pickLoopMotionUrl(urls, currentUrl, loopMode) {
+  if (loopMode === "sequential") return pickSequentialLoopMotionUrl(urls, currentUrl);
+  return pickNextLoopMotionUrl(urls, currentUrl);
+}
+
 /**
  * @param {any} runtime
  * @param {{
  *   speaking?: boolean,
- *   interaction?: { mode?: string, vmdUrl?: string, vmdLoopUrls?: string[], playbackRate?: number },
+ *   interaction?: {
+ *     mode?: string,
+ *     vmdUrl?: string,
+ *     vmdLoopUrls?: string[],
+ *     standbyVmdUrl?: string,
+ *     loopMode?: "random" | "sequential",
+ *     playbackRate?: number,
+ *   },
  *   resolveUrl?: (url: string) => string
  * }} [options]
  */
@@ -185,8 +217,12 @@ export function applyStageRuntimeState(runtime, { speaking = false, interaction,
     const loopUrls = Array.isArray(interaction.vmdLoopUrls)
       ? interaction.vmdLoopUrls.map((url) => resolveUrl(url))
       : undefined;
+    const standbyUrl = interaction.standbyVmdUrl ? resolveUrl(interaction.standbyVmdUrl) : "";
     runtime.applyInteraction?.(interaction);
-    runtime.playVmd?.(resolveUrl(interaction.vmdUrl), interaction.playbackRate, loopUrls);
+    runtime.playVmd?.(resolveUrl(interaction.vmdUrl), interaction.playbackRate, loopUrls, {
+      standbyUrl,
+      loopMode: interaction.loopMode === "sequential" ? "sequential" : "random",
+    });
     return;
   }
   runtime.applyInteraction?.(interaction);
@@ -431,6 +467,9 @@ export class MMDCompanionRuntime {
     this.currentClip = null;
     this.currentVmdPlaybackRate = 1;
     this.currentVmdLoopUrls = [];
+    this.currentVmdStandbyUrl = "";
+    this.currentVmdLoopMode = "random";
+    this.currentVmdLoopPhase = "loop";
     this.currentVmdUrl = "";
     this.currentVmdStartedAt = 0;
     this.currentVmdDurationMs = 0;
@@ -685,7 +724,11 @@ export class MMDCompanionRuntime {
     });
     this.model = null;
     this.currentClip = null;
+    this.currentVmdPlaybackRate = 1;
     this.currentVmdLoopUrls = [];
+    this.currentVmdStandbyUrl = "";
+    this.currentVmdLoopMode = "random";
+    this.currentVmdLoopPhase = "loop";
     this.currentVmdUrl = "";
     this.currentVmdStartedAt = 0;
     this.currentVmdDurationMs = 0;
@@ -837,9 +880,11 @@ export class MMDCompanionRuntime {
     return found ? found[1] : undefined;
   }
 
-  async playVmd(url, playbackRate = 1, loopUrls = []) {
+  async playVmd(url, playbackRate = 1, loopUrls = [], options = {}) {
     if (!this.model) return;
     const normalizedLoopUrls = Array.from(new Set((Array.isArray(loopUrls) ? loopUrls : []).filter(Boolean)));
+    const standbyUrl = options?.standbyUrl || "";
+    const loopMode = options?.loopMode === "sequential" ? "sequential" : "random";
     const loadToken = ++this.vmdLoadToken;
     try {
       this.isLoadingVmd = true;
@@ -847,6 +892,14 @@ export class MMDCompanionRuntime {
       this.currentSequence = null;
       this.currentVmdPlaybackRate = Math.max(0.1, Number(playbackRate) || 1);
       this.currentVmdLoopUrls = normalizedLoopUrls;
+      this.currentVmdStandbyUrl = standbyUrl;
+      this.currentVmdLoopMode = loopMode;
+      this.currentVmdLoopPhase = resolveVmdLoopPhase({
+        url,
+        loopUrls: normalizedLoopUrls,
+        standbyUrl,
+        resumePhase: options?.resumePhase,
+      });
       this.currentVmdUrl = url || "";
       this.currentVmdStartedAt = 0;
       this.currentVmdDurationMs = 0;
@@ -885,6 +938,9 @@ export class MMDCompanionRuntime {
       this.helper.add(this.model, { physics: this.hasPhysicsSupport });
     }
     this.currentVmdLoopUrls = [];
+    this.currentVmdStandbyUrl = "";
+    this.currentVmdLoopMode = "random";
+    this.currentVmdLoopPhase = "loop";
     this.currentVmdUrl = "";
     this.currentVmdStartedAt = 0;
     this.currentVmdDurationMs = 0;
@@ -910,13 +966,37 @@ export class MMDCompanionRuntime {
 
   updateVmdLoop(nowMs) {
     if (!this.currentClip || this.isLoadingVmd) return;
-    if (!Array.isArray(this.currentVmdLoopUrls) || this.currentVmdLoopUrls.length <= 1) return;
+    const loopUrls = Array.from(new Set((Array.isArray(this.currentVmdLoopUrls) ? this.currentVmdLoopUrls : []).filter(Boolean)));
+    const standbyUrl = this.currentVmdStandbyUrl || "";
+    if (!loopUrls.length && !standbyUrl) return;
     if (!this.currentVmdDurationMs || !this.currentVmdStartedAt) return;
     if (nowMs - this.currentVmdStartedAt < this.currentVmdDurationMs) return;
 
-    const nextUrl = pickNextLoopMotionUrl(this.currentVmdLoopUrls, this.currentVmdUrl);
-    if (!nextUrl || nextUrl === this.currentVmdUrl) return;
-    this.playVmd(nextUrl, this.currentVmdPlaybackRate, this.currentVmdLoopUrls);
+    if (standbyUrl && !loopUrls.length) {
+      this.playVmd(standbyUrl, this.currentVmdPlaybackRate, [], {
+        standbyUrl,
+        loopMode: this.currentVmdLoopMode,
+        resumePhase: "standby-only",
+      });
+      return;
+    }
+
+    if (this.currentVmdLoopPhase === "loop" && standbyUrl) {
+      this.playVmd(standbyUrl, this.currentVmdPlaybackRate, loopUrls, {
+        standbyUrl,
+        loopMode: this.currentVmdLoopMode,
+        resumePhase: "standby",
+      });
+      return;
+    }
+
+    const nextUrl = pickLoopMotionUrl(loopUrls, this.currentVmdUrl, this.currentVmdLoopMode);
+    if (!nextUrl) return;
+    this.playVmd(nextUrl, this.currentVmdPlaybackRate, loopUrls, {
+      standbyUrl,
+      loopMode: this.currentVmdLoopMode,
+      resumePhase: "loop",
+    });
   }
 
   getOffsetsForAction(action, t, intensity = 1) {
