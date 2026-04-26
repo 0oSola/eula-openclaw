@@ -18,6 +18,10 @@ export function isEntryStandbyAsset(asset) {
   return ENTRY_STANDBY_HINTS.some((hint) => text.includes(hint));
 }
 
+export function excludeEntryStandbyAssets(assets = []) {
+  return Array.isArray(assets) ? assets.filter((asset) => !isEntryStandbyAsset(asset)) : [];
+}
+
 function clampPlaybackMultiplier(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 1;
@@ -50,12 +54,8 @@ export function createVmdPreviewInteraction(asset, multiplier = 1) {
 
 export function createDefaultFavoriteLoopInteraction(assets = [], { enabled = true, loopMode = "random" } = {}) {
   if (!enabled) return null;
-  const assetsWithUrls = Array.isArray(assets) ? assets.filter((asset) => asset?.url) : [];
-  if (!assetsWithUrls.length) return null;
-  const standbyAsset = assetsWithUrls.find((asset) => isEntryStandbyAsset(asset)) || null;
-  const playableAssets = assetsWithUrls.filter((asset) => asset !== standbyAsset);
-  const leadAsset = playableAssets[0] || standbyAsset;
-
+  const playableAssets = excludeEntryStandbyAssets(assets).filter((asset) => asset?.url);
+  const leadAsset = playableAssets[0];
   if (!leadAsset) return null;
 
   return {
@@ -64,7 +64,7 @@ export function createDefaultFavoriteLoopInteraction(assets = [], { enabled = tr
     mode: "vmd",
     vmdUrl: leadAsset.url,
     vmdLoopUrls: playableAssets.map((asset) => asset.url),
-    standbyVmdUrl: standbyAsset?.url || "",
+    standbyVmdUrl: "",
     loopMode: loopMode === "sequential" ? "sequential" : "random",
     playbackRate: resolveVmdPlaybackRate(leadAsset),
     sequence: [],

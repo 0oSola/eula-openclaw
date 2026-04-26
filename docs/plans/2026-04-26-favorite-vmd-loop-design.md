@@ -226,6 +226,40 @@ The exact shape can vary, but the implementation needs enough state to distingui
 
 ---
 
+## Runtime Stability Addendum
+
+During implementation debugging, the most serious VMD-loop failure was not the loop picker itself, but cross-clip pose contamination inside the MMD runtime.
+
+Observed root cause:
+
+- `MMDLoader` / `AnimationBuilder.buildSkeletalAnimation()` builds new VMD skeletal tracks against the mesh's current live bone positions.
+- If the next clip is built while the previous VMD has already deformed the model, those offsets become part of the new clip's base position tracks.
+- The visible symptom is cumulative leg / IK drift after several previews or autoplay cycles, even when each individual VMD is valid on its own.
+
+Design constraint from this debugging work:
+
+- Favorite-loop logic must never assume that "load next VMD clip" is pose-neutral.
+- Any future standby or resume flow must preserve a stable clip-build baseline and a stable reset path, otherwise the loop can slowly corrupt the model pose.
+
+Required runtime guardrails:
+
+- Build new VMD clips against a captured base skeleton snapshot rather than the currently animated live mesh.
+- On hard-cut / helper-swap transitions, reset all captured bone local transforms before attaching the next clip.
+- Limit anchor stabilization to root transport bones only:
+  - `allparent`
+  - `center`
+  - `groove`
+- Do not pin leg or toe IK targets as "fixed anchors" during active VMD playback.
+- Avoid intermediate helper states that re-add physics without the next animation clip already attached.
+
+Current implementation variance from the original design:
+
+- The original design assumes `杩涘満寰呮満` / `entry idle` can be inserted between favorite motions.
+- The current implementation temporarily excludes entry-standby assets from autoplay pools and advanced-panel display because the available standby asset caused loop stalls and made transition debugging harder.
+- Re-enabling standby insertion remains a valid product direction, but it must keep the runtime guardrails above and must be validated against repeated multi-clip playback before being turned back on.
+
+---
+
 ## Verification Targets
 
 Minimum behaviors to verify during implementation:
@@ -247,6 +281,9 @@ Minimum behaviors to verify during implementation:
 6. Model switch:
    - previous model loop stops
    - new model favorites determine the new autoplay plan
+7. Repeated autoplay / preview cycles:
+   - model pose does not accumulate leg or IK drift across clips
+   - helper-swap transitions do not leave residual bone offsets behind
 
 ---
 

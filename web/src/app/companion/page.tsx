@@ -8,6 +8,7 @@ import {
   buildAutoFavoriteInteraction,
   buildAutoplayResumeInteraction,
   createVmdPreviewInteraction,
+  excludeEntryStandbyAssets,
   resolveVmdPlaybackRate,
 } from "@/features/mapping/vmdPreview.js";
 import { resolvePlaybackPlan } from "@/features/mapping/resolveAction.js";
@@ -206,6 +207,10 @@ export default function CompanionPage() {
     });
   }, [assets]);
 
+  const visibleRecentVmdAssets = useMemo(() => {
+    return excludeEntryStandbyAssets(recentVmdAssets);
+  }, [recentVmdAssets]);
+
   const selectedModel = useMemo(() => {
     return (
       models.find((item) => item.relative_path === selectedModelPath) ||
@@ -215,10 +220,10 @@ export default function CompanionPage() {
 
   const currentModelFavoriteAssets = useMemo(() => {
     if (!selectedModel?.relative_path) return [];
-    return recentVmdAssets.filter(
+    return visibleRecentVmdAssets.filter(
       (asset) => asset.is_favorite && asset.favorite_model_relative_path === selectedModel.relative_path,
     );
-  }, [recentVmdAssets, selectedModel?.relative_path]);
+  }, [selectedModel?.relative_path, visibleRecentVmdAssets]);
 
   const filteredFavoriteAssets = useMemo(() => {
     if (advancedFavoriteSlotFilter === "all") return currentModelFavoriteAssets;
@@ -366,8 +371,9 @@ export default function CompanionPage() {
         return [...importedItems, ...deduped];
       });
 
-      if (importedItems[0]) {
-        previewVmdAsset(importedItems[0]);
+      const visibleImportedItems = excludeEntryStandbyAssets(importedItems);
+      if (visibleImportedItems[0]) {
+        previewVmdAsset(visibleImportedItems[0]);
       }
       setAdvancedMessage(`Imported ${importedItems.length} VMD file(s).`);
       setIsAdvancedPanelOpen(true);
@@ -941,7 +947,7 @@ export default function CompanionPage() {
             <div className="mio-advanced-list-head">
               <span>{advancedTab === "library" ? "Recent VMD Assets" : "Current Model Favorites"}</span>
               <strong>
-                {(advancedTab === "library" ? recentVmdAssets.length : filteredFavoriteAssets.length)
+                {(advancedTab === "library" ? visibleRecentVmdAssets.length : filteredFavoriteAssets.length)
                   .toString()
                   .padStart(2, "0")}
               </strong>
@@ -969,14 +975,14 @@ export default function CompanionPage() {
             ) : null}
 
             <div className="mio-advanced-list-scroll">
-              {(advancedTab === "library" ? recentVmdAssets : filteredFavoriteAssets).length === 0 ? (
+              {(advancedTab === "library" ? visibleRecentVmdAssets : filteredFavoriteAssets).length === 0 ? (
                 <p className="mio-advanced-empty">
                   {advancedTab === "library"
                     ? "No VMD assets are ready for preview yet."
                     : "No favorited VMD assets match this slot filter."}
                 </p>
               ) : (
-                (advancedTab === "library" ? recentVmdAssets : filteredFavoriteAssets).map((asset) => (
+                (advancedTab === "library" ? visibleRecentVmdAssets : filteredFavoriteAssets).map((asset) => (
                   <div key={asset.asset_id} className="mio-advanced-asset" data-testid="mio-advanced-asset">
                     <button
                       type="button"

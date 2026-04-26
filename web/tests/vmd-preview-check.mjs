@@ -23,7 +23,7 @@ assert.deepEqual(interaction, {
   action: "idle",
   mode: "vmd",
   vmdUrl: "/assets/vmd/file/asset-1",
-  playbackRate: 1.2,
+  playbackRate: 1,
   sequence: [],
 });
 
@@ -37,8 +37,8 @@ assert.equal(
   }),
   2.5,
 );
-assert.equal(resolveVmdPlaybackRate({ filename: "wave.vmd", url: "/assets/vmd/file/asset-1" }), 1.2);
-assert.equal(resolveVmdPlaybackRate({ filename: "wave.vmd", url: "/assets/vmd/file/asset-1" }, 1.5), 1.8);
+assert.equal(resolveVmdPlaybackRate({ filename: "wave.vmd", url: "/assets/vmd/file/asset-1" }), 1);
+assert.equal(resolveVmdPlaybackRate({ filename: "wave.vmd", url: "/assets/vmd/file/asset-1" }, 1.5), 1.5);
 
 assert.deepEqual(
   createDefaultFavoriteLoopInteraction([
@@ -70,9 +70,9 @@ assert.deepEqual(
     mode: "vmd",
     vmdUrl: "/assets/vmd/file/asset-3",
     vmdLoopUrls: ["/assets/vmd/file/asset-3", "/assets/vmd/file/asset-1"],
-    standbyVmdUrl: "/assets/vmd/file/asset-standby",
+    standbyVmdUrl: "",
     loopMode: "random",
-    playbackRate: 1.2,
+    playbackRate: 1,
     sequence: [],
   },
 );
@@ -106,9 +106,9 @@ assert.deepEqual(
     mode: "vmd",
     vmdUrl: "/assets/vmd/file/asset-3",
     vmdLoopUrls: ["/assets/vmd/file/asset-3", "/assets/vmd/file/asset-1"],
-    standbyVmdUrl: "/assets/vmd/file/asset-standby",
+    standbyVmdUrl: "",
     loopMode: "random",
-    playbackRate: 1.2,
+    playbackRate: 1,
     sequence: [],
   },
 );
@@ -140,15 +140,15 @@ assert.deepEqual(
     emotion: "happy",
     action: "idle",
     mode: "vmd",
-    vmdUrl: "/assets/vmd/file/asset-standby",
+    vmdUrl: "/assets/vmd/file/asset-3",
     vmdLoopUrls: ["/assets/vmd/file/asset-3", "/assets/vmd/file/asset-1"],
-    standbyVmdUrl: "/assets/vmd/file/asset-standby",
+    standbyVmdUrl: "",
     loopMode: "random",
-    playbackRate: 1.2,
+    playbackRate: 1,
     sequence: [],
   },
 );
-assert.deepEqual(
+assert.equal(
   createDefaultFavoriteLoopInteraction([
     {
       asset_id: "asset-standby-only",
@@ -158,17 +158,7 @@ assert.deepEqual(
       url: "/assets/vmd/file/asset-standby-only",
     },
   ]),
-  {
-    emotion: "neutral",
-    action: "idle",
-    mode: "vmd",
-    vmdUrl: "/assets/vmd/file/asset-standby-only",
-    vmdLoopUrls: [],
-    standbyVmdUrl: "/assets/vmd/file/asset-standby-only",
-    loopMode: "random",
-    playbackRate: 1.2,
-    sequence: [],
-  },
+  null,
 );
 assert.equal(createDefaultFavoriteLoopInteraction([]), null);
 

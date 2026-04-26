@@ -8,6 +8,8 @@
 
 **Tech Stack:** Next.js 15, React 19, plain JS/TS in `web/src`, Node built-in test runner, existing assertion scripts in `web/tests`
 
+> **Status note (2026-04-26):** The task list below captures the original standby-first implementation direction. After runtime debugging, pose-stability constraints and a temporary standby exclusion were added. Treat the "Post-debugging update" section below as the current safety baseline.
+
 ---
 
 **Implementation context**
@@ -19,6 +21,42 @@
   - `web/src/features/stage/mmdCompanionRuntime.js:327-341,1233-1341,1453-1459`
   - `web/src/features/stage/MMDStage.tsx:9-18,75-110`
   - `web/src/app/companion/page.tsx:201-211,226-259,351-360,395-482`
+
+**Post-debugging update**
+
+Recent runtime debugging changed the safe implementation envelope for favorite VMD looping.
+
+1. Cross-clip pose drift root cause
+
+- The main "model becomes increasingly distorted after several VMDs" bug came from `MMDLoader` building new skeletal tracks against the model's current live bone positions.
+- That means autoplay can accidentally bake the previous clip's deformation into the next clip, especially in leg / IK chains.
+- The runtime now avoids this by building VMD clips against a captured base skeleton snapshot (`animationBuildTarget`) instead of the currently animated mesh.
+
+2. Runtime constraints that must not regress
+
+- `resetToBasePose()` must restore all captured bone local transforms, not just a few named torso / arm bones.
+- Hard-cut / helper-swap VMD transitions must reset to the captured base pose before attaching the next clip.
+- VMD anchor stabilization must stay limited to root transport anchors:
+  - `allparent`
+  - `center`
+  - `groove`
+- Do not reintroduce leg / toe IK anchor pinning. Earlier experiments in that direction caused unnatural stretching and did not solve the underlying clip-build issue.
+- Do not restore an intermediate "physics only" helper state before the next clip is attached. The swap path should move directly from reset -> remove helper state -> add next animation clip.
+
+3. Standby behavior is temporarily narrowed
+
+- The original plan assumes `杩涘満寰呮満` / `entry idle` is inserted between favorites and on autoplay resume.
+- The current implementation temporarily excludes entry-standby assets from autoplay pools and advanced-panel display because the available standby asset introduced loop stalls and made pose debugging harder.
+- In the current code path, autoplay loops directly across playable favorites and `standbyVmdUrl` is intentionally left empty.
+
+4. Conditions for any future standby re-enable
+
+- Re-enabling standby insertion is allowed only if repeated multi-clip playback proves:
+  - no accumulated leg / IK drift
+  - no loop stall when standby timing metadata is missing or zero
+  - no helper-swap residual pose contamination
+- Any future batch that revisits standby must add regression coverage for those exact failure modes before changing autoplay behavior.
+- The original task list below is therefore historical context, not a drop-in execution recipe for the current codebase.
 
 ### Task 1: Lock favorite-loop helper behavior with tests
 
