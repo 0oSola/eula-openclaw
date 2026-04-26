@@ -36,6 +36,9 @@ function makeRuntime(overrides = {}) {
     clock: { getDelta: () => 1 / 60 },
     bones: {},
     baseBoneRotation: {},
+    baseBoneTransforms: [],
+    baseBoneTransformMap: new Map(),
+    vmdAnchorBones: [],
     currentClip: null,
     currentVmdPlaybackRate: 1,
     currentVmdLoopUrls: [],
@@ -47,6 +50,8 @@ function makeRuntime(overrides = {}) {
     currentVmdUrl: "",
     currentVmdStartedAt: 0,
     currentVmdDurationMs: 0,
+    currentVmdAction: null,
+    pendingVmdActionCleanups: [],
     isLoadingVmd: false,
     vmdLoadToken: 0,
     toonRampTexture: {},
@@ -167,6 +172,13 @@ function withStubbedDocument(run) {
   }
 }
 
+function assertVectorLikeClose(actualValues, expectedValues, epsilon = 1e-9) {
+  assert.equal(actualValues.length, expectedValues.length);
+  actualValues.forEach((value, index) => {
+    assert.ok(Math.abs(value - expectedValues[index]) <= epsilon, `index ${index}: ${value} != ${expectedValues[index]}`);
+  });
+}
+
 test("loadModel makes thin garments double-sided and preserves metal highlights", async () => {
   const skin = makeMaterial({ name: "Face Skin", shininess: 80, specular: 1 });
   const metal = makeMaterial({ name: "Armor Metal", shininess: 80, specular: 1 });
@@ -220,7 +232,41 @@ test("captureBones also records common morph slots for face animation", () => {
   });
 });
 
-test("renderFrame updates morph influences when the model is speaking", () => {
+test("resetToBasePose restores unmapped bones when the model root has no pose() helper", () => {
+  const runtime = makeRuntime();
+  const head = new THREE.Bone();
+  head.name = "head";
+  head.rotation.set(0.1, 0.2, 0.3);
+  const leftLeg = new THREE.Bone();
+  leftLeg.name = "leftLeg";
+  leftLeg.rotation.set(-0.25, 0.35, 0.45);
+  leftLeg.position.set(1, 2, 3);
+
+  const mesh = {
+    morphTargetDictionary: {},
+    morphTargetInfluences: [0.6],
+    traverse(visitor) {
+      visitor(head);
+      visitor(leftLeg);
+    },
+  };
+
+  runtime.model = mesh;
+  runtime.captureBones(mesh);
+
+  head.rotation.set(0.9, 0.8, 0.7);
+  leftLeg.rotation.set(0.6, -0.4, 0.2);
+  leftLeg.position.set(8, 9, 10);
+
+  runtime.resetToBasePose();
+
+  assertVectorLikeClose([head.rotation.x, head.rotation.y, head.rotation.z], [0.1, 0.2, 0.3]);
+  assertVectorLikeClose([leftLeg.rotation.x, leftLeg.rotation.y, leftLeg.rotation.z], [-0.25, 0.35, 0.45]);
+  assertVectorLikeClose([leftLeg.position.x, leftLeg.position.y, leftLeg.position.z], [1, 2, 3]);
+  assert.deepEqual(mesh.morphTargetInfluences, [0]);
+});
+
+test("renderFrame leaves morph influences untouched even when the model is speaking", () => {
   const runtime = makeRuntime({
     model: { morphTargetInfluences: [0, 0, 0, 0, 0, 0] },
     morphSlots: { smile: 0, sad: 1, blink: 2, mouthA: 3, mouthI: 4, mouthU: 5 },
@@ -237,8 +283,135 @@ test("renderFrame updates morph influences when the model is speaking", () => {
     globalThis.requestAnimationFrame = originalRequestAnimationFrame;
   }
 
-  assert.ok(runtime.model.morphTargetInfluences[0] > 0);
-  assert.ok(runtime.model.morphTargetInfluences[3] > 0);
+  assert.deepEqual(runtime.model.morphTargetInfluences, [0, 0, 0, 0, 0, 0]);
+});
+
+test("renderFrame restores only root transport anchors after helper updates", () => {
+  const allParent = new THREE.Bone();
+  allParent.name = "全ての親";
+  allParent.position.set(0, 0, 0);
+  const leftLegIk = new THREE.Bone();
+  leftLegIk.name = "左足ＩＫ";
+  leftLegIk.position.set(0, 0, 0);
+  const finger = new THREE.Bone();
+  finger.name = "右小指１";
+  finger.position.set(0, 0, 0);
+
+  const mesh = {
+    morphTargetDictionary: {},
+    morphTargetInfluences: [],
+    traverse(visitor) {
+      visitor(allParent);
+      visitor(leftLegIk);
+      visitor(finger);
+    },
+  };
+
+  const runtime = makeRuntime({
+    model: mesh,
+    currentClip: { duration: 1 },
+    helper: {
+      update() {
+        allParent.position.set(5, 0, 0);
+        leftLegIk.position.set(2, 0, 0);
+        finger.position.set(1, 0, 0);
+      },
+    },
+  });
+  runtime.captureBones(mesh);
+
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = () => 0;
+
+  try {
+    runtime.renderFrame();
+  } finally {
+    globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+  }
+
+  assertVectorLikeClose([allParent.position.x, allParent.position.y, allParent.position.z], [0, 0, 0]);
+  assertVectorLikeClose([leftLegIk.position.x, leftLegIk.position.y, leftLegIk.position.z], [2, 0, 0]);
+  assertVectorLikeClose([finger.position.x, finger.position.y, finger.position.z], [1, 0, 0]);
+});
+
+test("captureBones does not treat leg IK targets as fixed VMD anchors", () => {
+  const leftLegIkParent = new THREE.Bone();
+  leftLegIkParent.name = "左足IK親";
+  leftLegIkParent.position.set(0, 0, 0);
+  const leftLegIk = new THREE.Bone();
+  leftLegIk.name = "左足ＩＫ";
+  leftLegIk.position.set(0, 0, 0);
+
+  const mesh = {
+    morphTargetDictionary: {},
+    morphTargetInfluences: [],
+    traverse(visitor) {
+      visitor(leftLegIkParent);
+      visitor(leftLegIk);
+    },
+  };
+
+  const runtime = makeRuntime({
+    model: mesh,
+  });
+  runtime.captureBones(mesh);
+  assert.equal(runtime.vmdAnchorBones.includes(leftLegIkParent), false);
+  assert.equal(runtime.vmdAnchorBones.includes(leftLegIk), false);
+});
+
+test("playVmd builds clips against the captured base skeleton instead of the live animated mesh", async () => {
+  const rightLegIk = new THREE.Bone();
+  rightLegIk.name = "右足ＩＫ";
+  rightLegIk.position.set(1, 2, 3);
+  const mesh = {
+    isSkinnedMesh: true,
+    morphTargetDictionary: {},
+    morphTargetInfluences: [],
+    skeleton: {
+      bones: [rightLegIk],
+      getBoneByName(name) {
+        return name === rightLegIk.name ? rightLegIk : null;
+      },
+    },
+    traverse(visitor) {
+      visitor(rightLegIk);
+    },
+  };
+
+  const helperCalls = [];
+  let loaderTarget = null;
+  let loaderBasePosition = null;
+  const runtime = makeRuntime({
+    model: mesh,
+    helper: {
+      remove(target) {
+        helperCalls.push(["remove", target]);
+      },
+      add(target, options) {
+        helperCalls.push(["add", target, Boolean(options?.animation), Boolean(options?.physics)]);
+      },
+      update() {},
+    },
+    loader: {
+      loadAnimation(_url, object, onLoad) {
+        loaderTarget = object;
+        loaderBasePosition = object.skeleton.getBoneByName("右足ＩＫ").position.toArray();
+        onLoad({ duration: 1 });
+      },
+    },
+    renderScene() {},
+  });
+  runtime.captureBones(mesh);
+  rightLegIk.position.set(10, 20, 30);
+
+  await runtime.playVmd("/motions/test.vmd", 1);
+
+  assert.notEqual(loaderTarget, mesh);
+  assert.deepEqual(loaderBasePosition, [1, 2, 3]);
+  assert.deepEqual(helperCalls, [
+    ["remove", mesh],
+    ["add", mesh, true, false],
+  ]);
 });
 
 test("stage presentation config supports classic, genshin, and unknown fallback pipelines", () => {
@@ -720,9 +893,10 @@ test("genshin bloom stays available when the stage uses an explicit backdrop pip
   assert.equal(runtime.shouldUseBloom(getStagePresentationConfig("classic")), false);
 });
 
-test("renderFrame accelerates active VMD clips without scaling procedural pose updates", async () => {
+test("renderFrame accelerates active VMD clips without applying procedural pose updates", async () => {
   const helperDeltas = [];
   const poseDeltas = [];
+  const morphCalls = [];
   const resetCalls = [];
   const model = { isSkinnedMesh: true };
   const runtime = makeRuntime({
@@ -748,7 +922,9 @@ test("renderFrame accelerates active VMD clips without scaling procedural pose u
     updateBonePose(delta) {
       poseDeltas.push(delta);
     },
-    updateMorph() {},
+    updateMorph() {
+      morphCalls.push("morph");
+    },
     renderScene() {},
   });
 
@@ -763,8 +939,220 @@ test("renderFrame accelerates active VMD clips without scaling procedural pose u
   }
 
   assert.deepEqual(helperDeltas, [0.375]);
-  assert.deepEqual(poseDeltas, [0.25]);
+  assert.deepEqual(poseDeltas, []);
+  assert.deepEqual(morphCalls, []);
   assert.deepEqual(resetCalls, ["reset"]);
+});
+
+test("playVmd crossfades into the next VMD when mixer actions are available", async () => {
+  const helperCalls = [];
+  const actionCalls = [];
+  const existingClip = { name: "existing-clip", duration: 1 };
+  const replacementClip = { name: "standby-clip", duration: 1 };
+  const existingAction = {
+    stopFading() {
+      actionCalls.push(["existing", "stopFading"]);
+      return this;
+    },
+    stopWarping() {
+      actionCalls.push(["existing", "stopWarping"]);
+      return this;
+    },
+  };
+  const nextAction = {
+    reset() {
+      actionCalls.push(["next", "reset"]);
+      return this;
+    },
+    stopFading() {
+      actionCalls.push(["next", "stopFading"]);
+      return this;
+    },
+    stopWarping() {
+      actionCalls.push(["next", "stopWarping"]);
+      return this;
+    },
+    setEffectiveTimeScale(value) {
+      actionCalls.push(["next", "timeScale", value]);
+      return this;
+    },
+    setEffectiveWeight(value) {
+      actionCalls.push(["next", "weight", value]);
+      return this;
+    },
+    play() {
+      actionCalls.push(["next", "play"]);
+      return this;
+    },
+    crossFadeFrom(action, duration, warp) {
+      actionCalls.push(["next", "crossFadeFrom", action, duration, warp]);
+      return this;
+    },
+  };
+  const mixer = {
+    existingAction(clip) {
+      if (clip === existingClip) return existingAction;
+      return null;
+    },
+    clipAction(clip) {
+      actionCalls.push(["mixer", "clipAction", clip]);
+      return clip === replacementClip ? nextAction : null;
+    },
+  };
+  const model = { isSkinnedMesh: true };
+  const runtime = makeRuntime({
+    model,
+    currentClip: existingClip,
+    helper: {
+      objects: {
+        get(target) {
+          if (target === model) return { mixer };
+          return null;
+        },
+      },
+      remove(target) {
+        helperCalls.push(["remove", target]);
+      },
+      add(target, options) {
+        helperCalls.push(["add", target, Boolean(options?.animation), Boolean(options?.physics)]);
+      },
+      update() {},
+    },
+    loader: {
+      loadAnimation(_url, _model, onLoad) {
+        onLoad(replacementClip);
+      },
+    },
+    renderScene() {},
+  });
+
+  await runtime.playVmd("/motions/standby.vmd", 1, ["/motions/loop-a.vmd"], {
+    standbyUrl: "/motions/standby.vmd",
+    resumePhase: "standby",
+  });
+
+  assert.deepEqual(helperCalls, []);
+  assert.deepEqual(actionCalls, [
+    ["mixer", "clipAction", replacementClip],
+    ["next", "reset"],
+    ["next", "stopFading"],
+    ["next", "stopWarping"],
+    ["next", "timeScale", 1],
+    ["next", "weight", 1],
+    ["next", "play"],
+    ["existing", "stopFading"],
+    ["existing", "stopWarping"],
+    ["next", "crossFadeFrom", existingAction, 0.24, false],
+  ]);
+  assert.equal(runtime.currentClip, replacementClip);
+  assert.equal(runtime.currentVmdAction, nextAction);
+  assert.equal(runtime.pendingVmdActionCleanups.length, 1);
+  assert.equal(runtime.pendingVmdActionCleanups[0].clip, existingClip);
+  assert.equal(runtime.pendingVmdActionCleanups[0].action, existingAction);
+});
+
+test("playVmd falls back to helper swapping when leaving standby for the next loop motion", async () => {
+  const helperCalls = [];
+  const actionCalls = [];
+  const standbyClip = { name: "standby-clip", duration: 1 };
+  const nextLoopClip = { name: "loop-clip", duration: 1 };
+  const standbyAction = {
+    stopFading() {
+      actionCalls.push(["standby", "stopFading"]);
+      return this;
+    },
+    stopWarping() {
+      actionCalls.push(["standby", "stopWarping"]);
+      return this;
+    },
+  };
+  const mixer = {
+    existingAction(clip) {
+      if (clip === standbyClip) return standbyAction;
+      return null;
+    },
+    clipAction(clip) {
+      actionCalls.push(["mixer", "clipAction", clip]);
+      return null;
+    },
+  };
+  const model = { isSkinnedMesh: true };
+  const runtime = makeRuntime({
+    model,
+    currentClip: standbyClip,
+    currentVmdLoopPhase: "standby",
+    currentVmdAction: standbyAction,
+    helper: {
+      objects: {
+        get(target) {
+          if (target === model) return { mixer };
+          return null;
+        },
+      },
+      remove(target) {
+        helperCalls.push(["remove", target]);
+      },
+      add(target, options) {
+        helperCalls.push(["add", target, Boolean(options?.animation), Boolean(options?.physics)]);
+      },
+      update() {},
+    },
+    loader: {
+      loadAnimation(_url, _model, onLoad) {
+        onLoad(nextLoopClip);
+      },
+    },
+    renderScene() {},
+  });
+
+  await runtime.playVmd("/motions/loop-b.vmd", 1, ["/motions/loop-a.vmd", "/motions/loop-b.vmd"], {
+    standbyUrl: "/motions/standby.vmd",
+    resumePhase: "loop",
+  });
+
+  assert.deepEqual(actionCalls, []);
+  assert.deepEqual(helperCalls, [
+    ["remove", model],
+    ["add", model, true, false],
+  ]);
+  assert.equal(runtime.currentClip, nextLoopClip);
+});
+
+test("playVmd resets to the base pose before helper-swapping to a replacement VMD clip", async () => {
+  const resetCalls = [];
+  const helperCalls = [];
+  const model = { isSkinnedMesh: true };
+  const runtime = makeRuntime({
+    model,
+    currentClip: { name: "existing-clip", duration: 1 },
+    helper: {
+      remove(target) {
+        helperCalls.push(["remove", target]);
+      },
+      add(target, options) {
+        helperCalls.push(["add", target, Boolean(options?.animation), Boolean(options?.physics)]);
+      },
+      update() {},
+    },
+    loader: {
+      loadAnimation(_url, _model, onLoad) {
+        onLoad({ name: "replacement-clip", duration: 1 });
+      },
+    },
+    resetToBasePose() {
+      resetCalls.push("reset");
+    },
+    renderScene() {},
+  });
+
+  await runtime.playVmd("/motions/replacement.vmd", 1);
+
+  assert.deepEqual(resetCalls, ["reset"]);
+  assert.deepEqual(helperCalls, [
+    ["remove", model],
+    ["add", model, true, false],
+  ]);
+  assert.equal(runtime.currentClip?.name, "replacement-clip");
 });
 
 test("updateVmdLoop starts another built-in idle motion after the current clip duration elapses", () => {
@@ -913,6 +1301,40 @@ test("updateVmdLoop uses the last played loop motion as the sequential anchor af
   });
 
   runtime.updateVmdLoop(1800);
+
+  assert.deepEqual(playCalls, [[
+    "/motions/idle-c.vmd",
+    1.5,
+    ["/motions/idle-a.vmd", "/motions/idle-b.vmd", "/motions/idle-c.vmd"],
+    {
+      standbyUrl: "/motions/standby.vmd",
+      loopGapMs: 0,
+      loopMode: "sequential",
+      resumePhase: "loop",
+    },
+  ]]);
+});
+
+test("updateVmdLoop leaves zero-duration standby clips and resumes the next loop motion", () => {
+  const playCalls = [];
+  const runtime = makeRuntime({
+    currentClip: { name: "standby-clip", duration: 0 },
+    currentVmdPlaybackRate: 1.5,
+    currentVmdLoopUrls: ["/motions/idle-a.vmd", "/motions/idle-b.vmd", "/motions/idle-c.vmd"],
+    currentVmdStandbyUrl: "/motions/standby.vmd",
+    currentVmdLoopMode: "sequential",
+    currentVmdLoopPhase: "standby",
+    currentVmdUrl: "/motions/standby.vmd",
+    lastPlayedLoopMotionUrl: "/motions/idle-b.vmd",
+    currentVmdStartedAt: 1000,
+    currentVmdDurationMs: 0,
+    isLoadingVmd: false,
+    playVmd(url, playbackRate, loopUrls, loopOptions) {
+      playCalls.push([url, playbackRate, loopUrls, loopOptions]);
+    },
+  });
+
+  runtime.updateVmdLoop(1001);
 
   assert.deepEqual(playCalls, [[
     "/motions/idle-c.vmd",

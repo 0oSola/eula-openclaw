@@ -62,7 +62,7 @@ function run() {
   }
 
   {
-    assert.equal(DEFAULT_VMD_PLAYBACK_RATE, 1.2);
+    assert.equal(DEFAULT_VMD_PLAYBACK_RATE, 1);
     assert.equal(BUILT_IN_VMD_PLAYBACK_RATE, 1.8);
     assert.ok(BUILT_IN_VMD_PLAYBACK_RATE > DEFAULT_VMD_PLAYBACK_RATE);
     assert.equal(resolveVmdPlaybackRate({ filename: "idle_animations_pack/pose.vmd" }), 2.5);
@@ -76,7 +76,7 @@ function run() {
       2.5,
     );
     assert.equal(resolveVmdPlaybackRate({ filename: "wave.vmd" }), DEFAULT_VMD_PLAYBACK_RATE);
-    assert.equal(resolveVmdPlaybackRate({ filename: "wave.vmd" }, 1.5), 1.8);
+    assert.equal(resolveVmdPlaybackRate({ filename: "wave.vmd" }, 1.5), 1.5);
     assert.deepEqual(
       createDefaultFavoriteLoopInteraction([
         {
@@ -107,7 +107,7 @@ function run() {
         mode: "vmd",
         vmdUrl: "/assets/vmd/file/asset-2",
         vmdLoopUrls: ["/assets/vmd/file/asset-2", "/assets/vmd/file/asset-1"],
-        standbyVmdUrl: "/assets/vmd/file/asset-standby",
+        standbyVmdUrl: "",
         loopMode: "random",
         playbackRate: DEFAULT_VMD_PLAYBACK_RATE,
         sequence: [],
@@ -143,7 +143,7 @@ function run() {
         mode: "vmd",
         vmdUrl: "/assets/vmd/file/asset-2",
         vmdLoopUrls: ["/assets/vmd/file/asset-2", "/assets/vmd/file/asset-1"],
-        standbyVmdUrl: "/assets/vmd/file/asset-standby",
+        standbyVmdUrl: "",
         loopMode: "random",
         playbackRate: DEFAULT_VMD_PLAYBACK_RATE,
         sequence: [],
@@ -177,15 +177,15 @@ function run() {
         emotion: "sad",
         action: "idle",
         mode: "vmd",
-        vmdUrl: "/assets/vmd/file/asset-standby",
+        vmdUrl: "/assets/vmd/file/asset-2",
         vmdLoopUrls: ["/assets/vmd/file/asset-2", "/assets/vmd/file/asset-1"],
-        standbyVmdUrl: "/assets/vmd/file/asset-standby",
+        standbyVmdUrl: "",
         loopMode: "random",
         playbackRate: DEFAULT_VMD_PLAYBACK_RATE,
         sequence: [],
       },
     );
-    assert.deepEqual(
+    assert.equal(
       createDefaultFavoriteLoopInteraction([
         {
           asset_id: "asset-standby-only",
@@ -195,17 +195,7 @@ function run() {
           url: "/assets/vmd/file/asset-standby-only",
         },
       ]),
-      {
-        emotion: "neutral",
-        action: "idle",
-        mode: "vmd",
-        vmdUrl: "/assets/vmd/file/asset-standby-only",
-        vmdLoopUrls: [],
-        standbyVmdUrl: "/assets/vmd/file/asset-standby-only",
-        loopMode: "random",
-        playbackRate: DEFAULT_VMD_PLAYBACK_RATE,
-        sequence: [],
-      },
+      null,
     );
   }
 

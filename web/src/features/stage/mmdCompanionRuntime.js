@@ -97,6 +97,12 @@ const FIXED_MORPH_HINTS = {
   mouthU: ["u", "mouth_u", "\u3046"],
 };
 
+const FIXED_VMD_ANCHOR_BONE_HINTS = [
+  ["allparent", "\u5168\u3066\u306e\u89aa"],
+  ["center", "\u30bb\u30f3\u30bf\u30fc"],
+  ["groove", "\u30b0\u30eb\u30fc\u30d6"],
+];
+
 // Legacy mojibake hint tables were replaced with ASCII-safe Unicode escapes above.
 
 const ACTION_DURATION = {
@@ -110,6 +116,8 @@ const ACTION_DURATION = {
   look_away: 1500,
   headshake: 1300,
 };
+
+const VMD_TRANSITION_FADE_SECONDS = 0.24;
 
 const smooth = (current, target, lambda, dt) => THREE.MathUtils.damp(current, target, lambda, dt);
 
@@ -728,6 +736,8 @@ export class MMDCompanionRuntime {
     this.currentVmdUrl = "";
     this.currentVmdStartedAt = 0;
     this.currentVmdDurationMs = 0;
+    this.currentVmdAction = null;
+    this.pendingVmdActionCleanups = [];
     this.isLoadingVmd = false;
     this.vmdLoadToken = 0;
     this.currentAction = null;
@@ -739,6 +749,10 @@ export class MMDCompanionRuntime {
 
     this.bones = {};
     this.baseBoneRotation = {};
+    this.baseBoneTransforms = [];
+    this.baseBoneTransformMap = new Map();
+    this.vmdAnchorBones = [];
+    this.animationBuildTarget = null;
     this.morphSlots = {};
 
     this.toonRampTexture = null;
@@ -1072,9 +1086,15 @@ export class MMDCompanionRuntime {
     this.currentVmdUrl = "";
     this.currentVmdStartedAt = 0;
     this.currentVmdDurationMs = 0;
+    this.currentVmdAction = null;
+    this.pendingVmdActionCleanups = [];
     this.isLoadingVmd = false;
     this.bones = {};
     this.baseBoneRotation = {};
+    this.baseBoneTransforms = [];
+    this.baseBoneTransformMap = new Map();
+    this.vmdAnchorBones = [];
+    this.animationBuildTarget = null;
     this.morphSlots = {};
   }
 
@@ -1189,10 +1209,16 @@ export class MMDCompanionRuntime {
     mesh.traverse((child) => {
       if (child.isBone) bones.push(child);
     });
+    const normalizedBones = bones.map((bone) => ({
+      bone,
+      lowerName: bone.name.toLowerCase(),
+    }));
 
     const findBone = (hints) => {
       const lowerHints = hints.map((hint) => hint.toLowerCase());
-      return bones.find((bone) => lowerHints.some((hint) => bone.name.toLowerCase().includes(hint)));
+      const exactMatch = normalizedBones.find(({ lowerName }) => lowerHints.includes(lowerName));
+      if (exactMatch) return exactMatch.bone;
+      return normalizedBones.find(({ lowerName }) => lowerHints.some((hint) => lowerName.includes(hint)))?.bone;
     };
 
     this.bones = {
@@ -1203,6 +1229,32 @@ export class MMDCompanionRuntime {
       rightArm: findBone(["rightarm", "arm_r", "r_shoulder"]),
       leftElbow: findBone(["leftelbow", "forearm_l", "l_forearm"]),
       rightElbow: findBone(["rightelbow", "forearm_r", "r_forearm"]),
+    };
+    this.baseBoneTransforms = bones.map((bone) => ({
+      bone,
+      position: bone.position?.clone?.() || new THREE.Vector3(),
+      quaternion: bone.quaternion?.clone?.() || new THREE.Quaternion(),
+      scale: bone.scale?.clone?.() || new THREE.Vector3(1, 1, 1),
+    }));
+    this.baseBoneTransformMap = new Map(this.baseBoneTransforms.map((entry) => [entry.bone, entry]));
+    this.vmdAnchorBones = Array.from(
+      new Set(
+        FIXED_VMD_ANCHOR_BONE_HINTS.map((hints) => findBone(hints)).filter(Boolean),
+      ),
+    );
+    const animationBuildBones = this.baseBoneTransforms.map((entry) => ({
+      name: entry.bone?.name || "",
+      position: entry.position?.clone?.() || new THREE.Vector3(),
+    }));
+    const animationBuildBoneMap = new Map(animationBuildBones.map((bone) => [bone.name, bone]));
+    this.animationBuildTarget = {
+      skeleton: {
+        bones: animationBuildBones,
+        getBoneByName(name) {
+          return animationBuildBoneMap.get(name) || null;
+        },
+      },
+      morphTargetDictionary: { ...(mesh.morphTargetDictionary || {}) },
     };
 
     for (const [slot, bone] of Object.entries(this.bones)) {
@@ -1233,6 +1285,13 @@ export class MMDCompanionRuntime {
     if (!this.model) return;
     this.model.pose?.();
 
+    for (const entry of this.baseBoneTransforms || []) {
+      if (!entry?.bone) continue;
+      if (entry.position) entry.bone.position?.copy?.(entry.position);
+      if (entry.quaternion) entry.bone.quaternion?.copy?.(entry.quaternion);
+      if (entry.scale) entry.bone.scale?.copy?.(entry.scale);
+    }
+
     for (const [slot, bone] of Object.entries(this.bones)) {
       if (!bone) continue;
       const base = this.baseBoneRotation[slot];
@@ -1247,12 +1306,109 @@ export class MMDCompanionRuntime {
     }
   }
 
+  stabilizeVmdAnchorBones() {
+    if (!this.model || !this.vmdAnchorBones.length) return;
+    for (const bone of this.vmdAnchorBones) {
+      const base = this.baseBoneTransformMap.get(bone);
+      if (!base) continue;
+      bone.position?.copy?.(base.position);
+    }
+    this.model.updateMatrixWorld?.(true);
+  }
+
+  getCurrentVmdMixer() {
+    if (!this.model) return null;
+    return this.helper?.objects?.get?.(this.model)?.mixer || null;
+  }
+
+  getVmdAction(clip, { create = false } = {}) {
+    if (!clip || !this.model) return null;
+    const mixer = this.getCurrentVmdMixer();
+    if (!mixer) return null;
+    const existingAction = mixer.existingAction?.(clip, this.model) || null;
+    if (existingAction || !create) return existingAction;
+    return mixer.clipAction?.(clip, this.model) || null;
+  }
+
+  scheduleVmdActionCleanup(clip, action, nowMs = performance.now()) {
+    if (!clip || !action) return;
+    this.pendingVmdActionCleanups = this.pendingVmdActionCleanups
+      .filter((entry) => entry?.clip !== clip && entry?.action !== action)
+      .concat({
+        clip,
+        action,
+        cleanupAt: nowMs + VMD_TRANSITION_FADE_SECONDS * 1000,
+      });
+  }
+
+  flushExpiredVmdActionCleanups(nowMs = performance.now()) {
+    if (!this.pendingVmdActionCleanups.length || !this.model) return;
+    const mixer = this.getCurrentVmdMixer();
+    if (!mixer) return;
+
+    const pendingEntries = [];
+    for (const entry of this.pendingVmdActionCleanups) {
+      if (!entry || nowMs < entry.cleanupAt) {
+        pendingEntries.push(entry);
+        continue;
+      }
+
+      if (entry.action !== this.currentVmdAction) {
+        entry.action?.stopFading?.();
+        entry.action?.stopWarping?.();
+        entry.action?.stop?.();
+      }
+
+      if (entry.clip && entry.clip !== this.currentClip) {
+        mixer.uncacheAction?.(entry.clip, this.model);
+        mixer.uncacheClip?.(entry.clip);
+      }
+    }
+
+    this.pendingVmdActionCleanups = pendingEntries;
+  }
+
+  transitionToVmdClip(previousClip, nextClip, startedAt = performance.now()) {
+    if (!previousClip || !nextClip) return false;
+    const previousAction = this.currentVmdAction || this.getVmdAction(previousClip);
+    const nextAction = this.getVmdAction(nextClip, { create: true });
+    if (!previousAction || !nextAction || typeof nextAction.crossFadeFrom !== "function") return false;
+
+    nextAction.reset?.();
+    nextAction.stopFading?.();
+    nextAction.stopWarping?.();
+    nextAction.setEffectiveTimeScale?.(1);
+    nextAction.setEffectiveWeight?.(1);
+    nextAction.play?.();
+
+    previousAction.stopFading?.();
+    previousAction.stopWarping?.();
+    nextAction.crossFadeFrom(previousAction, VMD_TRANSITION_FADE_SECONDS, false);
+
+    this.scheduleVmdActionCleanup(previousClip, previousAction, startedAt);
+    this.currentClip = nextClip;
+    this.currentVmdAction = nextAction;
+    return true;
+  }
+
+  shouldCrossfadeVmdTransition({ previousPhase = "loop", nextPhase = "loop" } = {}) {
+    return previousPhase === "loop" && (nextPhase === "standby" || nextPhase === "standby-only");
+  }
+
   async playVmd(url, playbackRate = 1, loopUrls = [], loopOptions = {}) {
     if (!this.model) return;
     const normalizedLoopUrls = Array.from(new Set((Array.isArray(loopUrls) ? loopUrls : []).filter(Boolean)));
     const standbyUrl = loopOptions?.standbyUrl || "";
     const loopGapMs = Math.max(0, Number(loopOptions?.loopGapMs) || 0);
     const loopMode = loopOptions?.loopMode === "sequential" ? "sequential" : "random";
+    const hadActiveClip = Boolean(this.currentClip);
+    const previousPhase = this.currentVmdLoopPhase || "loop";
+    const nextPhase = resolveVmdLoopPhase({
+      url,
+      loopUrls: normalizedLoopUrls,
+      standbyUrl,
+      resumePhase: loopOptions?.resumePhase,
+    });
     const loadToken = ++this.vmdLoadToken;
     try {
       this.isLoadingVmd = true;
@@ -1263,31 +1419,32 @@ export class MMDCompanionRuntime {
       this.currentVmdStandbyUrl = standbyUrl;
       this.currentVmdLoopGapMs = loopGapMs;
       this.currentVmdLoopMode = loopMode;
-      this.currentVmdLoopPhase = resolveVmdLoopPhase({
-        url,
-        loopUrls: normalizedLoopUrls,
-        standbyUrl,
-        resumePhase: loopOptions?.resumePhase,
-      });
+      this.currentVmdLoopPhase = nextPhase;
       this.currentVmdUrl = url || "";
       if (normalizedLoopUrls.includes(this.currentVmdUrl)) {
         this.lastPlayedLoopMotionUrl = this.currentVmdUrl;
       }
       this.currentVmdStartedAt = 0;
       this.currentVmdDurationMs = 0;
-      this.resetToBasePose();
-      if (this.currentClip) {
-        this.helper.remove(this.model);
-        this.helper.add(this.model, { physics: this.hasPhysicsSupport });
-      }
+      const animationBuildTarget = this.animationBuildTarget || this.model;
       const clip = await new Promise((resolve, reject) => {
-        this.loader.loadAnimation(url, this.model, resolve, undefined, reject);
+        this.loader.loadAnimation(url, animationBuildTarget, resolve, undefined, reject);
       });
       if (this.destroyed || loadToken !== this.vmdLoadToken) return;
-      this.currentClip = clip;
-      this.helper.remove(this.model);
-      this.helper.add(this.model, { animation: clip, physics: this.hasPhysicsSupport });
-      this.currentVmdStartedAt = performance.now();
+      const startedAt = performance.now();
+      const shouldCrossfade = hadActiveClip && this.shouldCrossfadeVmdTransition({ previousPhase, nextPhase });
+      if (!shouldCrossfade || !this.transitionToVmdClip(this.currentClip, clip, startedAt)) {
+        this.resetToBasePose();
+        try {
+          this.helper.remove(this.model);
+        } catch {
+          // ignore stale helper state when starting the first VMD clip
+        }
+        this.currentClip = clip;
+        this.helper.add(this.model, { animation: clip, physics: this.hasPhysicsSupport });
+        this.currentVmdAction = this.getVmdAction(clip);
+      }
+      this.currentVmdStartedAt = startedAt;
       this.currentVmdDurationMs =
         Number(clip?.duration) > 0 ? (Number(clip.duration) / this.currentVmdPlaybackRate) * 1000 : 0;
       this.setStatus("Playing mapped VMD motion.");
@@ -1307,6 +1464,8 @@ export class MMDCompanionRuntime {
     if (this.currentClip && this.model) {
       this.currentClip = null;
       this.currentVmdPlaybackRate = 1;
+      this.currentVmdAction = null;
+      this.pendingVmdActionCleanups = [];
       this.helper.remove(this.model);
       this.helper.add(this.model, { physics: this.hasPhysicsSupport });
     }
@@ -1321,6 +1480,8 @@ export class MMDCompanionRuntime {
     this.currentVmdUrl = "";
     this.currentVmdStartedAt = 0;
     this.currentVmdDurationMs = 0;
+    this.currentVmdAction = null;
+    this.pendingVmdActionCleanups = [];
     this.isLoadingVmd = false;
     if (Array.isArray(sequence) && sequence.length) {
       this.currentSequence = {
@@ -1346,14 +1507,22 @@ export class MMDCompanionRuntime {
     const loopUrls = Array.from(new Set((Array.isArray(this.currentVmdLoopUrls) ? this.currentVmdLoopUrls : []).filter(Boolean)));
     const standbyUrl = this.currentVmdStandbyUrl || "";
     if (!loopUrls.length && !standbyUrl) return;
-    if (!this.currentVmdDurationMs || !this.currentVmdStartedAt) return;
-    const minimumElapsedMs = this.currentVmdDurationMs + Math.max(0, Number(this.currentVmdLoopGapMs) || 0);
-    if (nowMs - this.currentVmdStartedAt < minimumElapsedMs) return;
+    if (!this.currentVmdStartedAt) return;
+    const loopGapMs = Math.max(0, Number(this.currentVmdLoopGapMs) || 0);
+    const elapsedMs = nowMs - this.currentVmdStartedAt;
+    const measuredDurationMs = Math.max(0, Number(this.currentVmdDurationMs) || 0);
+    if (measuredDurationMs > 0) {
+      if (elapsedMs < measuredDurationMs + loopGapMs) return;
+    } else {
+      const canAdvanceWithoutDuration =
+        loopUrls.length && (this.currentVmdLoopPhase === "loop" || this.currentVmdLoopPhase === "standby");
+      if (!canAdvanceWithoutDuration || elapsedMs < loopGapMs) return;
+    }
 
     if (standbyUrl && !loopUrls.length) {
       this.playVmd(standbyUrl, this.currentVmdPlaybackRate, [], {
         standbyUrl,
-        loopGapMs: this.currentVmdLoopGapMs,
+        loopGapMs,
         loopMode: this.currentVmdLoopMode,
         resumePhase: "standby-only",
       });
@@ -1363,7 +1532,7 @@ export class MMDCompanionRuntime {
     if (this.currentVmdLoopPhase === "loop" && standbyUrl) {
       this.playVmd(standbyUrl, this.currentVmdPlaybackRate, loopUrls, {
         standbyUrl,
-        loopGapMs: this.currentVmdLoopGapMs,
+        loopGapMs,
         loopMode: this.currentVmdLoopMode,
         resumePhase: "standby",
       });
@@ -1375,7 +1544,7 @@ export class MMDCompanionRuntime {
     if (!nextUrl) return;
     this.playVmd(nextUrl, this.currentVmdPlaybackRate, loopUrls, {
       standbyUrl,
-      loopGapMs: this.currentVmdLoopGapMs,
+      loopGapMs,
       loopMode: this.currentVmdLoopMode,
       resumePhase: "loop",
     });
@@ -1495,8 +1664,10 @@ export class MMDCompanionRuntime {
     this.updateVmdLoop(nowMs);
     const helperDelta = this.currentClip ? delta * this.currentVmdPlaybackRate : delta;
     this.helper.update(helperDelta);
-    this.updateBonePose(delta, nowMs);
-    this.updateMorph(delta, nowMs);
+    if (this.currentClip) {
+      this.stabilizeVmdAnchorBones();
+    }
+    this.flushExpiredVmdActionCleanups(nowMs);
     this.controls?.update();
     this.renderScene();
   }
