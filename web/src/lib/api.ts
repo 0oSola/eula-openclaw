@@ -107,6 +107,15 @@ export async function uploadVmdAsset(userId: string, slot: string, file: File): 
   const form = new FormData();
   form.append("user_id", userId);
   form.append("slot", slot);
+  const sourceRelativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath?.trim();
+  console.info("[vmd-upload] preparing upload", {
+    name: file.name,
+    slot,
+    sourceRelativePath: sourceRelativePath || null,
+  });
+  if (sourceRelativePath) {
+    form.append("source_relative_path", sourceRelativePath);
+  }
   form.append("file", file);
 
   const response = await fetch(makeUrl("/assets/vmd"), {
@@ -116,8 +125,30 @@ export async function uploadVmdAsset(userId: string, slot: string, file: File): 
     cache: "no-store",
   });
   const data = await response.json();
+  console.info("[vmd-upload] upload response", {
+    name: file.name,
+    sourceRelativePath: sourceRelativePath || null,
+    returnedSourceRelativePath: data?.source_relative_path || null,
+    assetId: data?.asset_id || null,
+  });
   if (!response.ok) throw new Error(data?.detail || `Upload failed: ${response.status}`);
   return data as VmdAsset;
+}
+
+export async function updateVmdAsset(
+  userId: string,
+  assetId: string,
+  payload: {
+    display_name?: string;
+    favorite?: boolean;
+    model_relative_path?: string;
+  },
+): Promise<VmdAsset> {
+  return requestJSON<VmdAsset>(`/assets/vmd/${encodeURIComponent(assetId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    userId,
+  });
 }
 
 export async function getTraceEvents(

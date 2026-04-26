@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import shutil
 import re
 from pathlib import Path
 from urllib.parse import quote
@@ -7,11 +9,13 @@ from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from app.security import resolve_requester
 
 
 router = APIRouter(prefix="/assets", tags=["assets"])
+logger = logging.getLogger(__name__)
 
 ALLOWED_SLOTS = {"neutral", "happy", "sad", "thinking", "excited", "caring"}
 MMD_MODEL_EXTENSIONS = {".pmx", ".pmd"}
@@ -24,6 +28,11 @@ def _asset_public(item: dict) -> dict:
         "user_id": item["user_id"],
         "slot": item["slot"],
         "filename": item["filename"],
+        "display_name": item.get("display_name") or item["filename"],
+        "source_relative_path": item.get("source_relative_path"),
+        "is_favorite": bool(item.get("is_favorite")),
+        "favorite_relative_path": item.get("favorite_relative_path"),
+        "favorite_model_relative_path": item.get("favorite_model_relative_path"),
         "size_bytes": item["size_bytes"],
         "created_at": item["created_at"],
         "url": f"/assets/vmd/file/{item['asset_id']}",
@@ -49,14 +58,15 @@ def _iter_mmd_models(root: Path) -> list[Path]:
 
 
 def _iter_mmd_vmds(root: Path) -> list[Path]:
-    motion_root = root / "vmd"
-    if not motion_root.exists() or not motion_root.is_dir():
-        return []
-    motions = [
-        item
-        for item in motion_root.rglob("*")
-        if item.is_file() and item.suffix.lower() in MMD_MOTION_EXTENSIONS
-    ]
+    motions: list[Path] = []
+    for motion_root in (root / "vmd", root / "usage" / "vmd"):
+        if not motion_root.exists() or not motion_root.is_dir():
+            continue
+        motions.extend(
+            item
+            for item in motion_root.rglob("*")
+            if item.is_file() and item.suffix.lower() in MMD_MOTION_EXTENSIONS
+        )
     return sorted(motions, key=lambda item: item.relative_to(root).as_posix().lower())
 
 
@@ -74,6 +84,96 @@ def _mmd_model_label(path: Path, root: Path) -> str:
 def _humanize_motion_label(name: str) -> str:
     label = re.sub(r"[_-]+", " ", name).strip()
     return re.sub(r"\s+", " ", label)
+
+
+def _sanitize_usage_segment(name: str) -> str:
+    clean = re.sub(r'[<>:"/\\\\|?*]+', " ", name).strip()
+    clean = re.sub(r"\s+", " ", clean)
+    return clean or "Unknown"
+
+
+def _normalize_vmd_filename(name: str) -> str:
+    base = Path((name or "").strip()).name
+    stem = Path(base).stem.strip() if base else ""
+    suffix = Path(base).suffix.lower() if base else ""
+    stem = re.sub(r'[<>:"/\\\\|?*]+', " ", stem)
+    stem = re.sub(r"\s+", " ", stem).strip()
+    if not stem:
+        stem = "motion"
+    if suffix != ".vmd":
+        suffix = ".vmd"
+    return f"{stem}{suffix}"
+
+
+def _ensure_unique_path(directory: Path, filename: str) -> Path:
+    candidate = directory / filename
+    if not candidate.exists():
+        return candidate
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix or ".vmd"
+    index = 2
+    while True:
+        next_candidate = directory / f"{stem} ({index}){suffix}"
+        if not next_candidate.exists():
+            return next_candidate
+        index += 1
+
+
+def _favorite_directory_for_model(root: Path, model_relative_path: str) -> Path:
+    model_path = _resolve_mmd_request_path(root, model_relative_path)
+    if model_path.suffix.lower() not in MMD_MODEL_EXTENSIONS or not model_path.exists():
+        raise HTTPException(status_code=404, detail="MMD model not found.")
+    folder_name = f"{_sanitize_usage_segment(_mmd_model_label(model_path, root))}[动作]"
+    return root / "usage" / "vmd" / folder_name
+
+
+def _infer_model_relative_path_from_favorite_path(root: Path, favorite_relative_path: str | None) -> str | None:
+    if not favorite_relative_path:
+        return None
+    favorite_path = Path(favorite_relative_path)
+    if len(favorite_path.parts) < 4:
+        return None
+    favorite_folder = favorite_path.parts[2]
+    matches: list[str] = []
+    for model_path in _iter_mmd_models(root):
+        folder_name = f"{_sanitize_usage_segment(_mmd_model_label(model_path, root))}[动作]"
+        if folder_name == favorite_folder:
+            matches.append(model_path.relative_to(root).as_posix())
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _remove_favorite_copy(settings, item: dict) -> None:
+    favorite_relative_path = item.get("favorite_relative_path")
+    if not favorite_relative_path:
+        return
+    favorite_path = settings.mmd_root_dir / favorite_relative_path
+    if favorite_path.exists():
+        favorite_path.unlink()
+
+
+def _sync_favorite_copy(settings, item: dict, display_name: str, model_relative_path: str) -> str:
+    source_path = settings.data_dir / item["relative_path"]
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail="Asset file missing.")
+    favorite_dir = _favorite_directory_for_model(settings.mmd_root_dir.resolve(), model_relative_path)
+    favorite_dir.mkdir(parents=True, exist_ok=True)
+    target_path = favorite_dir / display_name
+    previous_relative_path = item.get("favorite_relative_path")
+    previous_path = settings.mmd_root_dir / previous_relative_path if previous_relative_path else None
+    if previous_path and previous_path != target_path and previous_path.exists():
+        previous_path.unlink()
+    if target_path.exists() and (not previous_path or target_path != previous_path):
+        target_path = _ensure_unique_path(favorite_dir, display_name)
+    shutil.copyfile(source_path, target_path)
+    return target_path.relative_to(settings.mmd_root_dir).as_posix()
+
+
+class VmdAssetUpdatePayload(BaseModel):
+    display_name: str | None = None
+    favorite: bool | None = None
+    model_relative_path: str | None = None
 
 
 def _mmd_model_public(path: Path, root: Path) -> dict:
@@ -103,6 +203,7 @@ async def upload_vmd(
     request: Request,
     user_id: str = Form(...),
     slot: str = Form(...),
+    source_relative_path: str | None = Form(default=None),
     file: UploadFile = File(...),
     x_user_id: str | None = Header(default=None),
 ):
@@ -114,6 +215,14 @@ async def upload_vmd(
         raise HTTPException(status_code=400, detail="Invalid slot.")
     if not file.filename.lower().endswith(".vmd"):
         raise HTTPException(status_code=400, detail="Only .vmd files are allowed.")
+
+    logger.info(
+        "vmd upload request user=%s slot=%s filename=%s source_relative_path=%s",
+        user_id,
+        slot,
+        file.filename,
+        source_relative_path or "",
+    )
 
     data = await file.read()
     if len(data) > 30 * 1024 * 1024:
@@ -130,8 +239,15 @@ async def upload_vmd(
         user_id=user_id,
         slot=slot,
         filename=file.filename,
+        source_relative_path=source_relative_path,
         relative_path=relative_path,
         size_bytes=len(data),
+    )
+    logger.info(
+        "vmd upload stored asset_id=%s filename=%s source_relative_path=%s",
+        item["asset_id"],
+        item["filename"],
+        item.get("source_relative_path") or "",
     )
     return _asset_public(item)
 
@@ -150,7 +266,77 @@ def list_vmd_assets(
         is_admin=requester.is_admin,
         user_id_filter=user_id,
     )
-    return {"items": [_asset_public(item) for item in items]}
+    root = settings.mmd_root_dir.resolve()
+    normalized_items: list[dict] = []
+    for item in items:
+        if item.get("is_favorite") and not item.get("favorite_model_relative_path"):
+            inferred_model_relative_path = _infer_model_relative_path_from_favorite_path(
+                root, item.get("favorite_relative_path")
+            )
+            if inferred_model_relative_path:
+                updated = store.update_asset(
+                    item["asset_id"],
+                    display_name=item.get("display_name"),
+                    is_favorite=bool(item.get("is_favorite")),
+                    favorite_relative_path=item.get("favorite_relative_path"),
+                    favorite_model_relative_path=inferred_model_relative_path,
+                )
+                if updated:
+                    item = updated
+        normalized_items.append(item)
+    return {"items": [_asset_public(item) for item in normalized_items]}
+
+
+@router.patch("/vmd/{asset_id}")
+def update_vmd_asset(
+    asset_id: str,
+    payload: VmdAssetUpdatePayload,
+    request: Request,
+    x_user_id: str | None = Header(default=None),
+):
+    settings = request.app.state.settings
+    requester = resolve_requester(x_user_id, settings.admin_user_ids)
+    store = request.app.state.trace_store
+    item = store.get_asset(asset_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    if not requester.is_admin and requester.user_id != item["user_id"]:
+        raise HTTPException(status_code=403, detail="Cannot update another user's asset.")
+
+    display_name = _normalize_vmd_filename(payload.display_name or item.get("display_name") or item["filename"])
+    is_favorite = bool(item.get("is_favorite"))
+    favorite_relative_path = item.get("favorite_relative_path")
+    favorite_model_relative_path = item.get("favorite_model_relative_path")
+
+    if payload.favorite is not None:
+        is_favorite = payload.favorite
+    if is_favorite:
+        model_relative_path = (
+            payload.model_relative_path
+            or favorite_model_relative_path
+            or _infer_model_relative_path_from_favorite_path(
+                settings.mmd_root_dir.resolve(), favorite_relative_path
+            )
+        )
+        if not model_relative_path:
+            raise HTTPException(status_code=400, detail="model_relative_path is required when favoriting an asset.")
+        favorite_relative_path = _sync_favorite_copy(settings, item, display_name, model_relative_path)
+        favorite_model_relative_path = model_relative_path
+    else:
+        _remove_favorite_copy(settings, item)
+        favorite_relative_path = None
+        favorite_model_relative_path = None
+
+    updated = store.update_asset(
+        asset_id,
+        display_name=display_name,
+        is_favorite=is_favorite,
+        favorite_relative_path=favorite_relative_path,
+        favorite_model_relative_path=favorite_model_relative_path,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Asset not found.")
+    return _asset_public(updated)
 
 
 @router.delete("/vmd/{asset_id}")
@@ -167,6 +353,7 @@ def delete_vmd_asset(asset_id: str, request: Request, x_user_id: str | None = He
     full_path = settings.data_dir / item["relative_path"]
     if full_path.exists():
         full_path.unlink()
+    _remove_favorite_copy(settings, item)
     store.delete_asset(asset_id)
     return {"deleted": True, "asset_id": asset_id}
 

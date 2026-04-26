@@ -183,6 +183,56 @@ test("companion sidebar exposes built-in motion switching from the MMD vmd catal
   await expect(page.locator(".mio-motion-option.is-selected")).toContainText("Smelling Something in the Air");
 });
 
+test("advanced features button opens a non-modal VMD quick import panel with previewable assets @critical", async ({
+  page,
+}) => {
+  await seedSession(page);
+  await page.route("**/config/mapping/resolved/**", async (route) => {
+    await route.fulfill({ json: { mappings: {} } });
+  });
+  await page.route("**/assets/vmd?**", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            asset_id: "asset-1",
+            user_id: "8X29-AF3E",
+            slot: "happy",
+            filename: "happy-wave.vmd",
+            size_bytes: 20480,
+            created_at: "2026-04-26T10:00:00Z",
+            url: "/assets/vmd/happy-wave.vmd",
+          },
+          {
+            asset_id: "asset-2",
+            user_id: "8X29-AF3E",
+            slot: "thinking",
+            filename: "thinking-idle.vmd",
+            size_bytes: 19456,
+            created_at: "2026-04-26T09:00:00Z",
+            url: "/assets/vmd/thinking-idle.vmd",
+          },
+        ],
+      },
+    });
+  });
+
+  await page.goto("/companion");
+
+  const trigger = page.getByRole("button", { name: "楂樼骇鍔熻兘" });
+  await expect(trigger).toBeVisible();
+
+  await trigger.click();
+
+  const panel = page.getByTestId("mio-advanced-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText("VMD 快速导入")).toBeVisible();
+  await expect(panel.locator('input[type="file"]')).toBeAttached();
+  await expect(panel.getByTestId("mio-advanced-asset")).toHaveCount(2);
+  await expect(page.getByTestId("mio-command-bar")).toBeVisible();
+  await expect(page.getByTestId("mio-stage-wrap")).toBeVisible();
+});
+
 test("companion stage keeps runtime chrome hidden inside the restored HUD @critical", async ({ page }) => {
   await seedSession(page);
   await page.goto("/companion");

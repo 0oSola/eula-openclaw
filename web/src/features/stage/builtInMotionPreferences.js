@@ -1,4 +1,5 @@
-export const BUILT_IN_VMD_PLAYBACK_RATE = 1.5;
+export const DEFAULT_VMD_PLAYBACK_RATE = 1.2;
+export const BUILT_IN_VMD_PLAYBACK_RATE = 1.8;
 
 export const BUILT_IN_IDLE_PRESETS = {
   oneesan_idle_loop: {

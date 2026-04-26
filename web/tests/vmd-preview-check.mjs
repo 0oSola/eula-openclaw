@@ -5,6 +5,7 @@ import {
   buildAutoplayResumeInteraction,
   createDefaultFavoriteLoopInteraction,
   createVmdPreviewInteraction,
+  resolveVmdPlaybackRate,
 } from "../src/features/mapping/vmdPreview.js";
 
 const interaction = createVmdPreviewInteraction({
@@ -22,98 +23,153 @@ assert.deepEqual(interaction, {
   action: "idle",
   mode: "vmd",
   vmdUrl: "/assets/vmd/file/asset-1",
+  playbackRate: 1.2,
   sequence: [],
 });
 
+assert.equal(resolveVmdPlaybackRate({ filename: "idle_animations_pack/pose.vmd" }), 2.5);
+assert.equal(resolveVmdPlaybackRate({ filename: "idle_animations_pack/pose.vmd" }, 0.8), 2);
+assert.equal(resolveVmdPlaybackRate({ url: "/assets/mmd/vmd/idle_animations_pack/sample.vmd" }), 2.5);
+assert.equal(
+  resolveVmdPlaybackRate({
+    filename: "Smelling Something in the Air.vmd",
+    source_relative_path: "Idle Animations Pack - Copy/Air Scent Idle Animation/Smelling Something in the Air.vmd",
+  }),
+  2.5,
+);
+assert.equal(resolveVmdPlaybackRate({ filename: "wave.vmd", url: "/assets/vmd/file/asset-1" }), 1.2);
+assert.equal(resolveVmdPlaybackRate({ filename: "wave.vmd", url: "/assets/vmd/file/asset-1" }, 1.5), 1.8);
+
 assert.deepEqual(
   createDefaultFavoriteLoopInteraction([
-    { display_name: "杩涘満寰呮満.vmd", filename: "杩涘満寰呮満.vmd", slot: "neutral", url: "/standby.vmd" },
-    { display_name: "wave.vmd", filename: "wave.vmd", slot: "happy", url: "/wave.vmd" },
-    { display_name: "nod.vmd", filename: "nod.vmd", slot: "happy", url: "/nod.vmd" },
+    {
+      asset_id: "asset-standby",
+      slot: "neutral",
+      filename: "进场待机.vmd",
+      display_name: "进场待机.vmd",
+      url: "/assets/vmd/file/asset-standby",
+    },
+    {
+      asset_id: "asset-3",
+      slot: "happy",
+      filename: "latest.vmd",
+      display_name: "latest.vmd",
+      url: "/assets/vmd/file/asset-3",
+    },
+    {
+      asset_id: "asset-1",
+      slot: "happy",
+      filename: "older.vmd",
+      display_name: "older.vmd",
+      url: "/assets/vmd/file/asset-1",
+    },
   ]),
   {
     emotion: "happy",
     action: "idle",
     mode: "vmd",
-    vmdUrl: "/wave.vmd",
-    vmdLoopUrls: ["/wave.vmd", "/nod.vmd"],
-    standbyVmdUrl: "/standby.vmd",
+    vmdUrl: "/assets/vmd/file/asset-3",
+    vmdLoopUrls: ["/assets/vmd/file/asset-3", "/assets/vmd/file/asset-1"],
+    standbyVmdUrl: "/assets/vmd/file/asset-standby",
     loopMode: "random",
     playbackRate: 1.2,
     sequence: [],
   },
 );
-
-assert.deepEqual(
-  createDefaultFavoriteLoopInteraction([
-    { display_name: "杩涘満寰呮満.vmd", filename: "杩涘満寰呮満.vmd", slot: "neutral", url: "/standby.vmd" },
-  ]),
-  {
-    emotion: "neutral",
-    action: "idle",
-    mode: "vmd",
-    vmdUrl: "/standby.vmd",
-    vmdLoopUrls: [],
-    standbyVmdUrl: "/standby.vmd",
-    loopMode: "random",
-    playbackRate: 1.2,
-    sequence: [],
-  },
-);
-
 assert.deepEqual(
   buildAutoFavoriteInteraction([
-    { display_name: "杩涘満寰呮満.vmd", filename: "杩涘満寰呮満.vmd", slot: "neutral", url: "/standby.vmd" },
-    { display_name: "wave.vmd", filename: "wave.vmd", slot: "happy", url: "/wave.vmd" },
-    { display_name: "nod.vmd", filename: "nod.vmd", slot: "happy", url: "/nod.vmd" },
+    {
+      asset_id: "asset-standby",
+      slot: "neutral",
+      filename: "杩涘満寰呮満.vmd",
+      display_name: "杩涘満寰呮満.vmd",
+      url: "/assets/vmd/file/asset-standby",
+    },
+    {
+      asset_id: "asset-3",
+      slot: "happy",
+      filename: "latest.vmd",
+      display_name: "latest.vmd",
+      url: "/assets/vmd/file/asset-3",
+    },
+    {
+      asset_id: "asset-1",
+      slot: "happy",
+      filename: "older.vmd",
+      display_name: "older.vmd",
+      url: "/assets/vmd/file/asset-1",
+    },
   ]),
   {
     emotion: "happy",
     action: "idle",
     mode: "vmd",
-    vmdUrl: "/wave.vmd",
-    vmdLoopUrls: ["/wave.vmd", "/nod.vmd"],
-    standbyVmdUrl: "/standby.vmd",
+    vmdUrl: "/assets/vmd/file/asset-3",
+    vmdLoopUrls: ["/assets/vmd/file/asset-3", "/assets/vmd/file/asset-1"],
+    standbyVmdUrl: "/assets/vmd/file/asset-standby",
     loopMode: "random",
     playbackRate: 1.2,
     sequence: [],
   },
 );
-
 assert.deepEqual(
   buildAutoplayResumeInteraction([
-    { display_name: "杩涘満寰呮満.vmd", filename: "杩涘満寰呮満.vmd", slot: "neutral", url: "/standby.vmd" },
-    { display_name: "wave.vmd", filename: "wave.vmd", slot: "happy", url: "/wave.vmd" },
-    { display_name: "nod.vmd", filename: "nod.vmd", slot: "happy", url: "/nod.vmd" },
+    {
+      asset_id: "asset-standby",
+      slot: "neutral",
+      filename: "杩涘満寰呮満.vmd",
+      display_name: "杩涘満寰呮満.vmd",
+      url: "/assets/vmd/file/asset-standby",
+    },
+    {
+      asset_id: "asset-3",
+      slot: "happy",
+      filename: "latest.vmd",
+      display_name: "latest.vmd",
+      url: "/assets/vmd/file/asset-3",
+    },
+    {
+      asset_id: "asset-1",
+      slot: "happy",
+      filename: "older.vmd",
+      display_name: "older.vmd",
+      url: "/assets/vmd/file/asset-1",
+    },
   ]),
   {
     emotion: "happy",
     action: "idle",
     mode: "vmd",
-    vmdUrl: "/standby.vmd",
-    vmdLoopUrls: ["/wave.vmd", "/nod.vmd"],
-    standbyVmdUrl: "/standby.vmd",
+    vmdUrl: "/assets/vmd/file/asset-standby",
+    vmdLoopUrls: ["/assets/vmd/file/asset-3", "/assets/vmd/file/asset-1"],
+    standbyVmdUrl: "/assets/vmd/file/asset-standby",
     loopMode: "random",
     playbackRate: 1.2,
     sequence: [],
   },
 );
-
 assert.deepEqual(
-  buildAutoplayResumeInteraction([
-    { display_name: "杩涘満寰呮満.vmd", filename: "杩涘満寰呮満.vmd", slot: "neutral", url: "/standby.vmd" },
+  createDefaultFavoriteLoopInteraction([
+    {
+      asset_id: "asset-standby-only",
+      slot: "neutral",
+      filename: "杩涘満寰呮満.vmd",
+      display_name: "杩涘満寰呮満.vmd",
+      url: "/assets/vmd/file/asset-standby-only",
+    },
   ]),
   {
     emotion: "neutral",
     action: "idle",
     mode: "vmd",
-    vmdUrl: "/standby.vmd",
+    vmdUrl: "/assets/vmd/file/asset-standby-only",
     vmdLoopUrls: [],
-    standbyVmdUrl: "/standby.vmd",
+    standbyVmdUrl: "/assets/vmd/file/asset-standby-only",
     loopMode: "random",
     playbackRate: 1.2,
     sequence: [],
   },
 );
+assert.equal(createDefaultFavoriteLoopInteraction([]), null);
 
 console.log("vmd preview checks passed");

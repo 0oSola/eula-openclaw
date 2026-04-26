@@ -13,6 +13,7 @@ type StageInteraction = {
   vmdUrl?: string;
   vmdLoopUrls?: string[];
   standbyVmdUrl?: string;
+  loopGapMs?: number;
   loopMode?: "random" | "sequential";
   playbackRate?: number;
   sequence?: Array<{
@@ -117,6 +118,7 @@ export function MMDStage({
         interaction.vmdLoopUrls?.map((url) => toAbsolute(url)),
         {
           standbyUrl: interaction.standbyVmdUrl ? toAbsolute(interaction.standbyVmdUrl) : "",
+          loopGapMs: interaction.loopGapMs,
           loopMode: interaction.loopMode === "sequential" ? "sequential" : "random",
         },
       );

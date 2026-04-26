@@ -54,7 +54,7 @@ function Resolve-NpmCmd {
 
 function Get-ListeningProcessId([int]$Port) {
   try {
-    $conn = Get-NetTCPConnection -LocalPort $Port -ErrorAction Stop | Select-Object -First 1
+    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Select-Object -First 1
     return $conn.OwningProcess
   } catch {
     return $null

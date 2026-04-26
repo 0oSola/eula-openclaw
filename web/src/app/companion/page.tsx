@@ -1,6 +1,6 @@
-"use client";
+﻿"use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -13,11 +13,11 @@ import {
 import { resolvePlaybackPlan } from "@/features/mapping/resolveAction.js";
 import { MMDStage } from "@/features/stage/MMDStage";
 import {
+  DEFAULT_VMD_PLAYBACK_RATE,
   BUILT_IN_VMD_PLAYBACK_RATE,
-  pickMotionFromPreset,
-  resolveDefaultBuiltInMotionPresetForModel,
 } from "@/features/stage/builtInMotionPreferences.js";
 import { getModelDisplayLabel, pickInitialModelSelection } from "@/features/stage/modelCatalog.js";
+import { collectImportableVmdFiles } from "@/features/stage/vmdImportHelpers.js";
 import {
   getResolvedMappings,
   listMmdModels,
@@ -25,6 +25,8 @@ import {
   listVmdAssets,
   postChat,
   requestServerTts,
+  updateVmdAsset,
+  uploadVmdAsset,
 } from "@/lib/api";
 import { clearSession, loadSession, saveSession } from "@/lib/session";
 import type { ChatMessage, MappingConfig, MmdModelAsset, MmdMotionAsset, UserSession, VmdAsset } from "@/lib/types";
@@ -43,20 +45,16 @@ type InteractionState = {
   vmdUrl: string;
   vmdLoopUrls?: string[];
   standbyVmdUrl?: string;
+  loopGapMs?: number;
   loopMode?: "random" | "sequential";
   playbackRate?: number;
   sequence: InteractionStep[];
 };
 
 type InteractionSource = "default" | "autoplay" | "manual-preview" | "chat";
-type FavoriteCapableVmdAsset = VmdAsset & {
-  display_name?: string;
-  is_favorite?: boolean;
-  favorite_model_relative_path?: string | null;
-};
 
 const SPRITE = "/images/sprite-sliced";
-const DEFAULT_MODEL_RELATIVE_PATH = "GirlsFrontline NemesisGnosisDefault.pmx";
+const DEFAULT_MODEL_RELATIVE_PATH = "优菈.pmx";
 const DEFAULT_ASSISTANT_COPY =
   "\u6211\u7406\u89e3\u4f60\u7684\u9700\u6c42\u4e86\uff5e\n\u6b63\u5728\u5e2e\u4f60\u62c6\u89e3\u4efb\u52a1\u5e76\u89c4\u5212\u6b65\u9aa4\uff01";
 const INPUT_LABEL =
@@ -91,6 +89,23 @@ const traceRows = [
   ["GET", "/v1/tools/list", "200", "0.6s"],
 ] as const;
 
+const EMOTION_SLOTS = ["neutral", "happy", "sad", "thinking", "excited", "caring"] as const;
+
+function createDefaultInteractionState(): InteractionState {
+  return {
+    emotion: "neutral",
+    action: "idle",
+    mode: "procedural",
+    vmdUrl: "",
+    vmdLoopUrls: [],
+    standbyVmdUrl: "",
+    loopGapMs: 0,
+    loopMode: "random",
+    playbackRate: DEFAULT_VMD_PLAYBACK_RATE,
+    sequence: [],
+  };
+}
+
 function makeHistory(messages: ChatMessage[]) {
   return messages
     .filter((item) => item.role === "user" || item.role === "assistant")
@@ -115,13 +130,7 @@ export default function CompanionPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [interaction, setInteraction] = useState<InteractionState>({
-    emotion: "neutral",
-    action: "idle",
-    mode: "procedural",
-    vmdUrl: "",
-    sequence: [],
-  });
+  const [interaction, setInteraction] = useState<InteractionState>(createDefaultInteractionState);
   const [mappings, setMappings] = useState<Record<string, MappingConfig>>({});
   const [assets, setAssets] = useState<VmdAsset[]>([]);
   const [models, setModels] = useState<MmdModelAsset[]>([]);
@@ -133,14 +142,28 @@ export default function CompanionPage() {
   const [renderPipeline, setRenderPipeline] = useState<"classic" | "genshin">("classic");
   const [isCharacterPickerOpen, setIsCharacterPickerOpen] = useState(false);
   const [isMotionPickerOpen, setIsMotionPickerOpen] = useState(false);
+  const [isAdvancedPanelOpen, setIsAdvancedPanelOpen] = useState(false);
+  const [advancedTab, setAdvancedTab] = useState<"library" | "favorites">("library");
+  const [advancedSlot, setAdvancedSlot] = useState<(typeof EMOTION_SLOTS)[number]>("happy");
+  const [advancedFavoriteSlotFilter, setAdvancedFavoriteSlotFilter] = useState<"all" | (typeof EMOTION_SLOTS)[number]>(
+    "all",
+  );
+  const [advancedPlaybackRate, setAdvancedPlaybackRate] = useState("1");
+  const [advancedBusy, setAdvancedBusy] = useState(false);
+  const [advancedError, setAdvancedError] = useState("");
+  const [advancedMessage, setAdvancedMessage] = useState("");
+  const [renameTarget, setRenameTarget] = useState<VmdAsset | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [interactionSource, setInteractionSource] = useState<InteractionSource>("default");
   const [pendingAutoResume, setPendingAutoResume] = useState(false);
-  const autoIdlePresetKeyRef = useRef("");
 
   useEffect(() => {
     const saved = loadSession();
     setSession(saved);
-    setRenderPipeline(saved?.renderPipeline || "classic");
+    setRenderPipeline("classic");
+    if (saved && saved.renderPipeline !== "classic") {
+      saveSession({ ...saved, renderPipeline: "classic" });
+    }
   }, []);
 
   useEffect(() => {
@@ -193,11 +216,14 @@ export default function CompanionPage() {
   const currentModelFavoriteAssets = useMemo(() => {
     if (!selectedModel?.relative_path) return [];
     return recentVmdAssets.filter(
-      (asset) =>
-        (asset as FavoriteCapableVmdAsset).is_favorite &&
-        (asset as FavoriteCapableVmdAsset).favorite_model_relative_path === selectedModel.relative_path,
+      (asset) => asset.is_favorite && asset.favorite_model_relative_path === selectedModel.relative_path,
     );
   }, [recentVmdAssets, selectedModel?.relative_path]);
+
+  const filteredFavoriteAssets = useMemo(() => {
+    if (advancedFavoriteSlotFilter === "all") return currentModelFavoriteAssets;
+    return currentModelFavoriteAssets.filter((asset) => asset.slot === advancedFavoriteSlotFilter);
+  }, [advancedFavoriteSlotFilter, currentModelFavoriteAssets]);
 
   const autoFavoriteInteraction = useMemo<InteractionState | null>(() => {
     return buildAutoFavoriteInteraction(currentModelFavoriteAssets) as InteractionState | null;
@@ -217,46 +243,12 @@ export default function CompanionPage() {
     }));
   }, [models, selectedModelPath]);
 
-  const defaultBuiltInMotionPreset = useMemo(() => {
-    return resolveDefaultBuiltInMotionPresetForModel(selectedModel, motions);
-  }, [selectedModel, motions]);
-
-  useEffect(() => {
-    autoIdlePresetKeyRef.current = "";
-    setInteractionSource("default");
-    setPendingAutoResume(false);
-  }, [selectedModel?.relative_path]);
-
-  useEffect(() => {
-    if (autoFavoriteInteraction) return;
-    if (!defaultBuiltInMotionPreset || !selectedModel?.relative_path) return;
-    if (interactionSource !== "default") return;
-    const applyKey = `${selectedModel.relative_path}:${defaultBuiltInMotionPreset.key}`;
-    if (autoIdlePresetKeyRef.current === applyKey) return;
-    const defaultMotion = pickMotionFromPreset(defaultBuiltInMotionPreset);
-    if (!defaultMotion) return;
-
-    autoIdlePresetKeyRef.current = applyKey;
-    setInteraction((current) => {
-      return {
-        emotion: current.emotion || "neutral",
-        action: defaultMotion.label,
-        mode: "vmd",
-        vmdUrl: defaultMotion.url,
-        vmdLoopUrls: defaultBuiltInMotionPreset.motions.map((motion: MmdMotionAsset) => motion.url),
-        standbyVmdUrl: "",
-        loopMode: "random",
-        playbackRate: defaultBuiltInMotionPreset.playbackRate,
-        sequence: [],
-      };
-    });
-  }, [autoFavoriteInteraction, defaultBuiltInMotionPreset, interactionSource, selectedModel]);
+  const latestAssistantMessage =
+    [...messages].reverse().find((item) => item.role === "assistant")?.content || DEFAULT_ASSISTANT_COPY;
 
   useEffect(() => {
     if (!autoFavoriteInteraction) return;
-    if (!selectedModel?.relative_path) return;
     if (interactionSource !== "default" && interactionSource !== "autoplay") return;
-    autoIdlePresetKeyRef.current = "";
     setInteraction(autoFavoriteInteraction);
     setInteractionSource("autoplay");
     setPendingAutoResume(false);
@@ -264,16 +256,15 @@ export default function CompanionPage() {
 
   useEffect(() => {
     if (autoFavoriteInteraction || interactionSource !== "autoplay") return;
-    autoIdlePresetKeyRef.current = "";
+    setInteraction(createDefaultInteractionState());
     setInteractionSource("default");
     setPendingAutoResume(false);
   }, [autoFavoriteInteraction, interactionSource]);
 
-  const latestAssistantMessage =
-    [...messages].reverse().find((item) => item.role === "assistant")?.content || DEFAULT_ASSISTANT_COPY;
-
   function previewVmdAsset(asset: VmdAsset) {
-    const preview = createVmdPreviewInteraction(asset);
+    setAdvancedError("");
+    setAdvancedMessage(`Previewing ${asset.display_name || asset.filename}`);
+    const preview = createVmdPreviewInteraction(asset, Number(advancedPlaybackRate) || 1);
     setInteractionSource("manual-preview");
     setPendingAutoResume(Boolean(autoplayResumeInteraction));
     setInteraction({
@@ -282,11 +273,109 @@ export default function CompanionPage() {
       mode: "vmd",
       vmdUrl: preview.vmdUrl,
       vmdLoopUrls: [],
-      standbyVmdUrl: "",
-      loopMode: "random",
-      playbackRate: resolveVmdPlaybackRate(),
+      playbackRate: preview.playbackRate || DEFAULT_VMD_PLAYBACK_RATE,
       sequence: preview.sequence,
     });
+  }
+
+  function resetModelState() {
+    setSpeaking(false);
+    setInteractionSource("default");
+    setPendingAutoResume(false);
+    setInteraction(createDefaultInteractionState());
+    setAdvancedError("");
+    setAdvancedMessage("Model reset to default state.");
+  }
+
+  async function handleFavoriteAsset(asset: VmdAsset) {
+    if (!session || !selectedModel?.relative_path) return;
+    setAdvancedBusy(true);
+    setAdvancedError("");
+    setAdvancedMessage("");
+    try {
+      const next = await updateVmdAsset(session.userId, asset.asset_id, {
+        favorite: !asset.is_favorite,
+        model_relative_path: selectedModel.relative_path,
+      });
+      setAssets((current) => current.map((item) => (item.asset_id === next.asset_id ? next : item)));
+      setAdvancedMessage(next.is_favorite ? `Favorited ${next.display_name}` : `Removed ${next.display_name} from favorites`);
+    } catch (err) {
+      setAdvancedError(err instanceof Error ? err.message : "Favorite update failed.");
+    } finally {
+      setAdvancedBusy(false);
+    }
+  }
+
+  function openRenameDialog(asset: VmdAsset) {
+    setAdvancedError("");
+    setRenameTarget(asset);
+    setRenameDraft(asset.display_name || asset.filename);
+  }
+
+  function closeRenameDialog() {
+    setRenameTarget(null);
+    setRenameDraft("");
+  }
+
+  async function handleRenameAssetSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !renameTarget) return;
+    const nextName = renameDraft.trim();
+    if (!nextName) {
+      setAdvancedError("Name is required.");
+      return;
+    }
+    setAdvancedBusy(true);
+    setAdvancedError("");
+    setAdvancedMessage("");
+    try {
+      const next = await updateVmdAsset(session.userId, renameTarget.asset_id, {
+        display_name: nextName,
+        model_relative_path: selectedModel?.relative_path,
+      });
+      setAssets((current) => current.map((item) => (item.asset_id === next.asset_id ? next : item)));
+      setAdvancedMessage(`Renamed to ${next.display_name}`);
+      closeRenameDialog();
+    } catch (err) {
+      setAdvancedError(err instanceof Error ? err.message : "Rename failed.");
+    } finally {
+      setAdvancedBusy(false);
+    }
+  }
+
+  async function handleAdvancedUpload(fileListLike: FileList | File[]) {
+    if (!session) return;
+    setAdvancedBusy(true);
+    setAdvancedError("");
+    setAdvancedMessage("");
+    try {
+      const files = collectImportableVmdFiles(fileListLike);
+      if (!files.length) {
+        setAdvancedError("No importable .vmd files were found.");
+        return;
+      }
+
+      const importedItems: VmdAsset[] = [];
+      for (const file of files) {
+        const item = await uploadVmdAsset(session.userId, advancedSlot, file);
+        importedItems.push(item);
+      }
+
+      setAssets((current) => {
+        const deduped = current.filter((asset) => !importedItems.some((item) => item.asset_id === asset.asset_id));
+        return [...importedItems, ...deduped];
+      });
+
+      if (importedItems[0]) {
+        previewVmdAsset(importedItems[0]);
+      }
+      setAdvancedMessage(`Imported ${importedItems.length} VMD file(s).`);
+      setIsAdvancedPanelOpen(true);
+    } catch (err) {
+      setAdvancedError(err instanceof Error ? err.message : "VMD import failed.");
+    } finally {
+      setAdvancedBusy(false);
+    }
   }
 
   function previewBuiltInMotion(motion: MmdMotionAsset) {
@@ -298,8 +387,6 @@ export default function CompanionPage() {
       mode: "vmd",
       vmdUrl: motion.url,
       vmdLoopUrls: [],
-      standbyVmdUrl: "",
-      loopMode: "random",
       playbackRate: BUILT_IN_VMD_PLAYBACK_RATE,
       sequence: [],
     });
@@ -307,9 +394,10 @@ export default function CompanionPage() {
   }
 
   function handleRenderPipelineChange(nextPipeline: "classic" | "genshin") {
-    setRenderPipeline(nextPipeline);
+    const normalizedPipeline = nextPipeline === "genshin" ? "classic" : nextPipeline;
+    setRenderPipeline(normalizedPipeline);
     if (!session) return;
-    saveSession({ ...session, renderPipeline: nextPipeline });
+    saveSession({ ...session, renderPipeline: normalizedPipeline });
   }
 
   function browserSpeak(text: string) {
@@ -379,6 +467,7 @@ export default function CompanionPage() {
       });
 
       if (plan.mode === "vmd") {
+        const plannedAsset = Object.values(assetIndex).find((item) => item.url === plan.url);
         setInteractionSource("chat");
         setPendingAutoResume(Boolean(autoplayResumeInteraction));
         setInteraction({
@@ -387,9 +476,7 @@ export default function CompanionPage() {
           mode: "vmd",
           vmdUrl: plan.url,
           vmdLoopUrls: [],
-          standbyVmdUrl: "",
-          loopMode: "random",
-          playbackRate: 1,
+          playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: plan.url }),
           sequence: [],
         });
       } else {
@@ -429,7 +516,8 @@ export default function CompanionPage() {
   }
 
   function handleCharacterSwitch(nextPath: string) {
-    autoIdlePresetKeyRef.current = "";
+    setSpeaking(false);
+    setInteraction(createDefaultInteractionState());
     setInteractionSource("default");
     setPendingAutoResume(false);
     setSelectedModelPath(nextPath);
@@ -444,7 +532,6 @@ export default function CompanionPage() {
       return;
     }
 
-    autoIdlePresetKeyRef.current = "";
     setInteractionSource("default");
     setPendingAutoResume(false);
   }
@@ -529,7 +616,6 @@ export default function CompanionPage() {
               }}
             >
               <option value="classic">Classic</option>
-              <option value="genshin">Genshin</option>
             </select>
           </label>
         </div>
@@ -565,7 +651,7 @@ export default function CompanionPage() {
           className={`mio-nav-button mio-motion-trigger ${isMotionPickerOpen ? "is-open" : ""}`}
           type="button"
           data-testid="mio-motion-trigger"
-          aria-label={"动作切换"}
+          aria-label={"鍔ㄤ綔鍒囨崲"}
           aria-haspopup="dialog"
           aria-expanded={isMotionPickerOpen}
           onClick={() => {
@@ -627,15 +713,15 @@ export default function CompanionPage() {
             className="mio-motion-panel"
             data-testid="mio-motion-panel"
             role="dialog"
-            aria-label={"动作切换面板"}
+            aria-label={"鍔ㄤ綔鍒囨崲闈㈡澘"}
           >
             <header>
-              <strong>{"动作切换"}</strong>
-              <span>{activeMotionPath || "使用 MMD/vmd 内置动作"}</span>
+              <strong>{"鍔ㄤ綔鍒囨崲"}</strong>
+              <span>{activeMotionPath || "浣跨敤 MMD/vmd 鍐呯疆鍔ㄤ綔"}</span>
             </header>
             <div className="mio-motion-list">
               {motions.length === 0 ? (
-                <p className="mio-motion-empty">{"MMD/vmd 下暂无可用 .vmd 动作"}</p>
+                <p className="mio-motion-empty">{"MMD/vmd 涓嬫殏鏃犲彲鐢?.vmd 鍔ㄤ綔"}</p>
               ) : (
                 motions.map((motion) => {
                   const active = motion.relative_path === activeMotionPath;
@@ -645,7 +731,7 @@ export default function CompanionPage() {
                       className={`mio-motion-option ${active ? "is-selected" : ""}`}
                       type="button"
                       data-testid="mio-motion-option"
-                      aria-label={`切换到 ${motion.label} 动作`}
+                      aria-label={`鍒囨崲鍒?${motion.label} 鍔ㄤ綔`}
                       onClick={() => previewBuiltInMotion(motion)}
                     >
                       <span className="mio-motion-chip">{active ? "ON" : "VMD"}</span>
@@ -687,7 +773,7 @@ export default function CompanionPage() {
           modelUrl={selectedModel?.url || ""}
           modelLabel={selectedModel ? getModelDisplayLabel(selectedModel) : ""}
           renderPipeline={renderPipeline}
-          onModelChange={setSelectedModelPath}
+          onModelChange={handleCharacterSwitch}
         />
       </div>
 
@@ -736,6 +822,231 @@ export default function CompanionPage() {
       </section>
 
       <div className="mio-stage-bottom-fade" data-testid="mio-stage-bottom-fade" aria-hidden="true" />
+      {isAdvancedPanelOpen ? (
+        <section
+          id="mio-advanced-panel"
+          className="mio-advanced-panel"
+          data-testid="mio-advanced-panel"
+          role="dialog"
+          aria-modal="false"
+          aria-label="Advanced VMD quick import"
+        >
+          <header className="mio-advanced-panel-head">
+            <div>
+              <strong>VMD Quick Import</strong>
+              <span>Import, preview, favorite, and rename motions without leaving the stage.</span>
+            </div>
+            <button
+              type="button"
+              className="mio-advanced-close"
+              aria-label="Close advanced panel"
+              onClick={() => {
+                setIsAdvancedPanelOpen(false);
+                closeRenameDialog();
+              }}
+            >
+              ×
+            </button>
+          </header>
+
+          <div className="mio-advanced-toolbar">
+            <label className="mio-advanced-field">
+              <span>Emotion Slot</span>
+              <select
+                value={advancedSlot}
+                onChange={(event) => setAdvancedSlot(event.target.value as (typeof EMOTION_SLOTS)[number])}
+                disabled={advancedBusy}
+              >
+                {EMOTION_SLOTS.map((slot) => (
+                  <option key={slot} value={slot}>
+                    {slot}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="mio-advanced-field">
+              <span>Playback Rate</span>
+              <input
+                type="number"
+                min="0.1"
+                max="4"
+                step="0.1"
+                value={advancedPlaybackRate}
+                onChange={(event) => setAdvancedPlaybackRate(event.target.value)}
+                disabled={advancedBusy}
+              />
+            </label>
+
+            <label className={`mio-advanced-upload ${advancedBusy ? "is-busy" : ""}`}>
+              <span>{advancedBusy ? "Importing..." : "Import VMD"}</span>
+              <input
+                type="file"
+                accept=".vmd"
+                multiple
+                disabled={advancedBusy}
+                onChange={(event) => {
+                  if (event.target.files?.length) {
+                    void handleAdvancedUpload(event.target.files);
+                  }
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+            <label className={`mio-advanced-upload ${advancedBusy ? "is-busy" : ""}`}>
+              <span>{advancedBusy ? "Importing..." : "Import Folder"}</span>
+              <input
+                type="file"
+                accept=".vmd"
+                multiple
+                {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+                disabled={advancedBusy}
+                onChange={(event) => {
+                  if (event.target.files?.length) {
+                    void handleAdvancedUpload(event.target.files);
+                  }
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+          </div>
+
+          <div className="mio-advanced-tabs" role="tablist" aria-label="VMD asset views">
+            <button
+              type="button"
+              className={`mio-advanced-tab ${advancedTab === "library" ? "is-active" : ""}`}
+              role="tab"
+              aria-selected={advancedTab === "library"}
+              onClick={() => {
+                setAdvancedTab("library");
+                setAdvancedFavoriteSlotFilter("all");
+              }}
+            >
+              Library
+            </button>
+            <button
+              type="button"
+              className={`mio-advanced-tab ${advancedTab === "favorites" ? "is-active" : ""}`}
+              role="tab"
+              aria-selected={advancedTab === "favorites"}
+              onClick={() => setAdvancedTab("favorites")}
+            >
+              Favorites
+            </button>
+          </div>
+
+          {advancedError ? <p className="mio-advanced-error">{advancedError}</p> : null}
+          {advancedMessage && !advancedError ? <p className="mio-advanced-empty">{advancedMessage}</p> : null}
+
+          <div className="mio-advanced-list">
+            <div className="mio-advanced-list-head">
+              <span>{advancedTab === "library" ? "Recent VMD Assets" : "Current Model Favorites"}</span>
+              <strong>
+                {(advancedTab === "library" ? recentVmdAssets.length : filteredFavoriteAssets.length)
+                  .toString()
+                  .padStart(2, "0")}
+              </strong>
+            </div>
+
+            {advancedTab === "favorites" ? (
+              <label className="mio-advanced-filter">
+                <span>Favorite Slot Filter</span>
+                <select
+                  aria-label="Favorite slot filter"
+                  value={advancedFavoriteSlotFilter}
+                  onChange={(event) =>
+                    setAdvancedFavoriteSlotFilter(event.target.value as "all" | (typeof EMOTION_SLOTS)[number])
+                  }
+                  disabled={advancedBusy}
+                >
+                  <option value="all">All slots</option>
+                  {EMOTION_SLOTS.map((slot) => (
+                    <option key={slot} value={slot}>
+                      {slot}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+
+            <div className="mio-advanced-list-scroll">
+              {(advancedTab === "library" ? recentVmdAssets : filteredFavoriteAssets).length === 0 ? (
+                <p className="mio-advanced-empty">
+                  {advancedTab === "library"
+                    ? "No VMD assets are ready for preview yet."
+                    : "No favorited VMD assets match this slot filter."}
+                </p>
+              ) : (
+                (advancedTab === "library" ? recentVmdAssets : filteredFavoriteAssets).map((asset) => (
+                  <div key={asset.asset_id} className="mio-advanced-asset" data-testid="mio-advanced-asset">
+                    <button
+                      type="button"
+                      className="mio-advanced-asset-preview"
+                      onClick={() => previewVmdAsset(asset)}
+                    >
+                      <span className="mio-advanced-asset-copy">
+                        <strong>{asset.display_name || asset.filename}</strong>
+                        <small>
+                          {asset.slot} · {(asset.size_bytes / 1024).toFixed(1)} KB
+                        </small>
+                      </span>
+                      <span className="mio-advanced-asset-action">Preview</span>
+                    </button>
+                    <div className="mio-advanced-asset-tools">
+                      <button
+                        type="button"
+                        className={`mio-advanced-mini ${asset.is_favorite ? "is-active" : ""}`}
+                        onClick={() => handleFavoriteAsset(asset)}
+                        disabled={advancedBusy || !selectedModel?.relative_path}
+                      >
+                        {asset.is_favorite ? "Unfavorite" : "Favorite"}
+                      </button>
+                      <button
+                        type="button"
+                        className="mio-advanced-mini"
+                        onClick={() => openRenameDialog(asset)}
+                        disabled={advancedBusy}
+                      >
+                        Rename
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {renameTarget ? (
+            <div className="mio-rename-scrim">
+              <form
+                className="mio-rename-dialog"
+                data-testid="mio-rename-dialog"
+                onSubmit={handleRenameAssetSubmit}
+              >
+                <div className="mio-rename-copy">
+                  <strong>Rename Motion</strong>
+                  <span>{renameTarget.filename}</span>
+                </div>
+                <input
+                  className="mio-rename-input"
+                  data-testid="mio-rename-input"
+                  value={renameDraft}
+                  onChange={(event) => setRenameDraft(event.target.value)}
+                  placeholder="Enter motion name"
+                  autoFocus
+                />
+                <div className="mio-rename-actions">
+                  <button type="button" className="mio-advanced-mini" onClick={closeRenameDialog} disabled={advancedBusy}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="mio-advanced-mini is-active" disabled={advancedBusy}>
+                    Confirm
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
       <form className="mio-command-bar" data-testid="mio-command-bar" onSubmit={onSubmit}>
         <label className="mio-tts">
           <img src={`${SPRITE}/asset-013.png`} alt="" />
@@ -769,9 +1080,25 @@ export default function CompanionPage() {
           </select>
         </label>
 
-        <button className="mio-mode" type="button" onClick={() => assets[0] && previewVmdAsset(assets[0])}>
+        <button
+          className={`mio-mode ${isAdvancedPanelOpen ? "is-active" : ""}`}
+          type="button"
+          aria-expanded={isAdvancedPanelOpen}
+          aria-controls="mio-advanced-panel"
+          onClick={() => {
+            setIsAdvancedPanelOpen((open) => !open);
+            setAdvancedError("");
+            setAdvancedTab("library");
+            setAdvancedFavoriteSlotFilter("all");
+          }}
+        >
           <img src={`${SPRITE}/asset-010.png`} alt="" />
           <span>{"\u9ad8\u7ea7\u529f\u80fd"}</span>
+        </button>
+
+        <button className="mio-mode" type="button" onClick={resetModelState}>
+          <img src={`${SPRITE}/asset-011.png`} alt="" />
+          <span>{"\u6062\u590d\u9ed8\u8ba4"}</span>
         </button>
 
         {error ? <p className="mio-error">{error}</p> : null}
