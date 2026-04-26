@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 
-import { createDefaultFavoriteLoopInteraction } from "../src/features/mapping/vmdPreview.js";
+import {
+  buildAutoFavoriteInteraction,
+  buildAutoplayResumeInteraction,
+  createDefaultFavoriteLoopInteraction,
+} from "../src/features/mapping/vmdPreview.js";
 import { resolveActionConfig, resolvePlaybackPlan } from "../src/features/mapping/resolveAction.js";
 import { buildTraceHeaders } from "../src/lib/trace.js";
 
@@ -78,6 +82,61 @@ function run() {
       { display_name: "杩涘満寰呮満.vmd", filename: "杩涘満寰呮満.vmd", slot: "neutral", url: "/standby.vmd" },
     ]);
     assert.deepEqual(loopInteraction, {
+      emotion: "neutral",
+      action: "idle",
+      mode: "vmd",
+      vmdUrl: "/standby.vmd",
+      vmdLoopUrls: [],
+      standbyVmdUrl: "/standby.vmd",
+      loopMode: "random",
+      playbackRate: 1.2,
+      sequence: [],
+    });
+  }
+
+  {
+    const autoInteraction = buildAutoFavoriteInteraction([
+      { display_name: "杩涘満寰呮満.vmd", filename: "杩涘満寰呮満.vmd", slot: "neutral", url: "/standby.vmd" },
+      { display_name: "wave.vmd", filename: "wave.vmd", slot: "happy", url: "/wave.vmd" },
+      { display_name: "nod.vmd", filename: "nod.vmd", slot: "happy", url: "/nod.vmd" },
+    ]);
+    assert.deepEqual(autoInteraction, {
+      emotion: "happy",
+      action: "idle",
+      mode: "vmd",
+      vmdUrl: "/wave.vmd",
+      vmdLoopUrls: ["/wave.vmd", "/nod.vmd"],
+      standbyVmdUrl: "/standby.vmd",
+      loopMode: "random",
+      playbackRate: 1.2,
+      sequence: [],
+    });
+  }
+
+  {
+    const resumeInteraction = buildAutoplayResumeInteraction([
+      { display_name: "杩涘満寰呮満.vmd", filename: "杩涘満寰呮満.vmd", slot: "neutral", url: "/standby.vmd" },
+      { display_name: "wave.vmd", filename: "wave.vmd", slot: "happy", url: "/wave.vmd" },
+      { display_name: "nod.vmd", filename: "nod.vmd", slot: "happy", url: "/nod.vmd" },
+    ]);
+    assert.deepEqual(resumeInteraction, {
+      emotion: "happy",
+      action: "idle",
+      mode: "vmd",
+      vmdUrl: "/standby.vmd",
+      vmdLoopUrls: ["/wave.vmd", "/nod.vmd"],
+      standbyVmdUrl: "/standby.vmd",
+      loopMode: "random",
+      playbackRate: 1.2,
+      sequence: [],
+    });
+  }
+
+  {
+    const resumeInteraction = buildAutoplayResumeInteraction([
+      { display_name: "杩涘満寰呮満.vmd", filename: "杩涘満寰呮満.vmd", slot: "neutral", url: "/standby.vmd" },
+    ]);
+    assert.deepEqual(resumeInteraction, {
       emotion: "neutral",
       action: "idle",
       mode: "vmd",

@@ -12,6 +12,8 @@ type StageInteraction = {
   mode?: "procedural" | "vmd";
   vmdUrl?: string;
   vmdLoopUrls?: string[];
+  standbyVmdUrl?: string;
+  loopMode?: "random" | "sequential";
   playbackRate?: number;
   sequence?: Array<{
     template: string;
@@ -36,6 +38,7 @@ export function MMDStage({
   modelUrl,
   modelLabel,
   onModelChange,
+  onInteractionComplete,
   renderPipeline = "classic",
   chrome = "panel",
 }: {
@@ -46,6 +49,7 @@ export function MMDStage({
   modelUrl: string;
   modelLabel: string;
   onModelChange: (nextPath: string) => void;
+  onInteractionComplete?: () => void;
   renderPipeline?: "classic" | "genshin";
   chrome?: "panel" | "bare";
 }) {
@@ -111,11 +115,48 @@ export function MMDStage({
         toAbsolute(interaction.vmdUrl),
         interaction.playbackRate,
         interaction.vmdLoopUrls?.map((url) => toAbsolute(url)),
+        {
+          standbyUrl: interaction.standbyVmdUrl ? toAbsolute(interaction.standbyVmdUrl) : "",
+          loopMode: interaction.loopMode === "sequential" ? "sequential" : "random",
+        },
       );
       return;
     }
     runtime.applyInteraction(interaction);
   }, [interaction]);
+
+  useEffect(() => {
+    if (!onInteractionComplete) return;
+    if (interaction.mode === "vmd" && (interaction.vmdLoopUrls?.length || interaction.standbyVmdUrl)) return;
+
+    let armedProceduralCompletion = false;
+    const expectedVmdUrl = interaction.mode === "vmd" && interaction.vmdUrl ? toAbsolute(interaction.vmdUrl) : "";
+    const intervalId = window.setInterval(() => {
+      const runtime = runtimeRef.current;
+      if (!runtime || runtime.isLoadingVmd) return;
+
+      if (interaction.mode === "vmd") {
+        if (!expectedVmdUrl || runtime.currentVmdUrl !== expectedVmdUrl) return;
+        if (!runtime.currentVmdDurationMs || !runtime.currentVmdStartedAt) return;
+        if (performance.now() - runtime.currentVmdStartedAt < runtime.currentVmdDurationMs) return;
+        window.clearInterval(intervalId);
+        onInteractionComplete();
+        return;
+      }
+
+      if (runtime.currentSequence || runtime.currentAction) {
+        armedProceduralCompletion = true;
+        return;
+      }
+      if (!armedProceduralCompletion) return;
+      window.clearInterval(intervalId);
+      onInteractionComplete();
+    }, 100);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [interaction, onInteractionComplete]);
 
   function handleModelChange(event: ChangeEvent<HTMLSelectElement>) {
     onModelChange(event.target.value);
