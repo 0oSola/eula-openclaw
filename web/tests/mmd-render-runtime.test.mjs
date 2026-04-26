@@ -33,6 +33,9 @@ function makeRuntime(overrides = {}) {
     currentClip: null,
     currentVmdPlaybackRate: 1,
     currentVmdLoopUrls: [],
+    currentVmdStandbyUrl: "",
+    currentVmdLoopMode: "random",
+    currentVmdLoopPhase: "loop",
     currentVmdUrl: "",
     currentVmdStartedAt: 0,
     currentVmdDurationMs: 0,
@@ -519,6 +522,49 @@ test("stage runtime state reapplies current VMD interaction to recreated runtime
   ]);
 });
 
+test("stage runtime state forwards standby metadata when recreating VMD interactions", () => {
+  const calls = [];
+  const interaction = {
+    emotion: "happy",
+    action: "idle",
+    mode: "vmd",
+    vmdUrl: "/motions/wave.vmd",
+    playbackRate: 1.2,
+    vmdLoopUrls: ["/motions/wave.vmd", "/motions/nod.vmd"],
+    standbyVmdUrl: "/motions/standby.vmd",
+    loopMode: "random",
+  };
+  const runtime = {
+    setSpeaking(value) {
+      calls.push(["speaking", value]);
+    },
+    applyInteraction(value) {
+      calls.push(["interaction", value]);
+    },
+    playVmd(value, playbackRate, vmdLoopUrls, options) {
+      calls.push(["vmd", value, playbackRate, vmdLoopUrls, options]);
+    },
+  };
+
+  applyStageRuntimeState(runtime, {
+    speaking: false,
+    interaction,
+    resolveUrl: (url) => `abs:${url}`,
+  });
+
+  assert.deepEqual(calls, [
+    ["speaking", false],
+    ["interaction", interaction],
+    [
+      "vmd",
+      "abs:/motions/wave.vmd",
+      1.2,
+      ["abs:/motions/wave.vmd", "abs:/motions/nod.vmd"],
+      { standbyUrl: "abs:/motions/standby.vmd", loopMode: "random" },
+    ],
+  ]);
+});
+
 test("pickNextLoopMotionUrl avoids immediately repeating the active loop motion", () => {
   const urls = ["/motions/idle-a.vmd", "/motions/idle-b.vmd", "/motions/idle-c.vmd"];
 
@@ -604,12 +650,105 @@ test("updateVmdLoop starts another built-in idle motion after the current clip d
     },
   });
 
-  runtime.updateVmdLoop(1800);
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    runtime.updateVmdLoop(1800);
+  } finally {
+    Math.random = originalRandom;
+  }
 
   assert.deepEqual(playCalls, [[
     "/motions/idle-b.vmd",
     1.5,
     ["/motions/idle-a.vmd", "/motions/idle-b.vmd", "/motions/idle-c.vmd"],
+  ]]);
+});
+
+test("updateVmdLoop inserts standby between loop clips", () => {
+  const playCalls = [];
+  const runtime = makeRuntime({
+    currentClip: { name: "motion-clip", duration: 0.5 },
+    currentVmdPlaybackRate: 1.2,
+    currentVmdLoopUrls: ["/motions/wave.vmd", "/motions/nod.vmd"],
+    currentVmdStandbyUrl: "/motions/standby.vmd",
+    currentVmdLoopMode: "random",
+    currentVmdLoopPhase: "loop",
+    currentVmdUrl: "/motions/wave.vmd",
+    currentVmdStartedAt: 1000,
+    currentVmdDurationMs: 500,
+    playVmd(url, playbackRate, loopUrls, options) {
+      playCalls.push([url, playbackRate, loopUrls, options]);
+    },
+  });
+
+  runtime.updateVmdLoop(1600);
+
+  assert.deepEqual(playCalls, [[
+    "/motions/standby.vmd",
+    1.2,
+    ["/motions/wave.vmd", "/motions/nod.vmd"],
+    { standbyUrl: "/motions/standby.vmd", loopMode: "random", resumePhase: "standby" },
+  ]]);
+});
+
+test("updateVmdLoop resumes the next loop clip after standby finishes", () => {
+  const playCalls = [];
+  const runtime = makeRuntime({
+    currentClip: { name: "standby-clip", duration: 0.4 },
+    currentVmdPlaybackRate: 1.2,
+    currentVmdLoopUrls: ["/motions/wave.vmd", "/motions/nod.vmd"],
+    currentVmdStandbyUrl: "/motions/standby.vmd",
+    currentVmdLoopMode: "random",
+    currentVmdLoopPhase: "standby",
+    currentVmdUrl: "/motions/standby.vmd",
+    currentVmdStartedAt: 1000,
+    currentVmdDurationMs: 400,
+    playVmd(url, playbackRate, loopUrls, options) {
+      playCalls.push([url, playbackRate, loopUrls, options]);
+    },
+  });
+
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    runtime.updateVmdLoop(1500);
+  } finally {
+    Math.random = originalRandom;
+  }
+
+  assert.deepEqual(playCalls, [[
+    "/motions/wave.vmd",
+    1.2,
+    ["/motions/wave.vmd", "/motions/nod.vmd"],
+    { standbyUrl: "/motions/standby.vmd", loopMode: "random", resumePhase: "loop" },
+  ]]);
+});
+
+test("updateVmdLoop replays standby in standby-only mode", () => {
+  const playCalls = [];
+  const runtime = makeRuntime({
+    currentClip: { name: "standby-only-clip", duration: 0.5 },
+    currentVmdPlaybackRate: 1.2,
+    currentVmdLoopUrls: [],
+    currentVmdStandbyUrl: "/motions/standby.vmd",
+    currentVmdLoopMode: "random",
+    currentVmdLoopPhase: "standby-only",
+    currentVmdUrl: "/motions/standby.vmd",
+    currentVmdStartedAt: 1000,
+    currentVmdDurationMs: 500,
+    playVmd(url, playbackRate, loopUrls, options) {
+      playCalls.push([url, playbackRate, loopUrls, options]);
+    },
+  });
+
+  runtime.updateVmdLoop(1600);
+
+  assert.deepEqual(playCalls, [[
+    "/motions/standby.vmd",
+    1.2,
+    [],
+    { standbyUrl: "/motions/standby.vmd", loopMode: "random", resumePhase: "standby-only" },
   ]]);
 });
 
