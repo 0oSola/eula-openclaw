@@ -94,13 +94,51 @@ class TraceStore:
                 user_id TEXT NOT NULL,
                 slot TEXT NOT NULL,
                 filename TEXT NOT NULL,
+                display_name TEXT,
+                source_relative_path TEXT,
                 relative_path TEXT NOT NULL,
+                is_favorite INTEGER NOT NULL DEFAULT 0,
+                favorite_relative_path TEXT,
+                favorite_model_relative_path TEXT,
                 size_bytes INTEGER NOT NULL,
                 created_at TEXT NOT NULL
             );
             """
         )
+        existing_columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(asset_registry)").fetchall()
+        }
+        self._add_column_if_missing(existing_columns, "display_name", "ALTER TABLE asset_registry ADD COLUMN display_name TEXT")
+        self._add_column_if_missing(
+            existing_columns,
+            "source_relative_path",
+            "ALTER TABLE asset_registry ADD COLUMN source_relative_path TEXT",
+        )
+        self._add_column_if_missing(
+            existing_columns,
+            "is_favorite",
+            "ALTER TABLE asset_registry ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0",
+        )
+        self._add_column_if_missing(
+            existing_columns,
+            "favorite_relative_path",
+            "ALTER TABLE asset_registry ADD COLUMN favorite_relative_path TEXT",
+        )
+        self._add_column_if_missing(
+            existing_columns,
+            "favorite_model_relative_path",
+            "ALTER TABLE asset_registry ADD COLUMN favorite_model_relative_path TEXT",
+        )
         self._conn.commit()
+
+    def _add_column_if_missing(self, existing_columns: set[str], column_name: str, statement: str) -> None:
+        if column_name in existing_columns:
+            return
+        try:
+            self._conn.execute(statement)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
 
     def _append_ndjson(self, record: dict[str, Any], created_at: datetime) -> None:
         file_name = f"{created_at.date().isoformat()}.ndjson"
@@ -354,6 +392,7 @@ class TraceStore:
         user_id: str,
         slot: str,
         filename: str,
+        source_relative_path: str | None,
         relative_path: str,
         size_bytes: int,
     ) -> dict[str, Any]:
@@ -361,10 +400,12 @@ class TraceStore:
         ts = _utc_now_iso()
         self._conn.execute(
             """
-            INSERT INTO asset_registry (asset_id, user_id, slot, filename, relative_path, size_bytes, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO asset_registry (
+                asset_id, user_id, slot, filename, display_name, source_relative_path, relative_path, is_favorite, favorite_relative_path, favorite_model_relative_path, size_bytes, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?)
             """,
-            (asset_id, user_id, slot, filename, relative_path, size_bytes, ts),
+            (asset_id, user_id, slot, filename, filename, source_relative_path, relative_path, size_bytes, ts),
         )
         self._conn.commit()
         return {
@@ -372,7 +413,12 @@ class TraceStore:
             "user_id": user_id,
             "slot": slot,
             "filename": filename,
+            "display_name": filename,
+            "source_relative_path": source_relative_path,
             "relative_path": relative_path,
+            "is_favorite": False,
+            "favorite_relative_path": None,
+            "favorite_model_relative_path": None,
             "size_bytes": size_bytes,
             "created_at": ts,
         }
@@ -395,6 +441,26 @@ class TraceStore:
     def get_asset(self, asset_id: str) -> dict[str, Any] | None:
         row = self._conn.execute("SELECT * FROM asset_registry WHERE asset_id = ?", (asset_id,)).fetchone()
         return dict(row) if row else None
+
+    def update_asset(
+        self,
+        asset_id: str,
+        *,
+        display_name: str | None,
+        is_favorite: bool,
+        favorite_relative_path: str | None,
+        favorite_model_relative_path: str | None,
+    ) -> dict[str, Any] | None:
+        self._conn.execute(
+            """
+            UPDATE asset_registry
+            SET display_name = ?, is_favorite = ?, favorite_relative_path = ?, favorite_model_relative_path = ?
+            WHERE asset_id = ?
+            """,
+            (display_name, 1 if is_favorite else 0, favorite_relative_path, favorite_model_relative_path, asset_id),
+        )
+        self._conn.commit()
+        return self.get_asset(asset_id)
 
     def delete_asset(self, asset_id: str) -> None:
         self._conn.execute("DELETE FROM asset_registry WHERE asset_id = ?", (asset_id,))
@@ -419,4 +485,3 @@ class TraceStore:
             with path.open("rb") as src, gzip.open(gz_path, "wb") as dst:
                 dst.write(src.read())
             path.unlink(missing_ok=True)
-

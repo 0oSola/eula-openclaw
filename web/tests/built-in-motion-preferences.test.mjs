@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  DEFAULT_VMD_PLAYBACK_RATE,
   BUILT_IN_VMD_PLAYBACK_RATE,
   pickMotionFromPreset,
   resolveDefaultBuiltInMotionPresetForModel,
@@ -72,4 +73,10 @@ test("pickMotionFromPreset deterministically selects motions from the reusable p
   assert.equal(pickMotionFromPreset(preset, 0)?.label, "Smelling Something in the Air");
   assert.equal(pickMotionFromPreset(preset, 0.4)?.label, "Shy");
   assert.equal(pickMotionFromPreset(preset, 0.8)?.label, "Crossed Arms Look Around Confident");
+});
+
+test("built-in and generic VMD playback rates stay on the faster classic baseline", () => {
+  assert.equal(DEFAULT_VMD_PLAYBACK_RATE, 1.2);
+  assert.equal(BUILT_IN_VMD_PLAYBACK_RATE, 1.8);
+  assert.ok(BUILT_IN_VMD_PLAYBACK_RATE > DEFAULT_VMD_PLAYBACK_RATE);
 });

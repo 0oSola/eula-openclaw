@@ -56,6 +56,11 @@ export type VmdAsset = {
   user_id: string;
   slot: EmotionSlot;
   filename: string;
+  display_name: string;
+  source_relative_path?: string | null;
+  is_favorite: boolean;
+  favorite_relative_path?: string | null;
+  favorite_model_relative_path?: string | null;
   size_bytes: number;
   created_at: string;
   url: string;

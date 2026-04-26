@@ -180,17 +180,147 @@ def test_vmd_upload_and_list():
     upload = client.post(
         "/assets/vmd",
         headers={"x-user-id": "u1"},
-        data={"user_id": "u1", "slot": "happy"},
+        data={
+            "user_id": "u1",
+            "slot": "happy",
+            "source_relative_path": "Idle Animations Pack - Copy/Air Scent Idle Animation/Smelling Something in the Air.vmd",
+        },
         files={"file": ("wave.vmd", b"Vocaloid Motion Data 0002", "application/octet-stream")},
     )
     assert upload.status_code == 200
     item = upload.json()
     assert item["slot"] == "happy"
     assert item["filename"] == "wave.vmd"
+    assert (
+        item["source_relative_path"]
+        == "Idle Animations Pack - Copy/Air Scent Idle Animation/Smelling Something in the Air.vmd"
+    )
 
     listed = client.get("/assets/vmd?user_id=u1", headers={"x-user-id": "u1"})
     assert listed.status_code == 200
     assert len(listed.json()["items"]) == 1
+    assert (
+        listed.json()["items"][0]["source_relative_path"]
+        == "Idle Animations Pack - Copy/Air Scent Idle Animation/Smelling Something in the Air.vmd"
+    )
+
+
+def test_vmd_asset_can_be_renamed_and_favorited_into_character_usage_folder():
+    case_dir = _make_case_dir()
+    mmd_root = case_dir / "mmd"
+    model_rel = Path("Role/NemesisDefault.pmx")
+    model_abs = mmd_root / model_rel
+    model_abs.parent.mkdir(parents=True, exist_ok=True)
+    model_abs.write_bytes(b"pmx")
+
+    app = create_app(
+        {
+            "data_dir": str(case_dir / "data"),
+            "admin_user_ids": [],
+            "mmd_root_dir": str(mmd_root),
+        }
+    )
+    client = TestClient(app)
+
+    upload = client.post(
+        "/assets/vmd",
+        headers={"x-user-id": "u1"},
+        data={"user_id": "u1", "slot": "happy"},
+        files={"file": ("wave.vmd", b"Vocaloid Motion Data 0002", "application/octet-stream")},
+    )
+    assert upload.status_code == 200
+    asset = upload.json()
+
+    renamed = client.patch(
+        f"/assets/vmd/{asset['asset_id']}",
+        headers={"x-user-id": "u1"},
+        json={
+            "display_name": "Greeting Loop",
+            "favorite": True,
+            "model_relative_path": model_rel.as_posix(),
+        },
+    )
+    assert renamed.status_code == 200
+    payload = renamed.json()
+    assert payload["display_name"] == "Greeting Loop.vmd"
+    assert payload["is_favorite"] is True
+    assert payload["favorite_relative_path"] == "usage/vmd/Role[动作]/Greeting Loop.vmd"
+    assert payload["favorite_model_relative_path"] == model_rel.as_posix()
+
+    favorite_file = mmd_root / "usage" / "vmd" / "Role[动作]" / "Greeting Loop.vmd"
+    assert favorite_file.exists()
+    assert favorite_file.read_bytes() == b"Vocaloid Motion Data 0002"
+
+    listed = client.get("/assets/vmd?user_id=u1", headers={"x-user-id": "u1"})
+    assert listed.status_code == 200
+    listed_item = listed.json()["items"][0]
+    assert listed_item["display_name"] == "Greeting Loop.vmd"
+    assert listed_item["is_favorite"] is True
+    assert listed_item["favorite_model_relative_path"] == model_rel.as_posix()
+
+    motions = client.get("/assets/mmd/vmds")
+    assert motions.status_code == 200
+    relative_paths = {item["relative_path"] for item in motions.json()["items"]}
+    assert "usage/vmd/Role[动作]/Greeting Loop.vmd" in relative_paths
+
+    unfavorited = client.patch(
+        f"/assets/vmd/{asset['asset_id']}",
+        headers={"x-user-id": "u1"},
+        json={"favorite": False},
+    )
+    assert unfavorited.status_code == 200
+    unfavorited_payload = unfavorited.json()
+    assert unfavorited_payload["is_favorite"] is False
+    assert unfavorited_payload["favorite_relative_path"] is None
+    assert unfavorited_payload["favorite_model_relative_path"] is None
+
+
+def test_legacy_favorite_vmd_assets_backfill_model_association_from_usage_folder():
+    case_dir = _make_case_dir()
+    mmd_root = case_dir / "mmd"
+    model_rel = Path("优菈_by_原神_339146e6e418d79e85a515b26414c0b0/优菈.pmx")
+    model_abs = mmd_root / model_rel
+    model_abs.parent.mkdir(parents=True, exist_ok=True)
+    model_abs.write_bytes(b"pmx")
+
+    app = create_app(
+        {
+            "data_dir": str(case_dir / "data"),
+            "admin_user_ids": [],
+            "mmd_root_dir": str(mmd_root),
+        }
+    )
+    client = TestClient(app)
+
+    upload = client.post(
+        "/assets/vmd",
+        headers={"x-user-id": "u1"},
+        data={"user_id": "u1", "slot": "happy"},
+        files={"file": ("wave.vmd", b"Vocaloid Motion Data 0002", "application/octet-stream")},
+    )
+    assert upload.status_code == 200
+    asset = upload.json()
+
+    favorite_dir = mmd_root / "usage" / "vmd" / "优菈_by_原神_339146e6e418d79e85a515b26414c0b0[动作]"
+    favorite_dir.mkdir(parents=True, exist_ok=True)
+    favorite_file = favorite_dir / "Legacy Wave.vmd"
+    favorite_file.write_bytes(b"Vocaloid Motion Data 0002")
+
+    store = app.state.trace_store
+    updated = store.update_asset(
+        asset["asset_id"],
+        display_name="Legacy Wave.vmd",
+        is_favorite=True,
+        favorite_relative_path="usage/vmd/优菈_by_原神_339146e6e418d79e85a515b26414c0b0[动作]/Legacy Wave.vmd",
+        favorite_model_relative_path=None,
+    )
+    assert updated is not None
+
+    listed = client.get("/assets/vmd?user_id=u1", headers={"x-user-id": "u1"})
+    assert listed.status_code == 200
+    listed_item = listed.json()["items"][0]
+    assert listed_item["is_favorite"] is True
+    assert listed_item["favorite_model_relative_path"] == model_rel.as_posix()
 
 
 def test_mmd_models_list_and_serving_url():

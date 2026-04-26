@@ -9,14 +9,95 @@ import {
   UnrealBloomPass,
 } from "three-stdlib";
 
-const EMOTION_MORPH_HINTS = {
-  happy: ["绗?", "銇亾", "smile"],
-  sad: ["鎮?", "鍥?", "sad"],
-  caring: ["鍎?", "绌?", "smile"],
+const FIXED_EMOTION_MORPH_HINTS = {
+  happy: ["smile", "happy", "\u7b11", "\u5fae\u7b11", "\u7b11\u3044"],
+  sad: ["sad", "sorrow", "\u60b2", "\u96be\u8fc7", "\u60b2\u3057\u3044"],
+  caring: ["soft", "gentle", "smile", "\u6e29\u67d4", "\u5173\u5fc3"],
   neutral: [],
   thinking: [],
-  excited: ["绗?", "銇亾", "smile"],
+  excited: ["smile", "happy", "excited", "\u5f00\u5fc3", "\u9ad8\u5174"],
 };
+
+const FIXED_FACE_MATERIAL_HINTS = [
+  "face",
+  "eye",
+  "brow",
+  "eyelash",
+  "mouth",
+  "lip",
+  "cheek",
+  "\u8138",
+  "\u9762",
+  "\u76ee",
+  "\u773c",
+  "\u7709",
+  "\u776b\u6bdb",
+  "\u53e3",
+  "\u5634",
+  "\u9854",
+];
+
+const FIXED_SKIN_MATERIAL_HINTS = [
+  "skin",
+  "body",
+  "neck",
+  "hand",
+  "arm",
+  "leg",
+  "\u808c",
+  "\u4f53",
+  "\u8eab\u4f53",
+  "\u9888",
+  "\u8116",
+  "\u624b",
+  "\u8155",
+  "\u817f",
+];
+
+const FIXED_HAIR_MATERIAL_HINTS = [
+  "hair",
+  "bang",
+  "strand",
+  "fringe",
+  "ponytail",
+  "tail",
+  "\u9aea",
+  "\u524d\u9aea",
+  "\u6a2a\u9aea",
+  "\u5f8c\u9aea",
+  "\u5934\u53d1",
+  "\u5218\u6d77",
+];
+
+const FIXED_CLOTH_MATERIAL_HINTS = [
+  "skirt",
+  "dress",
+  "cloth",
+  "cape",
+  "cloak",
+  "ribbon",
+  "frill",
+  "sleeve",
+  "scarf",
+  "veil",
+  "\u670d",
+  "\u88d9",
+  "\u5e26",
+  "\u8896",
+  "\u62ab\u98ce",
+  "\u56f4\u5dfe",
+];
+
+const FIXED_MORPH_HINTS = {
+  smile: ["smile", "happy", "\u7b11", "\u5fae\u7b11"],
+  sad: ["sad", "\u60b2", "\u60b2\u4f24"],
+  blink: ["blink", "\u307e\u3070\u305f\u304d", "\u77ac\u304d", "\u7728\u773c"],
+  mouthA: ["a", "mouth_a", "\u3042"],
+  mouthI: ["i", "mouth_i", "\u3044"],
+  mouthU: ["u", "mouth_u", "\u3046"],
+};
+
+// Legacy mojibake hint tables were replaced with ASCII-safe Unicode escapes above.
 
 const ACTION_DURATION = {
   idle: 0,
@@ -63,7 +144,7 @@ const STAGE_PRESENTATION_PRESETS = {
     postfx: { enabled: false },
   },
   genshin: {
-    background: null,
+    background: "#081a35",
     fog: null,
     camera: {
       fov: 30,
@@ -86,25 +167,49 @@ const STAGE_PRESENTATION_PRESETS = {
       size: 38,
       y: -9.2,
       opacity: 0.18,
+      glow: {
+        enabled: true,
+        size: [30, 30],
+        color: "#66c8ff",
+        opacity: 0.28,
+        position: [0, -9.05, -1.8],
+      },
+      rings: {
+        enabled: true,
+        size: [34, 34],
+        color: "#d6f2ff",
+        opacity: 0.72,
+        position: [0, -9.02, -1.6],
+      },
+      contactShadow: {
+        enabled: true,
+        size: [11.8, 7.6],
+        opacity: 0.34,
+        position: [0, -9.16, 0.4],
+      },
     },
     outline: { enabled: true, color: "#2a3142", opacity: 0.92, scale: 1.03 },
     backdrop: {
-      enabled: false,
+      enabled: true,
       panelSize: [52, 34],
-      panelColorTop: "#435a8f",
-      panelColorBottom: "#121826",
-      panelOpacity: 0.44,
+      panelColorTop: "#4e82cf",
+      panelColorBottom: "#102646",
+      panelOpacity: 0.52,
       panelPosition: [0, 8.5, -20],
-      haloSize: [20, 20],
-      haloColor: "#79b8ff",
-      haloOpacity: 0.28,
-      haloPosition: [0, 9.2, -18],
+      haloSize: [24, 24],
+      haloColor: "#9ad8ff",
+      haloOpacity: 0.34,
+      haloPosition: [0, 8.8, -18],
+      ringSize: [28, 28],
+      ringColor: "#d5f1ff",
+      ringOpacity: 0.56,
+      ringPosition: [0, 7.2, -19],
     },
     postfx: {
       enabled: true,
-      bloomStrength: 0.12,
-      bloomRadius: 0.18,
-      bloomThreshold: 0.68,
+      bloomStrength: 0.18,
+      bloomRadius: 0.24,
+      bloomThreshold: 0.56,
       grade: {
         exposure: 1.02,
         contrast: 1.05,
@@ -133,7 +238,30 @@ function cloneStagePresentationConfig(config) {
       rim: { ...config.lights.rim, position: [...config.lights.rim.position] },
     },
     shadowMapType: config.shadowMapType,
-    floor: { ...config.floor },
+    floor: {
+      ...config.floor,
+      glow: config.floor.glow
+        ? {
+            ...config.floor.glow,
+            size: config.floor.glow.size ? [...config.floor.glow.size] : undefined,
+            position: config.floor.glow.position ? [...config.floor.glow.position] : undefined,
+          }
+        : undefined,
+      rings: config.floor.rings
+        ? {
+            ...config.floor.rings,
+            size: config.floor.rings.size ? [...config.floor.rings.size] : undefined,
+            position: config.floor.rings.position ? [...config.floor.rings.position] : undefined,
+          }
+        : undefined,
+      contactShadow: config.floor.contactShadow
+        ? {
+            ...config.floor.contactShadow,
+            size: config.floor.contactShadow.size ? [...config.floor.contactShadow.size] : undefined,
+            position: config.floor.contactShadow.position ? [...config.floor.contactShadow.position] : undefined,
+          }
+        : undefined,
+    },
     outline: config.outline ? { ...config.outline } : null,
     backdrop: config.backdrop
       ? {
@@ -142,6 +270,8 @@ function cloneStagePresentationConfig(config) {
           panelPosition: config.backdrop.panelPosition ? [...config.backdrop.panelPosition] : undefined,
           haloSize: config.backdrop.haloSize ? [...config.backdrop.haloSize] : undefined,
           haloPosition: config.backdrop.haloPosition ? [...config.backdrop.haloPosition] : undefined,
+          ringSize: config.backdrop.ringSize ? [...config.backdrop.ringSize] : undefined,
+          ringPosition: config.backdrop.ringPosition ? [...config.backdrop.ringPosition] : undefined,
         }
       : null,
     postfx: config.postfx
@@ -169,14 +299,13 @@ export function pickNextLoopMotionUrl(urls, currentUrl, randomValue = Math.rando
   return pool[index] || pool[0] || "";
 }
 
-function pickSequentialLoopMotionUrl(urls, currentUrl) {
+export function pickSequentialLoopMotionUrl(urls, currentUrl) {
   const uniqueUrls = Array.from(new Set((Array.isArray(urls) ? urls : []).filter(Boolean)));
   if (!uniqueUrls.length) return "";
   if (!currentUrl) return uniqueUrls[0];
-
   const currentIndex = uniqueUrls.indexOf(currentUrl);
-  if (currentIndex < 0) return uniqueUrls[0];
-  return uniqueUrls[(currentIndex + 1) % uniqueUrls.length] || uniqueUrls[0];
+  if (currentIndex === -1) return uniqueUrls[0];
+  return uniqueUrls[(currentIndex + 1) % uniqueUrls.length] || uniqueUrls[0] || "";
 }
 
 function resolveVmdLoopPhase({ url, loopUrls, standbyUrl, resumePhase }) {
@@ -203,8 +332,9 @@ function pickLoopMotionUrl(urls, currentUrl, loopMode) {
  *     vmdUrl?: string,
  *     vmdLoopUrls?: string[],
  *     standbyVmdUrl?: string,
- *     loopMode?: "random" | "sequential",
- *     playbackRate?: number,
+ *     loopGapMs?: number,
+ *     loopMode?: string,
+ *     playbackRate?: number
  *   },
  *   resolveUrl?: (url: string) => string
  * }} [options]
@@ -221,7 +351,8 @@ export function applyStageRuntimeState(runtime, { speaking = false, interaction,
     runtime.applyInteraction?.(interaction);
     runtime.playVmd?.(resolveUrl(interaction.vmdUrl), interaction.playbackRate, loopUrls, {
       standbyUrl,
-      loopMode: interaction.loopMode === "sequential" ? "sequential" : "random",
+      loopGapMs: interaction.loopGapMs,
+      loopMode: interaction.loopMode,
     });
     return;
   }
@@ -243,16 +374,12 @@ function describeMaterial(material) {
 function inferMaterialProfile(material) {
   const text = describeMaterial(material);
   const metalHints = ["metal", "armor", "steel", "blade", "weapon", "gun", "mecha", "buckle"];
-  const faceHints = ["face", "eye", "brow", "eyelash", "mouth", "lip", "cheek"];
-  const skinHints = ["skin", "body", "neck", "hand", "arm", "leg"];
-  const hairHints = ["hair", "bang", "strand", "fringe", "ponytail", "tail"];
-  const clothHints = ["skirt", "dress", "cloth", "cape", "cloak", "ribbon", "frill", "sleeve", "scarf", "veil"];
 
   if (metalHints.some((hint) => text.includes(hint))) return "metal";
-  if (faceHints.some((hint) => text.includes(hint))) return "face";
-  if (skinHints.some((hint) => text.includes(hint))) return "skin";
-  if (hairHints.some((hint) => text.includes(hint))) return "hair";
-  if (clothHints.some((hint) => text.includes(hint))) return "cloth";
+  if (FIXED_FACE_MATERIAL_HINTS.some((hint) => text.includes(hint))) return "face";
+  if (FIXED_SKIN_MATERIAL_HINTS.some((hint) => text.includes(hint))) return "skin";
+  if (FIXED_HAIR_MATERIAL_HINTS.some((hint) => text.includes(hint))) return "hair";
+  if (FIXED_CLOTH_MATERIAL_HINTS.some((hint) => text.includes(hint))) return "cloth";
   return "default";
 }
 
@@ -309,11 +436,61 @@ function primeMMDMaterial(material) {
 }
 
 function finalizeMMDMaterial(material, rampTexture) {
-  if ("gradientMap" in material && rampTexture) {
+  if ("gradientMap" in material && rampTexture && !material.gradientMap) {
     material.gradientMap = rampTexture;
   }
 
   material.needsUpdate = true;
+}
+
+function getMaterialArray(material) {
+  return (Array.isArray(material) ? material : [material]).filter(Boolean);
+}
+
+function pickOutlineProfile(materials) {
+  const profiles = materials.map((material) => inferMaterialProfile(material));
+  if (profiles.includes("face")) return "face";
+  if (profiles.includes("skin")) return "skin";
+  if (profiles.includes("hair")) return "hair";
+  if (profiles.includes("cloth")) return "cloth";
+  if (profiles.includes("metal")) return "metal";
+  return "default";
+}
+
+function needsOutlineCutout(materials) {
+  return materials.some((material) => {
+    return (
+      Boolean(material?.transparent) ||
+      Boolean(material?.alphaMap) ||
+      Boolean(material?.map) ||
+      (typeof material?.opacity === "number" && material.opacity < 1)
+    );
+  });
+}
+
+function buildOutlineStyle(materials, presentation) {
+  const profile = pickOutlineProfile(materials);
+  const usesCutout = needsOutlineCutout(materials);
+  const sourceMaterial = materials.find((material) => material?.map || material?.alphaMap || material?.alphaTest) || materials[0];
+  const baseScale = presentation?.outline?.scale ?? 1.03;
+  const baseOpacity = presentation?.outline?.opacity ?? 0.92;
+
+  const profileStyle = {
+    face: { scale: baseScale - 0.017, opacity: baseOpacity * 0.42 },
+    skin: { scale: baseScale - 0.015, opacity: baseOpacity * 0.48 },
+    hair: { scale: baseScale - 0.004, opacity: baseOpacity * 0.92 },
+    cloth: { scale: baseScale - 0.008, opacity: baseOpacity * 0.82 },
+    metal: { scale: baseScale - 0.01, opacity: baseOpacity * 0.76 },
+    default: { scale: baseScale - 0.01, opacity: baseOpacity * 0.78 },
+  }[profile];
+
+  return {
+    profile,
+    usesCutout,
+    sourceMaterial,
+    scale: Math.max(1.004, profileStyle.scale),
+    opacity: Math.min(1, Math.max(0.12, profileStyle.opacity)),
+  };
 }
 
 function createVerticalGradientTexture(topColor, bottomColor) {
@@ -348,6 +525,60 @@ function createHaloTexture(color) {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createConcentricRingTexture(color) {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 1024;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 28;
+  ctx.globalAlpha = 0.88;
+
+  const rings = [
+    { radius: 405, width: 6 },
+    { radius: 310, width: 3.5 },
+    { radius: 220, width: 2.5 },
+  ];
+
+  for (const ring of rings) {
+    ctx.beginPath();
+    ctx.lineWidth = ring.width;
+    ctx.arc(512, 512, ring.radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  return texture;
+}
+
+function createContactShadowTexture() {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  const gradient = ctx.createRadialGradient(256, 256, 36, 256, 256, 236);
+  gradient.addColorStop(0, "rgba(8, 15, 32, 0.78)");
+  gradient.addColorStop(0.4, "rgba(8, 15, 32, 0.42)");
+  gradient.addColorStop(1, "rgba(8, 15, 32, 0)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
   return texture;
 }
 
@@ -448,6 +679,27 @@ export function tuneGenshinMMDMaterial(material, rampTexture) {
   finalizeMMDMaterial(material, rampTexture);
 }
 
+function createOutlineMaterial(materials, presentation) {
+  const outlineStyle = buildOutlineStyle(materials, presentation);
+  const sourceMaterial = outlineStyle.sourceMaterial;
+  const outlineMaterial = new THREE.MeshBasicMaterial({
+    color: presentation.outline.color,
+    side: THREE.BackSide,
+    transparent: true,
+    opacity: outlineStyle.opacity,
+    depthWrite: false,
+    toneMapped: false,
+  });
+
+  if (outlineStyle.usesCutout) {
+    if (sourceMaterial?.map) outlineMaterial.map = sourceMaterial.map;
+    if (sourceMaterial?.alphaMap) outlineMaterial.alphaMap = sourceMaterial.alphaMap;
+    outlineMaterial.alphaTest = Math.max(sourceMaterial?.alphaTest || 0, 0.48);
+  }
+
+  return { outlineMaterial, outlineStyle };
+}
+
 export class MMDCompanionRuntime {
   constructor({ container, statusElement, renderPipeline = "classic" }) {
     this.container = container;
@@ -468,8 +720,11 @@ export class MMDCompanionRuntime {
     this.currentVmdPlaybackRate = 1;
     this.currentVmdLoopUrls = [];
     this.currentVmdStandbyUrl = "";
+    this.currentVmdLoopGapMs = 0;
     this.currentVmdLoopMode = "random";
     this.currentVmdLoopPhase = "loop";
+    this.pendingVmdLoopUrl = "";
+    this.lastPlayedLoopMotionUrl = "";
     this.currentVmdUrl = "";
     this.currentVmdStartedAt = 0;
     this.currentVmdDurationMs = 0;
@@ -491,6 +746,8 @@ export class MMDCompanionRuntime {
     this.outlineMaterials = [];
     this.backdropGroup = null;
     this.backdropTextures = [];
+    this.floorGroup = null;
+    this.floorTextures = [];
     this.composer = null;
     this.renderPass = null;
     this.colorGradePass = null;
@@ -584,14 +841,79 @@ export class MMDCompanionRuntime {
   }
 
   setupFloor(presentation) {
-    const floor = new THREE.Mesh(
+    if (!Array.isArray(this.floorTextures)) this.floorTextures = [];
+    this.disposeFloor();
+
+    const floorGroup = new THREE.Group();
+    floorGroup.name = `${this.renderPipeline}-stage-floor`;
+
+    const shadowCatcher = new THREE.Mesh(
       new THREE.PlaneGeometry(presentation.floor.size, presentation.floor.size),
       new THREE.ShadowMaterial({ color: 0x000000, opacity: presentation.floor.opacity }),
     );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.y = presentation.floor.y;
-    floor.receiveShadow = true;
-    this.scene.add(floor);
+    shadowCatcher.rotation.x = -Math.PI / 2;
+    shadowCatcher.position.y = presentation.floor.y;
+    shadowCatcher.receiveShadow = true;
+    floorGroup.add(shadowCatcher);
+
+    if (presentation.floor.glow?.enabled) {
+      const glowTexture = createHaloTexture(presentation.floor.glow.color);
+      if (glowTexture) this.floorTextures.push(glowTexture);
+      const glow = new THREE.Mesh(
+        new THREE.PlaneGeometry(...presentation.floor.glow.size),
+        new THREE.MeshBasicMaterial({
+          map: glowTexture,
+          transparent: true,
+          opacity: presentation.floor.glow.opacity,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          toneMapped: false,
+        }),
+      );
+      glow.rotation.x = -Math.PI / 2;
+      glow.position.fromArray(presentation.floor.glow.position);
+      floorGroup.add(glow);
+    }
+
+    if (presentation.floor.rings?.enabled) {
+      const ringTexture = createConcentricRingTexture(presentation.floor.rings.color);
+      if (ringTexture) this.floorTextures.push(ringTexture);
+      const rings = new THREE.Mesh(
+        new THREE.PlaneGeometry(...presentation.floor.rings.size),
+        new THREE.MeshBasicMaterial({
+          map: ringTexture,
+          transparent: true,
+          opacity: presentation.floor.rings.opacity,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          toneMapped: false,
+        }),
+      );
+      rings.rotation.x = -Math.PI / 2;
+      rings.position.fromArray(presentation.floor.rings.position);
+      floorGroup.add(rings);
+    }
+
+    if (presentation.floor.contactShadow?.enabled) {
+      const contactShadowTexture = createContactShadowTexture();
+      if (contactShadowTexture) this.floorTextures.push(contactShadowTexture);
+      const contactShadow = new THREE.Mesh(
+        new THREE.PlaneGeometry(...presentation.floor.contactShadow.size),
+        new THREE.MeshBasicMaterial({
+          map: contactShadowTexture,
+          transparent: true,
+          opacity: presentation.floor.contactShadow.opacity,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      contactShadow.rotation.x = -Math.PI / 2;
+      contactShadow.position.fromArray(presentation.floor.contactShadow.position);
+      floorGroup.add(contactShadow);
+    }
+
+    this.floorGroup = floorGroup;
+    this.scene.add(floorGroup);
   }
 
   setupBackdrop(presentation) {
@@ -636,6 +958,22 @@ export class MMDCompanionRuntime {
     halo.position.fromArray(presentation.backdrop.haloPosition);
     backdrop.add(halo);
 
+    const ringTexture = createConcentricRingTexture(presentation.backdrop.ringColor);
+    if (ringTexture) this.backdropTextures.push(ringTexture);
+    const ring = new THREE.Mesh(
+      new THREE.PlaneGeometry(...presentation.backdrop.ringSize),
+      new THREE.MeshBasicMaterial({
+        map: ringTexture,
+        transparent: true,
+        opacity: presentation.backdrop.ringOpacity,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+      }),
+    );
+    ring.position.fromArray(presentation.backdrop.ringPosition);
+    backdrop.add(ring);
+
     this.backdropGroup = backdrop;
     this.scene.add(backdrop);
   }
@@ -658,7 +996,7 @@ export class MMDCompanionRuntime {
 
   shouldUseBloom(presentation = this.presentation) {
     if (!presentation?.postfx?.enabled) return false;
-    return presentation.background != null;
+    return Number(presentation.postfx.bloomStrength) > 0;
   }
 
   setupPostprocessing(presentation) {
@@ -724,11 +1062,13 @@ export class MMDCompanionRuntime {
     });
     this.model = null;
     this.currentClip = null;
-    this.currentVmdPlaybackRate = 1;
     this.currentVmdLoopUrls = [];
     this.currentVmdStandbyUrl = "";
+    this.currentVmdLoopGapMs = 0;
     this.currentVmdLoopMode = "random";
     this.currentVmdLoopPhase = "loop";
+    this.pendingVmdLoopUrl = "";
+    this.lastPlayedLoopMotionUrl = "";
     this.currentVmdUrl = "";
     this.currentVmdStartedAt = 0;
     this.currentVmdDurationMs = 0;
@@ -771,14 +1111,8 @@ export class MMDCompanionRuntime {
 
     mesh.traverse((child) => {
       if (!child.isMesh) return;
-      const outlineMaterial = new THREE.MeshBasicMaterial({
-        color: presentation.outline.color,
-        side: THREE.BackSide,
-        transparent: true,
-        opacity: presentation.outline.opacity,
-        depthWrite: false,
-        toneMapped: false,
-      });
+      const materials = getMaterialArray(child.material);
+      const { outlineMaterial, outlineStyle } = createOutlineMaterial(materials, presentation);
       this.outlineMaterials.push(outlineMaterial);
 
       let outlineMesh;
@@ -794,7 +1128,7 @@ export class MMDCompanionRuntime {
       outlineMesh.name = `${child.name || "mesh"}__outline`;
       outlineMesh.position.copy(child.position);
       outlineMesh.quaternion.copy(child.quaternion);
-      outlineMesh.scale.copy(child.scale).multiplyScalar(presentation.outline.scale);
+      outlineMesh.scale.copy(child.scale).multiplyScalar(outlineStyle.scale);
       outlineMesh.renderOrder = (child.renderOrder || 0) - 1;
 
       const parent = child.parent || mesh;
@@ -824,6 +1158,21 @@ export class MMDCompanionRuntime {
     this.backdropGroup = null;
     for (const texture of this.backdropTextures) texture.dispose?.();
     this.backdropTextures = [];
+  }
+
+  disposeFloor() {
+    if (!Array.isArray(this.floorTextures)) this.floorTextures = [];
+    if (this.floorGroup) {
+      this.scene?.remove?.(this.floorGroup);
+      this.floorGroup.traverse((child) => {
+        child.geometry?.dispose?.();
+        if (Array.isArray(child.material)) child.material.forEach((material) => material.dispose?.());
+        else child.material?.dispose?.();
+      });
+    }
+    this.floorGroup = null;
+    for (const texture of this.floorTextures) texture.dispose?.();
+    this.floorTextures = [];
   }
 
   disposePostprocessing() {
@@ -862,12 +1211,12 @@ export class MMDCompanionRuntime {
 
     const dict = mesh.morphTargetDictionary || {};
     this.morphSlots = {
-      smile: this.findMorphIndex(dict, ["绗?", "銇亾", "smile"]),
-      sad: this.findMorphIndex(dict, ["鎮?", "鍥?", "sad"]),
-      blink: this.findMorphIndex(dict, ["銇俱伆銇熴亶", "blink"]),
-      mouthA: this.findMorphIndex(dict, ["銇?", "mouth_a"]),
-      mouthI: this.findMorphIndex(dict, ["銇?", "mouth_i"]),
-      mouthU: this.findMorphIndex(dict, ["銇?", "mouth_u"]),
+      smile: this.findMorphIndex(dict, FIXED_MORPH_HINTS.smile),
+      sad: this.findMorphIndex(dict, FIXED_MORPH_HINTS.sad),
+      blink: this.findMorphIndex(dict, FIXED_MORPH_HINTS.blink),
+      mouthA: this.findMorphIndex(dict, FIXED_MORPH_HINTS.mouthA),
+      mouthI: this.findMorphIndex(dict, FIXED_MORPH_HINTS.mouthI),
+      mouthU: this.findMorphIndex(dict, FIXED_MORPH_HINTS.mouthU),
     };
   }
 
@@ -880,11 +1229,30 @@ export class MMDCompanionRuntime {
     return found ? found[1] : undefined;
   }
 
-  async playVmd(url, playbackRate = 1, loopUrls = [], options = {}) {
+  resetToBasePose() {
+    if (!this.model) return;
+    this.model.pose?.();
+
+    for (const [slot, bone] of Object.entries(this.bones)) {
+      if (!bone) continue;
+      const base = this.baseBoneRotation[slot];
+      if (!base) continue;
+      bone.rotation.copy(base);
+    }
+
+    if (Array.isArray(this.model.morphTargetInfluences)) {
+      for (let index = 0; index < this.model.morphTargetInfluences.length; index += 1) {
+        this.model.morphTargetInfluences[index] = 0;
+      }
+    }
+  }
+
+  async playVmd(url, playbackRate = 1, loopUrls = [], loopOptions = {}) {
     if (!this.model) return;
     const normalizedLoopUrls = Array.from(new Set((Array.isArray(loopUrls) ? loopUrls : []).filter(Boolean)));
-    const standbyUrl = options?.standbyUrl || "";
-    const loopMode = options?.loopMode === "sequential" ? "sequential" : "random";
+    const standbyUrl = loopOptions?.standbyUrl || "";
+    const loopGapMs = Math.max(0, Number(loopOptions?.loopGapMs) || 0);
+    const loopMode = loopOptions?.loopMode === "sequential" ? "sequential" : "random";
     const loadToken = ++this.vmdLoadToken;
     try {
       this.isLoadingVmd = true;
@@ -893,16 +1261,21 @@ export class MMDCompanionRuntime {
       this.currentVmdPlaybackRate = Math.max(0.1, Number(playbackRate) || 1);
       this.currentVmdLoopUrls = normalizedLoopUrls;
       this.currentVmdStandbyUrl = standbyUrl;
+      this.currentVmdLoopGapMs = loopGapMs;
       this.currentVmdLoopMode = loopMode;
       this.currentVmdLoopPhase = resolveVmdLoopPhase({
         url,
         loopUrls: normalizedLoopUrls,
         standbyUrl,
-        resumePhase: options?.resumePhase,
+        resumePhase: loopOptions?.resumePhase,
       });
       this.currentVmdUrl = url || "";
+      if (normalizedLoopUrls.includes(this.currentVmdUrl)) {
+        this.lastPlayedLoopMotionUrl = this.currentVmdUrl;
+      }
       this.currentVmdStartedAt = 0;
       this.currentVmdDurationMs = 0;
+      this.resetToBasePose();
       if (this.currentClip) {
         this.helper.remove(this.model);
         this.helper.add(this.model, { physics: this.hasPhysicsSupport });
@@ -937,10 +1310,14 @@ export class MMDCompanionRuntime {
       this.helper.remove(this.model);
       this.helper.add(this.model, { physics: this.hasPhysicsSupport });
     }
+    this.resetToBasePose();
     this.currentVmdLoopUrls = [];
     this.currentVmdStandbyUrl = "";
+    this.currentVmdLoopGapMs = 0;
     this.currentVmdLoopMode = "random";
     this.currentVmdLoopPhase = "loop";
+    this.pendingVmdLoopUrl = "";
+    this.lastPlayedLoopMotionUrl = "";
     this.currentVmdUrl = "";
     this.currentVmdStartedAt = 0;
     this.currentVmdDurationMs = 0;
@@ -970,11 +1347,13 @@ export class MMDCompanionRuntime {
     const standbyUrl = this.currentVmdStandbyUrl || "";
     if (!loopUrls.length && !standbyUrl) return;
     if (!this.currentVmdDurationMs || !this.currentVmdStartedAt) return;
-    if (nowMs - this.currentVmdStartedAt < this.currentVmdDurationMs) return;
+    const minimumElapsedMs = this.currentVmdDurationMs + Math.max(0, Number(this.currentVmdLoopGapMs) || 0);
+    if (nowMs - this.currentVmdStartedAt < minimumElapsedMs) return;
 
     if (standbyUrl && !loopUrls.length) {
       this.playVmd(standbyUrl, this.currentVmdPlaybackRate, [], {
         standbyUrl,
+        loopGapMs: this.currentVmdLoopGapMs,
         loopMode: this.currentVmdLoopMode,
         resumePhase: "standby-only",
       });
@@ -984,16 +1363,19 @@ export class MMDCompanionRuntime {
     if (this.currentVmdLoopPhase === "loop" && standbyUrl) {
       this.playVmd(standbyUrl, this.currentVmdPlaybackRate, loopUrls, {
         standbyUrl,
+        loopGapMs: this.currentVmdLoopGapMs,
         loopMode: this.currentVmdLoopMode,
         resumePhase: "standby",
       });
       return;
     }
 
-    const nextUrl = pickLoopMotionUrl(loopUrls, this.currentVmdUrl, this.currentVmdLoopMode);
+    const currentLoopAnchor = this.lastPlayedLoopMotionUrl || this.currentVmdUrl;
+    const nextUrl = pickLoopMotionUrl(loopUrls, currentLoopAnchor, this.currentVmdLoopMode);
     if (!nextUrl) return;
     this.playVmd(nextUrl, this.currentVmdPlaybackRate, loopUrls, {
       standbyUrl,
+      loopGapMs: this.currentVmdLoopGapMs,
       loopMode: this.currentVmdLoopMode,
       resumePhase: "loop",
     });
@@ -1089,9 +1471,9 @@ export class MMDCompanionRuntime {
       influences[index] = smooth(current, value, 12, delta);
     };
 
-    const hints = EMOTION_MORPH_HINTS[this.activeEmotion] || [];
-    const shouldSmile = hints.includes("smile") || hints.includes("绗?") || hints.includes("銇亾");
-    const shouldSad = hints.includes("sad") || hints.includes("鎮?") || hints.includes("鍥?");
+    const hints = FIXED_EMOTION_MORPH_HINTS[this.activeEmotion] || [];
+    const shouldSmile = hints.includes("smile") || hints.includes("happy") || hints.includes("\u7b11");
+    const shouldSad = hints.includes("sad") || hints.includes("sorrow") || hints.includes("\u60b2");
 
     setMorph(this.morphSlots.smile, shouldSmile ? 0.75 : 0.06);
     setMorph(this.morphSlots.sad, shouldSad ? 0.7 : 0);
@@ -1135,6 +1517,7 @@ export class MMDCompanionRuntime {
     this.destroyed = true;
     if (this.handleResize) window.removeEventListener("resize", this.handleResize);
     this.clearModel();
+    this.disposeFloor();
     this.disposeBackdrop();
     this.disposePostprocessing();
     this.renderer?.dispose();
