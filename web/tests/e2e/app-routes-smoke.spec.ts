@@ -277,50 +277,34 @@ test("companion render pipeline selection persists across reloads @smoke", async
   await page.goto("/companion");
 
   const pipelineSelect = page.getByRole("combobox", { name: "Render pipeline" });
-  const orbit = page.locator(".mio-orbit").first();
-  const stageFade = page.getByTestId("mio-stage-bottom-fade");
-  const stageWrap = page.getByTestId("mio-stage-wrap");
-  const hud = page.getByTestId("mio-hud");
   await expect(pipelineSelect).toBeVisible();
+  await expect(pipelineSelect.locator("option")).toHaveText(["Classic", "Hero Shot"]);
   await expect(pipelineSelect).toHaveValue("classic");
-  await expect(orbit).toBeVisible();
-  await expect(stageFade).toBeVisible();
-  await expect
-    .poll(() => hud.evaluate((node) => getComputedStyle(node, "::before").display))
-    .not.toBe("none");
-  await expect
-    .poll(() => hud.evaluate((node) => getComputedStyle(node, "::after").display))
-    .not.toBe("none");
 
-  await pipelineSelect.selectOption("genshin");
-  await expect(pipelineSelect).toHaveValue("genshin");
-  await expect(orbit).toBeHidden();
-  await expect(stageFade).toBeHidden();
-  await expect
-    .poll(() => hud.evaluate((node) => getComputedStyle(node, "::before").display))
-    .toBe("none");
-  await expect
-    .poll(() => hud.evaluate((node) => getComputedStyle(node, "::after").display))
-    .toBe("none");
-  await expect
-    .poll(() => stageWrap.evaluate((node) => getComputedStyle(node, "::before").display))
-    .toBe("none");
+  await pipelineSelect.selectOption("hero-shot");
+  await expect(pipelineSelect).toHaveValue("hero-shot");
 
   await page.reload();
 
-  await expect(page.getByRole("combobox", { name: "Render pipeline" })).toHaveValue("genshin");
-  await expect(page.locator(".mio-orbit").first()).toBeHidden();
-  await expect(page.getByTestId("mio-stage-bottom-fade")).toBeHidden();
+  await expect(page.getByRole("combobox", { name: "Render pipeline" })).toHaveValue("hero-shot");
+});
+
+test("companion upgrades legacy genshin sessions to hero-shot @smoke", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "mmd_companion_session_v1",
+      JSON.stringify({ userId: "8X29-AF3E", renderPipeline: "genshin" }),
+    );
+  });
+
+  await page.goto("/companion");
+
+  await expect(page.getByRole("combobox", { name: "Render pipeline" })).toHaveValue("hero-shot");
   await expect
     .poll(() =>
-      page.getByTestId("mio-hud").evaluate((node) => getComputedStyle(node, "::before").display),
+      page.evaluate(() => JSON.parse(window.localStorage.getItem("mmd_companion_session_v1") || "{}").renderPipeline),
     )
-    .toBe("none");
-  await expect
-    .poll(() =>
-      page.getByTestId("mio-hud").evaluate((node) => getComputedStyle(node, "::after").display),
-    )
-    .toBe("none");
+    .toBe("hero-shot");
 });
 
 test("companion stage occupies about seventy percent of the desktop viewport @critical", async ({ page }) => {

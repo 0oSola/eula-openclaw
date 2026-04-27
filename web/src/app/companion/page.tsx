@@ -53,6 +53,7 @@ type InteractionState = {
 };
 
 type InteractionSource = "default" | "autoplay" | "manual-preview" | "chat";
+type RenderPipeline = "classic" | "hero-shot";
 
 const SPRITE = "/images/sprite-sliced";
 const DEFAULT_MODEL_RELATIVE_PATH = "优菈.pmx";
@@ -60,6 +61,11 @@ const DEFAULT_ASSISTANT_COPY =
   "\u6211\u7406\u89e3\u4f60\u7684\u9700\u6c42\u4e86\uff5e\n\u6b63\u5728\u5e2e\u4f60\u62c6\u89e3\u4efb\u52a1\u5e76\u89c4\u5212\u6b65\u9aa4\uff01";
 const INPUT_LABEL =
   "\u8f93\u5165\u4f60\u7684\u6307\u4ee4 / \u4efb\u52a1 / \u95ee\u9898...\uff08Enter \u53d1\u9001\uff0cShift + Enter \u6362\u884c\uff09";
+
+function normalizeRenderPipeline(value?: string): RenderPipeline {
+  if (value === "hero-shot" || value === "genshin") return "hero-shot";
+  return "classic";
+}
 
 const navIcons = [
   { src: "asset-004.png", label: "\u83dc\u5355" },
@@ -140,7 +146,7 @@ export default function CompanionPage() {
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [ttsMode, setTtsMode] = useState<"browser" | "server">("browser");
   const [speaking, setSpeaking] = useState(false);
-  const [renderPipeline, setRenderPipeline] = useState<"classic" | "genshin">("classic");
+  const [renderPipeline, setRenderPipeline] = useState<RenderPipeline>("classic");
   const [isCharacterPickerOpen, setIsCharacterPickerOpen] = useState(false);
   const [isMotionPickerOpen, setIsMotionPickerOpen] = useState(false);
   const [isAdvancedPanelOpen, setIsAdvancedPanelOpen] = useState(false);
@@ -160,10 +166,13 @@ export default function CompanionPage() {
 
   useEffect(() => {
     const saved = loadSession();
-    setSession(saved);
-    setRenderPipeline("classic");
-    if (saved && saved.renderPipeline !== "classic") {
-      saveSession({ ...saved, renderPipeline: "classic" });
+    const normalizedPipeline = normalizeRenderPipeline(saved?.renderPipeline);
+    const migratedSession =
+      saved?.renderPipeline === "genshin" ? { ...saved, renderPipeline: "hero-shot" as const } : saved;
+    setSession(migratedSession ?? null);
+    setRenderPipeline(normalizedPipeline);
+    if (migratedSession && migratedSession !== saved) {
+      saveSession(migratedSession);
     }
   }, []);
 
@@ -399,11 +408,12 @@ export default function CompanionPage() {
     setIsMotionPickerOpen(false);
   }
 
-  function handleRenderPipelineChange(nextPipeline: "classic" | "genshin") {
-    const normalizedPipeline = nextPipeline === "genshin" ? "classic" : nextPipeline;
-    setRenderPipeline(normalizedPipeline);
+  function handleRenderPipelineChange(nextPipeline: RenderPipeline) {
+    setRenderPipeline(nextPipeline);
     if (!session) return;
-    saveSession({ ...session, renderPipeline: normalizedPipeline });
+    const nextSession = { ...session, renderPipeline: nextPipeline };
+    setSession(nextSession);
+    saveSession(nextSession);
   }
 
   function browserSpeak(text: string) {
@@ -608,13 +618,13 @@ export default function CompanionPage() {
             }}
           >
             <span>PIPELINE</span>
-            <select
-              aria-label="Render pipeline"
-              value={renderPipeline}
-              onChange={(event) => handleRenderPipelineChange(event.target.value as "classic" | "genshin")}
-              style={{
-                minHeight: "2.2rem",
-                borderRadius: "999px",
+              <select
+                aria-label="Render pipeline"
+                value={renderPipeline}
+                onChange={(event) => handleRenderPipelineChange(event.target.value as RenderPipeline)}
+                style={{
+                  minHeight: "2.2rem",
+                  borderRadius: "999px",
                 border: "1px solid rgba(140, 209, 255, 0.24)",
                 background: "rgba(9, 18, 31, 0.82)",
                 color: "rgba(235, 245, 255, 0.92)",
@@ -622,6 +632,7 @@ export default function CompanionPage() {
               }}
             >
               <option value="classic">Classic</option>
+              <option value="hero-shot">Hero Shot</option>
             </select>
           </label>
         </div>

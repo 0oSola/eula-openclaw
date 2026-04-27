@@ -126,30 +126,112 @@ const STAGE_PRESENTATION_PRESETS = {
     background: null,
     fog: null,
     camera: {
-      fov: 36,
-      position: [0, 9.6, 24],
-      target: [0, 7.6, 0],
-      minDistance: 14,
-      maxDistance: 30,
+      fov: 33,
+      position: [0, 9.2, 21.6],
+      target: [0, 7.9, 0],
+      minDistance: 13,
+      maxDistance: 27,
       maxPolarAngle: Math.PI * 0.46,
     },
+    character: {
+      targetHeight: 19.5,
+    },
     lights: {
-      ambient: { color: 0xffffff, intensity: 0.72 },
-      hemisphere: { sky: "#f4f8ff", ground: "#5a6270", intensity: 0.52 },
-      key: { color: 0xffffff, intensity: 1.32, position: [-12, 18, 24] },
-      fill: { color: 0xffffff, intensity: 0.42, position: [14, 8, 16] },
-      rim: { color: 0xffffff, intensity: 0.32, position: [-10, 12, -18] },
+      ambient: { color: 0xffffff, intensity: 0.78 },
+      hemisphere: { sky: "#f4f8ff", ground: "#5a6270", intensity: 0.6 },
+      key: { color: 0xffffff, intensity: 1.42, position: [-14, 20, 28] },
+      fill: { color: 0xffffff, intensity: 0.5, position: [16, 10, 18] },
+      rim: { color: 0xffffff, intensity: 0.36, position: [-10, 14, -18] },
     },
     shadowMapType: THREE.PCFShadowMap,
     floor: {
       kind: "shadowCatcher",
       size: 44,
-      y: -10,
-      opacity: 0.24,
+      y: -9.75,
+      opacity: 0.2,
     },
     outline: { enabled: false, color: "#1b2130", opacity: 0.88, scale: 1.025 },
     backdrop: { enabled: false },
     postfx: { enabled: false },
+  },
+  "hero-shot": {
+    background: "#061630",
+    fog: null,
+    camera: {
+      fov: 31,
+      position: [0, 8.8, 20.4],
+      target: [0, 7.45, 0],
+      minDistance: 12,
+      maxDistance: 25,
+      maxPolarAngle: Math.PI * 0.41,
+    },
+    character: {
+      targetHeight: 19.5,
+    },
+    lights: {
+      ambient: { color: 0xffffff, intensity: 0.66 },
+      hemisphere: { sky: "#d8e8ff", ground: "#26364d", intensity: 0.54 },
+      key: { color: "#fff1dc", intensity: 1.42, position: [-11, 18, 21] },
+      fill: { color: "#c3dcff", intensity: 0.42, position: [13, 9, 17] },
+      rim: { color: "#d6f3ff", intensity: 0.54, position: [-8, 13, -16] },
+    },
+    shadowMapType: THREE.PCFShadowMap,
+    floor: {
+      kind: "shadowCatcher",
+      size: 36,
+      y: -12,
+      opacity: 0.02,
+      glow: {
+        enabled: true,
+        size: [24, 24],
+        color: "#63c8ff",
+        opacity: 0.14,
+        position: [0, -11.96, -1.1],
+      },
+      rings: {
+        enabled: true,
+        size: [27, 27],
+        color: "#d7f2ff",
+        opacity: 0.32,
+        position: [0, -11.94, -1],
+      },
+      contactShadow: {
+        enabled: true,
+        size: [11.2, 7.1],
+        opacity: 0.16,
+        position: [0, -11.98, 0.2],
+      },
+    },
+    outline: { enabled: true, color: "#20304a", opacity: 0.94, scale: 1.04 },
+    backdrop: {
+      enabled: true,
+      panelSize: [48, 44],
+      panelColorTop: "#2c7ca8",
+      panelColorBottom: "#123a62",
+      panelOpacity: 0.68,
+      panelPosition: [0, 6.8, -20],
+      haloSize: [18, 18],
+      haloColor: "#8ff0ff",
+      haloOpacity: 0.36,
+      haloPosition: [0, 8.6, -18.3],
+      ringSize: [23, 23],
+      ringColor: "#e2fbff",
+      ringOpacity: 0.58,
+      ringPosition: [0, 7.3, -19],
+    },
+    postfx: {
+      enabled: true,
+      bloomStrength: 0.12,
+      bloomRadius: 0.2,
+      bloomThreshold: 0.66,
+      grade: {
+        exposure: 1,
+        contrast: 1.1,
+        saturation: 1.12,
+        warmth: 0.03,
+        shadowLift: 0.01,
+      },
+    },
   },
   genshin: {
     background: "#081a35",
@@ -161,6 +243,9 @@ const STAGE_PRESENTATION_PRESETS = {
       minDistance: 12,
       maxDistance: 26,
       maxPolarAngle: Math.PI * 0.42,
+    },
+    character: {
+      targetHeight: 19.5,
     },
     lights: {
       ambient: { color: 0xffffff, intensity: 0.88 },
@@ -238,6 +323,7 @@ function cloneStagePresentationConfig(config) {
       position: [...config.camera.position],
       target: [...config.camera.target],
     },
+    character: config.character ? { ...config.character } : null,
     lights: {
       ambient: { ...config.lights.ambient },
       hemisphere: { ...config.lights.hemisphere },
@@ -293,6 +379,37 @@ function cloneStagePresentationConfig(config) {
 
 export function getStagePresentationConfig(pipeline = "classic") {
   return cloneStagePresentationConfig(STAGE_PRESENTATION_PRESETS[pipeline] || STAGE_PRESENTATION_PRESETS.classic);
+}
+
+export function fitModelToPresentation(mesh, presentation = getStagePresentationConfig("classic")) {
+  if (!(mesh instanceof THREE.Object3D)) return null;
+
+  mesh.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(mesh);
+  if (bounds.isEmpty()) return null;
+
+  const size = bounds.getSize(new THREE.Vector3());
+  const targetHeight = Math.max(0.001, Number(presentation?.character?.targetHeight) || size.y || 1);
+  const height = Math.max(0.001, size.y || 1);
+  const scale = targetHeight / height;
+
+  mesh.scale.multiplyScalar(scale);
+  mesh.updateMatrixWorld(true);
+
+  const scaledBounds = new THREE.Box3().setFromObject(mesh);
+  const center = scaledBounds.getCenter(new THREE.Vector3());
+  const floorY = Number(presentation?.floor?.y);
+  const targetFloorY = Number.isFinite(floorY) ? floorY : 0;
+
+  mesh.position.x -= center.x;
+  mesh.position.z -= center.z;
+  mesh.position.y += targetFloorY - scaledBounds.min.y;
+  mesh.updateMatrixWorld(true);
+
+  return {
+    scale,
+    floorY: targetFloorY,
+  };
 }
 
 export function pickNextLoopMotionUrl(urls, currentUrl, randomValue = Math.random()) {
@@ -400,7 +517,13 @@ function createToonRampTexture(pipeline = "classic") {
   if (!ctx) return null;
 
   const gradient = ctx.createLinearGradient(0, 0, 256, 0);
-  if (pipeline === "genshin") {
+  if (pipeline === "hero-shot") {
+    gradient.addColorStop(0, "#4d5365");
+    gradient.addColorStop(0.45, "#4d5365");
+    gradient.addColorStop(0.46, "#92a0b8");
+    gradient.addColorStop(0.76, "#92a0b8");
+    gradient.addColorStop(0.77, "#eef7ff");
+  } else if (pipeline === "genshin") {
     gradient.addColorStop(0, "#383838");
     gradient.addColorStop(0.43, "#383838");
     gradient.addColorStop(0.44, "#8d8d8d");
@@ -658,6 +781,35 @@ export function tuneClassicMMDMaterial(material, rampTexture) {
   finalizeMMDMaterial(material, rampTexture);
 }
 
+export function tuneHeroShotMMDMaterial(material, rampTexture) {
+  if (!material) return;
+  const { needsCutout, profile } = primeMMDMaterial(material);
+
+  if (needsCutout) material.alphaTest = Math.max(material.alphaTest || 0, 0.52);
+  if (needsCutout || profile === "hair" || profile === "cloth") material.side = THREE.DoubleSide;
+
+  const profileTuning = {
+    face: { shininess: 8, specular: 0.14, emissiveIntensity: 0.26, envMapIntensity: 0.14 },
+    skin: { shininess: 10, specular: 0.18, emissiveIntensity: 0.22, envMapIntensity: 0.16 },
+    hair: { shininess: 16, specular: 0.46, emissiveIntensity: 0.14, envMapIntensity: 0.28 },
+    cloth: { shininess: 13, specular: 0.28, emissiveIntensity: 0.06, envMapIntensity: 0.2 },
+    metal: { shininess: 34, specular: 0.72, emissiveIntensity: 0.06, envMapIntensity: 0.44 },
+    default: { shininess: 18, specular: 0.42, emissiveIntensity: 0.1, envMapIntensity: 0.22 },
+  };
+  const tuning = profileTuning[profile] || profileTuning.default;
+
+  if ("shininess" in material && typeof material.shininess === "number") {
+    material.shininess = Math.min(material.shininess, tuning.shininess);
+  }
+  if ("specular" in material && material.specular?.isColor) {
+    material.specular.multiplyScalar(tuning.specular);
+  }
+  if ("emissiveIntensity" in material) material.emissiveIntensity = tuning.emissiveIntensity;
+  if ("envMapIntensity" in material) material.envMapIntensity = tuning.envMapIntensity;
+
+  finalizeMMDMaterial(material, rampTexture);
+}
+
 export function tuneGenshinMMDMaterial(material, rampTexture) {
   if (!material) return;
   const { needsCutout, profile } = primeMMDMaterial(material);
@@ -685,6 +837,12 @@ export function tuneGenshinMMDMaterial(material, rampTexture) {
   if ("envMapIntensity" in material) material.envMapIntensity = tuning.envMapIntensity;
 
   finalizeMMDMaterial(material, rampTexture);
+}
+
+function tuneMaterialByPipeline(material, toonRampTexture, pipeline) {
+  if (pipeline === "hero-shot") return tuneHeroShotMMDMaterial(material, toonRampTexture);
+  if (pipeline === "genshin") return tuneGenshinMMDMaterial(material, toonRampTexture);
+  return tuneClassicMMDMaterial(material, toonRampTexture);
 }
 
 function createOutlineMaterial(materials, presentation) {
@@ -1104,17 +1262,19 @@ export class MMDCompanionRuntime {
     const mesh = await new Promise((resolve, reject) => {
       this.loader.load(modelUrl, resolve, undefined, reject);
     });
-    mesh.position.set(0, -10, 0);
+    mesh.position.set(0, 0, 0);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
-    const tuneMaterial = this.renderPipeline === "genshin" ? tuneGenshinMMDMaterial : tuneClassicMMDMaterial;
     mesh.traverse((child) => {
       if (!child.isMesh) return;
       child.castShadow = true;
       child.receiveShadow = true;
       const materials = Array.isArray(child.material) ? child.material : [child.material];
-      for (const material of materials) tuneMaterial(material, this.toonRampTexture);
+      for (const material of materials) {
+        tuneMaterialByPipeline(material, this.toonRampTexture, this.renderPipeline);
+      }
     });
+    fitModelToPresentation(mesh, this.presentation);
     this.scene.add(mesh);
     this.model = mesh;
     this.helper.add(mesh, { physics: this.hasPhysicsSupport });
