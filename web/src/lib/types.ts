@@ -107,5 +107,5 @@ export type TraceMirror = {
 
 export type UserSession = {
   userId: string;
-  renderPipeline?: "classic" | "genshin";
+  renderPipeline?: "classic" | "hero-shot" | "genshin";
 };

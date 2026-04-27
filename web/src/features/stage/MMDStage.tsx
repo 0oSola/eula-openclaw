@@ -51,7 +51,7 @@ export function MMDStage({
   modelLabel: string;
   onModelChange: (nextPath: string) => void;
   onInteractionComplete?: () => void;
-  renderPipeline?: "classic" | "genshin";
+  renderPipeline?: "classic" | "hero-shot" | "genshin";
   chrome?: "panel" | "bare";
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);

@@ -421,11 +421,12 @@ test("stage presentation config supports classic, genshin, and unknown fallback 
 
   assert.equal(classic.fog, null);
   assert.equal(classic.background, null);
-  assert.equal(classic.camera.fov, 36);
-  assert.deepEqual(classic.camera.position, [0, 9.6, 24]);
-  assert.deepEqual(classic.camera.target, [0, 7.6, 0]);
+  assert.equal(classic.camera.fov, 33);
+  assert.deepEqual(classic.camera.position, [0, 9.2, 21.6]);
+  assert.deepEqual(classic.camera.target, [0, 7.9, 0]);
+  assert.equal(classic.character.targetHeight, 19.5);
   assert.equal(classic.floor.kind, "shadowCatcher");
-  assert.equal(classic.floor.opacity, 0.24);
+  assert.equal(classic.floor.opacity, 0.2);
   assert.equal(classic.shadowMapType, THREE.PCFShadowMap);
 
   assert.equal(typeof genshin.background, "string");
@@ -437,6 +438,60 @@ test("stage presentation config supports classic, genshin, and unknown fallback 
   assert.notEqual(genshin.floor.y, classic.floor.y);
 
   assert.deepEqual(fallback, classic);
+});
+
+test("fitModelToPresentation recenters a loaded mesh on the stage floor and normalizes its height", () => {
+  const presentation = getStagePresentationConfig("classic");
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(4, 10, 2), new THREE.MeshBasicMaterial());
+  body.position.set(6, 5, -3);
+  group.add(body);
+
+  runtimeModule.fitModelToPresentation(group, presentation);
+
+  const bounds = new THREE.Box3().setFromObject(group);
+  const center = bounds.getCenter(new THREE.Vector3());
+  const size = bounds.getSize(new THREE.Vector3());
+
+  assert.ok(Math.abs(bounds.min.y - presentation.floor.y) < 1e-6);
+  assert.ok(Math.abs(center.x) < 1e-6);
+  assert.ok(Math.abs(center.z) < 1e-6);
+  assert.ok(Math.abs(size.y - presentation.character.targetHeight) < 1e-6);
+});
+
+test("stage presentation config supports hero-shot while preserving classic fallback", () => {
+  const classic = getStagePresentationConfig("classic");
+  const heroShot = getStagePresentationConfig("hero-shot");
+
+  assert.equal(classic.camera.fov, 33);
+  assert.notDeepEqual(heroShot.camera.position, classic.camera.position);
+  assert.equal(heroShot.character.targetHeight, 19.5);
+  assert.ok(heroShot.outline?.enabled);
+  assert.ok(heroShot.backdrop?.enabled);
+  assert.ok(heroShot.postfx?.enabled);
+  assert.deepEqual(getStagePresentationConfig("unknown"), classic);
+});
+
+test("hero-shot presentation keeps portrait staging and lighting restrained", () => {
+  const heroShot = getStagePresentationConfig("hero-shot");
+
+  assert.ok(heroShot.camera.fov >= 30);
+  assert.ok(heroShot.camera.fov <= 31);
+  assert.ok(heroShot.camera.fov < getStagePresentationConfig("classic").camera.fov);
+  assert.ok(heroShot.camera.position[2] <= 20.8);
+  assert.ok(heroShot.floor.y <= -10.3);
+  assert.ok(heroShot.floor.opacity <= 0.03);
+  assert.ok(heroShot.lights.ambient.intensity <= 0.7);
+  assert.ok(heroShot.lights.key.intensity <= 1.5);
+  assert.ok(heroShot.backdrop.panelSize[1] >= 40);
+  assert.ok(heroShot.backdrop.panelOpacity >= 0.58);
+  assert.ok(heroShot.backdrop.ringOpacity >= 0.5);
+  assert.notEqual(heroShot.backdrop.panelColorBottom, "#06162d");
+  assert.ok(heroShot.outline.scale >= 1.038);
+  assert.ok(heroShot.postfx.bloomStrength >= 0.1);
+  assert.ok(heroShot.postfx.bloomStrength <= 0.16);
+  assert.ok(heroShot.postfx.grade.contrast >= 1.08);
+  assert.ok(heroShot.postfx.grade.saturation >= 1.1);
 });
 
 test("runtime stores explicit and default render pipelines", () => {
@@ -488,12 +543,12 @@ test("setupScene runs classic shared setup steps in order and dispatches the cla
   assert.equal(runtime.scene.background, null);
   assert.equal(runtime.scene.fog, null);
   assert.deepEqual(calls, [
-    ["renderer", 36],
-    ["camera", "0,7.6,0"],
-    ["lights", 0.72],
-    ["floor", 0.24],
+    ["renderer", 33],
+    ["camera", "0,7.9,0"],
+    ["lights", 0.78],
+    ["floor", 0.2],
     ["backdrop", null],
-    ["classic", -10],
+    ["classic", -9.75],
   ]);
 });
 
@@ -573,9 +628,51 @@ test("genshin material tuning preserves authored toon ramps and recognizes non-E
   assert.equal(hair.shininess, 14);
 });
 
+test("hero-shot material tuning differs from classic while preserving alpha safety", () => {
+  const classic = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
+  const hero = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
+  const classicRamp = { id: "classic-ramp" };
+  const heroRamp = { id: "hero-shot-ramp" };
+
+  runtimeModule.tuneClassicMMDMaterial?.(classic, classicRamp);
+  runtimeModule.tuneHeroShotMMDMaterial?.(hero, heroRamp);
+
+  assert.ok(classic.alphaTest >= 0.48);
+  assert.ok(hero.alphaTest >= 0.48);
+  assert.notEqual(hero.emissiveIntensity, classic.emissiveIntensity);
+  assert.equal(hero.gradientMap, heroRamp);
+});
+
+test("hero-shot keeps face shading softer than generic cloth shading", () => {
+  const face = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
+  const cloth = makeMaterial({ name: "Cape Cloth", transparent: true, specular: 1, shininess: 80 });
+  const heroRamp = { id: "hero-shot-ramp" };
+
+  runtimeModule.tuneHeroShotMMDMaterial?.(face, heroRamp);
+  runtimeModule.tuneHeroShotMMDMaterial?.(cloth, heroRamp);
+
+  assert.ok(face.alphaTest >= 0.48);
+  assert.ok(cloth.alphaTest >= 0.48);
+  assert.ok(face.shininess < cloth.shininess);
+  assert.ok(face.emissiveIntensity > cloth.emissiveIntensity);
+  assert.ok(face.envMapIntensity < cloth.envMapIntensity);
+});
+
+test("hero-shot face material lift stays below overexposure range", () => {
+  const face = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
+
+  runtimeModule.tuneHeroShotMMDMaterial?.(face, { id: "hero-shot-ramp" });
+
+  assert.ok(face.emissiveIntensity >= 0.24);
+  assert.ok(face.emissiveIntensity <= 0.3);
+  assert.ok(face.specular.r <= 0.16);
+  assert.ok(face.envMapIntensity <= 0.18);
+});
+
 test("loadModel selects material tuning by renderPipeline", async () => {
   const classicMaterial = makeMaterial({ name: "Hair Cloth", transparent: true, specular: 0.7, shininess: 40 });
   const genshinMaterial = makeMaterial({ name: "Hair Cloth", transparent: true, specular: 0.7, shininess: 40 });
+  const heroShotMaterial = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
 
   const classicRuntime = makeRuntime({ renderPipeline: "classic", toonRampTexture: { id: "classic-ramp" } });
   classicRuntime.loader = {
@@ -591,8 +688,16 @@ test("loadModel selects material tuning by renderPipeline", async () => {
     },
   };
 
+  const heroShotRuntime = makeRuntime({ renderPipeline: "hero-shot", toonRampTexture: { id: "hero-shot-ramp" } });
+  heroShotRuntime.loader = {
+    load(_url, onLoad) {
+      onLoad(makeMesh({ materials: [heroShotMaterial] }));
+    },
+  };
+
   await classicRuntime.loadModel("/classic-model.pmx");
   await genshinRuntime.loadModel("/genshin-model.pmx");
+  await heroShotRuntime.loadModel("/hero-shot-model.pmx");
 
   assert.equal(classicMaterial.alphaTest, 0.5);
   assert.equal(classicMaterial.shininess, 26);
@@ -602,6 +707,36 @@ test("loadModel selects material tuning by renderPipeline", async () => {
   assert.equal(genshinMaterial.gradientMap.id, "genshin-ramp");
   assert.notEqual(genshinMaterial.shininess, classicMaterial.shininess);
   assert.notEqual(genshinMaterial.emissiveIntensity, classicMaterial.emissiveIntensity);
+
+  assert.ok(heroShotMaterial.alphaTest >= 0.48);
+  assert.equal(heroShotMaterial.gradientMap.id, "hero-shot-ramp");
+  assert.notEqual(heroShotMaterial.shininess, classicMaterial.shininess);
+  assert.notEqual(heroShotMaterial.emissiveIntensity, classicMaterial.emissiveIntensity);
+});
+
+test("loadModel routes hero-shot face materials through hero-shot tuning instead of classic tuning", async () => {
+  const classicFaceMaterial = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
+  const heroShotFaceMaterial = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
+
+  const classicRuntime = makeRuntime({ renderPipeline: "classic", toonRampTexture: { id: "classic-ramp" } });
+  classicRuntime.loader = {
+    load(_url, onLoad) {
+      onLoad(makeMesh({ materials: [classicFaceMaterial] }));
+    },
+  };
+
+  const heroShotRuntime = makeRuntime({ renderPipeline: "hero-shot", toonRampTexture: { id: "hero-shot-ramp" } });
+  heroShotRuntime.loader = {
+    load(_url, onLoad) {
+      onLoad(makeMesh({ materials: [heroShotFaceMaterial] }));
+    },
+  };
+
+  await classicRuntime.loadModel("/classic-face-model.pmx");
+  await heroShotRuntime.loadModel("/hero-shot-face-model.pmx");
+
+  assert.notEqual(heroShotFaceMaterial.shininess, classicFaceMaterial.shininess);
+  assert.notEqual(heroShotFaceMaterial.emissiveIntensity, classicFaceMaterial.emissiveIntensity);
 });
 
 test("loadModel attaches character outline only for genshin pipeline", async () => {
@@ -780,9 +915,9 @@ test("stage presentation config returns fresh objects on every call", () => {
 
   assert.notStrictEqual(first, second);
   assert.notStrictEqual(second, fallback);
-  assert.deepEqual(second.camera.position, [0, 9.6, 24]);
-  assert.deepEqual(second.lights.key.position, [-12, 18, 24]);
-  assert.equal(second.floor.opacity, 0.24);
+  assert.deepEqual(second.camera.position, [0, 9.2, 21.6]);
+  assert.deepEqual(second.lights.key.position, [-14, 20, 28]);
+  assert.equal(second.floor.opacity, 0.2);
   assert.deepEqual(fallback, second);
 });
 
