@@ -234,83 +234,36 @@ const STAGE_PRESENTATION_PRESETS = {
     },
   },
   genshin: {
-    background: "#081a35",
+    background: null,
     fog: null,
     camera: {
-      fov: 30,
-      position: [0, 8.9, 20.5],
-      target: [0, 7.1, 0],
-      minDistance: 12,
-      maxDistance: 26,
-      maxPolarAngle: Math.PI * 0.42,
+      fov: 33,
+      position: [0, 9.2, 21.6],
+      target: [0, 7.9, 0],
+      minDistance: 13,
+      maxDistance: 27,
+      maxPolarAngle: Math.PI * 0.46,
     },
     character: {
       targetHeight: 19.5,
     },
     lights: {
-      ambient: { color: 0xffffff, intensity: 0.88 },
-      hemisphere: { sky: "#dbe9ff", ground: "#41516a", intensity: 0.68 },
-      key: { color: "#fff0d6", intensity: 1.56, position: [-10, 19, 20] },
-      fill: { color: "#bfd8ff", intensity: 0.58, position: [12, 10, 14] },
-      rim: { color: "#f1f6ff", intensity: 0.46, position: [-8, 14, -16] },
+      ambient: { color: 0xffffff, intensity: 0.8 },
+      hemisphere: { sky: "#ffffff", ground: "#333333", intensity: 0.6 },
+      key: { color: "#ffffff", intensity: 1.2, position: [-15, 20, 30] },
+      fill: { color: "#ffffff", intensity: 0.5, position: [15, 10, -20] },
+      rim: { color: "#ffffff", intensity: 0, position: [0, 0, 0] },
     },
-    shadowMapType: THREE.PCFShadowMap,
+    shadowMapType: THREE.PCFSoftShadowMap,
     floor: {
       kind: "shadowCatcher",
-      size: 38,
-      y: -9.2,
-      opacity: 0.18,
-      glow: {
-        enabled: true,
-        size: [30, 30],
-        color: "#66c8ff",
-        opacity: 0.28,
-        position: [0, -9.05, -1.8],
-      },
-      rings: {
-        enabled: true,
-        size: [34, 34],
-        color: "#d6f2ff",
-        opacity: 0.72,
-        position: [0, -9.02, -1.6],
-      },
-      contactShadow: {
-        enabled: true,
-        size: [11.8, 7.6],
-        opacity: 0.34,
-        position: [0, -9.16, 0.4],
-      },
+      size: 44,
+      y: -9.75,
+      opacity: 0.2,
     },
-    outline: { enabled: true, color: "#2a3142", opacity: 0.92, scale: 1.03 },
-    backdrop: {
-      enabled: true,
-      panelSize: [52, 34],
-      panelColorTop: "#4e82cf",
-      panelColorBottom: "#102646",
-      panelOpacity: 0.52,
-      panelPosition: [0, 8.5, -20],
-      haloSize: [24, 24],
-      haloColor: "#9ad8ff",
-      haloOpacity: 0.34,
-      haloPosition: [0, 8.8, -18],
-      ringSize: [28, 28],
-      ringColor: "#d5f1ff",
-      ringOpacity: 0.56,
-      ringPosition: [0, 7.2, -19],
-    },
-    postfx: {
-      enabled: true,
-      bloomStrength: 0.18,
-      bloomRadius: 0.24,
-      bloomThreshold: 0.56,
-      grade: {
-        exposure: 1.02,
-        contrast: 1.05,
-        saturation: 1.06,
-        warmth: 0.03,
-        shadowLift: 0.02,
-      },
-    },
+    outline: { enabled: false, color: "#2a3142", opacity: 0.92, scale: 1.03 },
+    backdrop: { enabled: false },
+    postfx: { enabled: false },
   },
 };
 
@@ -524,11 +477,9 @@ function createToonRampTexture(pipeline = "classic") {
     gradient.addColorStop(0.76, "#92a0b8");
     gradient.addColorStop(0.77, "#eef7ff");
   } else if (pipeline === "genshin") {
-    gradient.addColorStop(0, "#383838");
-    gradient.addColorStop(0.43, "#383838");
-    gradient.addColorStop(0.44, "#8d8d8d");
-    gradient.addColorStop(0.72, "#8d8d8d");
-    gradient.addColorStop(0.73, "#ffffff");
+    gradient.addColorStop(0, "#505050");
+    gradient.addColorStop(0.3, "#b4b4b4");
+    gradient.addColorStop(0.7, "#ffffff");
   } else {
     gradient.addColorStop(0, "#505050");
     gradient.addColorStop(0.3, "#b4b4b4");
@@ -553,17 +504,18 @@ function primeMMDMaterial(material) {
   if (material.map) material.map.colorSpace = THREE.SRGBColorSpace;
   if (material.emissiveMap) material.emissiveMap.colorSpace = THREE.SRGBColorSpace;
 
-  if (material.color) material.color.multiplyScalar(1.12);
-  if (material.emissive) material.emissive.multiplyScalar(1.05);
-  if ("envMapIntensity" in material) material.envMapIntensity = 0.45;
-  if ("emissiveIntensity" in material) material.emissiveIntensity = 0.24;
-
   const needsCutout =
     Boolean(material.transparent) ||
     (typeof material.opacity === "number" && material.opacity < 1) ||
     Boolean(material.alphaMap);
 
   return { needsCutout, profile };
+}
+
+function cleanLegacyMMDMaterialFlags(material) {
+  if (!material) return;
+  if ("skinning" in material) delete material.skinning;
+  if ("morphTargets" in material) delete material.morphTargets;
 }
 
 function finalizeMMDMaterial(material, rampTexture) {
@@ -591,7 +543,7 @@ export function isGenshinGlowMaterial(materialName = "") {
 
 export function isGenshinSuppressedMaskMaterial(materialName = "") {
   const name = normalizeGenshinMaterialName(materialName);
-  return GENSHIN_MASK_HINTS.includes(name);
+  return GENSHIN_MASK_HINTS.some((hint) => name.includes(hint));
 }
 
 function getMaterialArray(material) {
@@ -832,39 +784,34 @@ export function tuneHeroShotMMDMaterial(material, rampTexture) {
 
 export function tuneGenshinMMDMaterial(material, rampTexture) {
   if (!material) return;
-  const { needsCutout, profile } = primeMMDMaterial(material);
+  const { profile } = primeMMDMaterial(material);
   const materialName = `${material.name || ""}`;
+  const normalizedName = normalizeGenshinMaterialName(materialName);
+  const isGlowMaterial = isGenshinGlowMaterial(materialName);
+  const isHeadFxMaterial = isGlowMaterial && normalizedName.includes("head");
 
-  if (needsCutout) material.alphaTest = Math.max(material.alphaTest || 0, 0.58);
-  if (needsCutout || profile === "hair" || profile === "cloth") material.side = THREE.DoubleSide;
+  cleanLegacyMMDMaterialFlags(material);
 
-  const profileTuning = {
-    face: { shininess: 10, specular: 0.18, emissiveIntensity: 0.32, envMapIntensity: 0.18 },
-    skin: { shininess: 12, specular: 0.24, emissiveIntensity: 0.28, envMapIntensity: 0.2 },
-    hair: { shininess: 14, specular: 0.42, emissiveIntensity: 0.14, envMapIntensity: 0.24 },
-    cloth: { shininess: 12, specular: 0.38, emissiveIntensity: 0.12, envMapIntensity: 0.2 },
-    metal: { shininess: 42, specular: 0.88, emissiveIntensity: 0.1, envMapIntensity: 0.52 },
-    default: { shininess: 18, specular: 0.5, emissiveIntensity: 0.14, envMapIntensity: 0.24 },
-  };
-  const tuning = profileTuning[profile] || profileTuning.default;
+  material.alphaTest = Math.max(material.alphaTest || 0, 0.5);
+  material.side = THREE.DoubleSide;
 
-  if ("shininess" in material && typeof material.shininess === "number") {
-    material.shininess = Math.min(material.shininess, tuning.shininess);
+  if ("shininess" in material && typeof material.shininess === "number" && profile !== "metal") {
+    material.shininess = Math.min(material.shininess, profile === "face" || profile === "skin" ? 18 : 26);
   }
-  if ("specular" in material && material.specular?.isColor) {
-    material.specular.multiplyScalar(tuning.specular);
+  if ("specular" in material && material.specular?.isColor && profile !== "metal") {
+    material.specular.multiplyScalar(profile === "face" || profile === "skin" ? 0.45 : 0.72);
   }
-  if ("emissiveIntensity" in material) material.emissiveIntensity = tuning.emissiveIntensity;
-  if ("envMapIntensity" in material) material.envMapIntensity = tuning.envMapIntensity;
+  if ("envMapIntensity" in material) material.envMapIntensity = 0;
 
-  if (isGenshinGlowMaterial(materialName)) {
+  if (isGlowMaterial) {
     material.emissive?.setHex?.(0x9d00ff);
-    if ("emissiveIntensity" in material) {
-      material.emissiveIntensity = Math.max(material.emissiveIntensity || 0, 0.75);
-    }
+    if ("emissiveIntensity" in material) material.emissiveIntensity = 1;
+  } else {
+    material.emissive?.setHex?.(0x000000);
+    if ("emissiveIntensity" in material) material.emissiveIntensity = 0;
   }
 
-  if (isGenshinSuppressedMaskMaterial(materialName)) {
+  if (isGenshinSuppressedMaskMaterial(materialName) || isHeadFxMaterial) {
     material.visible = false;
     material.transparent = true;
     material.opacity = 0;
