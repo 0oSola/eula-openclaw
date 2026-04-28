@@ -57,6 +57,31 @@ test("companion stage loads model assets without MMD request failures @critical"
   await expect(pipelineSelect).toBeVisible();
   await pipelineSelect.selectOption("genshin");
   await expect(pipelineSelect).toHaveValue("genshin");
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(window.localStorage.getItem("mmd_companion_session_v1") || "{}").renderPipeline),
+    )
+    .toBe("genshin");
+  await expect(status).toContainText(/Loading MMD model|Model ready/, { timeout: 30_000 });
+  await expect(canvas).toBeVisible();
+
+  await pipelineSelect.selectOption("classic");
+  await expect(pipelineSelect).toHaveValue("classic");
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(window.localStorage.getItem("mmd_companion_session_v1") || "{}").renderPipeline),
+    )
+    .toBe("classic");
+  await expect(status).toContainText(/Loading MMD model|Model ready/, { timeout: 30_000 });
+  await expect(canvas).toBeVisible();
+
+  await pipelineSelect.selectOption("genshin");
+  await expect(pipelineSelect).toHaveValue("genshin");
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(window.localStorage.getItem("mmd_companion_session_v1") || "{}").renderPipeline),
+    )
+    .toBe("genshin");
   await expect(status).toContainText(/Loading MMD model|Model ready/, { timeout: 30_000 });
   await expect(canvas).toBeVisible();
 
