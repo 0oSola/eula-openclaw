@@ -594,6 +594,34 @@ test("setupScene dispatches the genshin branch after the shared setup steps", ()
   ]);
 });
 
+test("genshin material tuning keeps texture color space and cutout safety source-compatible", () => {
+  const material = makeMaterial({ name: "Hair Cloth", transparent: true, specular: 0.7, shininess: 40 });
+  const ramp = { id: "genshin-ramp" };
+
+  runtimeModule.tuneGenshinMMDMaterial?.(material, ramp);
+
+  assert.equal(material.map.colorSpace, THREE.SRGBColorSpace);
+  assert.equal(material.emissiveMap.colorSpace, THREE.SRGBColorSpace);
+  assert.ok(material.alphaTest >= 0.5);
+  assert.equal(material.side, THREE.DoubleSide);
+  assert.equal(material.gradientMap, ramp);
+});
+
+test("classic material tuning remains separate from genshin emissive policy", () => {
+  const classic = makeMaterial({ name: "Glow FX" });
+  const genshin = makeMaterial({ name: "Glow FX" });
+  const classicRamp = { id: "classic-ramp" };
+  const genshinRamp = { id: "genshin-ramp" };
+
+  runtimeModule.tuneClassicMMDMaterial?.(classic, classicRamp);
+  runtimeModule.tuneGenshinMMDMaterial?.(genshin, genshinRamp);
+
+  assert.equal(classic.emissiveIntensity, 0.24);
+  assert.equal(genshin.emissiveIntensity, 0.14);
+  assert.equal(classic.gradientMap.id, "classic-ramp");
+  assert.equal(genshin.gradientMap.id, "genshin-ramp");
+});
+
 test("classic and genshin material tuners diverge while preserving cutout safety", () => {
   const classic = makeMaterial({ name: "Hair Cloth", transparent: true, specular: 0.7, shininess: 40 });
   const genshin = makeMaterial({ name: "Hair Cloth", transparent: true, specular: 0.7, shininess: 40 });
