@@ -53,7 +53,7 @@ type InteractionState = {
 };
 
 type InteractionSource = "default" | "autoplay" | "manual-preview" | "chat";
-type RenderPipeline = "classic" | "hero-shot";
+type RenderPipeline = "classic" | "hero-shot" | "genshin";
 
 const SPRITE = "/images/sprite-sliced";
 const DEFAULT_MODEL_RELATIVE_PATH = "优菈.pmx";
@@ -63,7 +63,7 @@ const INPUT_LABEL =
   "\u8f93\u5165\u4f60\u7684\u6307\u4ee4 / \u4efb\u52a1 / \u95ee\u9898...\uff08Enter \u53d1\u9001\uff0cShift + Enter \u6362\u884c\uff09";
 
 function normalizeRenderPipeline(value?: string): RenderPipeline {
-  if (value === "hero-shot" || value === "genshin") return "hero-shot";
+  if (value === "classic" || value === "hero-shot" || value === "genshin") return value;
   return "classic";
 }
 
@@ -167,12 +167,14 @@ export default function CompanionPage() {
   useEffect(() => {
     const saved = loadSession();
     const normalizedPipeline = normalizeRenderPipeline(saved?.renderPipeline);
-    const migratedSession =
-      saved?.renderPipeline === "genshin" ? { ...saved, renderPipeline: "hero-shot" as const } : saved;
-    setSession(migratedSession ?? null);
+    const normalizedSession =
+      saved && saved.renderPipeline !== normalizedPipeline
+        ? { ...saved, renderPipeline: normalizedPipeline }
+        : saved;
+    setSession(normalizedSession ?? null);
     setRenderPipeline(normalizedPipeline);
-    if (migratedSession && migratedSession !== saved) {
-      saveSession(migratedSession);
+    if (normalizedSession && normalizedSession !== saved) {
+      saveSession(normalizedSession);
     }
   }, []);
 
@@ -633,6 +635,7 @@ export default function CompanionPage() {
             >
               <option value="classic">Classic</option>
               <option value="hero-shot">Hero Shot</option>
+              <option value="genshin">Genshin</option>
             </select>
           </label>
         </div>

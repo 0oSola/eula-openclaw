@@ -278,18 +278,18 @@ test("companion render pipeline selection persists across reloads @smoke", async
 
   const pipelineSelect = page.getByRole("combobox", { name: "Render pipeline" });
   await expect(pipelineSelect).toBeVisible();
-  await expect(pipelineSelect.locator("option")).toHaveText(["Classic", "Hero Shot"]);
+  await expect(pipelineSelect.locator("option")).toHaveText(["Classic", "Hero Shot", "Genshin"]);
   await expect(pipelineSelect).toHaveValue("classic");
 
-  await pipelineSelect.selectOption("hero-shot");
-  await expect(pipelineSelect).toHaveValue("hero-shot");
+  await pipelineSelect.selectOption("genshin");
+  await expect(pipelineSelect).toHaveValue("genshin");
 
   await page.reload();
 
-  await expect(page.getByRole("combobox", { name: "Render pipeline" })).toHaveValue("hero-shot");
+  await expect(page.getByRole("combobox", { name: "Render pipeline" })).toHaveValue("genshin");
 });
 
-test("companion upgrades legacy genshin sessions to hero-shot @smoke", async ({ page }) => {
+test("companion restores saved genshin render pipeline sessions @smoke", async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem(
       "mmd_companion_session_v1",
@@ -299,12 +299,12 @@ test("companion upgrades legacy genshin sessions to hero-shot @smoke", async ({ 
 
   await page.goto("/companion");
 
-  await expect(page.getByRole("combobox", { name: "Render pipeline" })).toHaveValue("hero-shot");
+  await expect(page.getByRole("combobox", { name: "Render pipeline" })).toHaveValue("genshin");
   await expect
     .poll(() =>
       page.evaluate(() => JSON.parse(window.localStorage.getItem("mmd_companion_session_v1") || "{}").renderPipeline),
     )
-    .toBe("hero-shot");
+    .toBe("genshin");
 });
 
 test("companion stage occupies about seventy percent of the desktop viewport @critical", async ({ page }) => {
