@@ -574,6 +574,26 @@ function finalizeMMDMaterial(material, rampTexture) {
   material.needsUpdate = true;
 }
 
+const GENSHIN_GLOW_HINTS = ["glow", "emissive", "purple", "fx"];
+const GENSHIN_MASK_HINTS = ["mask", "face mask", "mouth mask"];
+
+function normalizeGenshinMaterialName(materialName = "") {
+  return `${materialName}`.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+export function isGenshinGlowMaterial(materialName = "") {
+  const name = normalizeGenshinMaterialName(materialName);
+  const tokens = name.split(" ").filter(Boolean);
+  const hasExplicitGlow = GENSHIN_GLOW_HINTS.slice(0, 2).some((hint) => tokens.includes(hint));
+  const hasPurpleFx = tokens.includes("purple") && tokens.includes("fx");
+  return hasExplicitGlow || hasPurpleFx;
+}
+
+export function isGenshinSuppressedMaskMaterial(materialName = "") {
+  const name = normalizeGenshinMaterialName(materialName);
+  return GENSHIN_MASK_HINTS.includes(name);
+}
+
 function getMaterialArray(material) {
   return (Array.isArray(material) ? material : [material]).filter(Boolean);
 }
@@ -813,6 +833,7 @@ export function tuneHeroShotMMDMaterial(material, rampTexture) {
 export function tuneGenshinMMDMaterial(material, rampTexture) {
   if (!material) return;
   const { needsCutout, profile } = primeMMDMaterial(material);
+  const materialName = `${material.name || ""}`;
 
   if (needsCutout) material.alphaTest = Math.max(material.alphaTest || 0, 0.58);
   if (needsCutout || profile === "hair" || profile === "cloth") material.side = THREE.DoubleSide;
@@ -835,6 +856,19 @@ export function tuneGenshinMMDMaterial(material, rampTexture) {
   }
   if ("emissiveIntensity" in material) material.emissiveIntensity = tuning.emissiveIntensity;
   if ("envMapIntensity" in material) material.envMapIntensity = tuning.envMapIntensity;
+
+  if (isGenshinGlowMaterial(materialName)) {
+    material.emissive?.setHex?.(0x9d00ff);
+    if ("emissiveIntensity" in material) {
+      material.emissiveIntensity = Math.max(material.emissiveIntensity || 0, 0.75);
+    }
+  }
+
+  if (isGenshinSuppressedMaskMaterial(materialName)) {
+    material.visible = false;
+    material.transparent = true;
+    material.opacity = 0;
+  }
 
   finalizeMMDMaterial(material, rampTexture);
 }
@@ -864,6 +898,30 @@ function createOutlineMaterial(materials, presentation) {
   }
 
   return { outlineMaterial, outlineStyle };
+}
+
+function createInvisibleOutlineMaterial(presentation) {
+  const outlineMaterial = new THREE.MeshBasicMaterial({
+    color: presentation?.outline?.color ?? 0x000000,
+    side: THREE.BackSide,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  outlineMaterial.visible = false;
+  return outlineMaterial;
+}
+
+function createSlotPreservingOutlineMaterials(sourceMaterials, presentation) {
+  const visibleMaterials = sourceMaterials.filter((material) => material && material.visible !== false);
+  const outlineStyle = buildOutlineStyle(visibleMaterials, presentation);
+  const outlineMaterials = sourceMaterials.map((material) => {
+    if (!material || material.visible === false) return createInvisibleOutlineMaterial(presentation);
+    return createOutlineMaterial([material], presentation).outlineMaterial;
+  });
+
+  return { outlineMaterial: outlineMaterials, outlineStyle, outlineMaterials };
 }
 
 export class MMDCompanionRuntime {
@@ -1291,9 +1349,16 @@ export class MMDCompanionRuntime {
 
     mesh.traverse((child) => {
       if (!child.isMesh) return;
+      const isGenshinOutline = this.renderPipeline === "genshin";
+      const sourceMaterials = Array.isArray(child.material) ? child.material : [child.material];
       const materials = getMaterialArray(child.material);
-      const { outlineMaterial, outlineStyle } = createOutlineMaterial(materials, presentation);
-      this.outlineMaterials.push(outlineMaterial);
+      if (isGenshinOutline && materials.length && materials.every((material) => material.visible === false)) return;
+      const hasHiddenMaterialSlot =
+        isGenshinOutline && Array.isArray(child.material) && sourceMaterials.some((material) => material?.visible === false);
+      const { outlineMaterial, outlineStyle, outlineMaterials } = hasHiddenMaterialSlot
+        ? createSlotPreservingOutlineMaterials(sourceMaterials, presentation)
+        : { ...createOutlineMaterial(materials, presentation), outlineMaterials: null };
+      this.outlineMaterials.push(...(outlineMaterials || [outlineMaterial]));
 
       let outlineMesh;
       if (child.isSkinnedMesh && child.skeleton) {
