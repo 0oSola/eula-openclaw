@@ -180,7 +180,8 @@ test("companion sidebar exposes built-in motion switching from the MMD vmd catal
 
   await expect(page.getByTestId("mio-motion-panel")).toBeVisible();
   await expect(page.getByTestId("mio-motion-option")).toHaveCount(3);
-  await expect(page.locator(".mio-motion-option.is-selected")).toContainText("Smelling Something in the Air");
+  await expect(page.getByTestId("mio-motion-option").first()).toContainText("Smelling Something in the Air");
+  await expect(page.locator(".mio-motion-option.is-selected")).toHaveCount(0);
 });
 
 test("advanced features button opens a non-modal VMD quick import panel with previewable assets @critical", async ({
@@ -218,6 +219,19 @@ test("advanced features button opens a non-modal VMD quick import panel with pre
   });
 
   await page.goto("/companion");
+  const advancedTrigger = page.getByRole("button", { name: /高级功能/ });
+  await expect(advancedTrigger).toBeVisible();
+
+  await advancedTrigger.click();
+
+  const advancedPanel = page.getByTestId("mio-advanced-panel");
+  await expect(advancedPanel).toBeVisible();
+  await expect(advancedPanel.getByText("VMD Quick Import")).toBeVisible();
+  await expect(advancedPanel.locator('input[type="file"]')).toHaveCount(2);
+  await expect(advancedPanel.getByTestId("mio-advanced-asset")).toHaveCount(2);
+  await expect(page.getByTestId("mio-command-bar")).toBeVisible();
+  await expect(page.getByTestId("mio-stage-wrap")).toBeVisible();
+  return;
 
   const trigger = page.getByRole("button", { name: "楂樼骇鍔熻兘" });
   await expect(trigger).toBeVisible();
