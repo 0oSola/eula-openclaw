@@ -607,6 +607,28 @@ test("genshin material tuning keeps texture color space and cutout safety source
   assert.equal(material.gradientMap, ramp);
 });
 
+test("genshin material tuning boosts explicit glow materials without changing classic glow policy", () => {
+  const classic = makeMaterial({ name: "purple glow fx", shininess: 20 });
+  const genshin = makeMaterial({ name: "purple glow fx", shininess: 20 });
+  const classicRamp = { id: "classic-ramp" };
+  const genshinRamp = { id: "genshin-ramp" };
+
+  runtimeModule.tuneClassicMMDMaterial?.(classic, classicRamp);
+  runtimeModule.tuneGenshinMMDMaterial?.(genshin, genshinRamp);
+
+  assert.ok(genshin.emissiveIntensity >= classic.emissiveIntensity);
+  assert.equal(genshin.emissive.getHex(), 0x9d00ff);
+  assert.equal(genshin.gradientMap.id, "genshin-ramp");
+});
+
+test("genshin glow detection requires explicit glow or purple fx material names", () => {
+  assert.equal(runtimeModule.isGenshinGlowMaterial?.("purple glow fx"), true);
+  assert.equal(runtimeModule.isGenshinGlowMaterial?.("emissive aura"), true);
+  assert.equal(runtimeModule.isGenshinGlowMaterial?.("nonemissive cloth"), false);
+  assert.equal(runtimeModule.isGenshinGlowMaterial?.("purple cloth"), false);
+  assert.equal(runtimeModule.isGenshinGlowMaterial?.("fx dress"), false);
+});
+
 test("classic material tuning remains separate from genshin emissive policy", () => {
   const classic = makeMaterial({ name: "Glow FX" });
   const genshin = makeMaterial({ name: "Glow FX" });
@@ -617,9 +639,34 @@ test("classic material tuning remains separate from genshin emissive policy", ()
   runtimeModule.tuneGenshinMMDMaterial?.(genshin, genshinRamp);
 
   assert.equal(classic.emissiveIntensity, 0.24);
-  assert.equal(genshin.emissiveIntensity, 0.14);
+  assert.equal(genshin.emissiveIntensity, 0.75);
   assert.equal(classic.gradientMap.id, "classic-ramp");
   assert.equal(genshin.gradientMap.id, "genshin-ramp");
+});
+
+test("genshin mask detection is narrow enough to avoid hiding ordinary face materials", () => {
+  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("face skin"), false);
+  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("eye lash"), false);
+  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("surface mask"), false);
+  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("tengu mask"), false);
+  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("mask ornament"), false);
+  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("face mask ornament"), false);
+  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("face mask"), true);
+  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("mouth mask"), true);
+});
+
+test("genshin material tuning suppresses only matched mask materials", () => {
+  const mask = makeMaterial({ name: "face mask" });
+  const ornament = makeMaterial({ name: "mask ornament" });
+
+  runtimeModule.tuneGenshinMMDMaterial?.(mask, { id: "genshin-ramp" });
+  runtimeModule.tuneGenshinMMDMaterial?.(ornament, { id: "genshin-ramp" });
+
+  assert.equal(mask.visible, false);
+  assert.equal(mask.transparent, true);
+  assert.equal(mask.opacity, 0);
+  assert.notEqual(ornament.visible, false);
+  assert.notEqual(ornament.opacity, 0);
 });
 
 test("classic and genshin material tuners diverge while preserving cutout safety", () => {
@@ -807,6 +854,7 @@ test("loadModel attaches character outline only for genshin pipeline", async () 
 
 test("genshin outline respects cutout textures and uses gentler face silhouettes", () => {
   const runtime = makeRuntime({
+    renderPipeline: "genshin",
     presentation: getStagePresentationConfig("genshin"),
   });
 
@@ -855,6 +903,114 @@ test("genshin outline respects cutout textures and uses gentler face silhouettes
   assert.ok(faceOutline.scale.x < hairOutline.scale.x);
   assert.equal(hairOutline.material.map, transparentMap);
   assert.ok(hairOutline.material.alphaTest >= 0.5);
+});
+
+test("genshin outline skips meshes whose materials were suppressed", () => {
+  const runtime = makeRuntime({
+    renderPipeline: "genshin",
+    presentation: getStagePresentationConfig("genshin"),
+  });
+  const maskMaterial = makeMaterial({ name: "face mask" });
+  const parent = { added: [], add(node) { this.added.push(node); }, remove() {} };
+
+  runtimeModule.tuneGenshinMMDMaterial?.(maskMaterial, { id: "genshin-ramp" });
+  runtime.attachCharacterOutline(
+    {
+      traverse(visitor) {
+        visitor({
+          isMesh: true,
+          isSkinnedMesh: false,
+          geometry: new THREE.BufferGeometry(),
+          material: maskMaterial,
+          parent,
+          position: new THREE.Vector3(),
+          quaternion: new THREE.Quaternion(),
+          scale: new THREE.Vector3(1, 1, 1),
+          renderOrder: 0,
+          name: "face-mask",
+        });
+      },
+    },
+    getStagePresentationConfig("genshin"),
+  );
+
+  assert.equal(runtime.outlineObjects.length, 0);
+  assert.equal(parent.added.length, 0);
+});
+
+test("genshin outline keeps suppressed material slots invisible on mixed-material meshes", () => {
+  const runtime = makeRuntime({
+    renderPipeline: "genshin",
+    presentation: getStagePresentationConfig("genshin"),
+  });
+  const visibleMaterial = makeMaterial({ name: "Hair" });
+  const maskMaterial = makeMaterial({ name: "face mask" });
+  const parent = { added: [], add(node) { this.added.push(node); }, remove() {} };
+
+  runtimeModule.tuneGenshinMMDMaterial?.(maskMaterial, { id: "genshin-ramp" });
+  runtime.attachCharacterOutline(
+    {
+      traverse(visitor) {
+        visitor({
+          isMesh: true,
+          isSkinnedMesh: false,
+          geometry: new THREE.BufferGeometry(),
+          material: [visibleMaterial, maskMaterial],
+          parent,
+          position: new THREE.Vector3(),
+          quaternion: new THREE.Quaternion(),
+          scale: new THREE.Vector3(1, 1, 1),
+          renderOrder: 0,
+          name: "mixed-face",
+        });
+      },
+    },
+    getStagePresentationConfig("genshin"),
+  );
+
+  assert.equal(runtime.outlineObjects.length, 1);
+  assert.equal(parent.added.length, 1);
+  const [outline] = runtime.outlineObjects;
+  assert.equal(Array.isArray(outline.material), true);
+  assert.notEqual(outline.material[0].visible, false);
+  assert.ok(outline.material[0].opacity > 0);
+  assert.equal(outline.material[1].visible, false);
+  assert.equal(outline.material[1].opacity, 0);
+});
+
+test("non-genshin outlines keep hidden source material slots on the existing shared path", () => {
+  const runtime = makeRuntime({
+    renderPipeline: "hero-shot",
+    presentation: getStagePresentationConfig("hero-shot"),
+  });
+  const visibleMaterial = makeMaterial({ name: "Hair" });
+  const hiddenMaterial = makeMaterial({ name: "face mask" });
+  hiddenMaterial.visible = false;
+  const parent = { added: [], add(node) { this.added.push(node); }, remove() {} };
+
+  runtime.attachCharacterOutline(
+    {
+      traverse(visitor) {
+        visitor({
+          isMesh: true,
+          isSkinnedMesh: false,
+          geometry: new THREE.BufferGeometry(),
+          material: [visibleMaterial, hiddenMaterial],
+          parent,
+          position: new THREE.Vector3(),
+          quaternion: new THREE.Quaternion(),
+          scale: new THREE.Vector3(1, 1, 1),
+          renderOrder: 0,
+          name: "hero-shot-mixed-face",
+        });
+      },
+    },
+    getStagePresentationConfig("hero-shot"),
+  );
+
+  assert.equal(runtime.outlineObjects.length, 1);
+  assert.equal(parent.added.length, 1);
+  assert.equal(Array.isArray(runtime.outlineObjects[0].material), false);
 });
 
 test("setupBackdrop stays disabled for classic but builds a layered genshin backdrop", () => {
