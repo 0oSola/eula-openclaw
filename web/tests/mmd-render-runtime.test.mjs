@@ -113,6 +113,66 @@ function makeMesh({ materials, bones = [], morphTargetDictionary = {} }) {
   };
 }
 
+function createProject2PoseMesh() {
+  const mesh = new THREE.Group();
+  const hip = new THREE.Bone();
+  hip.name = "Hip";
+  const chest = new THREE.Bone();
+  chest.name = "Chest";
+  const leftLeg = new THREE.Bone();
+  leftLeg.name = "LeftLeg";
+  const leftKnee = new THREE.Bone();
+  leftKnee.name = "LeftKnee";
+  const leftShoulder = new THREE.Bone();
+  leftShoulder.name = "LeftShoulder";
+  const rightShoulder = new THREE.Bone();
+  rightShoulder.name = "RightShoulder";
+  const leftArm = new THREE.Bone();
+  leftArm.name = "LeftArm";
+  const rightArm = new THREE.Bone();
+  rightArm.name = "RightArm";
+  const leftElbow = new THREE.Bone();
+  leftElbow.name = "LeftElbow";
+  const rightElbow = new THREE.Bone();
+  rightElbow.name = "RightElbow";
+
+  mesh.add(hip);
+  hip.add(chest);
+  hip.add(leftLeg);
+  leftLeg.add(leftKnee);
+  chest.add(leftShoulder);
+  chest.add(rightShoulder);
+  leftShoulder.add(leftArm);
+  rightShoulder.add(rightArm);
+  leftArm.add(leftElbow);
+  rightArm.add(rightElbow);
+
+  const bones = [hip, chest, leftLeg, leftKnee, leftShoulder, rightShoulder, leftArm, rightArm, leftElbow, rightElbow];
+  mesh.skeleton = {
+    bones,
+    getBoneByName(name) {
+      return bones.find((bone) => bone.name === name) || null;
+    },
+    update() {},
+  };
+
+  return {
+    mesh,
+    bones: {
+      hip,
+      chest,
+      leftLeg,
+      leftKnee,
+      leftShoulder,
+      rightShoulder,
+      leftArm,
+      rightArm,
+      leftElbow,
+      rightElbow,
+    },
+  };
+}
+
 function createCanvasContextStub() {
   return {
     createLinearGradient() {
@@ -266,8 +326,9 @@ test("resetToBasePose restores unmapped bones when the model root has no pose() 
   assert.deepEqual(mesh.morphTargetInfluences, [0]);
 });
 
-test("renderFrame leaves morph influences untouched even when the model is speaking", () => {
+test("renderFrame keeps classic morph influences untouched even when the model is speaking", () => {
   const runtime = makeRuntime({
+    renderPipeline: "classic",
     model: { morphTargetInfluences: [0, 0, 0, 0, 0, 0] },
     morphSlots: { smile: 0, sad: 1, blink: 2, mouthA: 3, mouthI: 4, mouthU: 5 },
     activeEmotion: "happy",
@@ -284,6 +345,29 @@ test("renderFrame leaves morph influences untouched even when the model is speak
   }
 
   assert.deepEqual(runtime.model.morphTargetInfluences, [0, 0, 0, 0, 0, 0]);
+});
+
+test("renderFrame keeps genshin morph influences untouched so runtime speaking stays classic-compatible", () => {
+  const runtime = makeRuntime({
+    renderPipeline: "genshin",
+    presentation: getStagePresentationConfig("genshin"),
+    model: { morphTargetInfluences: [0] },
+    isSpeaking: true,
+  });
+
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = () => 0;
+
+  try {
+    runtime.renderFrame();
+    assert.equal(runtime.model.morphTargetInfluences[0], 0);
+
+    runtime.isSpeaking = false;
+    runtime.renderFrame();
+    assert.equal(runtime.model.morphTargetInfluences[0], 0);
+  } finally {
+    globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+  }
 });
 
 test("renderFrame restores only root transport anchors after helper updates", () => {
@@ -414,7 +498,7 @@ test("playVmd builds clips against the captured base skeleton instead of the liv
   ]);
 });
 
-test("stage presentation config supports classic, genshin, and unknown fallback pipelines", () => {
+test("stage presentation config keeps classic untouched while genshin now reuses the transparent classic framing", () => {
   const classic = getStagePresentationConfig("classic");
   const genshin = getStagePresentationConfig("genshin");
   const fallback = getStagePresentationConfig("unknown");
@@ -429,13 +513,20 @@ test("stage presentation config supports classic, genshin, and unknown fallback 
   assert.equal(classic.floor.opacity, 0.2);
   assert.equal(classic.shadowMapType, THREE.PCFShadowMap);
 
-  assert.equal(typeof genshin.background, "string");
-  assert.equal(genshin.backdrop.enabled, true);
-  assert.equal(genshin.floor.glow.enabled, true);
-  assert.equal(genshin.floor.contactShadow.enabled, true);
-  assert.notDeepEqual(genshin.camera.position, classic.camera.position);
-  assert.notEqual(genshin.lights.ambient.intensity, classic.lights.ambient.intensity);
-  assert.notEqual(genshin.floor.y, classic.floor.y);
+  assert.equal(genshin.background, null);
+  assert.equal(genshin.camera.fov, classic.camera.fov);
+  assert.deepEqual(genshin.camera.position, classic.camera.position);
+  assert.deepEqual(genshin.camera.target, classic.camera.target);
+  assert.equal(genshin.backdrop.enabled, false);
+  assert.equal(genshin.outline.enabled, false);
+  assert.equal(genshin.postfx.enabled, false);
+  assert.equal(genshin.lights.ambient.intensity, 0.8);
+  assert.equal(genshin.lights.hemisphere.intensity, 0.6);
+  assert.equal(genshin.lights.key.intensity, 1.2);
+  assert.equal(genshin.lights.fill.intensity, 0.5);
+  assert.equal(genshin.shadowMapType, THREE.PCFSoftShadowMap);
+  assert.equal(genshin.floor.y, classic.floor.y);
+  assert.equal(genshin.floor.opacity, classic.floor.opacity);
 
   assert.deepEqual(fallback, classic);
 });
@@ -583,18 +674,18 @@ test("setupScene dispatches the genshin branch after the shared setup steps", ()
   runtime.setupScene();
 
   assert.equal(runtime.scene.isScene, true);
-  assert.ok(runtime.scene.background?.isColor);
+  assert.equal(runtime.scene.background, null);
   assert.deepEqual(calls, [
-    ["renderer", 30],
-    ["camera", "0,7.1,0"],
-    ["lights", 0.88],
-    ["floor", 0.18],
-    ["backdrop", "#081a35"],
-    ["genshin", -9.2],
+    ["renderer", 33],
+    ["camera", "0,7.9,0"],
+    ["lights", 0.8],
+    ["floor", 0.2],
+    ["backdrop", null],
+    ["genshin", -9.75],
   ]);
 });
 
-test("genshin material tuning keeps texture color space and cutout safety source-compatible", () => {
+test("genshin material tuning keeps texture color space, cutout safety, and clears ordinary emissive lift", () => {
   const material = makeMaterial({ name: "Hair Cloth", transparent: true, specular: 0.7, shininess: 40 });
   const ramp = { id: "genshin-ramp" };
 
@@ -602,9 +693,10 @@ test("genshin material tuning keeps texture color space and cutout safety source
 
   assert.equal(material.map.colorSpace, THREE.SRGBColorSpace);
   assert.equal(material.emissiveMap.colorSpace, THREE.SRGBColorSpace);
-  assert.ok(material.alphaTest >= 0.5);
+  assert.equal(material.alphaTest, 0.5);
   assert.equal(material.side, THREE.DoubleSide);
   assert.equal(material.gradientMap, ramp);
+  assert.equal(material.emissive.getHex(), 0x000000);
 });
 
 test("genshin material tuning boosts explicit glow materials without changing classic glow policy", () => {
@@ -616,8 +708,9 @@ test("genshin material tuning boosts explicit glow materials without changing cl
   runtimeModule.tuneClassicMMDMaterial?.(classic, classicRamp);
   runtimeModule.tuneGenshinMMDMaterial?.(genshin, genshinRamp);
 
-  assert.ok(genshin.emissiveIntensity >= classic.emissiveIntensity);
+  assert.notEqual(classic.emissive.getHex(), 0x9d00ff);
   assert.equal(genshin.emissive.getHex(), 0x9d00ff);
+  assert.equal(genshin.emissiveIntensity, 1);
   assert.equal(genshin.gradientMap.id, "genshin-ramp");
 });
 
@@ -629,33 +722,33 @@ test("genshin glow detection requires explicit glow or purple fx material names"
   assert.equal(runtimeModule.isGenshinGlowMaterial?.("fx dress"), false);
 });
 
-test("classic material tuning remains separate from genshin emissive policy", () => {
+test("classic material tuning remains separate from genshin emissive cleanup policy", () => {
   const classic = makeMaterial({ name: "Glow FX" });
-  const genshin = makeMaterial({ name: "Glow FX" });
+  const genshin = makeMaterial({ name: "Face Skin" });
   const classicRamp = { id: "classic-ramp" };
   const genshinRamp = { id: "genshin-ramp" };
 
   runtimeModule.tuneClassicMMDMaterial?.(classic, classicRamp);
   runtimeModule.tuneGenshinMMDMaterial?.(genshin, genshinRamp);
 
-  assert.equal(classic.emissiveIntensity, 0.24);
-  assert.equal(genshin.emissiveIntensity, 0.75);
+  assert.notEqual(classic.emissive.getHex(), 0x000000);
+  assert.equal(genshin.emissive.getHex(), 0x000000);
   assert.equal(classic.gradientMap.id, "classic-ramp");
   assert.equal(genshin.gradientMap.id, "genshin-ramp");
 });
 
-test("genshin mask detection is narrow enough to avoid hiding ordinary face materials", () => {
+test("genshin mask detection follows the broader project2 mask suppression rule", () => {
   assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("face skin"), false);
   assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("eye lash"), false);
-  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("surface mask"), false);
-  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("tengu mask"), false);
-  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("mask ornament"), false);
-  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("face mask ornament"), false);
+  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("surface mask"), true);
+  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("tengu mask"), true);
+  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("mask ornament"), true);
+  assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("face mask ornament"), true);
   assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("face mask"), true);
   assert.equal(runtimeModule.isGenshinSuppressedMaskMaterial?.("mouth mask"), true);
 });
 
-test("genshin material tuning suppresses only matched mask materials", () => {
+test("genshin material tuning suppresses broad project2-style mask materials", () => {
   const mask = makeMaterial({ name: "face mask" });
   const ornament = makeMaterial({ name: "mask ornament" });
 
@@ -665,8 +758,8 @@ test("genshin material tuning suppresses only matched mask materials", () => {
   assert.equal(mask.visible, false);
   assert.equal(mask.transparent, true);
   assert.equal(mask.opacity, 0);
-  assert.notEqual(ornament.visible, false);
-  assert.notEqual(ornament.opacity, 0);
+  assert.equal(ornament.visible, false);
+  assert.equal(ornament.opacity, 0);
 });
 
 test("classic and genshin material tuners diverge while preserving cutout safety", () => {
@@ -683,15 +776,13 @@ test("classic and genshin material tuners diverge while preserving cutout safety
   assert.equal(classic.gradientMap, classicRamp);
   assert.equal(classic.shininess, 26);
 
-  assert.ok(genshin.alphaTest >= 0.5);
+  assert.equal(genshin.alphaTest, 0.5);
   assert.equal(genshin.side, THREE.DoubleSide);
   assert.equal(genshin.gradientMap, genshinRamp);
-  assert.notEqual(genshin.shininess, classic.shininess);
-  assert.notEqual(genshin.specular.r, classic.specular.r);
-  assert.notEqual(genshin.emissiveIntensity, classic.emissiveIntensity);
+  assert.equal(genshin.emissive.getHex(), 0x000000);
 });
 
-test("genshin material tuning preserves authored toon ramps and recognizes non-English hair profiles", () => {
+test("genshin material tuning preserves authored toon ramps while keeping hair presentation readable", () => {
   const existingGradientMap = { id: "authored-ramp" };
   const hair = makeMaterial({ name: "前髪", transparent: false, specular: 0.7, shininess: 40 });
   hair.gradientMap = existingGradientMap;
@@ -700,7 +791,7 @@ test("genshin material tuning preserves authored toon ramps and recognizes non-E
 
   assert.equal(hair.gradientMap, existingGradientMap);
   assert.equal(hair.side, THREE.DoubleSide);
-  assert.equal(hair.shininess, 14);
+  assert.equal(hair.emissive.getHex(), 0x000000);
 });
 
 test("hero-shot material tuning differs from classic while preserving alpha safety", () => {
@@ -778,10 +869,10 @@ test("loadModel selects material tuning by renderPipeline", async () => {
   assert.equal(classicMaterial.shininess, 26);
   assert.equal(classicMaterial.gradientMap.id, "classic-ramp");
 
-  assert.ok(genshinMaterial.alphaTest >= 0.5);
+  assert.equal(genshinMaterial.alphaTest, 0.5);
+  assert.equal(genshinMaterial.side, THREE.DoubleSide);
   assert.equal(genshinMaterial.gradientMap.id, "genshin-ramp");
-  assert.notEqual(genshinMaterial.shininess, classicMaterial.shininess);
-  assert.notEqual(genshinMaterial.emissiveIntensity, classicMaterial.emissiveIntensity);
+  assert.equal(genshinMaterial.emissive.getHex(), 0x000000);
 
   assert.ok(heroShotMaterial.alphaTest >= 0.48);
   assert.equal(heroShotMaterial.gradientMap.id, "hero-shot-ramp");
@@ -814,7 +905,7 @@ test("loadModel routes hero-shot face materials through hero-shot tuning instead
   assert.notEqual(heroShotFaceMaterial.emissiveIntensity, classicFaceMaterial.emissiveIntensity);
 });
 
-test("loadModel attaches character outline only for genshin pipeline", async () => {
+test("loadModel keeps outline disabled for classic and genshin while preserving hero-shot outline support", async () => {
   const classicCalls = [];
   const classicRuntime = makeRuntime({
     renderPipeline: "classic",
@@ -845,137 +936,28 @@ test("loadModel attaches character outline only for genshin pipeline", async () 
     },
   };
 
-  await classicRuntime.loadModel("/classic-model.pmx");
-  await genshinRuntime.loadModel("/genshin-model.pmx");
-
-  assert.deepEqual(classicCalls, []);
-  assert.deepEqual(genshinCalls, ["genshin"]);
-});
-
-test("genshin outline respects cutout textures and uses gentler face silhouettes", () => {
-  const runtime = makeRuntime({
-    renderPipeline: "genshin",
-    presentation: getStagePresentationConfig("genshin"),
+  const heroShotCalls = [];
+  const heroShotRuntime = makeRuntime({
+    renderPipeline: "hero-shot",
+    toonRampTexture: { id: "hero-shot-ramp" },
+    attachCharacterOutline() {
+      heroShotCalls.push("hero-shot");
+    },
+    presentation: getStagePresentationConfig("hero-shot"),
   });
-
-  const transparentMap = { id: "hair-map" };
-  const faceMaterial = makeMaterial({ name: "Face Skin", transparent: false, shininess: 40 });
-  const hairMaterial = makeMaterial({ name: "Hair", transparent: true, shininess: 40 });
-  hairMaterial.map = transparentMap;
-  hairMaterial.alphaTest = 0.58;
-
-  const faceParent = { added: [], add(node) { this.added.push(node); }, remove() {} };
-  const hairParent = { added: [], add(node) { this.added.push(node); }, remove() {} };
-
-  const mesh = {
-    traverse(visitor) {
-      visitor({
-        isMesh: true,
-        isSkinnedMesh: false,
-        geometry: new THREE.BufferGeometry(),
-        material: faceMaterial,
-        parent: faceParent,
-        position: new THREE.Vector3(),
-        quaternion: new THREE.Quaternion(),
-        scale: new THREE.Vector3(1, 1, 1),
-        renderOrder: 0,
-        name: "face",
-      });
-      visitor({
-        isMesh: true,
-        isSkinnedMesh: false,
-        geometry: new THREE.BufferGeometry(),
-        material: hairMaterial,
-        parent: hairParent,
-        position: new THREE.Vector3(),
-        quaternion: new THREE.Quaternion(),
-        scale: new THREE.Vector3(1, 1, 1),
-        renderOrder: 0,
-        name: "hair",
-      });
+  heroShotRuntime.loader = {
+    load(_url, onLoad) {
+      onLoad(makeMesh({ materials: [makeMaterial({ name: "Hair Cloth", transparent: true })] }));
     },
   };
 
-  runtime.attachCharacterOutline(mesh, getStagePresentationConfig("genshin"));
+  await classicRuntime.loadModel("/classic-model.pmx");
+  await genshinRuntime.loadModel("/genshin-model.pmx");
+  await heroShotRuntime.loadModel("/hero-shot-model.pmx");
 
-  assert.equal(runtime.outlineObjects.length, 2);
-  const [faceOutline, hairOutline] = runtime.outlineObjects;
-  assert.ok(faceOutline.scale.x < hairOutline.scale.x);
-  assert.equal(hairOutline.material.map, transparentMap);
-  assert.ok(hairOutline.material.alphaTest >= 0.5);
-});
-
-test("genshin outline skips meshes whose materials were suppressed", () => {
-  const runtime = makeRuntime({
-    renderPipeline: "genshin",
-    presentation: getStagePresentationConfig("genshin"),
-  });
-  const maskMaterial = makeMaterial({ name: "face mask" });
-  const parent = { added: [], add(node) { this.added.push(node); }, remove() {} };
-
-  runtimeModule.tuneGenshinMMDMaterial?.(maskMaterial, { id: "genshin-ramp" });
-  runtime.attachCharacterOutline(
-    {
-      traverse(visitor) {
-        visitor({
-          isMesh: true,
-          isSkinnedMesh: false,
-          geometry: new THREE.BufferGeometry(),
-          material: maskMaterial,
-          parent,
-          position: new THREE.Vector3(),
-          quaternion: new THREE.Quaternion(),
-          scale: new THREE.Vector3(1, 1, 1),
-          renderOrder: 0,
-          name: "face-mask",
-        });
-      },
-    },
-    getStagePresentationConfig("genshin"),
-  );
-
-  assert.equal(runtime.outlineObjects.length, 0);
-  assert.equal(parent.added.length, 0);
-});
-
-test("genshin outline keeps suppressed material slots invisible on mixed-material meshes", () => {
-  const runtime = makeRuntime({
-    renderPipeline: "genshin",
-    presentation: getStagePresentationConfig("genshin"),
-  });
-  const visibleMaterial = makeMaterial({ name: "Hair" });
-  const maskMaterial = makeMaterial({ name: "face mask" });
-  const parent = { added: [], add(node) { this.added.push(node); }, remove() {} };
-
-  runtimeModule.tuneGenshinMMDMaterial?.(maskMaterial, { id: "genshin-ramp" });
-  runtime.attachCharacterOutline(
-    {
-      traverse(visitor) {
-        visitor({
-          isMesh: true,
-          isSkinnedMesh: false,
-          geometry: new THREE.BufferGeometry(),
-          material: [visibleMaterial, maskMaterial],
-          parent,
-          position: new THREE.Vector3(),
-          quaternion: new THREE.Quaternion(),
-          scale: new THREE.Vector3(1, 1, 1),
-          renderOrder: 0,
-          name: "mixed-face",
-        });
-      },
-    },
-    getStagePresentationConfig("genshin"),
-  );
-
-  assert.equal(runtime.outlineObjects.length, 1);
-  assert.equal(parent.added.length, 1);
-  const [outline] = runtime.outlineObjects;
-  assert.equal(Array.isArray(outline.material), true);
-  assert.notEqual(outline.material[0].visible, false);
-  assert.ok(outline.material[0].opacity > 0);
-  assert.equal(outline.material[1].visible, false);
-  assert.equal(outline.material[1].opacity, 0);
+  assert.deepEqual(classicCalls, []);
+  assert.deepEqual(genshinCalls, []);
+  assert.deepEqual(heroShotCalls, ["hero-shot"]);
 });
 
 test("non-genshin outlines keep hidden source material slots on the existing shared path", () => {
@@ -1013,7 +995,7 @@ test("non-genshin outlines keep hidden source material slots on the existing sha
   assert.equal(Array.isArray(runtime.outlineObjects[0].material), false);
 });
 
-test("setupBackdrop stays disabled for classic but builds a layered genshin backdrop", () => {
+test("setupBackdrop stays disabled for classic and genshin once genshin follows project2 staging", () => {
   const classicAdds = [];
   const classicRuntime = makeRuntime({
     scene: { add(node) { classicAdds.push(node); }, remove() {} },
@@ -1022,20 +1004,16 @@ test("setupBackdrop stays disabled for classic but builds a layered genshin back
   assert.equal(classicRuntime.backdropGroup, null);
   assert.deepEqual(classicAdds, []);
 
-  withStubbedDocument(() => {
-    const genshinAdds = [];
-    const genshinRuntime = makeRuntime({
-      scene: { add(node) { genshinAdds.push(node); }, remove() {} },
-    });
-    genshinRuntime.setupBackdrop(getStagePresentationConfig("genshin"));
-    assert.equal(genshinAdds.length, 1);
-    assert.ok(genshinRuntime.backdropGroup);
-    assert.ok(genshinRuntime.backdropGroup.children.length >= 3);
-    assert.equal(genshinRuntime.backdropTextures.length >= 3, true);
+  const genshinAdds = [];
+  const genshinRuntime = makeRuntime({
+    scene: { add(node) { genshinAdds.push(node); }, remove() {} },
   });
+  genshinRuntime.setupBackdrop(getStagePresentationConfig("genshin"));
+  assert.equal(genshinRuntime.backdropGroup, null);
+  assert.deepEqual(genshinAdds, []);
 });
 
-test("setupFloor builds a layered genshin presentation floor with glow and contact shadow", () => {
+test("setupFloor keeps genshin to a plain shadow catcher without decorative stage layers", () => {
   withStubbedDocument(() => {
     const adds = [];
     const runtime = makeRuntime({
@@ -1046,12 +1024,12 @@ test("setupFloor builds a layered genshin presentation floor with glow and conta
 
     assert.equal(adds.length, 1);
     assert.ok(runtime.floorGroup);
-    assert.ok(runtime.floorGroup.children.length >= 4);
-    assert.equal(runtime.floorTextures.length >= 2, true);
+    assert.equal(runtime.floorGroup.children.length, 1);
+    assert.deepEqual(runtime.floorTextures, []);
   });
 });
 
-test("renderScene chooses composer for genshin postfx and renderer for classic", () => {
+test("renderScene uses direct renderer for both classic and project2-style genshin", () => {
   const classicCalls = [];
   const classicRuntime = makeRuntime({
     presentation: getStagePresentationConfig("classic"),
@@ -1085,7 +1063,7 @@ test("renderScene chooses composer for genshin postfx and renderer for classic",
     },
   });
   genshinRuntime.renderScene();
-  assert.deepEqual(genshinCalls, ["composer"]);
+  assert.deepEqual(genshinCalls, ["renderer"]);
 });
 
 test("stage presentation config returns fresh objects on every call", () => {
@@ -1201,15 +1179,61 @@ test("shouldUsePostFX follows the active presentation config", () => {
   const genshinRuntime = makeRuntime({ presentation: getStagePresentationConfig("genshin") });
 
   assert.equal(classicRuntime.shouldUsePostFX(), false);
-  assert.equal(genshinRuntime.shouldUsePostFX(), true);
+  assert.equal(genshinRuntime.shouldUsePostFX(), false);
 });
 
-test("genshin bloom stays available when the stage uses an explicit backdrop pipeline", () => {
+test("genshin bloom stays disabled when the project2-style stage bypasses postfx", () => {
   const runtime = makeRuntime({ presentation: getStagePresentationConfig("genshin") });
   const genshinPresentation = getStagePresentationConfig("genshin");
 
-  assert.equal(runtime.shouldUseBloom(genshinPresentation), true);
+  assert.equal(runtime.shouldUseBloom(genshinPresentation), false);
   assert.equal(runtime.shouldUseBloom(getStagePresentationConfig("classic")), false);
+});
+
+test("loadModel keeps genshin base skeleton capture aligned with classic integration semantics", async () => {
+  const classicAsset = createProject2PoseMesh();
+  const genshinAsset = createProject2PoseMesh();
+
+  const classicRuntime = makeRuntime({
+    renderPipeline: "classic",
+    presentation: getStagePresentationConfig("classic"),
+    toonRampTexture: { id: "classic-ramp" },
+  });
+  classicRuntime.loader = {
+    load(_url, onLoad) {
+      onLoad(classicAsset.mesh);
+    },
+  };
+
+  const genshinRuntime = makeRuntime({
+    renderPipeline: "genshin",
+    presentation: getStagePresentationConfig("genshin"),
+    toonRampTexture: { id: "genshin-ramp" },
+  });
+  genshinRuntime.loader = {
+    load(_url, onLoad) {
+      onLoad(genshinAsset.mesh);
+    },
+  };
+
+  await classicRuntime.loadModel("/classic-pose-model.pmx");
+  await genshinRuntime.loadModel("/genshin-pose-model.pmx");
+
+  assert.equal(classicAsset.bones.leftArm.rotation.z, 0);
+  assert.equal(classicAsset.bones.rightArm.rotation.z, 0);
+  assert.equal(classicRuntime.baseBoneRotation.leftArm.z, 0);
+  assert.equal(classicRuntime.baseBoneRotation.rightArm.z, 0);
+
+  assert.equal(genshinAsset.bones.hip.rotation.z, 0);
+  assert.equal(genshinAsset.bones.chest.rotation.z, 0);
+  assert.equal(genshinAsset.bones.leftLeg.rotation.z, 0);
+  assert.equal(genshinAsset.bones.leftLeg.rotation.y, 0);
+  assert.equal(genshinAsset.bones.leftKnee.rotation.x, 0);
+  assert.equal(genshinAsset.bones.leftArm.rotation.z, 0);
+  assert.equal(genshinAsset.bones.rightArm.rotation.z, 0);
+  assert.equal(genshinRuntime.baseBoneRotation.leftArm.z, 0);
+  assert.equal(genshinRuntime.baseBoneRotation.rightArm.z, 0);
+  assert.ok(genshinRuntime.baseBoneTransformMap.get(genshinAsset.bones.leftKnee).quaternion.angleTo(genshinAsset.bones.leftKnee.quaternion) < 1e-9);
 });
 
 test("renderFrame accelerates active VMD clips without applying procedural pose updates", async () => {
