@@ -247,6 +247,91 @@ test("advanced features button opens a non-modal VMD quick import panel with pre
   await expect(page.getByTestId("mio-stage-wrap")).toBeVisible();
 });
 
+test("advanced panel can unlock and save the active favorite VMD camera @smoke", async ({ page }) => {
+  await page.route("**/config/mapping/resolved/**", async (route) => {
+    await route.fulfill({ json: { mappings: {} } });
+  });
+  await page.route("**/assets/vmd?**", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            asset_id: "asset-1",
+            user_id: "8X29-AF3E",
+            slot: "happy",
+            filename: "eula-favorite.vmd",
+            display_name: "eula-favorite.vmd",
+            is_favorite: true,
+            favorite_relative_path: "usage/vmd/Eula[action]/eula-favorite.vmd",
+            favorite_model_relative_path: "Eula_by_Genshin/Eula.pmx",
+            size_bytes: 20480,
+            created_at: "2026-04-26T10:00:00Z",
+            url: "/assets/vmd/file/asset-1",
+          },
+        ],
+      },
+    });
+  });
+  await page.route("**/assets/mmd/models", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            name: "Eula.pmx",
+            label: "Eula",
+            relative_path: "Eula_by_Genshin/Eula.pmx",
+            size_bytes: 1024,
+            url: "/assets/mmd/Eula_by_Genshin/Eula.pmx",
+          },
+        ],
+      },
+    });
+  });
+  await page.route("**/assets/mmd/vmds", async (route) => {
+    await route.fulfill({ json: { items: [] } });
+  });
+
+  await page.goto("/");
+  await page.evaluate(() => {
+    window.localStorage.setItem("mmd_companion_session_v1", JSON.stringify({ userId: "8X29-AF3E", renderPipeline: "genshin" }));
+  });
+  await page.goto("/companion");
+  await page.locator('button[aria-controls="mio-advanced-panel"]').click();
+  await page.getByRole("tab", { name: "Favorites" }).click();
+  await page.getByTestId("mio-advanced-asset").first().getByRole("button", { name: /Preview/ }).click();
+
+  const cameraControls = page.getByTestId("mio-camera-controls");
+  await expect(cameraControls).toBeVisible();
+  await expect(cameraControls).toContainText("eula-favorite.vmd");
+  await expect(cameraControls.getByTestId("mio-camera-mode")).toContainText("Free");
+  await cameraControls.getByTestId("mio-camera-unlock").click();
+  await expect(cameraControls.getByTestId("mio-camera-mode")).toContainText("Editing");
+  const savedCameraLog = page.waitForEvent(
+    "console",
+    (message) => message.type() === "info" && message.text().includes("[mmd-camera] saved snapshot"),
+  );
+  await cameraControls.getByTestId("mio-camera-save").click();
+  await expect(cameraControls.getByTestId("mio-camera-mode")).toContainText("Free");
+  await savedCameraLog;
+
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const session = JSON.parse(window.localStorage.getItem("mmd_companion_session_v1") || "{}");
+        return Object.entries(session.mmdCameraByFavoriteVmd || {})[0] || null;
+      }),
+    )
+    .toEqual([
+      "genshin::Eula_by_Genshin%2FEula.pmx::asset-1",
+      {
+        fov: 33,
+        position: [0, 9.2, 21.6],
+        target: [0, 7.9, 0],
+        locked: false,
+      },
+    ]);
+});
+
 test("companion stage keeps runtime chrome hidden inside the restored HUD @critical", async ({ page }) => {
   await seedSession(page);
   await page.goto("/companion");

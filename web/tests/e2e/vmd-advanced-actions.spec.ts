@@ -204,14 +204,14 @@ test("favorites tab shows current model favorites and allows rename plus unfavor
   await expect(page.getByTestId("mio-advanced-asset")).toHaveCount(2);
   await expect(page.getByTestId("mio-advanced-asset").nth(0)).toContainText("eula-sad.vmd");
   await expect(page.getByTestId("mio-advanced-asset").nth(1)).toContainText("eula-favorite.vmd");
-  await expect(page.getByText("eula-favorite.vmd")).toBeVisible();
-  await expect(page.getByText("eula-sad.vmd")).toBeVisible();
-  await expect(page.getByText("ayaka-favorite.vmd")).toHaveCount(0);
+  await expect(page.getByTestId("mio-advanced-asset").filter({ hasText: "eula-favorite.vmd" })).toHaveCount(1);
+  await expect(page.getByTestId("mio-advanced-asset").filter({ hasText: "eula-sad.vmd" })).toHaveCount(1);
+  await expect(page.getByTestId("mio-advanced-asset").filter({ hasText: "ayaka-favorite.vmd" })).toHaveCount(0);
 
   await page.getByLabel("Favorite slot filter").selectOption("happy");
   await expect(page.getByTestId("mio-advanced-asset")).toHaveCount(1);
-  await expect(page.getByText("eula-favorite.vmd")).toBeVisible();
-  await expect(page.getByText("eula-sad.vmd")).toHaveCount(0);
+  await expect(page.getByTestId("mio-advanced-asset").filter({ hasText: "eula-favorite.vmd" })).toHaveCount(1);
+  await expect(page.getByTestId("mio-advanced-asset").filter({ hasText: "eula-sad.vmd" })).toHaveCount(0);
 
   await page.getByLabel("Favorite slot filter").selectOption("all");
   await expect(page.getByTestId("mio-advanced-asset")).toHaveCount(2);

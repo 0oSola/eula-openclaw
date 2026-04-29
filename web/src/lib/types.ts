@@ -82,6 +82,15 @@ export type MmdMotionAsset = {
   url: string;
 };
 
+export type RenderPipeline = "classic" | "hero-shot" | "genshin";
+
+export type MmdCameraSnapshot = {
+  fov: number;
+  position: [number, number, number];
+  target: [number, number, number];
+  locked: boolean;
+};
+
 export type TraceEvent = {
   trace_id: string;
   user_id: string;
@@ -107,5 +116,7 @@ export type TraceMirror = {
 
 export type UserSession = {
   userId: string;
-  renderPipeline?: "classic" | "hero-shot" | "genshin";
+  renderPipeline?: RenderPipeline;
+  mmdCamera?: Partial<Record<RenderPipeline, MmdCameraSnapshot>>;
+  mmdCameraByFavoriteVmd?: Record<string, MmdCameraSnapshot>;
 };

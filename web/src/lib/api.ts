@@ -1,4 +1,5 @@
 import { buildTraceHeaders } from "@/lib/trace.js";
+import { requestServerTtsAudio } from "@/lib/ttsClient.js";
 import type {
   ChatResponse,
   MappingConfig,
@@ -179,23 +180,20 @@ export async function getTraceMirrors(
   return payload.items || [];
 }
 
-export async function requestServerTts(userId: string, text: string): Promise<{
-  configured: boolean;
-  message: string;
-}> {
-  const response = await fetch(makeUrl("/tts/speak"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-user-id": userId,
-    },
-    body: JSON.stringify({ text, voice: "default" }),
-  });
-  const payload = await response.json();
-  if (!response.ok && response.status !== 501) {
-    throw new Error(payload?.detail || payload?.message || "Server TTS failed");
-  }
-  return payload;
+export type ServerTtsResult =
+  | {
+      configured: false;
+      message: string;
+    }
+  | {
+      configured: true;
+      audio: Blob;
+      mediaType: string;
+      message?: string;
+    };
+
+export async function requestServerTts(userId: string, text: string, sessionId?: string): Promise<ServerTtsResult> {
+  return requestServerTtsAudio({ userId, text, sessionId, makeUrl }) as Promise<ServerTtsResult>;
 }
 
 export { API_BASE_URL, makeUrl };

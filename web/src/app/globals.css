@@ -913,6 +913,67 @@ a {
   cursor: pointer;
 }
 
+.mio-camera-controls {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(136, 211, 255, 0.22);
+  border-radius: 12px;
+  background: rgba(7, 26, 51, 0.54);
+}
+
+.mio-camera-controls-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mio-camera-controls-head strong {
+  display: block;
+  color: #eef8ff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mio-camera-controls-head span {
+  display: block;
+  color: rgba(205, 228, 243, 0.72);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.mio-camera-controls-head > span {
+  flex: 0 0 auto;
+  min-width: 64px;
+  border: 1px solid rgba(136, 211, 255, 0.26);
+  border-radius: 999px;
+  background: rgba(10, 34, 67, 0.72);
+  color: rgba(238, 248, 255, 0.82);
+  padding: 4px 9px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.mio-camera-controls-head > span.is-editing {
+  border-color: rgba(108, 224, 255, 0.62);
+  color: #6ce0ff;
+}
+
+.mio-camera-controls p {
+  margin: 0;
+  color: rgba(231, 243, 255, 0.72);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.mio-camera-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .mio-advanced-toolbar {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

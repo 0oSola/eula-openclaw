@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from app.models.chat import OpenClawReply
+from app.models.chat import OpenClawReply, OpenClawSpeech
 
 
 class OpenClawInvocationError(RuntimeError):
@@ -176,30 +176,9 @@ class OpenClawClient:
                 timeout=self.timeout_seconds,
             ),
         )
-        if responses_probe["ok"] is True:
-            chat_probe = self._diagnostic_probe_result(
-                endpoint="/v1/chat/completions",
-                ok=None,
-                status_code=None,
-                detail="not_run",
-            )
-        else:
-            chat_probe = await self._probe_endpoint(
-                "/v1/chat/completions",
-                lambda: self.http_client.post(
-                    f"{self.base_url}/v1/chat/completions",
-                    headers=headers,
-                    json={
-                        "model": payload_model,
-                        "messages": [{"role": "user", "content": "ping"}],
-                        "stream": False,
-                    },
-                    timeout=self.timeout_seconds,
-                ),
-            )
 
         recommendations: list[str] = []
-        probe_details = [models_probe["detail"], responses_probe["detail"], chat_probe["detail"]]
+        probe_details = [models_probe["detail"], responses_probe["detail"]]
         if any(self._probe_needs_scope_fix(detail) for detail in probe_details):
             recommendations.append(
                 "OpenClaw accepted the bearer token but denied operator scopes. "
@@ -207,12 +186,12 @@ class OpenClawClient:
             )
         if any(
             probe["status_code"] == 404
-            for probe in (models_probe, responses_probe, chat_probe)
+            for probe in (models_probe, responses_probe)
             if probe["status_code"] is not None
         ):
             recommendations.append(
                 "Ensure OPENCLAW_BASE_URL points at the Gateway port and "
-                "gateway.http.endpoints.responses.enabled / gateway.http.endpoints.chatCompletions.enabled are enabled."
+                "gateway.http.endpoints.responses.enabled is enabled."
             )
         if any(
             "connection attempts failed" in detail.lower()
@@ -236,7 +215,6 @@ class OpenClawClient:
             "probes": {
                 "models": models_probe,
                 "responses": responses_probe,
-                "chat_completions": chat_probe,
             },
             "recommendations": recommendations,
         }
@@ -290,34 +268,12 @@ class OpenClawClient:
                     chunks.append(text)
         return "\n".join(chunks).strip()
 
-    @staticmethod
-    def _extract_chat_text(payload: dict[str, Any]) -> str:
-        choices = payload.get("choices")
-        if not isinstance(choices, list) or not choices:
-            return ""
-        message = choices[0].get("message") if isinstance(choices[0], dict) else None
-        if not isinstance(message, dict):
-            return ""
-        content = message.get("content")
-        if isinstance(content, str):
-            return content.strip()
-        if isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict) and isinstance(item.get("text"), str):
-                    parts.append(item["text"])
-                elif isinstance(item, str):
-                    parts.append(item)
-            return "\n".join(parts).strip()
-        return ""
-
     def _format_error(self, response: httpx.Response) -> str:
         text = response.text.strip() or "Unknown error."
         if response.status_code == 404:
             return (
                 "OpenClaw HTTP endpoint returned 404. Ensure OPENCLAW_BASE_URL points at the Gateway port "
-                "and enable gateway.http.endpoints.responses.enabled and "
-                "gateway.http.endpoints.chatCompletions.enabled. "
+                "and enable gateway.http.endpoints.responses.enabled. "
                 f"Response body: {text}"
             )
         return f"OpenClaw failed with status {response.status_code}: {text}"
@@ -340,35 +296,49 @@ class OpenClawClient:
 
         try:
             resp = await self._post_with_retry("/v1/responses", responses_payload, headers)
-            if resp.is_success:
-                text = self._extract_responses_text(resp.json())
-                if text:
-                    return OpenClawReply(
-                        raw_text=text,
-                        endpoint_used="/v1/responses",
-                        status_code=resp.status_code,
-                    )
-        except Exception:
-            pass
-
-        chat_payload = {
-            "model": payload_model,
-            "messages": history + [{"role": "user", "content": message}],
-            "user": user_id,
-            "stream": False,
-        }
-        try:
-            resp = await self._post_with_retry("/v1/chat/completions", chat_payload, headers)
             if not resp.is_success:
                 raise OpenClawInvocationError(self._format_error(resp))
-
-            text = self._extract_chat_text(resp.json())
+            text = self._extract_responses_text(resp.json())
             if not text:
-                raise OpenClawInvocationError("OpenClaw returned empty content.")
+                raise OpenClawInvocationError("OpenClaw /v1/responses returned empty content.")
             return OpenClawReply(
                 raw_text=text,
-                endpoint_used="/v1/chat/completions",
+                endpoint_used="/v1/responses",
                 status_code=resp.status_code,
+            )
+        except Exception as error:
+            if isinstance(error, OpenClawInvocationError):
+                raise
+            raise OpenClawInvocationError(str(error)) from error
+
+    async def generate_speech(
+        self,
+        user_id: str,
+        session_id: str | None,
+        text: str,
+        voice: str = "default",
+    ) -> OpenClawSpeech:
+        payload_model, _, _ = self._resolve_request_target()
+        headers = self._headers(session_id)
+        payload = {
+            "model": payload_model,
+            "input": text,
+            "voice": voice or "default",
+            "response_format": "mp3",
+            "user": user_id,
+        }
+        try:
+            response = await self._post_with_retry("/v1/audio/speech", payload, headers)
+            if not response.is_success:
+                raise OpenClawInvocationError(self._format_error(response))
+            if not response.content:
+                raise OpenClawInvocationError("OpenClaw TTS returned empty audio.")
+            media_type = response.headers.get("content-type", "audio/mpeg").split(";", 1)[0] or "audio/mpeg"
+            return OpenClawSpeech(
+                audio=response.content,
+                media_type=media_type,
+                endpoint_used="/v1/audio/speech",
+                status_code=response.status_code,
             )
         except Exception as error:
             if isinstance(error, OpenClawInvocationError):

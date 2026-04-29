@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -12,7 +12,7 @@ import {
   resolveVmdPlaybackRate,
 } from "@/features/mapping/vmdPreview.js";
 import { resolvePlaybackPlan } from "@/features/mapping/resolveAction.js";
-import { MMDStage } from "@/features/stage/MMDStage";
+import { MMDStage, type MMDStageHandle } from "@/features/stage/MMDStage";
 import {
   DEFAULT_VMD_PLAYBACK_RATE,
   BUILT_IN_VMD_PLAYBACK_RATE,
@@ -30,7 +30,17 @@ import {
   uploadVmdAsset,
 } from "@/lib/api";
 import { clearSession, loadSession, saveSession } from "@/lib/session";
-import type { ChatMessage, MappingConfig, MmdModelAsset, MmdMotionAsset, UserSession, VmdAsset } from "@/lib/types";
+import { DEFAULT_TTS_MODE, playServerTtsAudio } from "@/lib/ttsPlayback.js";
+import type {
+  ChatMessage,
+  MappingConfig,
+  MmdCameraSnapshot,
+  MmdModelAsset,
+  MmdMotionAsset,
+  RenderPipeline,
+  UserSession,
+  VmdAsset,
+} from "@/lib/types";
 
 type InteractionStep = {
   template: string;
@@ -53,7 +63,6 @@ type InteractionState = {
 };
 
 type InteractionSource = "default" | "autoplay" | "manual-preview" | "chat";
-type RenderPipeline = "classic" | "hero-shot" | "genshin";
 
 const SPRITE = "/images/sprite-sliced";
 const DEFAULT_MODEL_RELATIVE_PATH = "优菈.pmx";
@@ -124,8 +133,15 @@ function getCharacterBadge(index: number) {
   return `${index + 1}`.padStart(2, "0");
 }
 
+function buildFavoriteVmdCameraKey(pipeline: RenderPipeline, modelPath: string, assetId: string) {
+  return `${pipeline}::${encodeURIComponent(modelPath)}::${encodeURIComponent(assetId)}`;
+}
+
 export default function CompanionPage() {
   const router = useRouter();
+  const stageRef = useRef<MMDStageHandle | null>(null);
+  const serverAudioRef = useRef<HTMLAudioElement | null>(null);
+  const serverAudioCleanupRef = useRef<(() => void) | null>(null);
   const [session, setSession] = useState<UserSession | null>(null);
   const [sessionId] = useState(() => crypto.randomUUID());
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -144,7 +160,7 @@ export default function CompanionPage() {
   const [motions, setMotions] = useState<MmdMotionAsset[]>([]);
   const [selectedModelPath, setSelectedModelPath] = useState("");
   const [ttsEnabled, setTtsEnabled] = useState(true);
-  const [ttsMode, setTtsMode] = useState<"browser" | "server">("browser");
+  const [ttsMode, setTtsMode] = useState<"browser" | "server">(DEFAULT_TTS_MODE as "browser" | "server");
   const [speaking, setSpeaking] = useState(false);
   const [renderPipeline, setRenderPipeline] = useState<RenderPipeline>("classic");
   const [isCharacterPickerOpen, setIsCharacterPickerOpen] = useState(false);
@@ -159,6 +175,8 @@ export default function CompanionPage() {
   const [advancedBusy, setAdvancedBusy] = useState(false);
   const [advancedError, setAdvancedError] = useState("");
   const [advancedMessage, setAdvancedMessage] = useState("");
+  const [cameraEditMode, setCameraEditMode] = useState(false);
+  const [activeVmdAssetId, setActiveVmdAssetId] = useState("");
   const [renameTarget, setRenameTarget] = useState<VmdAsset | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [interactionSource, setInteractionSource] = useState<InteractionSource>("default");
@@ -259,27 +277,52 @@ export default function CompanionPage() {
     }));
   }, [models, selectedModelPath]);
 
+  const activeFavoriteVmdAsset = useMemo(() => {
+    if (!activeVmdAssetId) return null;
+    return currentModelFavoriteAssets.find((asset) => asset.asset_id === activeVmdAssetId) || null;
+  }, [activeVmdAssetId, currentModelFavoriteAssets]);
+
+  const activeFavoriteVmdCameraKey =
+    activeFavoriteVmdAsset && selectedModel?.relative_path
+      ? buildFavoriteVmdCameraKey(renderPipeline, selectedModel.relative_path, activeFavoriteVmdAsset.asset_id)
+      : "";
+
   const latestAssistantMessage =
     [...messages].reverse().find((item) => item.role === "assistant")?.content || DEFAULT_ASSISTANT_COPY;
+  const activeCameraSnapshot =
+    (activeFavoriteVmdCameraKey ? session?.mmdCameraByFavoriteVmd?.[activeFavoriteVmdCameraKey] : null) ??
+    session?.mmdCamera?.[renderPipeline] ??
+    null;
 
   useEffect(() => {
     if (!autoFavoriteInteraction) return;
     if (interactionSource !== "default" && interactionSource !== "autoplay") return;
     setInteraction(autoFavoriteInteraction);
     setInteractionSource("autoplay");
+    setActiveVmdAssetId(currentModelFavoriteAssets[0]?.asset_id || "");
     setPendingAutoResume(false);
-  }, [autoFavoriteInteraction, interactionSource, selectedModel?.relative_path]);
+  }, [autoFavoriteInteraction, currentModelFavoriteAssets, interactionSource, selectedModel?.relative_path]);
 
   useEffect(() => {
     if (autoFavoriteInteraction || interactionSource !== "autoplay") return;
     setInteraction(createDefaultInteractionState());
     setInteractionSource("default");
+    setActiveVmdAssetId("");
     setPendingAutoResume(false);
   }, [autoFavoriteInteraction, interactionSource]);
+
+  useEffect(() => {
+    setCameraEditMode(false);
+  }, [renderPipeline, selectedModelPath]);
+
+  useEffect(() => {
+    return () => stopServerAudio({ updateSpeaking: false });
+  }, []);
 
   function previewVmdAsset(asset: VmdAsset) {
     setAdvancedError("");
     setAdvancedMessage(`Previewing ${asset.display_name || asset.filename}`);
+    setActiveVmdAssetId(asset.asset_id);
     const preview = createVmdPreviewInteraction(asset, Number(advancedPlaybackRate) || 1);
     setInteractionSource("manual-preview");
     setPendingAutoResume(Boolean(autoplayResumeInteraction));
@@ -295,8 +338,9 @@ export default function CompanionPage() {
   }
 
   function resetModelState() {
-    setSpeaking(false);
+    stopSpeechPlayback();
     setInteractionSource("default");
+    setActiveVmdAssetId("");
     setPendingAutoResume(false);
     setInteraction(createDefaultInteractionState());
     setAdvancedError("");
@@ -314,6 +358,8 @@ export default function CompanionPage() {
         model_relative_path: selectedModel.relative_path,
       });
       setAssets((current) => current.map((item) => (item.asset_id === next.asset_id ? next : item)));
+      if (next.is_favorite) setActiveVmdAssetId(next.asset_id);
+      if (!next.is_favorite && activeVmdAssetId === next.asset_id) setActiveVmdAssetId("");
       setAdvancedMessage(next.is_favorite ? `Favorited ${next.display_name}` : `Removed ${next.display_name} from favorites`);
     } catch (err) {
       setAdvancedError(err instanceof Error ? err.message : "Favorite update failed.");
@@ -397,6 +443,7 @@ export default function CompanionPage() {
 
   function previewBuiltInMotion(motion: MmdMotionAsset) {
     setInteractionSource("manual-preview");
+    setActiveVmdAssetId("");
     setPendingAutoResume(Boolean(autoplayResumeInteraction));
     setInteraction({
       emotion: interaction.emotion || "neutral",
@@ -412,13 +459,131 @@ export default function CompanionPage() {
 
   function handleRenderPipelineChange(nextPipeline: RenderPipeline) {
     setRenderPipeline(nextPipeline);
+    setCameraEditMode(false);
     if (!session) return;
     const nextSession = { ...session, renderPipeline: nextPipeline };
     setSession(nextSession);
     saveSession(nextSession);
   }
 
+  function handleUnlockMmdCamera() {
+    setAdvancedError("");
+    const snapshot = stageRef.current?.unlockCamera();
+    if (!snapshot) {
+      setAdvancedError("Camera is not ready yet.");
+      return;
+    }
+    setCameraEditMode(true);
+    setAdvancedMessage("Editing camera. Drag, pan, or zoom on the MMD stage, then save this framing.");
+  }
+
+  function handleSaveMmdCamera() {
+    setAdvancedError("");
+    if (!session) return;
+    const snapshot = stageRef.current?.captureCamera();
+    if (!snapshot) {
+      setAdvancedError("Camera is not ready yet.");
+      return;
+    }
+    const savedSnapshot: MmdCameraSnapshot = { ...snapshot, locked: false };
+    stageRef.current?.unlockCamera();
+    console.info("[mmd-camera] saved snapshot", savedSnapshot);
+    const nextSession: UserSession = activeFavoriteVmdCameraKey
+      ? {
+          ...session,
+          mmdCameraByFavoriteVmd: {
+            ...(session.mmdCameraByFavoriteVmd || {}),
+            [activeFavoriteVmdCameraKey]: savedSnapshot,
+          },
+        }
+      : {
+          ...session,
+          mmdCamera: {
+            ...(session.mmdCamera || {}),
+            [renderPipeline]: savedSnapshot,
+          },
+        };
+    setSession(nextSession);
+    saveSession(nextSession);
+    setCameraEditMode(false);
+    setAdvancedMessage(
+      activeFavoriteVmdAsset
+        ? `Camera saved for ${activeFavoriteVmdAsset.display_name || activeFavoriteVmdAsset.filename}.`
+        : `Camera saved for ${renderPipeline}.`,
+    );
+  }
+
+  function handleResetMmdCamera() {
+    setAdvancedError("");
+    if (!session) return;
+    const snapshot = stageRef.current?.resetCamera();
+    if (!snapshot) {
+      setAdvancedError("Camera is not ready yet.");
+      return;
+    }
+    const nextCamera = { ...(session.mmdCamera || {}) };
+    const nextFavoriteCameras = { ...(session.mmdCameraByFavoriteVmd || {}) };
+    if (activeFavoriteVmdCameraKey) {
+      delete nextFavoriteCameras[activeFavoriteVmdCameraKey];
+    } else {
+      delete nextCamera[renderPipeline];
+    }
+    const nextSession: UserSession = {
+      ...session,
+      mmdCamera: Object.keys(nextCamera).length ? nextCamera : undefined,
+      mmdCameraByFavoriteVmd: Object.keys(nextFavoriteCameras).length ? nextFavoriteCameras : undefined,
+    };
+    setSession(nextSession);
+    saveSession(nextSession);
+    setCameraEditMode(false);
+    setAdvancedMessage(
+      activeFavoriteVmdAsset
+        ? `Camera reset for ${activeFavoriteVmdAsset.display_name || activeFavoriteVmdAsset.filename}.`
+        : `Camera reset to the ${renderPipeline} default.`,
+    );
+  }
+
+  function stopServerAudio({ updateSpeaking = true }: { updateSpeaking?: boolean } = {}) {
+    const audio = serverAudioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+    }
+    if (serverAudioCleanupRef.current) {
+      serverAudioCleanupRef.current();
+      serverAudioCleanupRef.current = null;
+    }
+    serverAudioRef.current = null;
+    if (updateSpeaking) {
+      setSpeaking(false);
+    }
+  }
+
+  function stopSpeechPlayback() {
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    stopServerAudio();
+  }
+
+  async function playServerAudio(audioBlob: Blob) {
+    stopSpeechPlayback();
+    const controller = await playServerTtsAudio(audioBlob, {
+      setSpeaking: (value?: boolean) => setSpeaking(Boolean(value)),
+      onCleanup: ({ audio }: { audio?: HTMLAudioElement } = {}) => {
+        if (audio && serverAudioRef.current === audio) {
+          serverAudioRef.current = null;
+          serverAudioCleanupRef.current = null;
+        }
+      },
+    });
+    serverAudioRef.current = controller.audio as HTMLAudioElement;
+    serverAudioCleanupRef.current = controller.cleanup;
+  }
+
   function browserSpeak(text: string) {
+    stopServerAudio();
     if (!("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
@@ -437,10 +602,12 @@ export default function CompanionPage() {
       browserSpeak(text);
       return;
     }
-    const result = await requestServerTts(session.userId, text);
+    const result = await requestServerTts(session.userId, text, sessionId);
     if (!result.configured) {
       browserSpeak(text);
+      return;
     }
+    await playServerAudio(result.audio);
   }
 
   async function onSubmit(event: FormEvent) {
@@ -487,6 +654,7 @@ export default function CompanionPage() {
       if (plan.mode === "vmd") {
         const plannedAsset = Object.values(assetIndex).find((item) => item.url === plan.url);
         setInteractionSource("chat");
+        setActiveVmdAssetId(plannedAsset?.asset_id || "");
         setPendingAutoResume(Boolean(autoplayResumeInteraction));
         setInteraction({
           emotion: response.emotion,
@@ -499,6 +667,7 @@ export default function CompanionPage() {
         });
       } else {
         setInteractionSource("chat");
+        setActiveVmdAssetId("");
         setPendingAutoResume(Boolean(autoplayResumeInteraction));
         setInteraction({
           emotion: response.emotion,
@@ -534,9 +703,10 @@ export default function CompanionPage() {
   }
 
   function handleCharacterSwitch(nextPath: string) {
-    setSpeaking(false);
+    stopSpeechPlayback();
     setInteraction(createDefaultInteractionState());
     setInteractionSource("default");
+    setActiveVmdAssetId("");
     setPendingAutoResume(false);
     setSelectedModelPath(nextPath);
     setIsCharacterPickerOpen(false);
@@ -784,6 +954,7 @@ export default function CompanionPage() {
           <span className="mio-typing">....</span>
         </section>
         <MMDStage
+          ref={stageRef}
           chrome="bare"
           interaction={interaction}
           speaking={speaking}
@@ -793,6 +964,7 @@ export default function CompanionPage() {
           modelUrl={selectedModel?.url || ""}
           modelLabel={selectedModel ? getModelDisplayLabel(selectedModel) : ""}
           renderPipeline={renderPipeline}
+          cameraSnapshot={activeCameraSnapshot}
           onModelChange={handleCharacterSwitch}
         />
       </div>
@@ -868,6 +1040,52 @@ export default function CompanionPage() {
               ×
             </button>
           </header>
+
+          <section className="mio-camera-controls" data-testid="mio-camera-controls" aria-label="MMD camera controls">
+            <div className="mio-camera-controls-head">
+              <div>
+                <strong>MMD Camera</strong>
+                <span>
+                  {activeFavoriteVmdAsset
+                    ? `Linked to ${activeFavoriteVmdAsset.display_name || activeFavoriteVmdAsset.filename}`
+                    : activeCameraSnapshot
+                      ? `Saved for ${renderPipeline}`
+                      : `Default ${renderPipeline} camera`}
+                </span>
+              </div>
+              <span className={cameraEditMode ? "is-editing" : ""} data-testid="mio-camera-mode">
+                {cameraEditMode ? "Editing" : activeCameraSnapshot?.locked ? "Locked" : "Free"}
+              </span>
+            </div>
+            <p>Move the stage camera, then save this framing in the current session.</p>
+            <div className="mio-camera-actions">
+              <button
+                type="button"
+                className="mio-advanced-mini"
+                data-testid="mio-camera-unlock"
+                onClick={handleUnlockMmdCamera}
+                disabled={cameraEditMode}
+              >
+                Move Camera
+              </button>
+              <button
+                type="button"
+                className="mio-advanced-mini is-active"
+                data-testid="mio-camera-save"
+                onClick={handleSaveMmdCamera}
+              >
+                Save Camera
+              </button>
+              <button
+                type="button"
+                className="mio-advanced-mini"
+                data-testid="mio-camera-reset"
+                onClick={handleResetMmdCamera}
+              >
+                Reset
+              </button>
+            </div>
+          </section>
 
           <div className="mio-advanced-toolbar">
             <label className="mio-advanced-field">

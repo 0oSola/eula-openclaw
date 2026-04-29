@@ -1,10 +1,10 @@
 "use client";
 
-import { ChangeEvent, useEffect, useRef } from "react";
+import { ChangeEvent, forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 import { getModelDisplayLabel } from "@/features/stage/modelCatalog.js";
 import { applyStageRuntimeState, MMDCompanionRuntime } from "@/features/stage/mmdCompanionRuntime.js";
-import type { MmdModelAsset } from "@/lib/types";
+import type { MmdCameraSnapshot, MmdModelAsset, RenderPipeline } from "@/lib/types";
 
 type StageInteraction = {
   emotion: string;
@@ -31,7 +31,28 @@ function toAbsolute(url: string): string {
   return `${baseUrl}${url.startsWith("/") ? url : `/${url}`}`;
 }
 
-export function MMDStage({
+export type MMDStageHandle = {
+  unlockCamera: () => MmdCameraSnapshot | null;
+  lockCamera: () => MmdCameraSnapshot | null;
+  captureCamera: () => MmdCameraSnapshot | null;
+  resetCamera: () => MmdCameraSnapshot | null;
+};
+
+type MMDStageProps = {
+  interaction: StageInteraction;
+  speaking: boolean;
+  models: MmdModelAsset[];
+  selectedModelPath: string;
+  modelUrl: string;
+  modelLabel: string;
+  onModelChange: (nextPath: string) => void;
+  onInteractionComplete?: () => void;
+  renderPipeline?: RenderPipeline;
+  cameraSnapshot?: MmdCameraSnapshot | null;
+  chrome?: "panel" | "bare";
+};
+
+export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDStage({
   interaction,
   speaking,
   models,
@@ -41,27 +62,38 @@ export function MMDStage({
   onModelChange,
   onInteractionComplete,
   renderPipeline = "classic",
+  cameraSnapshot = null,
   chrome = "panel",
-}: {
-  interaction: StageInteraction;
-  speaking: boolean;
-  models: MmdModelAsset[];
-  selectedModelPath: string;
-  modelUrl: string;
-  modelLabel: string;
-  onModelChange: (nextPath: string) => void;
-  onInteractionComplete?: () => void;
-  renderPipeline?: "classic" | "hero-shot" | "genshin";
-  chrome?: "panel" | "bare";
-}) {
+}: MMDStageProps, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const statusRef = useRef<HTMLParagraphElement | null>(null);
   const runtimeRef = useRef<any>(null);
   const currentInteractionRef = useRef(interaction);
   const currentSpeakingRef = useRef(speaking);
+  const cameraSnapshotRef = useRef<MmdCameraSnapshot | null>(cameraSnapshot);
 
   currentInteractionRef.current = interaction;
   currentSpeakingRef.current = speaking;
+  cameraSnapshotRef.current = cameraSnapshot;
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      unlockCamera() {
+        return runtimeRef.current?.setCameraLocked?.(false) ?? null;
+      },
+      lockCamera() {
+        return runtimeRef.current?.setCameraLocked?.(true) ?? null;
+      },
+      captureCamera() {
+        return runtimeRef.current?.getCameraSnapshot?.() ?? null;
+      },
+      resetCamera() {
+        return runtimeRef.current?.resetCameraToDefault?.() ?? null;
+      },
+    }),
+    [],
+  );
 
   useEffect(() => {
     if (!containerRef.current || !statusRef.current) return;
@@ -71,10 +103,11 @@ export function MMDStage({
       return;
     }
     let disposed = false;
-    const runtime = new MMDCompanionRuntime({
+    const runtime = new (MMDCompanionRuntime as any)({
       container: containerRef.current,
       statusElement: statusRef.current,
       renderPipeline,
+      cameraSnapshot: cameraSnapshotRef.current,
     });
     runtimeRef.current = runtime;
     applyStageRuntimeState(runtime, {
@@ -126,6 +159,16 @@ export function MMDStage({
     }
     runtime.applyInteraction(interaction);
   }, [interaction]);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    if (cameraSnapshot) {
+      runtime.applyCameraSnapshot(cameraSnapshot);
+      return;
+    }
+    runtime.resetCameraToDefault();
+  }, [cameraSnapshot]);
 
   useEffect(() => {
     if (!onInteractionComplete) return;
@@ -215,4 +258,4 @@ export function MMDStage({
       </p>
     </section>
   );
-}
+});

@@ -242,7 +242,8 @@ const STAGE_PRESENTATION_PRESETS = {
       target: [0, 7.9, 0],
       minDistance: 13,
       maxDistance: 27,
-      maxPolarAngle: Math.PI * 0.46,
+      maxPolarAngle: Math.PI * 0.5,
+      locked: false,
     },
     character: {
       targetHeight: 19.5,
@@ -275,6 +276,7 @@ function cloneStagePresentationConfig(config) {
       ...config.camera,
       position: [...config.camera.position],
       target: [...config.camera.target],
+      locked: Boolean(config.camera.locked),
     },
     character: config.character ? { ...config.character } : null,
     lights: {
@@ -328,6 +330,41 @@ function cloneStagePresentationConfig(config) {
         }
       : null,
   };
+}
+
+function readFiniteNumber(value, fallback) {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : fallback;
+}
+
+function readVectorTuple(value, fallback) {
+  if (!Array.isArray(value) || value.length !== 3) return [...fallback];
+  const next = value.map((item) => Number(item));
+  if (next.some((item) => !Number.isFinite(item))) return [...fallback];
+  return next;
+}
+
+function roundCameraNumber(value) {
+  return Number(Number(value).toFixed(6));
+}
+
+export function normalizeMmdCameraSnapshot(snapshot, fallbackCamera = STAGE_PRESENTATION_PRESETS.genshin.camera) {
+  return {
+    fov: readFiniteNumber(snapshot?.fov, fallbackCamera.fov),
+    position: readVectorTuple(snapshot?.position, fallbackCamera.position),
+    target: readVectorTuple(snapshot?.target, fallbackCamera.target),
+    locked: typeof snapshot?.locked === "boolean" ? snapshot.locked : Boolean(fallbackCamera.locked),
+  };
+}
+
+function applyCameraSnapshotToPresentation(presentation, snapshot) {
+  if (!snapshot) return presentation;
+  const camera = normalizeMmdCameraSnapshot(snapshot, presentation.camera);
+  presentation.camera = {
+    ...presentation.camera,
+    ...camera,
+  };
+  return presentation;
 }
 
 export function getStagePresentationConfig(pipeline = "classic") {
@@ -872,10 +909,11 @@ function createSlotPreservingOutlineMaterials(sourceMaterials, presentation) {
 }
 
 export class MMDCompanionRuntime {
-  constructor({ container, statusElement, renderPipeline = "classic" }) {
+  constructor({ container, statusElement, renderPipeline = "classic", cameraSnapshot = null }) {
     this.container = container;
     this.statusElement = statusElement;
     this.renderPipeline = renderPipeline;
+    this.cameraSnapshot = cameraSnapshot;
     this.clock = new THREE.Clock();
     this.loader = new MMDLoader();
     this.loader.crossOrigin = "anonymous";
@@ -929,6 +967,7 @@ export class MMDCompanionRuntime {
     this.renderPass = null;
     this.colorGradePass = null;
     this.bloomPass = null;
+    this.cameraLocked = false;
   }
 
   setStatus(text) {
@@ -944,6 +983,7 @@ export class MMDCompanionRuntime {
 
   setupScene() {
     const presentation = getStagePresentationConfig(this.renderPipeline);
+    applyCameraSnapshotToPresentation(presentation, this.cameraSnapshot);
     this.presentation = presentation;
     this.scene = new THREE.Scene();
     this.scene.background = presentation.background ? new THREE.Color(presentation.background) : null;
@@ -979,11 +1019,61 @@ export class MMDCompanionRuntime {
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.target.fromArray(presentation.camera.target);
-    this.controls.enableDamping = true;
+    const isCameraLocked = Boolean(presentation.camera.locked);
     this.controls.dampingFactor = 0.05;
     this.controls.minDistance = presentation.camera.minDistance;
     this.controls.maxDistance = presentation.camera.maxDistance;
     this.controls.maxPolarAngle = presentation.camera.maxPolarAngle;
+    this.setCameraLocked(isCameraLocked);
+  }
+
+  setCameraLocked(locked) {
+    if (!this.camera || !this.controls) return null;
+    this.cameraLocked = Boolean(locked);
+    this.controls.enabled = !this.cameraLocked;
+    this.controls.enableRotate = !this.cameraLocked;
+    this.controls.enablePan = !this.cameraLocked;
+    this.controls.enableZoom = !this.cameraLocked;
+    this.controls.enableDamping = !this.cameraLocked;
+    if (this.cameraLocked) {
+      this.camera.lookAt(this.controls.target);
+    } else {
+      this.controls.update();
+    }
+    return this.getCameraSnapshot();
+  }
+
+  getCameraSnapshot() {
+    if (!this.camera || !this.controls) return null;
+    return {
+      fov: roundCameraNumber(this.camera.fov),
+      position: this.camera.position.toArray().map(roundCameraNumber),
+      target: this.controls.target.toArray().map(roundCameraNumber),
+      locked: Boolean(this.cameraLocked),
+    };
+  }
+
+  applyCameraSnapshot(snapshot, { locked } = {}) {
+    if (!this.camera || !this.controls) return null;
+    const camera = normalizeMmdCameraSnapshot(snapshot, this.presentation?.camera || STAGE_PRESENTATION_PRESETS.genshin.camera);
+    this.cameraSnapshot = camera;
+    if (this.presentation?.camera) {
+      this.presentation.camera = {
+        ...this.presentation.camera,
+        ...camera,
+      };
+    }
+    this.camera.fov = camera.fov;
+    this.camera.position.fromArray(camera.position);
+    this.controls.target.fromArray(camera.target);
+    this.camera.updateProjectionMatrix();
+    return this.setCameraLocked(locked ?? camera.locked);
+  }
+
+  resetCameraToDefault() {
+    const presentation = getStagePresentationConfig(this.renderPipeline);
+    this.cameraSnapshot = null;
+    return this.applyCameraSnapshot(presentation.camera, { locked: presentation.camera.locked });
   }
 
   setupLights(presentation) {

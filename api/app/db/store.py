@@ -442,6 +442,13 @@ class TraceStore:
         row = self._conn.execute("SELECT * FROM asset_registry WHERE asset_id = ?", (asset_id,)).fetchone()
         return dict(row) if row else None
 
+    def get_asset_by_favorite_relative_path(self, user_id: str, favorite_relative_path: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM asset_registry WHERE user_id = ? AND favorite_relative_path = ?",
+            (user_id, favorite_relative_path),
+        ).fetchone()
+        return dict(row) if row else None
+
     def update_asset(
         self,
         asset_id: str,

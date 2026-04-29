@@ -46,3 +46,11 @@ class OpenClawReply:
     raw_text: str
     endpoint_used: str
     status_code: int
+
+
+@dataclass(slots=True)
+class OpenClawSpeech:
+    audio: bytes
+    media_type: str
+    endpoint_used: str
+    status_code: int
