@@ -232,6 +232,21 @@ function withStubbedDocument(run) {
   }
 }
 
+function createOrbitDomStub() {
+  const rootNode = {
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  return {
+    style: {},
+    addEventListener() {},
+    removeEventListener() {},
+    getRootNode() {
+      return rootNode;
+    },
+  };
+}
+
 function assertVectorLikeClose(actualValues, expectedValues, epsilon = 1e-9) {
   assert.equal(actualValues.length, expectedValues.length);
   actualValues.forEach((value, index) => {
@@ -517,6 +532,7 @@ test("stage presentation config keeps classic untouched while genshin now reuses
   assert.equal(genshin.camera.fov, classic.camera.fov);
   assert.deepEqual(genshin.camera.position, classic.camera.position);
   assert.deepEqual(genshin.camera.target, classic.camera.target);
+  assert.equal(genshin.camera.locked, false);
   assert.equal(genshin.backdrop.enabled, false);
   assert.equal(genshin.outline.enabled, false);
   assert.equal(genshin.postfx.enabled, false);
@@ -683,6 +699,85 @@ test("setupScene dispatches the genshin branch after the shared setup steps", ()
     ["backdrop", null],
     ["genshin", -9.75],
   ]);
+});
+
+test("setupCamera keeps genshin at the screenshot MMD framing without locking controls by default", () => {
+  const runtime = makeRuntime({
+    renderPipeline: "genshin",
+    renderer: { domElement: createOrbitDomStub() },
+  });
+
+  runtime.setupCamera(getStagePresentationConfig("genshin"));
+
+  assertVectorLikeClose(runtime.camera.position.toArray(), [0, 9.2, 21.6]);
+  assertVectorLikeClose(runtime.controls.target.toArray(), [0, 7.9, 0]);
+  assert.equal(runtime.controls.enabled, true);
+  assert.equal(runtime.controls.enableRotate, true);
+  assert.equal(runtime.controls.enablePan, true);
+  assert.equal(runtime.controls.enableZoom, true);
+});
+
+test("runtime camera controls can be unlocked, moved, captured, and locked again", () => {
+  const runtime = makeRuntime({
+    renderPipeline: "genshin",
+    renderer: { domElement: createOrbitDomStub() },
+  });
+
+  runtime.setupCamera(getStagePresentationConfig("genshin"));
+  runtime.setCameraLocked(false);
+
+  assert.equal(runtime.controls.enabled, true);
+  assert.equal(runtime.controls.enableRotate, true);
+  assert.equal(runtime.controls.enablePan, true);
+  assert.equal(runtime.controls.enableZoom, true);
+  assertVectorLikeClose(runtime.camera.position.toArray(), [0, 9.2, 21.6]);
+
+  runtime.camera.fov = 37;
+  runtime.camera.position.set(1, 2, 3);
+  runtime.controls.target.set(4, 5, 6);
+
+  const snapshot = runtime.getCameraSnapshot();
+  assert.deepEqual(snapshot, {
+    fov: 37,
+    position: [1, 2, 3],
+    target: [4, 5, 6],
+    locked: false,
+  });
+
+  const lockedSnapshot = runtime.setCameraLocked(true);
+  assert.deepEqual(lockedSnapshot, {
+    fov: 37,
+    position: [1, 2, 3],
+    target: [4, 5, 6],
+    locked: true,
+  });
+  assert.equal(runtime.controls.enabled, false);
+});
+
+test("setupScene applies a saved genshin camera snapshot before camera setup", () => {
+  const calls = [];
+  const runtime = makeRuntime({
+    renderPipeline: "genshin",
+    cameraSnapshot: {
+      fov: 38,
+      position: [2, 8, 19],
+      target: [0.5, 7.25, -0.4],
+      locked: true,
+    },
+    setupRenderer() {},
+    setupCamera(presentation) {
+      calls.push(["camera", presentation.camera.fov, presentation.camera.position, presentation.camera.target, presentation.camera.locked]);
+    },
+    setupLights() {},
+    setupFloor() {},
+    setupBackdrop() {},
+    setupGenshinPipeline() {},
+    setupPostprocessing() {},
+  });
+
+  runtime.setupScene();
+
+  assert.deepEqual(calls, [["camera", 38, [2, 8, 19], [0.5, 7.25, -0.4], true]]);
 });
 
 test("genshin material tuning keeps texture color space, cutout safety, and clears ordinary emissive lift", () => {

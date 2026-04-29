@@ -174,7 +174,13 @@ def test_healthz_openclaw_returns_diagnostic_payload():
 
 def test_vmd_upload_and_list():
     case_dir = _make_case_dir()
-    app = create_app({"data_dir": str(case_dir), "admin_user_ids": []})
+    app = create_app(
+        {
+            "data_dir": str(case_dir / "data"),
+            "admin_user_ids": [],
+            "mmd_root_dir": str(case_dir / "mmd"),
+        }
+    )
     client = TestClient(app)
 
     upload = client.post(
@@ -203,6 +209,19 @@ def test_vmd_upload_and_list():
         listed.json()["items"][0]["source_relative_path"]
         == "Idle Animations Pack - Copy/Air Scent Idle Animation/Smelling Something in the Air.vmd"
     )
+
+
+def test_usage_vmd_folder_name_uses_model_parent_folder_name():
+    from app.routes.assets import _usage_vmd_folder_name_for_model
+
+    case_dir = _make_case_dir()
+    mmd_root = case_dir / "mmd"
+    model_rel = Path("优菈_by_原神_339146e6e418d79e85a515b26414c0b0/优菈.pmx")
+    model_abs = mmd_root / model_rel
+    model_abs.parent.mkdir(parents=True, exist_ok=True)
+    model_abs.write_bytes(b"pmx")
+
+    assert _usage_vmd_folder_name_for_model(model_abs, mmd_root) == "优菈_by_原神_339146e6e418d79e85a515b26414c0b0[动作]"
 
 
 def test_vmd_asset_can_be_renamed_and_favorited_into_character_usage_folder():
@@ -321,6 +340,49 @@ def test_legacy_favorite_vmd_assets_backfill_model_association_from_usage_folder
     listed_item = listed.json()["items"][0]
     assert listed_item["is_favorite"] is True
     assert listed_item["favorite_model_relative_path"] == model_rel.as_posix()
+
+
+def test_usage_vmd_files_are_synced_into_asset_registry_by_parent_folder():
+    case_dir = _make_case_dir()
+    mmd_root = case_dir / "mmd"
+    model_rel = Path("优菈_by_原神_339146e6e418d79e85a515b26414c0b0/优菈.pmx")
+    model_abs = mmd_root / model_rel
+    model_abs.parent.mkdir(parents=True, exist_ok=True)
+    model_abs.write_bytes(b"pmx")
+
+    favorite_rel = Path("usage/vmd/优菈_by_原神_339146e6e418d79e85a515b26414c0b0[动作]/回答-自信.vmd")
+    favorite_abs = mmd_root / favorite_rel
+    favorite_abs.parent.mkdir(parents=True, exist_ok=True)
+    favorite_abs.write_bytes(b"Vocaloid Motion Data 0002")
+
+    app = create_app(
+        {
+            "data_dir": str(case_dir / "data"),
+            "admin_user_ids": [],
+            "mmd_root_dir": str(mmd_root),
+        }
+    )
+    client = TestClient(app)
+
+    listed = client.get("/assets/vmd?user_id=u1", headers={"x-user-id": "u1"})
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert len(items) == 1
+    item = items[0]
+    assert item["filename"] == "回答-自信.vmd"
+    assert item["display_name"] == "回答-自信.vmd"
+    assert item["slot"] == "neutral"
+    assert item["is_favorite"] is True
+    assert item["favorite_relative_path"] == favorite_rel.as_posix()
+    assert item["favorite_model_relative_path"] == model_rel.as_posix()
+
+    stored_items = app.state.trace_store.list_assets(requester_user_id="u1", is_admin=False, user_id_filter="u1")
+    assert len(stored_items) == 1
+    assert stored_items[0]["favorite_relative_path"] == favorite_rel.as_posix()
+
+    fetched = client.get(item["url"])
+    assert fetched.status_code == 200
+    assert fetched.content == b"Vocaloid Motion Data 0002"
 
 
 def test_mmd_models_list_and_serving_url():
