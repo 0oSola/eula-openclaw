@@ -35,8 +35,8 @@ function Resolve-NpmCmd {
   }
 
   $candidates = @(
-    "C:\nvm4w\nodejs\npm.cmd",
-    "C:\Program Files\nodejs\npm.cmd"
+    "C:\Program Files\nodejs\npm.cmd",
+    "C:\nvm4w\nodejs\npm.cmd"
   )
   foreach ($candidate in $candidates) {
     try {
@@ -152,6 +152,11 @@ switch ($Action) {
 
     $pythonExe = Resolve-PythonExe
     $npmCmd = Resolve-NpmCmd
+    $npmDir = Split-Path -Parent $npmCmd
+    if ($npmDir -and ($env:Path -notlike "*$npmDir*")) {
+      $env:Path = "$npmDir;$env:Path"
+      Write-Info "Prepended npm directory to PATH for child processes: $npmDir"
+    }
 
     $apiEnv = Join-Path $ProjectRoot "api\.env"
     $apiEnvExample = Join-Path $ProjectRoot "api\.env.example"

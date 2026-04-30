@@ -61,3 +61,46 @@ test("playServerTtsAudio plays the OpenClaw audio blob", async () => {
   assert.deepEqual(speakingStates, [true, false]);
   assert.equal(controller.objectUrl, "blob:openclaw-audio");
 });
+
+test("playServerTtsAudio cleans up and rethrows when browser audio playback is rejected", async () => {
+  const events = {};
+  const calls = [];
+  class FakeAudio {
+    constructor(src) {
+      this.src = src;
+      calls.push(["new Audio", src]);
+    }
+
+    set onplay(handler) {
+      events.play = handler;
+    }
+
+    set onended(handler) {
+      events.ended = handler;
+    }
+
+    set onerror(handler) {
+      events.error = handler;
+    }
+
+    play() {
+      calls.push(["play", this.src]);
+      return Promise.reject(new Error("NotAllowedError"));
+    }
+  }
+
+  const speakingStates = [];
+  await assert.rejects(
+    () =>
+      playServerTtsAudio(new Blob(["openclaw-mp3"], { type: "audio/mpeg" }), {
+        AudioCtor: FakeAudio,
+        createObjectURL: () => "blob:openclaw-audio",
+        revokeObjectURL: (url) => calls.push(["revokeObjectURL", url]),
+        setSpeaking: (value) => speakingStates.push(value),
+      }),
+    /NotAllowedError/,
+  );
+
+  assert.deepEqual(calls.at(-1), ["revokeObjectURL", "blob:openclaw-audio"]);
+  assert.deepEqual(speakingStates, [false]);
+});

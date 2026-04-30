@@ -1,12 +1,16 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-function seedSession(page: Parameters<typeof test>[0]["page"]) {
+function seedSession(page: Page) {
   return page.addInitScript(() => {
     const key = "mmd_companion_session_v1";
     if (window.localStorage.getItem(key)) return;
     window.localStorage.setItem(key, JSON.stringify({ userId: "8X29-AF3E", renderPipeline: "classic" }));
   });
 }
+
+const ADVANCED_FEATURES = "\u9ad8\u7ea7\u529f\u80fd";
+const MODEL_SWITCH = "\u6a21\u578b\u5207\u6362";
+const RENDER_MODE = "\u6e32\u67d3\u6a21\u5f0f";
 
 test("core routes render without document 5xx, page errors, or console errors @critical", async ({
   page,
@@ -85,7 +89,7 @@ test("companion route exposes stable HUD structure for the restored design @crit
   await expect(page.getByText("生成需求文档大纲")).toBeVisible();
   await expect(page.getByText("常用工具：Notion / VS Code")).toBeVisible();
   await expect(page.getByText("/v1/chat/completions")).toBeVisible();
-  await expect(page.getByRole("button", { name: "高级功能" })).toBeVisible();
+  await expect(page.getByRole("button", { name: ADVANCED_FEATURES })).toBeVisible();
 });
 
 test("companion dialogue bubble is anchored inside the stage container @critical", async ({ page }) => {
@@ -97,26 +101,8 @@ test("companion dialogue bubble is anchored inside the stage container @critical
   await expect(stageWrap.getByTestId("mio-dialogue")).toBeVisible();
 });
 
-test("companion sidebar supports avatar-driven character switching @critical", async ({ page }) => {
+test("advanced features panel owns model and render pipeline switching @critical", async ({ page }) => {
   await seedSession(page);
-  await page.goto("/companion");
-
-  const trigger = page.getByRole("button", { name: "角色切换" });
-  await expect(trigger).toBeVisible();
-
-  await trigger.click();
-
-  await expect(page.getByRole("dialog", { name: "角色切换面板" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /切换到.*角色/ }).first()).toBeVisible();
-  await expect(page.getByTestId("mio-character-option").first()).toBeVisible();
-});
-
-test("companion sidebar exposes built-in motion switching from the MMD vmd catalog @critical", async ({ page }) => {
-  await seedSession(page);
-  await page.addInitScript(() => {
-    Math.random = () => 0;
-  });
-
   await page.route("**/config/mapping/resolved/**", async (route) => {
     await route.fulfill({ json: { mappings: {} } });
   });
@@ -130,58 +116,51 @@ test("companion sidebar exposes built-in motion switching from the MMD vmd catal
           {
             name: "Eula.pmx",
             label: "Eula",
-            relative_path: "Eula_by_Genshin/Eula.pmx",
+            relative_path: "Eula/Eula.pmx",
             size_bytes: 1024,
-            url: "/assets/mmd/Eula_by_Genshin/Eula.pmx",
+            url: "/assets/mmd/Eula/Eula.pmx",
+          },
+          {
+            name: "Ayaka.pmx",
+            label: "Ayaka",
+            relative_path: "Ayaka/Ayaka.pmx",
+            size_bytes: 1024,
+            url: "/assets/mmd/Ayaka/Ayaka.pmx",
           },
         ],
       },
     });
   });
   await page.route("**/assets/mmd/vmds", async (route) => {
-    await route.fulfill({
-      json: {
-        items: [
-          {
-            name: "Smelling Something in the Air.vmd",
-            label: "Smelling Something in the Air",
-            relative_path:
-              "vmd/idle_animations_pack_zip_by_deedee524_dck53f5/Idle Animations Pack - Copy/Air Scent Idle Animation/Smelling Something in the Air.vmd",
-            size_bytes: 768,
-            url: "/assets/mmd/vmd/idle_animations_pack_zip_by_deedee524_dck53f5/Idle%20Animations%20Pack%20-%20Copy/Air%20Scent%20Idle%20Animation/Smelling%20Something%20in%20the%20Air.vmd",
-          },
-          {
-            name: "Shy.vmd",
-            label: "Shy",
-            relative_path:
-              "vmd/idle_animations_pack_zip_by_deedee524_dck53f5/Idle Animations Pack - Copy/Shy Idle Animation/Shy.vmd",
-            size_bytes: 768,
-            url: "/assets/mmd/vmd/idle_animations_pack_zip_by_deedee524_dck53f5/Idle%20Animations%20Pack%20-%20Copy/Shy%20Idle%20Animation/Shy.vmd",
-          },
-          {
-            name: "Crossed Arms Look Around Confident.vmd",
-            label: "Crossed Arms Look Around Confident",
-            relative_path:
-              "vmd/idle_animations_pack_zip_by_deedee524_dck53f5/Idle Animations Pack - Copy/Confident Idle Animation/Crossed Arms Look Around Confident.vmd",
-            size_bytes: 768,
-            url: "/assets/mmd/vmd/idle_animations_pack_zip_by_deedee524_dck53f5/Idle%20Animations%20Pack%20-%20Copy/Confident%20Idle%20Animation/Crossed%20Arms%20Look%20Around%20Confident.vmd",
-          },
-        ],
-      },
-    });
+    await route.fulfill({ json: { items: [] } });
   });
 
   await page.goto("/companion");
+  await expect(page.getByRole("button", { name: "\u89d2\u8272\u5207\u6362" })).toHaveCount(0);
+  await expect(page.getByTestId("mio-motion-trigger")).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Render pipeline" })).toHaveCount(0);
 
-  const trigger = page.getByTestId("mio-motion-trigger");
-  await expect(trigger).toBeVisible();
+  await page.locator('button[aria-controls="mio-advanced-panel"]').click();
 
-  await trigger.click();
+  const advancedPanel = page.getByTestId("mio-advanced-panel");
+  await expect(advancedPanel).toBeVisible();
+  await expect(advancedPanel.getByText(ADVANCED_FEATURES, { exact: true })).toBeVisible();
 
-  await expect(page.getByTestId("mio-motion-panel")).toBeVisible();
-  await expect(page.getByTestId("mio-motion-option")).toHaveCount(3);
-  await expect(page.getByTestId("mio-motion-option").first()).toContainText("Smelling Something in the Air");
-  await expect(page.locator(".mio-motion-option.is-selected")).toHaveCount(0);
+  const modelSelect = advancedPanel.getByRole("combobox", { name: MODEL_SWITCH });
+  await expect(modelSelect).toHaveValue("Eula/Eula.pmx");
+  await modelSelect.selectOption("Ayaka/Ayaka.pmx");
+  await expect(modelSelect).toHaveValue("Ayaka/Ayaka.pmx");
+
+  const pipelineOptions = advancedPanel.getByRole("radiogroup", { name: RENDER_MODE });
+  await expect(pipelineOptions.getByRole("radio", { name: /Classic/ })).toHaveAttribute("aria-checked", "true");
+  await pipelineOptions.getByRole("radio", { name: /Genshin/ }).click();
+  await expect(pipelineOptions.getByRole("radio", { name: /Genshin/ })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("mio-hud")).toHaveAttribute("data-render-pipeline", "genshin");
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(window.localStorage.getItem("mmd_companion_session_v1") || "{}").renderPipeline),
+    )
+    .toBe("genshin");
 });
 
 test("advanced features button opens a non-modal VMD quick import panel with previewable assets @critical", async ({
@@ -226,7 +205,7 @@ test("advanced features button opens a non-modal VMD quick import panel with pre
 
   const advancedPanel = page.getByTestId("mio-advanced-panel");
   await expect(advancedPanel).toBeVisible();
-  await expect(advancedPanel.getByText("VMD Quick Import")).toBeVisible();
+  await expect(advancedPanel.getByText(ADVANCED_FEATURES, { exact: true })).toBeVisible();
   await expect(advancedPanel.locator('input[type="file"]')).toHaveCount(2);
   await expect(advancedPanel.getByTestId("mio-advanced-asset")).toHaveCount(2);
   await expect(page.getByTestId("mio-command-bar")).toBeVisible();
@@ -375,17 +354,21 @@ test("companion render pipeline selection persists across reloads @smoke", async
   await seedSession(page);
   await page.goto("/companion");
 
-  const pipelineSelect = page.getByRole("combobox", { name: "Render pipeline" });
-  await expect(pipelineSelect).toBeVisible();
-  await expect(pipelineSelect.locator("option")).toHaveText(["Classic", "Hero Shot", "Genshin"]);
-  await expect(pipelineSelect).toHaveValue("classic");
+  await page.locator('button[aria-controls="mio-advanced-panel"]').click();
+  const pipelineOptions = page.getByTestId("mio-advanced-panel").getByRole("radiogroup", { name: RENDER_MODE });
+  await expect(pipelineOptions.getByRole("radio", { name: /Classic/ })).toHaveAttribute("aria-checked", "true");
 
-  await pipelineSelect.selectOption("genshin");
-  await expect(pipelineSelect).toHaveValue("genshin");
+  await pipelineOptions.getByRole("radio", { name: /Genshin/ }).click();
+  await expect(pipelineOptions.getByRole("radio", { name: /Genshin/ })).toHaveAttribute("aria-checked", "true");
 
   await page.reload();
+  await page.locator('button[aria-controls="mio-advanced-panel"]').click();
 
-  await expect(page.getByRole("combobox", { name: "Render pipeline" })).toHaveValue("genshin");
+  await expect(
+    page.getByTestId("mio-advanced-panel").getByRole("radiogroup", { name: RENDER_MODE }).getByRole("radio", {
+      name: /Genshin/,
+    }),
+  ).toHaveAttribute("aria-checked", "true");
 });
 
 test("companion restores saved genshin render pipeline sessions @smoke", async ({ page }) => {
@@ -398,7 +381,12 @@ test("companion restores saved genshin render pipeline sessions @smoke", async (
 
   await page.goto("/companion");
 
-  await expect(page.getByRole("combobox", { name: "Render pipeline" })).toHaveValue("genshin");
+  await page.locator('button[aria-controls="mio-advanced-panel"]').click();
+  await expect(
+    page.getByTestId("mio-advanced-panel").getByRole("radiogroup", { name: RENDER_MODE }).getByRole("radio", {
+      name: /Genshin/,
+    }),
+  ).toHaveAttribute("aria-checked", "true");
   await expect
     .poll(() =>
       page.evaluate(() => JSON.parse(window.localStorage.getItem("mmd_companion_session_v1") || "{}").renderPipeline),

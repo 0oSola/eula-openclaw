@@ -13,16 +13,15 @@ import {
 } from "@/features/mapping/vmdPreview.js";
 import { resolvePlaybackPlan } from "@/features/mapping/resolveAction.js";
 import { MMDStage, type MMDStageHandle } from "@/features/stage/MMDStage";
+import { CompanionCommandBar } from "./CompanionCommandBar";
 import {
   DEFAULT_VMD_PLAYBACK_RATE,
-  BUILT_IN_VMD_PLAYBACK_RATE,
 } from "@/features/stage/builtInMotionPreferences.js";
 import { getModelDisplayLabel, pickInitialModelSelection } from "@/features/stage/modelCatalog.js";
 import { collectImportableVmdFiles } from "@/features/stage/vmdImportHelpers.js";
 import {
   getResolvedMappings,
   listMmdModels,
-  listMmdMotions,
   listVmdAssets,
   postChat,
   requestServerTts,
@@ -36,7 +35,6 @@ import type {
   MappingConfig,
   MmdCameraSnapshot,
   MmdModelAsset,
-  MmdMotionAsset,
   RenderPipeline,
   UserSession,
   VmdAsset,
@@ -63,6 +61,7 @@ type InteractionState = {
 };
 
 type InteractionSource = "default" | "autoplay" | "manual-preview" | "chat";
+type ToastState = { id: number; message: string } | null;
 
 const SPRITE = "/images/sprite-sliced";
 const DEFAULT_MODEL_RELATIVE_PATH = "优菈.pmx";
@@ -105,6 +104,12 @@ const traceRows = [
   ["GET", "/v1/tools/list", "200", "0.6s"],
 ] as const;
 
+const renderPipelineOptions: { value: RenderPipeline; label: string; description: string }[] = [
+  { value: "classic", label: "Classic", description: "\u7a33\u5b9a MMD \u821e\u53f0" },
+  { value: "hero-shot", label: "Hero Shot", description: "\u7535\u5f71\u611f\u6784\u56fe" },
+  { value: "genshin", label: "Genshin", description: "Project2 \u900f\u660e\u98ce\u683c" },
+];
+
 const EMOTION_SLOTS = ["neutral", "happy", "sad", "thinking", "excited", "caring"] as const;
 
 function createDefaultInteractionState(): InteractionState {
@@ -129,10 +134,6 @@ function makeHistory(messages: ChatMessage[]) {
     .map((item) => ({ role: item.role, content: item.content }));
 }
 
-function getCharacterBadge(index: number) {
-  return `${index + 1}`.padStart(2, "0");
-}
-
 function buildFavoriteVmdCameraKey(pipeline: RenderPipeline, modelPath: string, assetId: string) {
   return `${pipeline}::${encodeURIComponent(modelPath)}::${encodeURIComponent(assetId)}`;
 }
@@ -142,6 +143,7 @@ export default function CompanionPage() {
   const stageRef = useRef<MMDStageHandle | null>(null);
   const serverAudioRef = useRef<HTMLAudioElement | null>(null);
   const serverAudioCleanupRef = useRef<(() => void) | null>(null);
+  const ignoreNextStageCompletionResetRef = useRef(false);
   const [session, setSession] = useState<UserSession | null>(null);
   const [sessionId] = useState(() => crypto.randomUUID());
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -153,18 +155,16 @@ export default function CompanionPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [toast, setToast] = useState<ToastState>(null);
   const [interaction, setInteraction] = useState<InteractionState>(createDefaultInteractionState);
   const [mappings, setMappings] = useState<Record<string, MappingConfig>>({});
   const [assets, setAssets] = useState<VmdAsset[]>([]);
   const [models, setModels] = useState<MmdModelAsset[]>([]);
-  const [motions, setMotions] = useState<MmdMotionAsset[]>([]);
   const [selectedModelPath, setSelectedModelPath] = useState("");
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [ttsMode, setTtsMode] = useState<"browser" | "server">(DEFAULT_TTS_MODE as "browser" | "server");
   const [speaking, setSpeaking] = useState(false);
   const [renderPipeline, setRenderPipeline] = useState<RenderPipeline>("classic");
-  const [isCharacterPickerOpen, setIsCharacterPickerOpen] = useState(false);
-  const [isMotionPickerOpen, setIsMotionPickerOpen] = useState(false);
   const [isAdvancedPanelOpen, setIsAdvancedPanelOpen] = useState(false);
   const [advancedTab, setAdvancedTab] = useState<"library" | "favorites">("library");
   const [advancedSlot, setAdvancedSlot] = useState<(typeof EMOTION_SLOTS)[number]>("happy");
@@ -199,12 +199,11 @@ export default function CompanionPage() {
   useEffect(() => {
     if (!session) return;
 
-    Promise.all([getResolvedMappings(session.userId), listVmdAssets(session.userId), listMmdModels(), listMmdMotions()])
-      .then(([mappingRows, assetRows, modelRows, motionRows]) => {
+    Promise.all([getResolvedMappings(session.userId), listVmdAssets(session.userId), listMmdModels()])
+      .then(([mappingRows, assetRows, modelRows]) => {
         setMappings(mappingRows);
         setAssets(assetRows);
         setModels(modelRows);
-        setMotions(motionRows);
         setSelectedModelPath((current) => {
           if (current && modelRows.some((item) => item.relative_path === current)) {
             return current;
@@ -219,6 +218,14 @@ export default function CompanionPage() {
         setError(err.message);
       });
   }, [session]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timeoutId = window.setTimeout(() => {
+      setToast((current) => (current?.id === toast.id ? null : current));
+    }, 3200);
+    return () => window.clearTimeout(timeoutId);
+  }, [toast]);
 
   const assetIndex = useMemo(() => {
     const next: Record<string, VmdAsset> = {};
@@ -266,16 +273,6 @@ export default function CompanionPage() {
   const autoplayResumeInteraction = useMemo<InteractionState | null>(() => {
     return buildAutoplayResumeInteraction(currentModelFavoriteAssets) as InteractionState | null;
   }, [currentModelFavoriteAssets]);
-
-  const characterOptions = useMemo(() => {
-    return models.map((model, index) => ({
-      id: model.relative_path,
-      path: model.relative_path,
-      label: getModelDisplayLabel(model),
-      badge: getCharacterBadge(index),
-      active: model.relative_path === selectedModelPath,
-    }));
-  }, [models, selectedModelPath]);
 
   const activeFavoriteVmdAsset = useMemo(() => {
     if (!activeVmdAssetId) return null;
@@ -441,22 +438,6 @@ export default function CompanionPage() {
     }
   }
 
-  function previewBuiltInMotion(motion: MmdMotionAsset) {
-    setInteractionSource("manual-preview");
-    setActiveVmdAssetId("");
-    setPendingAutoResume(Boolean(autoplayResumeInteraction));
-    setInteraction({
-      emotion: interaction.emotion || "neutral",
-      action: motion.label,
-      mode: "vmd",
-      vmdUrl: motion.url,
-      vmdLoopUrls: [],
-      playbackRate: BUILT_IN_VMD_PLAYBACK_RATE,
-      sequence: [],
-    });
-    setIsMotionPickerOpen(false);
-  }
-
   function handleRenderPipelineChange(nextPipeline: RenderPipeline) {
     setRenderPipeline(nextPipeline);
     setCameraEditMode(false);
@@ -567,6 +548,15 @@ export default function CompanionPage() {
     stopServerAudio();
   }
 
+  function pushToast(message: string) {
+    setToast({ id: Date.now(), message });
+  }
+
+  function handleTtsFailure(message: string) {
+    ignoreNextStageCompletionResetRef.current = true;
+    pushToast(message);
+  }
+
   async function playServerAudio(audioBlob: Blob) {
     stopSpeechPlayback();
     const controller = await playServerTtsAudio(audioBlob, {
@@ -584,7 +574,10 @@ export default function CompanionPage() {
 
   function browserSpeak(text: string) {
     stopServerAudio();
-    if (!("speechSynthesis" in window)) return;
+    if (!("speechSynthesis" in window)) {
+      handleTtsFailure("当前环境不支持浏览器语音播放。");
+      return;
+    }
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = "zh-CN";
@@ -592,8 +585,16 @@ export default function CompanionPage() {
     utter.pitch = 1.08;
     utter.onstart = () => setSpeaking(true);
     utter.onend = () => setSpeaking(false);
-    utter.onerror = () => setSpeaking(false);
-    window.speechSynthesis.speak(utter);
+    utter.onerror = () => {
+      setSpeaking(false);
+      handleTtsFailure("浏览器语音播放失败。");
+    };
+    try {
+      window.speechSynthesis.speak(utter);
+    } catch {
+      setSpeaking(false);
+      handleTtsFailure("浏览器语音播放失败。");
+    }
   }
 
   async function speak(text: string) {
@@ -616,6 +617,7 @@ export default function CompanionPage() {
 
     const userText = input.trim();
     const historyMessages = [...messages, { role: "user", content: userText } satisfies ChatMessage];
+    ignoreNextStageCompletionResetRef.current = false;
     setInput("");
     setError("");
     setLoading(true);
@@ -679,24 +681,13 @@ export default function CompanionPage() {
         });
       }
 
-      await speak(response.text);
+      try {
+        await speak(response.text);
+      } catch (speakError) {
+        handleTtsFailure(speakError instanceof Error ? `语音播放失败：${speakError.message}` : "语音播放失败。");
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "\u8bf7\u6c42\u5931\u8d25\u3002");
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "system",
-          content: "\u53d1\u9001\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5 API \u670d\u52a1\u72b6\u6001\u548c\u914d\u7f6e\u3002",
-        },
-      ]);
-      setInteraction({
-        emotion: "caring",
-        action: "comfort",
-        mode: "procedural",
-        vmdUrl: "",
-        playbackRate: 1,
-        sequence: [],
-      });
+      pushToast(err instanceof Error ? err.message : "\u8bf7\u6c42\u5931\u8d25\u3002");
     } finally {
       setLoading(false);
     }
@@ -709,10 +700,15 @@ export default function CompanionPage() {
     setActiveVmdAssetId("");
     setPendingAutoResume(false);
     setSelectedModelPath(nextPath);
-    setIsCharacterPickerOpen(false);
   }
 
   function handleStageInteractionComplete() {
+    if (ignoreNextStageCompletionResetRef.current) {
+      ignoreNextStageCompletionResetRef.current = false;
+      setPendingAutoResume(false);
+      return;
+    }
+
     if (pendingAutoResume && autoplayResumeInteraction) {
       setInteraction(autoplayResumeInteraction);
       setInteractionSource("autoplay");
@@ -723,9 +719,6 @@ export default function CompanionPage() {
     setInteractionSource("default");
     setPendingAutoResume(false);
   }
-
-  const activeMotionPath =
-    interaction.mode === "vmd" ? motions.find((motion) => motion.url === interaction.vmdUrl)?.relative_path || "" : "";
 
   if (!session) {
     return (
@@ -775,39 +768,7 @@ export default function CompanionPage() {
           </button>
           <div className="mio-avatar-stack">
             <img className="mio-avatar" src={`${SPRITE}/asset-030.png`} alt={"\u5f53\u524d\u89d2\u8272\u5934\u50cf"} />
-            <div className="mio-avatar-meta">
-              <strong>{selectedModel ? getModelDisplayLabel(selectedModel) : "MODEL"}</strong>
-              <span>ACTIVE CHARACTER</span>
-            </div>
           </div>
-          <label
-            style={{
-              display: "grid",
-              gap: "0.2rem",
-              minWidth: "10rem",
-              fontSize: "0.7rem",
-              letterSpacing: "0.08em",
-            }}
-          >
-            <span>PIPELINE</span>
-              <select
-                aria-label="Render pipeline"
-                value={renderPipeline}
-                onChange={(event) => handleRenderPipelineChange(event.target.value as RenderPipeline)}
-                style={{
-                  minHeight: "2.2rem",
-                  borderRadius: "999px",
-                border: "1px solid rgba(140, 209, 255, 0.24)",
-                background: "rgba(9, 18, 31, 0.82)",
-                color: "rgba(235, 245, 255, 0.92)",
-                padding: "0 0.85rem",
-              }}
-            >
-              <option value="classic">Classic</option>
-              <option value="hero-shot">Hero Shot</option>
-              <option value="genshin">Genshin</option>
-            </select>
-          </label>
         </div>
       </header>
 
@@ -823,123 +784,10 @@ export default function CompanionPage() {
           </button>
         ))}
 
-        <button
-          className={`mio-nav-button mio-character-trigger ${isCharacterPickerOpen ? "is-open" : ""}`}
-          type="button"
-          aria-label={"\u89d2\u8272\u5207\u6362"}
-          aria-haspopup="dialog"
-          aria-expanded={isCharacterPickerOpen}
-          onClick={() => {
-            setIsCharacterPickerOpen((open) => !open);
-            setIsMotionPickerOpen(false);
-          }}
-        >
-          <img src={`${SPRITE}/asset-030.png`} alt="" />
-        </button>
-
-        <button
-          className={`mio-nav-button mio-motion-trigger ${isMotionPickerOpen ? "is-open" : ""}`}
-          type="button"
-          data-testid="mio-motion-trigger"
-          aria-label={"鍔ㄤ綔鍒囨崲"}
-          aria-haspopup="dialog"
-          aria-expanded={isMotionPickerOpen}
-          onClick={() => {
-            setIsMotionPickerOpen((open) => !open);
-            setIsCharacterPickerOpen(false);
-          }}
-        >
-          <img src={`${SPRITE}/asset-006.png`} alt="" />
-        </button>
-
         <button className="mio-nav-button is-bottom" type="button" aria-label={"\u8bbe\u7f6e"}>
           <img src={`${SPRITE}/asset-010.png`} alt="" />
         </button>
 
-        {isCharacterPickerOpen ? (
-          <section
-            className="mio-character-panel"
-            role="dialog"
-            aria-label={"\u89d2\u8272\u5207\u6362\u9762\u677f"}
-          >
-            <header>
-              <strong>{"\u89d2\u8272\u5207\u6362"}</strong>
-              <span>{selectedModel ? getModelDisplayLabel(selectedModel) : "\u672a\u9009\u62e9\u89d2\u8272"}</span>
-            </header>
-            <div className="mio-character-list">
-              {characterOptions.length === 0 ? (
-                <p className="mio-character-empty">{"\u6682\u65e0\u53ef\u7528\u89d2\u8272"}</p>
-              ) : (
-                characterOptions.map((option) => (
-                  <button
-                    key={option.id}
-                    className={`mio-character-option ${option.active ? "is-selected" : ""}`}
-                    type="button"
-                    data-testid="mio-character-option"
-                    aria-label={`\u5207\u6362\u5230 ${option.label} \u89d2\u8272`}
-                    onClick={() => handleCharacterSwitch(option.path)}
-                  >
-                    <span className="mio-character-avatar">
-                      <img src={`${SPRITE}/asset-030.png`} alt="" />
-                    </span>
-                    <span className="mio-character-copy">
-                      <strong>{option.label}</strong>
-                      <small>{option.active ? "\u5f53\u524d\u4f7f\u7528\u4e2d" : "\u70b9\u51fb\u5207\u6362\u89d2\u8272"}</small>
-                    </span>
-                    <span className="mio-character-badge">{option.badge}</span>
-                  </button>
-                ))
-              )}
-            </div>
-            <footer className="mio-character-panel-footer">
-              <span>AVAILABLE MODELS</span>
-              <strong>{characterOptions.length.toString().padStart(2, "0")}</strong>
-            </footer>
-          </section>
-        ) : null}
-
-        {isMotionPickerOpen ? (
-          <section
-            className="mio-motion-panel"
-            data-testid="mio-motion-panel"
-            role="dialog"
-            aria-label={"鍔ㄤ綔鍒囨崲闈㈡澘"}
-          >
-            <header>
-              <strong>{"鍔ㄤ綔鍒囨崲"}</strong>
-              <span>{activeMotionPath || "浣跨敤 MMD/vmd 鍐呯疆鍔ㄤ綔"}</span>
-            </header>
-            <div className="mio-motion-list">
-              {motions.length === 0 ? (
-                <p className="mio-motion-empty">{"MMD/vmd 涓嬫殏鏃犲彲鐢?.vmd 鍔ㄤ綔"}</p>
-              ) : (
-                motions.map((motion) => {
-                  const active = motion.relative_path === activeMotionPath;
-                  return (
-                    <button
-                      key={motion.relative_path}
-                      className={`mio-motion-option ${active ? "is-selected" : ""}`}
-                      type="button"
-                      data-testid="mio-motion-option"
-                      aria-label={`鍒囨崲鍒?${motion.label} 鍔ㄤ綔`}
-                      onClick={() => previewBuiltInMotion(motion)}
-                    >
-                      <span className="mio-motion-chip">{active ? "ON" : "VMD"}</span>
-                      <span className="mio-motion-copy">
-                        <strong>{motion.label}</strong>
-                        <small>{motion.relative_path}</small>
-                      </span>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-            <footer className="mio-motion-panel-footer">
-              <span>BUILT-IN MOTIONS</span>
-              <strong>{motions.length.toString().padStart(2, "0")}</strong>
-            </footer>
-          </section>
-        ) : null}
       </aside>
 
       <div className="mio-stage-wrap" data-testid="mio-stage-wrap">
@@ -1021,12 +869,12 @@ export default function CompanionPage() {
           data-testid="mio-advanced-panel"
           role="dialog"
           aria-modal="false"
-          aria-label="Advanced VMD quick import"
+          aria-label={"\u9ad8\u7ea7\u529f\u80fd"}
         >
           <header className="mio-advanced-panel-head">
             <div>
-              <strong>VMD Quick Import</strong>
-              <span>Import, preview, favorite, and rename motions without leaving the stage.</span>
+              <strong>{"\u9ad8\u7ea7\u529f\u80fd"}</strong>
+              <span>{"\u7edf\u4e00\u7ba1\u7406\u6a21\u578b\u3001\u6e32\u67d3\u6a21\u5f0f\u3001VMD \u5bfc\u5165\u4e0e MMD \u76f8\u673a\u3002"}</span>
             </div>
             <button
               type="button"
@@ -1040,6 +888,55 @@ export default function CompanionPage() {
               ×
             </button>
           </header>
+
+          <section
+            className="mio-advanced-stage"
+            data-testid="mio-advanced-stage"
+            aria-label={"\u6a21\u578b\u4e0e\u6e32\u67d3\u8bbe\u7f6e"}
+          >
+            <div className="mio-camera-controls-head">
+              <div>
+                <strong>{"\u821e\u53f0\u8bbe\u7f6e"}</strong>
+                <span>
+                  {selectedModel ? getModelDisplayLabel(selectedModel) : "\u672a\u9009\u62e9\u89d2\u8272"} · {renderPipeline}
+                </span>
+              </div>
+              <span>{models.length.toString().padStart(2, "0")} MODELS</span>
+            </div>
+
+            <label className="mio-advanced-field mio-advanced-field-wide">
+              <span>{"\u6a21\u578b\u5207\u6362"}</span>
+              <select
+                aria-label={"\u6a21\u578b\u5207\u6362"}
+                value={selectedModel?.relative_path || ""}
+                onChange={(event) => handleCharacterSwitch(event.target.value)}
+                disabled={models.length === 0}
+              >
+                {models.length === 0 ? <option value="">No models available</option> : null}
+                {models.map((model) => (
+                  <option key={model.relative_path} value={model.relative_path}>
+                    {getModelDisplayLabel(model)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="mio-pipeline-options" role="radiogroup" aria-label={"\u6e32\u67d3\u6a21\u5f0f"}>
+              {renderPipelineOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`mio-pipeline-option ${renderPipeline === option.value ? "is-active" : ""}`}
+                  role="radio"
+                  aria-checked={renderPipeline === option.value}
+                  onClick={() => handleRenderPipelineChange(option.value)}
+                >
+                  <strong>{option.label}</strong>
+                  <span>{option.description}</span>
+                </button>
+              ))}
+            </div>
+          </section>
 
           <section className="mio-camera-controls" data-testid="mio-camera-controls" aria-label="MMD camera controls">
             <div className="mio-camera-controls-head">
@@ -1285,62 +1182,32 @@ export default function CompanionPage() {
           ) : null}
         </section>
       ) : null}
-      <form className="mio-command-bar" data-testid="mio-command-bar" onSubmit={onSubmit}>
-        <label className="mio-tts">
-          <img src={`${SPRITE}/asset-013.png`} alt="" />
-          <span>TTS</span>
-          <input type="checkbox" checked={ttsEnabled} onChange={(event) => setTtsEnabled(event.target.checked)} />
-        </label>
-
-        <button className="mio-mic" type="button" aria-label={"\u8bed\u97f3\u8f93\u5165"}>
-          <img src={`${SPRITE}/asset-020.png`} alt="" />
-        </button>
-
-        <input
-          className="mio-command-input"
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          placeholder={INPUT_LABEL}
-          aria-label={INPUT_LABEL}
-        />
-
-        <button className="mio-send" type="submit" disabled={loading} aria-label={"\u53d1\u9001"}>
-          <img src={`${SPRITE}/asset-019.png`} alt="" />
-          <span>{loading ? "\u53d1\u9001\u4e2d" : "\u53d1\u9001"}</span>
-        </button>
-
-        <label className="mio-mode">
-          <img src={`${SPRITE}/asset-080.png`} alt="" />
-          <span>{"\u8bed\u97f3\u6a21\u5f0f"}</span>
-          <select value={ttsMode} onChange={(event) => setTtsMode(event.target.value as "browser" | "server")}>
-            <option value="browser">browser</option>
-            <option value="server">server</option>
-          </select>
-        </label>
-
-        <button
-          className={`mio-mode ${isAdvancedPanelOpen ? "is-active" : ""}`}
-          type="button"
-          aria-expanded={isAdvancedPanelOpen}
-          aria-controls="mio-advanced-panel"
-          onClick={() => {
-            setIsAdvancedPanelOpen((open) => !open);
-            setAdvancedError("");
-            setAdvancedTab("library");
-            setAdvancedFavoriteSlotFilter("all");
-          }}
-        >
-          <img src={`${SPRITE}/asset-010.png`} alt="" />
-          <span>{"\u9ad8\u7ea7\u529f\u80fd"}</span>
-        </button>
-
-        <button className="mio-mode" type="button" onClick={resetModelState}>
-          <img src={`${SPRITE}/asset-011.png`} alt="" />
-          <span>{"\u6062\u590d\u9ed8\u8ba4"}</span>
-        </button>
-
-        {error ? <p className="mio-error">{error}</p> : null}
-      </form>
+      <CompanionCommandBar
+        input={input}
+        inputLabel={INPUT_LABEL}
+        loading={loading}
+        error={error}
+        ttsEnabled={ttsEnabled}
+        ttsMode={ttsMode}
+        isAdvancedPanelOpen={isAdvancedPanelOpen}
+        onSubmit={onSubmit}
+        onInputChange={setInput}
+        onTtsEnabledChange={setTtsEnabled}
+        onTtsModeChange={setTtsMode}
+        onAdvancedToggle={() => {
+          setIsAdvancedPanelOpen((open) => !open);
+          setAdvancedError("");
+          setAdvancedTab("library");
+          setAdvancedFavoriteSlotFilter("all");
+        }}
+      />
+      <div className="mio-toast-layer" aria-live="polite" aria-atomic="true">
+        {toast ? (
+          <div className="mio-toast" role="status">
+            {toast.message}
+          </div>
+        ) : null}
+      </div>
     </main>
   );
 }

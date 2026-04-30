@@ -88,7 +88,7 @@ test("companion stage loads model assets without MMD request failures @critical"
   await page.waitForTimeout(1500);
 
   await testInfo.attach("stage-status", {
-    body: await status.textContent(),
+    body: (await status.textContent()) ?? "",
     contentType: "text/plain",
   });
   await testInfo.attach("console-log", {

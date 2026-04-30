@@ -149,7 +149,7 @@ a {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 18px;
+  gap: 68px;
   padding: 0 18px;
   border-bottom: 1px solid rgba(143, 214, 255, 0.16);
   background: linear-gradient(180deg, rgba(4, 13, 31, 0.74), rgba(4, 13, 31, 0.16));
@@ -168,14 +168,54 @@ a {
   align-items: center;
 }
 
+.mio-toast-layer {
+  position: fixed;
+  left: 50%;
+  bottom: 132px;
+  z-index: 40;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.mio-toast {
+  min-width: 220px;
+  max-width: min(480px, calc(100vw - 32px));
+  padding: 12px 16px;
+  border: 1px solid rgba(145, 213, 255, 0.24);
+  border-radius: 14px;
+  background: rgba(7, 19, 34, 0.88);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(14px);
+  color: rgba(237, 246, 255, 0.96);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+}
+
 .mio-brand {
-  gap: 12px;
+  gap: 18px;
+}
+
+.mio-brand::before {
+  content: "";
+  width: 54px;
+  height: 54px;
+  flex: 0 0 54px;
+  background:
+    radial-gradient(circle at 50% 50%, #f3fbff 0 6%, transparent 7%),
+    linear-gradient(0deg, transparent 37%, rgba(197, 246, 255, 0.95) 43% 57%, transparent 63%),
+    linear-gradient(90deg, transparent 37%, rgba(197, 246, 255, 0.95) 43% 57%, transparent 63%),
+    linear-gradient(45deg, transparent 39%, rgba(104, 211, 255, 0.92) 45% 55%, transparent 61%),
+    linear-gradient(-45deg, transparent 39%, rgba(104, 211, 255, 0.92) 45% 55%, transparent 61%),
+    radial-gradient(circle at 50% 50%, rgba(57, 173, 255, 0.58), transparent 58%);
+  clip-path: polygon(50% 0, 60% 33%, 95% 18%, 67% 43%, 100% 50%, 67% 57%, 95% 82%, 60% 67%, 50% 100%, 40% 67%, 5% 82%, 33% 57%, 0 50%, 33% 43%, 5% 18%, 40% 33%);
+  filter: drop-shadow(0 0 8px rgba(109, 211, 255, 0.9)) drop-shadow(0 0 18px rgba(44, 141, 255, 0.42));
 }
 
 .mio-brand img {
-  width: 48px;
-  height: 32px;
-  object-fit: contain;
+  display: none;
 }
 
 .mio-brand h1 {
@@ -206,9 +246,43 @@ a {
 
 .mio-session {
   justify-content: end;
-  gap: 12px;
+  gap: 16px;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 13px;
+}
+
+.mio-session > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mio-session > span:first-child {
+  min-width: 138px;
+}
+
+.mio-session > span:nth-child(2) {
+  min-width: 140px;
+}
+
+.mio-session > span::before {
+  content: "";
+  width: 15px;
+  height: 15px;
+  display: inline-block;
+  opacity: 0.92;
+  color: rgba(236, 247, 255, 0.9);
+}
+
+.mio-session > span:first-child::before {
+  background:
+    radial-gradient(circle at 50% 29%, currentColor 0 3px, transparent 3.5px),
+    radial-gradient(ellipse at 50% 82%, currentColor 0 6px, transparent 6.5px);
+}
+
+.mio-session > span:nth-child(2)::before {
+  background: currentColor;
+  clip-path: polygon(50% 0, 90% 24%, 90% 76%, 50% 100%, 10% 76%, 10% 24%);
 }
 
 .mio-trace-button,
@@ -223,8 +297,23 @@ a {
 }
 
 .mio-trace-button {
-  padding: 9px 16px;
+  min-width: 88px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 14px;
   border-radius: 8px;
+}
+
+.mio-trace-button::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid rgba(239, 248, 255, 0.92);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 3px rgba(239, 248, 255, 0.16);
 }
 
 .mio-icon-button {
@@ -243,6 +332,16 @@ a {
   width: 28px;
   height: 28px;
   object-fit: contain;
+  clip-path: inset(7px);
+  transform: scale(1.55);
+  mix-blend-mode: screen;
+}
+
+.mio-nav-button img {
+  width: 34px;
+  height: 34px;
+  clip-path: inset(9px);
+  transform: scale(1.7);
 }
 
 .mio-avatar {
@@ -313,262 +412,19 @@ a {
   box-shadow: inset 3px 0 0 #57e4ff, 0 0 24px rgba(84, 204, 255, 0.18);
 }
 
-.mio-character-trigger {
-  position: relative;
-  overflow: hidden;
-  border: 1px solid rgba(142, 214, 255, 0.26);
-  background: rgba(34, 78, 132, 0.42);
-}
-
-.mio-motion-trigger {
-  border: 1px solid rgba(142, 214, 255, 0.22);
-  background: rgba(18, 55, 95, 0.38);
-}
-
-.mio-character-trigger::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 42%);
-  pointer-events: none;
-}
-
-.mio-character-trigger img {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: 1px solid rgba(170, 231, 255, 0.45);
-}
-
-.mio-character-trigger.is-open {
-  background: rgba(84, 171, 255, 0.24);
-  box-shadow: inset 3px 0 0 #57e4ff, 0 0 24px rgba(84, 204, 255, 0.26);
-}
-
-.mio-motion-trigger.is-open {
-  background: rgba(84, 171, 255, 0.2);
-  box-shadow: inset 3px 0 0 #57e4ff, 0 0 24px rgba(84, 204, 255, 0.22);
-}
-
 .mio-nav-button.is-bottom {
   margin-top: auto;
-}
-
-.mio-character-panel,
-.mio-motion-panel {
-  position: absolute;
-  z-index: 8;
-  left: 86px;
-  width: 276px;
-  padding: 14px;
-  border: 1px solid rgba(139, 219, 255, 0.34);
-  border-radius: 16px;
-  background: linear-gradient(180deg, rgba(18, 54, 92, 0.9), rgba(9, 31, 60, 0.88));
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(16px);
-}
-
-.mio-character-panel {
-  top: 238px;
-}
-
-.mio-motion-panel {
-  top: 316px;
-  max-height: 320px;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-}
-
-.mio-character-panel::before,
-.mio-motion-panel::before {
-  content: "";
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  top: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(154, 225, 255, 0.9), transparent);
-}
-
-.mio-character-panel header,
-.mio-motion-panel header {
-  display: grid;
-  gap: 4px;
-  margin-bottom: 12px;
-}
-
-.mio-character-panel header strong,
-.mio-motion-panel header strong {
-  font-size: 14px;
-  font-weight: 600;
-  color: #eef8ff;
-}
-
-.mio-character-panel header span,
-.mio-motion-panel header span {
-  font-size: 12px;
-  color: rgba(209, 231, 245, 0.72);
-}
-
-.mio-character-list,
-.mio-motion-list {
-  display: grid;
-  gap: 8px;
-  min-height: 0;
-  overflow: auto;
-}
-
-.mio-character-option,
-.mio-motion-option {
-  display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid rgba(137, 212, 255, 0.24);
-  border-radius: 12px;
-  background: rgba(5, 20, 42, 0.46);
-  color: #eef8ff;
-  text-align: left;
-  cursor: pointer;
-}
-
-.mio-character-option.is-selected,
-.mio-motion-option.is-selected {
-  border-color: rgba(121, 224, 255, 0.62);
-  background: rgba(60, 121, 197, 0.36);
-  box-shadow: 0 0 20px rgba(84, 204, 255, 0.14);
-}
-
-.mio-character-avatar {
-  display: grid;
-  place-items: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  border: 1px solid rgba(142, 214, 255, 0.32);
-  background: rgba(23, 64, 109, 0.72);
-}
-
-.mio-character-avatar img {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-}
-
-.mio-character-copy {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.mio-motion-copy {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.mio-character-copy strong,
-.mio-character-copy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mio-motion-copy strong,
-.mio-motion-copy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mio-character-copy strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.mio-motion-copy strong {
-  font-size: 13px;
-  font-weight: 600;
-  text-transform: capitalize;
-}
-
-.mio-character-copy small {
-  color: rgba(209, 231, 245, 0.72);
-  font-size: 11px;
-}
-
-.mio-motion-copy small {
-  color: rgba(209, 231, 245, 0.72);
-  font-size: 11px;
-}
-
-.mio-character-badge {
-  display: inline-grid;
-  place-items: center;
-  min-width: 30px;
-  height: 24px;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: rgba(84, 171, 255, 0.18);
-  color: #9be6ff;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.mio-motion-chip {
-  display: inline-grid;
-  place-items: center;
-  min-width: 42px;
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: rgba(84, 171, 255, 0.18);
-  color: #9be6ff;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-}
-
-.mio-character-empty,
-.mio-motion-empty {
-  margin: 0;
-  padding: 8px 4px;
-  color: rgba(209, 231, 245, 0.72);
-  font-size: 12px;
-}
-
-.mio-character-panel-footer,
-.mio-motion-panel-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(132, 202, 245, 0.14);
-  color: rgba(209, 231, 245, 0.68);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-}
-
-.mio-character-panel-footer strong,
-.mio-motion-panel-footer strong {
-  color: #a5edff;
-  font-size: 13px;
-  letter-spacing: 0;
 }
 
 .mio-dialogue {
   position: absolute;
   z-index: 4;
-  top: clamp(24px, 4vh, 52px);
-  left: clamp(18px, 2.4vw, 34px);
-  width: clamp(250px, 25vw, 410px);
+  top: 99px;
+  left: 151px;
+  width: 320px;
   max-width: calc(42% - 24px);
-  min-height: clamp(168px, 18vh, 222px);
-  padding: clamp(18px, 2vw, 24px) clamp(18px, 2vw, 26px);
+  min-height: 190px;
+  padding: 22px 24px;
   border: 1px solid rgba(163, 225, 255, 0.58);
   border-radius: 26px;
   background: linear-gradient(180deg, rgba(18, 54, 92, 0.66), rgba(8, 27, 53, 0.72));
@@ -780,6 +636,9 @@ a {
   width: 24px;
   height: 24px;
   object-fit: contain;
+  clip-path: inset(6px);
+  transform: scale(1.55);
+  mix-blend-mode: screen;
 }
 
 .mio-card small {
@@ -850,17 +709,124 @@ a {
 .mio-command-bar {
   position: absolute;
   z-index: 6;
-  left: 30px;
-  right: 30px;
-  bottom: 42px;
-  min-height: 76px;
-  gap: 12px;
-  padding: 12px 16px;
-  border: 1px solid rgba(140, 213, 255, 0.32);
-  border-radius: 18px;
-  background: rgba(8, 26, 54, 0.76);
-  backdrop-filter: blur(16px);
-  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  left: 16px;
+  right: 16px;
+  bottom: 18px;
+  display: block;
+  width: auto;
+  height: 83px;
+  min-height: 83px;
+  aspect-ratio: auto;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  box-shadow: none;
+  overflow: visible;
+  isolation: isolate;
+  transform: none;
+}
+
+.mio-command-shell {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  padding: 0 6px;
+}
+
+.mio-command-shell::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 2px;
+  height: 1px;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(138, 223, 255, 0), rgba(211, 245, 255, 0.85) 48%, rgba(138, 223, 255, 0) 100%);
+  filter: blur(0.2px);
+  opacity: 0.92;
+}
+
+.mio-command-surface {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 83px;
+  z-index: 0;
+  pointer-events: none;
+  border: 1px solid rgba(163, 229, 255, 0.51);
+  border-radius: 17px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0) 16%, rgba(16, 45, 88, 0.57) 17%, rgba(10, 33, 70, 0.72) 56%, rgba(8, 22, 50, 0.84) 88%, rgba(5, 12, 27, 0.93) 100%),
+    radial-gradient(ellipse at 11% 1%, rgba(151, 230, 255, 0.24), transparent 19%),
+    radial-gradient(ellipse at 51% 3%, rgba(208, 245, 255, 0.11), transparent 36%),
+    radial-gradient(ellipse at 86% 2%, rgba(129, 148, 255, 0.19), transparent 22%),
+    linear-gradient(0deg, rgba(3, 8, 20, 0.51), rgba(7, 16, 31, 0) 28%);
+  backdrop-filter: blur(24px) saturate(126%);
+  -webkit-backdrop-filter: blur(24px) saturate(126%);
+  box-shadow:
+    inset 0 1px 0 rgba(247, 252, 255, 0.18),
+    0 5px 15px rgba(4, 16, 31, 0.21);
+}
+
+.mio-command-shell::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  z-index: 0;
+  width: 10px;
+  height: 6px;
+  transform: translateX(-50%);
+  background:
+    linear-gradient(45deg, transparent 42%, rgba(234, 248, 255, 0.9) 43% 55%, transparent 56%) left center / 50% 100% no-repeat,
+    linear-gradient(-45deg, transparent 42%, rgba(234, 248, 255, 0.9) 43% 55%, transparent 56%) right center / 50% 100% no-repeat;
+  filter: drop-shadow(0 0 3px rgba(111, 199, 255, 0.32));
+}
+
+.mio-command-left,
+.mio-command-center,
+.mio-command-right {
+  display: flex;
+  align-items: center;
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.mio-command-left,
+.mio-command-right {
+  gap: 8px;
+}
+
+.mio-command-left {
+  align-self: center;
+  height: 41px;
+}
+
+.mio-command-center {
+  align-self: center;
+  height: 45px;
+  gap: 0;
+}
+
+.mio-command-right {
+  align-self: center;
+  height: 41px;
+  justify-content: flex-end;
+}
+
+.mio-command-left::after,
+.mio-command-center::after {
+  display: none;
 }
 
 .mio-advanced-panel {
@@ -913,6 +879,7 @@ a {
   cursor: pointer;
 }
 
+.mio-advanced-stage,
 .mio-camera-controls {
   display: grid;
   gap: 10px;
@@ -920,6 +887,12 @@ a {
   border: 1px solid rgba(136, 211, 255, 0.22);
   border-radius: 12px;
   background: rgba(7, 26, 51, 0.54);
+}
+
+.mio-advanced-stage {
+  background:
+    radial-gradient(circle at 18% 0%, rgba(68, 177, 255, 0.12), transparent 38%),
+    rgba(7, 26, 51, 0.54);
 }
 
 .mio-camera-controls-head {
@@ -972,6 +945,47 @@ a {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.mio-advanced-field-wide {
+  width: 100%;
+}
+
+.mio-pipeline-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mio-pipeline-option {
+  display: grid;
+  gap: 3px;
+  min-height: 54px;
+  padding: 9px 8px;
+  border: 1px solid rgba(136, 211, 255, 0.24);
+  border-radius: 10px;
+  background: rgba(5, 20, 42, 0.5);
+  color: #eef8ff;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.mio-pipeline-option strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mio-pipeline-option span {
+  color: rgba(205, 228, 243, 0.64);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.mio-pipeline-option.is-active {
+  border-color: rgba(108, 224, 255, 0.72);
+  background: linear-gradient(180deg, rgba(32, 102, 170, 0.6), rgba(13, 45, 91, 0.62));
+  box-shadow: 0 0 18px rgba(84, 204, 255, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .mio-advanced-toolbar {
@@ -1290,72 +1304,273 @@ a {
 .mio-mic,
 .mio-send,
 .mio-mode {
-  height: 48px;
-  border: 1px solid rgba(136, 211, 255, 0.3);
-  border-radius: 10px;
-  background: rgba(10, 34, 67, 0.72);
+  height: 100%;
+  border: 1px solid rgba(143, 213, 255, 0.32);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.014) 35%),
+    linear-gradient(180deg, rgba(18, 43, 82, 0.7), rgba(10, 31, 65, 0.68));
   color: #eef8ff;
   font: inherit;
+  box-shadow:
+    inset 0 1px 0 rgba(244, 251, 255, 0.12),
+    0 6px 14px rgba(0, 10, 34, 0.11);
+  backdrop-filter: blur(12px) saturate(125%);
+  -webkit-backdrop-filter: blur(12px) saturate(125%);
 }
 
 .mio-tts {
-  gap: 10px;
-  padding: 0 14px;
-  min-width: 136px;
+  position: relative;
+  gap: 6px;
+  padding: 0 9px;
+  width: 104px;
+  flex: 0 0 auto;
+  justify-content: space-between;
 }
 
-.mio-tts img {
-  width: 24px;
-  height: 24px;
-  object-fit: contain;
+.mio-tts span {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.mio-tts > span:nth-child(2) {
+  color: rgba(242, 248, 255, 0.98);
+}
+
+.mio-tts > span:not(.mio-tts-switch) {
+  opacity: 1;
+}
+
+.mio-tts-glyph {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  display: grid;
+  place-items: center;
+  opacity: 0.9;
+  filter: drop-shadow(0 0 2px rgba(190, 231, 255, 0.18));
+}
+
+.mio-tts-glyph svg {
+  width: 13px;
+  height: 13px;
+}
+
+.mio-tts-glyph circle,
+.mio-tts-glyph path {
+  fill: none;
+  stroke: rgba(242, 248, 255, 0.96);
+  stroke-width: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mio-tts-switch {
+  width: 36px;
+  height: 21px;
+  border: 1px solid rgba(181, 228, 255, 0.26);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #4fa6ff, #3d7bff);
+  box-shadow: inset 0 1px 0 rgba(233, 248, 255, 0.16);
+  position: relative;
+  flex: 0 0 auto;
+  opacity: 1;
+}
+
+.mio-tts-switch::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, rgba(242, 247, 255, 0.98), rgba(202, 220, 255, 0.96));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
+  transition: transform 160ms ease;
+}
+
+.mio-tts-switch.is-on {
+  background: linear-gradient(180deg, #58adff, #3f81fb);
+  box-shadow: inset 0 1px 0 rgba(233, 248, 255, 0.22), 0 0 6px rgba(82, 166, 255, 0.08);
+}
+
+.mio-tts-switch.is-on::before {
+  transform: translateX(15px);
+}
+
+.mio-tts-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
 }
 
 .mio-tts input {
-  accent-color: #45b8ff;
   width: 42px;
   height: 22px;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .mio-mic {
-  width: 72px;
+  width: 52px;
+  position: relative;
   display: grid;
   place-items: center;
-  box-shadow: 0 0 24px rgba(134, 88, 255, 0.42);
+  border-color: rgba(147, 205, 255, 0.5);
+  background:
+    radial-gradient(circle at 24% 18%, rgba(153, 230, 255, 0.28), transparent 31%),
+    radial-gradient(circle at 72% 78%, rgba(175, 83, 255, 0.42), transparent 36%),
+    linear-gradient(135deg, rgba(92, 111, 255, 0.8), rgba(111, 67, 214, 0.82));
+  box-shadow:
+    inset 0 1px 0 rgba(244, 248, 255, 0.24),
+    inset 0 -1px 0 rgba(49, 44, 139, 0.24),
+    0 0 14px rgba(115, 104, 255, 0.28),
+    0 0 0 1px rgba(98, 200, 255, 0.14);
+}
+
+.mio-mic-icon {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  display: grid;
+  place-items: center;
+}
+
+.mio-mic-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.mio-mic-icon rect,
+.mio-mic-icon path {
+  fill: none;
+  stroke: rgba(248, 251, 255, 0.98);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mio-command-input-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  height: 45px;
+  border: 1px solid rgba(106, 186, 251, 0.38);
+  border-radius: 19px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 16%, rgba(16, 45, 88, 0.57) 17%, rgba(10, 33, 71, 0.76) 64%, rgba(8, 26, 55, 0.92) 92%, rgba(6, 17, 32, 0.97) 100%),
+    radial-gradient(ellipse at 46% 4%, rgba(214, 247, 255, 0.07), transparent 34%),
+    linear-gradient(0deg, rgba(2, 6, 17, 0.38), rgba(2, 6, 17, 0) 20%);
+  box-shadow:
+    inset 0 1px 0 rgba(241, 251, 255, 0.06),
+    inset 0 -1px 0 rgba(4, 10, 22, 0.34),
+    0 0 0 1px rgba(31, 74, 128, 0.04);
+  backdrop-filter: blur(8px) saturate(116%);
+  -webkit-backdrop-filter: blur(8px) saturate(116%);
+  overflow: hidden;
+}
+
+.mio-command-copy-wrap {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  padding: 0 22px 0 24px;
 }
 
 .mio-command-input {
   min-width: 0;
   flex: 1;
-  height: 48px;
-  border: 1px solid rgba(96, 181, 242, 0.48);
-  border-radius: 24px;
-  padding: 0 30px;
-  background: rgba(5, 20, 43, 0.72);
-  color: #eef8ff;
+  height: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: rgba(170, 186, 206, 0.88);
   font: inherit;
+  font-size: 10.6px;
+  font-weight: 400;
+  line-height: 1.02;
+  letter-spacing: 0.01em;
   outline: none;
+  box-shadow: none;
 }
 
 .mio-command-bar input::placeholder {
-  color: rgba(206, 225, 241, 0.58);
+  color: rgba(170, 186, 206, 0.88);
+  font-weight: 400;
 }
 
 .mio-send {
-  width: 86px;
+  position: relative;
+  width: 62px;
+  height: 100%;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, #167cff, #7047f2);
-  box-shadow: 0 0 26px rgba(91, 115, 255, 0.5);
+  flex: 0 0 auto;
+  border: 0;
+  border-left: 1px solid rgba(199, 240, 255, 0.26);
+  border-radius: 14px 18px 18px 14px;
+  background:
+    linear-gradient(90deg, #5d76fc 0%, #8a59e8 100%),
+    radial-gradient(circle at 24% 18%, rgba(215, 245, 255, 0.24), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14), transparent 38%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 0 10px rgba(108, 101, 255, 0.2);
   cursor: pointer;
+  padding: 0;
+  overflow: hidden;
+  isolation: isolate;
 }
 
-.mio-send img {
-  width: 58px;
-  height: 44px;
-  object-fit: contain;
+.mio-send::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 44%);
+  pointer-events: none;
 }
 
-.mio-send span {
+.mio-send::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+}
+
+.mio-send-icon {
+  position: relative;
+  z-index: 1;
+  width: 19px;
+  height: 19px;
+  display: grid;
+  place-items: center;
+  filter: drop-shadow(0 0 4px rgba(238, 243, 255, 0.24));
+  opacity: 1;
+}
+
+.mio-send-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.mio-send-icon path {
+  fill: rgba(255, 255, 255, 0.98);
+}
+
+.mio-send-label {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -1364,11 +1579,82 @@ a {
 }
 
 .mio-mode {
-  gap: 10px;
-  padding: 0 14px;
-  min-width: 132px;
+  gap: 6px;
+  padding: 0 9px;
+  min-width: 0;
+  flex: 0 0 auto;
   justify-content: center;
   cursor: pointer;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.015) 34%),
+    linear-gradient(180deg, rgba(23, 57, 103, 0.7), rgba(11, 33, 71, 0.8));
+}
+
+.mio-mode span {
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 1;
+}
+
+.mio-voice-mode,
+.mio-advanced-mode {
+  position: relative;
+}
+
+.mio-voice-mode {
+  width: 102px;
+  min-width: 0;
+}
+
+.mio-advanced-mode {
+  width: 112px;
+}
+
+.mio-eq-icon,
+.mio-gear-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  opacity: 1;
+}
+
+.mio-eq-icon svg,
+.mio-gear-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.mio-eq-icon path,
+.mio-gear-icon path,
+.mio-gear-icon circle {
+  fill: none;
+  stroke: rgba(242, 248, 255, 0.96);
+  stroke-width: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mio-eq-icon path {
+  filter: drop-shadow(0 0 3px rgba(151, 230, 255, 0.22));
+}
+
+.mio-voice-mode::after,
+.mio-advanced-mode::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), transparent 42%);
+  pointer-events: none;
+}
+
+.mio-gear-icon circle:last-child {
+  fill: rgba(242, 248, 255, 0.96);
+  stroke: none;
 }
 
 .mio-mode select {
@@ -1379,8 +1665,8 @@ a {
 
 .mio-error {
   position: absolute;
-  left: 20px;
-  bottom: 84px;
+  left: 16px;
+  bottom: calc(100% - 2px);
   margin: 0;
   padding: 8px 12px;
   border-radius: 8px;
@@ -1423,6 +1709,12 @@ a {
     right: 20px;
     width: min(340px, calc(100vw - 40px));
   }
+
+  .mio-command-shell {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 12px;
+    padding-inline: 14px;
+  }
 }
 
 @media (max-width: 860px) {
@@ -1446,17 +1738,6 @@ a {
   .mio-sidebar {
     top: 108px;
     left: 10px;
-  }
-
-  .mio-character-panel {
-    left: 76px;
-    width: min(276px, calc(100vw - 110px));
-  }
-
-  .mio-motion-panel {
-    left: 76px;
-    width: min(276px, calc(100vw - 110px));
-    top: 386px;
   }
 
   .mio-dialogue {
@@ -1490,12 +1771,35 @@ a {
   }
 
   .mio-command-bar {
-      position: fixed;
-      left: 10px;
-      right: 10px;
-      bottom: 10px;
-      flex-wrap: wrap;
-    }
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    width: auto;
+    height: 83px;
+    min-height: 83px;
+    aspect-ratio: auto;
+    transform: none;
+  }
+
+  .mio-command-shell {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 0 6px;
+  }
+
+  .mio-command-center {
+    height: 44px;
+  }
+
+  .mio-command-left,
+  .mio-command-right {
+    height: 41px;
+  }
+
+  .mio-mode {
+    padding: 0 12px;
+  }
 
     .mio-stage-bottom-fade {
       left: 10px;
@@ -1508,11 +1812,11 @@ a {
   }
 
   .mio-command-input {
-    order: -1;
-    flex-basis: 100%;
+    order: initial;
+    flex-basis: auto;
   }
 
   .mio-mode {
-    flex: 1;
+    flex: 0 0 auto;
   }
 }
