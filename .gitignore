@@ -17,5 +17,7 @@ __pycache__
 .runtime
 pytest-cache-files-*
 web/test-results
+web/tsconfig.tsbuildinfo
+.artifacts/
 MMD
 .worktrees/

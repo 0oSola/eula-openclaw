@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { BUILT_IN_VMD_PLAYBACK_RATE, DEFAULT_VMD_PLAYBACK_RATE } from "../src/features/stage/builtInMotionPreferences.js";
 import {
@@ -12,6 +13,35 @@ import { resolveActionConfig, resolvePlaybackPlan } from "../src/features/mappin
 import { buildTraceHeaders } from "../src/lib/trace.js";
 
 function run() {
+  {
+    const commandBarSource = readFileSync(new URL("../src/app/companion/CompanionCommandBar.tsx", import.meta.url), "utf8");
+    const companionPageSource = readFileSync(new URL("../src/app/companion/page.tsx", import.meta.url), "utf8");
+    const cssSource = readFileSync(new URL("../src/app/globals.css", import.meta.url), "utf8");
+
+    assert.match(commandBarSource, /export function CompanionCommandBar/);
+    assert.doesNotMatch(commandBarSource, /ttsNotice: string/);
+    assert.doesNotMatch(commandBarSource, /className="mio-notice"/);
+    assert.match(commandBarSource, /mio-command-shell/);
+    assert.match(companionPageSource, /<CompanionCommandBar/);
+    assert.match(companionPageSource, /const \[toast, setToast\] = useState/);
+    assert.match(companionPageSource, /ignoreNextStageCompletionResetRef = useRef\(false\)/);
+    assert.match(companionPageSource, /function handleTtsFailure\(message: string\)/);
+    assert.match(companionPageSource, /className="mio-toast-layer"/);
+    assert.match(companionPageSource, /className="mio-toast"/);
+    assert.doesNotMatch(companionPageSource, /<form className="mio-command-bar"/);
+    assert.match(
+      companionPageSource,
+      /const response = await postChat\([\s\S]*?try\s*\{\s*await speak\(response\.text\);\s*\}\s*catch\s*\(speakError\)/,
+    );
+    assert.match(companionPageSource, /catch\s*\(err\)\s*\{\s*pushToast\(/);
+    assert.doesNotMatch(companionPageSource, /发送失败，请检查 API 服务状态和配置/);
+    assert.match(companionPageSource, /if \(ignoreNextStageCompletionResetRef\.current\) \{/);
+    assert.match(cssSource, /\.mio-command-shell/);
+    assert.match(cssSource, /\.mio-command-surface/);
+    assert.match(cssSource, /\.mio-toast-layer/);
+    assert.match(cssSource, /\.mio-toast/);
+  }
+
   {
     const resolved = resolveActionConfig({
       slot: "happy",

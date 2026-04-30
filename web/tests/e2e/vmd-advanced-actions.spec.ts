@@ -1,6 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-function seedSession(page: Parameters<typeof test>[0]["page"]) {
+function seedSession(page: Page) {
   return page.addInitScript(() => {
     window.localStorage.setItem(
       "mmd_companion_session_v1",
