@@ -8,8 +8,8 @@ dist
 **/.env.local
 web/node_modules
 web/.next
-api/data
-api/api/data
+#api/data
+#api/api/data
 api/tests_runtime
 api/.pytest_tmp
 __pycache__
@@ -19,5 +19,6 @@ pytest-cache-files-*
 web/test-results
 web/tsconfig.tsbuildinfo
 .artifacts/
-MMD
+#MMD
+MMD/audio/优菈的所有剧情和语音.优菈语音.1077401401.mp4
 .worktrees/
