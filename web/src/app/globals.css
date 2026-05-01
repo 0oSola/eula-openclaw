@@ -479,7 +479,7 @@ a {
 .mio-stage-wrap {
   position: absolute;
   z-index: 2;
-  inset: 60px clamp(260px, 20vw, 300px) 118px 96px;
+  inset: 60px clamp(260px, 20vw, 300px) 101px 96px;
   display: grid;
   place-items: center;
   isolation: isolate;
@@ -514,7 +514,7 @@ a {
 
 .mio-hud[data-render-pipeline="genshin"] .mio-orbit,
 .mio-hud[data-render-pipeline="genshin"] .mio-stage-bottom-fade {
-  display: none;
+  /* display: none; */
 }
 
 .mio-hud[data-render-pipeline="genshin"] {
@@ -542,8 +542,8 @@ a {
   z-index: 5;
   left: 30px;
   right: 30px;
-  bottom: calc(42px + 76px);
-  height: 44px;
+  bottom: 101px;
+  height: 70px;
   pointer-events: none;
   background:
     radial-gradient(ellipse at center bottom, rgba(98, 196, 255, 0.22) 0%, rgba(98, 196, 255, 0.1) 34%, rgba(98, 196, 255, 0) 72%),
@@ -754,6 +754,7 @@ a {
   opacity: 0.92;
 }
 
+/* 底栏样式 */
 .mio-command-surface {
   position: absolute;
   left: 0;
@@ -765,13 +766,13 @@ a {
   border: 1px solid rgba(163, 229, 255, 0.51);
   border-radius: 17px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0) 16%, rgba(16, 45, 88, 0.57) 17%, rgba(10, 33, 70, 0.72) 56%, rgba(8, 22, 50, 0.84) 88%, rgba(5, 12, 27, 0.93) 100%),
+    linear-gradient(180deg, rgba(10, 33, 70, 0.32) 56%, rgba(8, 22, 50, 0.34) 88%, rgba(5, 12, 27, 0.33) 100%),
     radial-gradient(ellipse at 11% 1%, rgba(151, 230, 255, 0.24), transparent 19%),
     radial-gradient(ellipse at 51% 3%, rgba(208, 245, 255, 0.11), transparent 36%),
     radial-gradient(ellipse at 86% 2%, rgba(129, 148, 255, 0.19), transparent 22%),
     linear-gradient(0deg, rgba(3, 8, 20, 0.51), rgba(7, 16, 31, 0) 28%);
-  backdrop-filter: blur(24px) saturate(126%);
-  -webkit-backdrop-filter: blur(24px) saturate(126%);
+  backdrop-filter: blur(3px) saturate(126%);
+  -webkit-backdrop-filter: blur(3px) saturate(126%);
   box-shadow:
     inset 0 1px 0 rgba(247, 252, 255, 0.18),
     0 5px 15px rgba(4, 16, 31, 0.21);
@@ -1456,6 +1457,7 @@ a {
   stroke-linejoin: round;
 }
 
+/* 输入框样式 */
 .mio-command-input-shell {
   position: relative;
   display: flex;
@@ -1466,15 +1468,15 @@ a {
   border: 1px solid rgba(106, 186, 251, 0.38);
   border-radius: 19px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 16%, rgba(16, 45, 88, 0.57) 17%, rgba(10, 33, 71, 0.76) 64%, rgba(8, 26, 55, 0.92) 92%, rgba(6, 17, 32, 0.97) 100%),
+    linear-gradient(180deg,rgba(16, 45, 88, 0.57) 17%, rgba(10, 33, 71, 0.36) 64%, rgba(8, 26, 55, 0.32) 92%, rgba(6, 17, 32, 0.37) 100%),
     radial-gradient(ellipse at 46% 4%, rgba(214, 247, 255, 0.07), transparent 34%),
     linear-gradient(0deg, rgba(2, 6, 17, 0.38), rgba(2, 6, 17, 0) 20%);
   box-shadow:
     inset 0 1px 0 rgba(241, 251, 255, 0.06),
     inset 0 -1px 0 rgba(4, 10, 22, 0.34),
     0 0 0 1px rgba(31, 74, 128, 0.04);
-  backdrop-filter: blur(8px) saturate(116%);
-  -webkit-backdrop-filter: blur(8px) saturate(116%);
+  backdrop-filter: blur(4px) saturate(116%);
+  -webkit-backdrop-filter: blur(4px) saturate(116%);
   overflow: hidden;
 }
 
@@ -1691,7 +1693,7 @@ a {
   }
 
   .mio-stage-wrap {
-    inset: 88px 300px 112px 96px;
+    inset: 88px 300px 101px 96px;
   }
 
   .mio-stage {
