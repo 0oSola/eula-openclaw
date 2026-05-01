@@ -40,6 +40,8 @@ function run() {
     assert.match(cssSource, /\.mio-command-surface/);
     assert.match(cssSource, /\.mio-toast-layer/);
     assert.match(cssSource, /\.mio-toast/);
+    assert.match(cssSource, /inset: 60px clamp\(260px, 20vw, 300px\) 101px 96px;/);
+    assert.match(cssSource, /bottom: 101px;/);
   }
 
   {
