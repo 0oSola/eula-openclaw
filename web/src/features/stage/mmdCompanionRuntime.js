@@ -118,8 +118,57 @@ const ACTION_DURATION = {
 };
 
 const VMD_TRANSITION_FADE_SECONDS = 0.24;
+const STAGE_CANVAS_ASPECT_RATIO = 3 / 4;
 
 const smooth = (current, target, lambda, dt) => THREE.MathUtils.damp(current, target, lambda, dt);
+
+function isKnownMmdParserConsoleError(args) {
+  const text = args
+    .map((value) => {
+      if (typeof value === "string") return value;
+      if (value instanceof Error) return `${value.message}\n${value.stack || ""}`;
+      return "";
+    })
+    .join("\n");
+  return /three-stdlib[\\/].*mmdparser|CharsetEncoder\.s2u|DataViewEx\.getSjisStringsAsUnicode|parseMorph|parseVmd/i.test(text);
+}
+
+function loadAnimationSilently(loader, url, target) {
+  return new Promise((resolve, reject) => {
+    const originalConsoleError = console.error;
+    console.error = (...args) => {
+      if (isKnownMmdParserConsoleError(args)) return;
+      originalConsoleError(...args);
+    };
+
+    const restore = () => {
+      console.error = originalConsoleError;
+    };
+
+    loader.loadAnimation(
+      url,
+      target,
+      (clip) => {
+        restore();
+        resolve(clip);
+      },
+      undefined,
+      (error) => {
+        restore();
+        reject(error);
+      },
+    );
+  });
+}
+
+function cloneCameraSnapshot(snapshot) {
+  if (!snapshot) return null;
+  return {
+    ...snapshot,
+    position: Array.isArray(snapshot.position) ? [...snapshot.position] : [0, 0, 0],
+    target: Array.isArray(snapshot.target) ? [...snapshot.target] : [0, 0, 0],
+  };
+}
 
 const STAGE_PRESENTATION_PRESETS = {
   classic: {
@@ -127,8 +176,8 @@ const STAGE_PRESENTATION_PRESETS = {
     fog: null,
     camera: {
       fov: 33,
-      position: [0, 9.2, 21.6],
-      target: [0, 7.9, 0],
+      position: [-2.150011, 5.38729, 24.17144],
+      target: [-2.150011, 3.946847, 0.237922],
       minDistance: 13,
       maxDistance: 27,
       maxPolarAngle: Math.PI * 0.46,
@@ -158,9 +207,9 @@ const STAGE_PRESENTATION_PRESETS = {
     background: "#061630",
     fog: null,
     camera: {
-      fov: 31,
-      position: [0, 8.8, 20.4],
-      target: [0, 7.45, 0],
+      fov: 33,
+      position: [-2.150011, 5.38729, 24.17144],
+      target: [-2.150011, 3.946847, 0.237922],
       minDistance: 12,
       maxDistance: 25,
       maxPolarAngle: Math.PI * 0.41,
@@ -238,8 +287,8 @@ const STAGE_PRESENTATION_PRESETS = {
     fog: null,
     camera: {
       fov: 33,
-      position: [0, 9.2, 21.6],
-      target: [0, 7.9, 0],
+      position: [-2.150011, 5.38729, 24.17144],
+      target: [-2.150011, 3.946847, 0.237922],
       minDistance: 13,
       maxDistance: 27,
       maxPolarAngle: Math.PI * 0.5,
@@ -968,10 +1017,36 @@ export class MMDCompanionRuntime {
     this.colorGradePass = null;
     this.bloomPass = null;
     this.cameraLocked = false;
+    this.resizeObserver = null;
   }
 
   setStatus(text) {
     if (this.statusElement) this.statusElement.textContent = text;
+  }
+
+  syncStageCanvasBox() {
+    if (!this.container) return null;
+    const stageElement = this.container.parentElement;
+    const stageHeight = stageElement?.clientHeight || this.container.clientHeight || 0;
+    if (stageHeight <= 0) return null;
+
+    const stageWidth = stageElement?.clientWidth || this.container.clientWidth || 0;
+    const canvasWidth = Math.max(1, Math.round(stageHeight * STAGE_CANVAS_ASPECT_RATIO));
+
+    this.container.style.height = `${stageHeight}px`;
+    this.container.style.minHeight = `${stageHeight}px`;
+    this.container.style.width = `${canvasWidth}px`;
+    this.container.style.minWidth = `${canvasWidth}px`;
+    this.container.style.maxWidth = "none";
+
+    if (stageWidth > 0) {
+      this.container.style.maxHeight = `${stageHeight}px`;
+    }
+
+    return {
+      width: canvasWidth,
+      height: stageHeight,
+    };
   }
 
   async init(modelUrl) {
@@ -999,9 +1074,10 @@ export class MMDCompanionRuntime {
   }
 
   setupRenderer(presentation) {
+    const size = this.syncStageCanvasBox();
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+    this.renderer.setSize(size?.width || this.container.clientWidth, size?.height || this.container.clientHeight);
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NoToneMapping;
@@ -1298,16 +1374,24 @@ export class MMDCompanionRuntime {
   bindResize() {
     this.handleResize = () => {
       if (!this.renderer || !this.camera || !this.container) return;
-      const width = this.container.clientWidth;
-      const height = this.container.clientHeight;
+      const size = this.syncStageCanvasBox();
+      const width = size?.width || this.container.clientWidth;
+      const height = size?.height || this.container.clientHeight;
       if (width === 0 || height === 0) return;
-      this.camera.aspect = width / height;
+      this.camera.aspect = STAGE_CANVAS_ASPECT_RATIO;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(width, height);
       this.composer?.setSize?.(width, height);
       this.bloomPass?.setSize?.(width, height);
     };
     window.addEventListener("resize", this.handleResize);
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver = new ResizeObserver(() => {
+        this.handleResize?.();
+      });
+      this.resizeObserver.observe(this.container);
+      this.resizeObserver.observe(this.container.parentElement || this.container);
+    }
     this.handleResize();
   }
 
@@ -1689,9 +1773,7 @@ export class MMDCompanionRuntime {
       this.currentVmdStartedAt = 0;
       this.currentVmdDurationMs = 0;
       const animationBuildTarget = this.animationBuildTarget || this.model;
-      const clip = await new Promise((resolve, reject) => {
-        this.loader.loadAnimation(url, animationBuildTarget, resolve, undefined, reject);
-      });
+      const clip = await loadAnimationSilently(this.loader, url, animationBuildTarget);
       if (this.destroyed || loadToken !== this.vmdLoadToken) return;
       const startedAt = performance.now();
       const shouldCrossfade = hadActiveClip && this.shouldCrossfadeVmdTransition({ previousPhase, nextPhase });
@@ -1710,7 +1792,13 @@ export class MMDCompanionRuntime {
       this.currentVmdDurationMs =
         Number(clip?.duration) > 0 ? (Number(clip.duration) / this.currentVmdPlaybackRate) * 1000 : 0;
       this.setStatus("Playing mapped VMD motion.");
-    } catch {
+    } catch (error) {
+      if (error) {
+        console.warn("[mmd-vmd] failed to parse motion", {
+          url,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       this.setStatus("VMD playback failed, fallback to procedural.");
     } finally {
       if (loadToken === this.vmdLoadToken) this.isLoadingVmd = false;
@@ -1949,6 +2037,8 @@ export class MMDCompanionRuntime {
   dispose() {
     this.destroyed = true;
     if (this.handleResize) window.removeEventListener("resize", this.handleResize);
+    this.resizeObserver?.disconnect?.();
+    this.resizeObserver = null;
     this.clearModel();
     this.disposeFloor();
     this.disposeBackdrop();

@@ -1,0 +1,187 @@
+meta:
+  id: companion-layout-guide
+  version: 1
+  status: active
+  scope: web/src/app/companion
+  purpose: >
+    定义 companion 页面当前确认的布局约束，用于后续界面迭代、review、
+    回归检查和交接，不作为视觉创意稿，而是作为实现规范。
+
+principles:
+  - 页面不出现全局滚动条。
+  - 左右侧区域不使用绝对定位，使用 flex 布局。
+  - 舞台区域必须贴合底栏上边缘。
+  - 底栏保持当前样式和布局，不在常规迭代中随意修改。
+  - 左右侧区域不能与底栏视觉重叠。
+  - 右侧区域默认展开。
+  - 右侧区域高度必须与左侧区域一致。
+  - 右侧区域在既定高度内自适应，不应出现自身滚动条。
+  - 高级功能浮窗必须靠近触发按钮，且不能超出界面边界。
+
+frame:
+  root:
+    selector: ".mio-hud"
+    layout:
+      display: flex
+      flex-direction: column
+      height: 100dvh
+      overflow: hidden
+    requirement:
+      - 作为页面总容器，负责消除全局滚动。
+      - 上部内容区和底栏垂直分布。
+
+topbar:
+  role: 顶部控制区
+  behavior:
+    - 位于主内容区上方。
+    - 顶部间距使用响应式变量控制，不写死单一像素值。
+
+main:
+  selector: ".mio-layout"
+  layout:
+    display: flex
+    flex-direction: row
+    align-items: stretch
+    min-height: 0
+    flex: 1
+    overflow: hidden
+  children:
+    - left_sidebar
+    - stage
+    - right_panel
+  requirement:
+    - 三栏横向排布。
+    - 不使用 left/right absolute overlay 方案。
+    - 侧栏与舞台之间通过 gap 和响应式宽度协调。
+
+left_sidebar:
+  selector: ".mio-sidebar"
+  layout:
+    position: relative
+    display: flex
+    flex-direction: column
+    flex: "0 0 var(--mio-sidebar-width)"
+    height: "calc(100% - var(--mio-side-panels-bottom-gap))"
+    margin-bottom: "var(--mio-side-panels-bottom-gap)"
+    min-height: 0
+  responsive:
+    compact:
+      default_state: collapsed
+      supports_toggle: true
+  requirement:
+    - 不与底栏重叠。
+    - 高度规则作为右侧区域的基准。
+
+stage:
+  selector: ".mio-stage-shell"
+  layout:
+    position: relative
+    flex: 1
+    min-width: 0
+    min-height: 0
+    overflow: hidden
+  requirement:
+    - 占据左右侧栏之间剩余空间。
+    - 底部必须与底栏上边缘完全贴合，不留缝隙。
+    - 不因左右面板展开而触发页面全局滚动。
+  camera_init:
+    fov: 33
+    position: [-5.135554, 6.25785, 21.777074]
+    target: [-5.135554, 4.95785, 0.177074]
+    locked: false
+
+right_panel:
+  selector: ".mio-right-rail"
+  layout:
+    position: relative
+    display: flex
+    flex-direction: column
+    flex: "0 0 var(--mio-right-rail-width)"
+    height: "calc(100% - var(--mio-side-panels-bottom-gap))"
+    margin-bottom: "var(--mio-side-panels-bottom-gap)"
+    min-height: 0
+    overflow: hidden
+  state:
+    default: expanded
+  requirement:
+    - margin-bottom 规则与左侧区域一致。
+    - 高度必须与左侧区域一致。
+    - 自身不应出现滚动条。
+    - 内部组件通过高度压缩、比例调整、内容裁剪策略完成自适应。
+    - 任何展开状态都不能导致页面出现全局滚动条。
+
+right_panel_cards:
+  role: 右侧面板内部卡片
+  requirement:
+    - 在右侧总高度约束内分配空间。
+    - 单卡高度可以响应式缩放。
+    - 目标是保证内容不被明显裁切，同时不引入右侧滚动条。
+
+command_bar:
+  selector: ".mio-command-bar"
+  layout:
+    preserve_current_layout: true
+    current_horizontal_rule:
+      left: 16px
+      right: 16px
+  requirement:
+    - 底栏样式不要修改，除非明确提出。
+    - 底栏不应与左右 section 形成视觉重叠。
+    - 舞台必须贴合到底栏。
+
+advanced_panel:
+  role: 高级功能浮窗
+  anchor:
+    near_trigger_button: true
+    keep_in_viewport: true
+  scrolling:
+    outer_scroll: true
+    tab_sticky: true
+    vmd_list_inner_scroll: true
+    dual_scrollbars: true
+  requirement:
+    - 浮窗靠近按钮出现。
+    - 浮窗整体不能超出界面边界。
+    - 浮窗外层可滚动。
+    - tab 区域在滚动到顶部后保持吸顶。
+    - VMD 列表有独立滚动条。
+    - 当用户滚动到 VMD 列表区域后，继续滚动应驱动 VMD 列表，而非外层整体。
+
+defaults:
+  render_pipeline:
+    default_selected: genshin
+  stage_mode:
+    default_selected: genshin
+
+responsive:
+  goals:
+    - 小分辨率下布局仍然不出现全局滚动条。
+    - 左右区域在空间不足时允许收起，但右侧默认不自动收起。
+    - 顶部间距、栏宽、卡片高度通过变量和断点自适应。
+  small_viewport:
+    left_sidebar:
+      allow_collapse: true
+    right_panel:
+      allow_collapse: true
+      default_state: expanded
+  implementation_notes:
+    - 优先使用 flex-basis、clamp、min/max-height、gap 和 CSS 变量控制布局。
+    - 避免通过绝对定位叠放来规避尺寸问题。
+
+forbidden_changes:
+  - 不要重新引入页面级滚动条。
+  - 不要让右侧区域出现滚动条作为常态解法。
+  - 不要把左右区域改回绝对定位。
+  - 不要在未明确要求时修改底栏现有布局风格。
+  - 不要让舞台与底栏之间出现空隙。
+
+change_protocol:
+  before_change:
+    - 先检查是否违反本规范中的硬性约束。
+    - 若需调整底栏布局，必须单独说明原因和影响范围。
+  after_change:
+    - 验证页面无全局滚动条。
+    - 验证右侧展开时页面仍无滚动条。
+    - 验证右侧高度与左侧一致。
+    - 验证舞台底边贴合底栏。
+    - 验证高级功能浮窗双滚动行为正常。

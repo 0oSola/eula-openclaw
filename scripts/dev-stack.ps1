@@ -20,11 +20,43 @@ function Write-ErrorLine([string]$Message) {
   Write-Host "[ERROR] $Message" -ForegroundColor Red
 }
 
+function Test-UsablePythonPath([string]$Path) {
+  if (-not $Path) { return $false }
+  if ($Path -match "WindowsApps\\python(?:3)?(?:\.exe)?$") { return $false }
+  return (Test-Path $Path)
+}
+
 function Resolve-PythonExe {
   $cmd = Get-Command python -ErrorAction SilentlyContinue
-  if ($cmd) { return $cmd.Source }
-  $known = "C:\Users\KSG\AppData\Local\Programs\Python\Python312\python.exe"
-  if (Test-Path $known) { return $known }
+  if ($cmd -and (Test-UsablePythonPath $cmd.Source)) { return $cmd.Source }
+
+  $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+  if ($pyCmd -and $pyCmd.Source) {
+    try {
+      $resolved = & $pyCmd.Source -c "import sys; print(sys.executable)"
+      if ($LASTEXITCODE -eq 0) {
+        $resolved = ($resolved | Select-Object -First 1).Trim()
+        if (Test-UsablePythonPath $resolved) { return $resolved }
+      }
+    } catch {
+    }
+  }
+
+  $searchRoots = @(
+    (Join-Path $env:LocalAppData "Programs\Python"),
+    "C:\Program Files\Python",
+    "C:\Python"
+  )
+  foreach ($root in $searchRoots) {
+    if (-not (Test-Path $root)) { continue }
+    $candidates = Get-ChildItem -Path $root -Recurse -Filter python.exe -ErrorAction SilentlyContinue |
+      Where-Object { Test-UsablePythonPath $_.FullName } |
+      Sort-Object FullName -Descending
+    if ($candidates) {
+      return $candidates[0].FullName
+    }
+  }
+
   throw "Python executable not found. Install Python or add it to PATH."
 }
 

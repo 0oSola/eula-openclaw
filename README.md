@@ -29,7 +29,7 @@ Browser-based MMD virtual companion with OpenClaw chat, interaction mapping, and
 ```powershell
 cd api
 copy .env.example .env
-C:\Users\KSG\AppData\Local\Programs\Python\Python312\python.exe -m uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --port 8000
 ```
 
 OpenClaw setup notes / OpenClaw 配置说明:

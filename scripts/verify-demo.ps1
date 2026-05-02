@@ -1,12 +1,58 @@
 $ErrorActionPreference = "Stop"
 
-$python = "C:\Users\KSG\AppData\Local\Programs\Python\Python312\python.exe"
-$node = "C:\Program Files\cursor\resources\app\resources\helpers\node.exe"
-$npx = "C:\nvm4w\nodejs\npx.cmd"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $webDir = Join-Path $projectRoot "web"
 $stateFile = Join-Path $projectRoot ".runtime\dev-stack.json"
 $failedSteps = New-Object System.Collections.Generic.List[string]
+
+function Test-UsablePythonPath([string]$Path) {
+  if (-not $Path) { return $false }
+  if ($Path -match "WindowsApps\\python(?:3)?(?:\.exe)?$") { return $false }
+  return (Test-Path $Path)
+}
+
+function Resolve-PythonExe() {
+  $cmd = Get-Command python -ErrorAction SilentlyContinue
+  if ($cmd -and (Test-UsablePythonPath $cmd.Source)) { return $cmd.Source }
+
+  $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+  if ($pyCmd -and $pyCmd.Source) {
+    try {
+      $resolved = & $pyCmd.Source -c "import sys; print(sys.executable)"
+      if ($LASTEXITCODE -eq 0) {
+        $resolved = ($resolved | Select-Object -First 1).Trim()
+        if (Test-UsablePythonPath $resolved) { return $resolved }
+      }
+    } catch {
+    }
+  }
+
+  $pythonRoot = Join-Path $env:LocalAppData "Programs\Python"
+  if (Test-Path $pythonRoot) {
+    $candidate = Get-ChildItem -Path $pythonRoot -Recurse -Filter python.exe -ErrorAction SilentlyContinue |
+      Where-Object { Test-UsablePythonPath $_.FullName } |
+      Sort-Object FullName -Descending |
+      Select-Object -First 1
+    if ($candidate) { return $candidate.FullName }
+  }
+
+  throw "Python executable not found. Install Python first."
+}
+
+function Resolve-CommandPath([string[]]$Names, [string]$ErrorMessage) {
+  foreach ($name in $Names) {
+    $cmd = Get-Command $name -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) {
+      return $cmd.Source
+    }
+  }
+
+  throw $ErrorMessage
+}
+
+$python = Resolve-PythonExe
+$node = Resolve-CommandPath -Names @("node.exe", "node") -ErrorMessage "Node.js executable not found. Install Node.js or add it to PATH."
+$npx = Resolve-CommandPath -Names @("npx.cmd", "npx") -ErrorMessage "npx not found. Install Node.js or add it to PATH."
 
 function Test-PortAvailable([int]$Port) {
   $matches = netstat -ano | Select-String ":$Port "

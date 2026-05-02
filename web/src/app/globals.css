@@ -10,6 +10,24 @@
   --accent: #45d8b9;
   --accent-2: #ffb469;
   --danger: #ff7676;
+  --mio-command-bar-height: 83px;
+  --mio-command-bar-bottom: 18px;
+  --mio-bottom-safe-gap: calc(var(--mio-command-bar-height) + var(--mio-command-bar-bottom) + 18px);
+  --mio-side-panels-bottom-gap: var(--mio-bottom-safe-gap);
+  --mio-right-rail-width: clamp(228px, 20vw, 304px);
+  --mio-right-rail-gap: clamp(10px, 1.4vh, 18px);
+  --mio-card-padding-y: clamp(12px, 1.6vh, 18px);
+  --mio-card-padding-x: clamp(12px, 1.2vw, 18px);
+  --mio-card-title-size: clamp(16px, 1vw, 20px);
+  --mio-card-body-size: clamp(11px, 0.72vw, 13px);
+  --mio-card-button-gap: clamp(10px, 1.4vh, 16px);
+  --mio-card-copy-gap: clamp(6px, 0.9vh, 10px);
+  --mio-layout-gap: clamp(12px, 1.6vw, 24px);
+  --mio-layout-padding-x: clamp(12px, 1.8vw, 30px);
+  --mio-layout-padding-top: clamp(14px, 2.2vh, 28px);
+  --mio-sidebar-width: 64px;
+  --mio-sidebar-collapsed-width: 52px;
+  --mio-topbar-height: 68px;
 }
 
 * {
@@ -110,8 +128,11 @@ a {
 
 .mio-hud {
   position: relative;
+  height: 100dvh;
   min-height: 100dvh;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   color: #e8f6ff;
   background:
     linear-gradient(180deg, rgba(3, 12, 27, 0.22), rgba(3, 10, 24, 0.34)),
@@ -140,12 +161,10 @@ a {
 }
 
 .mio-topbar {
-  position: absolute;
+  position: relative;
   z-index: 5;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 68px;
+  flex: 0 0 auto;
+  min-height: var(--mio-topbar-height);
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
@@ -379,84 +398,257 @@ a {
 }
 
 .mio-sidebar {
-  position: absolute;
+  position: relative;
   z-index: 7;
-  top: 162px;
-  left: 18px;
-  width: 64px;
-  height: 568px;
+  flex: 0 0 var(--mio-sidebar-width);
+  width: var(--mio-sidebar-width);
+  height: calc(100% - var(--mio-side-panels-bottom-gap));
+  margin-bottom: var(--mio-side-panels-bottom-gap);
   padding: 16px 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
+  overflow: hidden;
   border: 1px solid rgba(140, 213, 255, 0.28);
   border-radius: 12px;
   background: rgba(15, 43, 76, 0.45);
   backdrop-filter: blur(14px);
 }
 
-.mio-nav-button {
-  width: 56px;
-  height: 56px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  display: grid;
-  place-items: center;
+.mio-layout {
+  position: relative;
+  z-index: 2;
+  flex: 1 1 auto;
+  height: calc(100dvh - var(--mio-topbar-height));
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: var(--mio-layout-gap);
+  padding: var(--mio-layout-padding-top) var(--mio-layout-padding-x) 0;
+  overflow: hidden;
+}
+
+.mio-sidebar.is-collapsed {
+  flex-basis: var(--mio-sidebar-collapsed-width);
+  width: var(--mio-sidebar-collapsed-width);
+}
+
+.mio-sidebar.is-collapsed .mio-nav-button {
+  width: 40px;
+  height: 40px;
+}
+
+.mio-sidebar.is-collapsed .mio-nav-glyph {
+  width: 20px;
+  height: 20px;
+}
+
+.mio-panel-toggle {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(140, 213, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(7, 26, 51, 0.82);
+  color: #eef8ff;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
   cursor: pointer;
 }
 
+.mio-nav-button {
+  width: 48px;
+  height: 48px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(34, 73, 122, 0.34), rgba(10, 28, 53, 0.22)),
+    rgba(7, 21, 40, 0.14);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.mio-nav-button:hover {
+  border-color: rgba(137, 219, 255, 0.34);
+  background:
+    linear-gradient(180deg, rgba(58, 108, 168, 0.4), rgba(14, 34, 64, 0.28)),
+    rgba(11, 28, 49, 0.2);
+  box-shadow: 0 12px 26px rgba(0, 14, 38, 0.18);
+  transform: translateY(-1px);
+}
+
 .mio-nav-button.is-active {
-  background: rgba(71, 171, 247, 0.2);
-  box-shadow: inset 3px 0 0 #57e4ff, 0 0 24px rgba(84, 204, 255, 0.18);
+  border-color: rgba(129, 226, 255, 0.44);
+  background:
+    linear-gradient(180deg, rgba(83, 166, 255, 0.4), rgba(34, 84, 145, 0.24)),
+    rgba(18, 48, 88, 0.26);
+  box-shadow:
+    inset 3px 0 0 #57e4ff,
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 0 28px rgba(84, 204, 255, 0.2);
 }
 
 .mio-nav-button.is-bottom {
   margin-top: auto;
 }
 
+.mio-nav-glyph {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  color: rgba(236, 247, 255, 0.94);
+  filter: drop-shadow(0 0 8px rgba(116, 208, 255, 0.2));
+}
+
+.mio-nav-glyph svg {
+  width: 100%;
+  height: 100%;
+}
+
+.mio-nav-glyph path,
+.mio-nav-glyph circle {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.55;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mio-nav-button.is-active .mio-nav-glyph {
+  color: #f7fdff;
+  filter: drop-shadow(0 0 10px rgba(108, 221, 255, 0.4));
+}
+
 .mio-dialogue {
   position: absolute;
   z-index: 4;
-  top: 99px;
-  left: 151px;
-  width: 320px;
-  max-width: calc(42% - 24px);
+  top: clamp(22px, 2.9vh, 34px);
+  left: clamp(22px, 2.5vw, 34px);
+  width: min(346px, calc(41% - 24px));
+  max-width: calc(41% - 24px);
   min-height: 190px;
-  padding: 22px 24px;
-  border: 1px solid rgba(163, 225, 255, 0.58);
-  border-radius: 26px;
-  background: linear-gradient(180deg, rgba(18, 54, 92, 0.66), rgba(8, 27, 53, 0.72));
-  box-shadow: 0 24px 54px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(16px);
+  padding: 22px 30px 20px 28px;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 14px;
+  overflow: visible;
+  background: transparent;
+  box-shadow: none;
 }
 
-.mio-dialogue::after {
+.mio-dialogue::before {
   content: "";
   position: absolute;
-  right: -24px;
-  top: 72px;
-  width: 44px;
-  height: 40px;
-  border-right: 1px solid rgba(163, 225, 255, 0.58);
-  border-bottom: 1px solid rgba(163, 225, 255, 0.58);
-  transform: skewX(44deg);
-  background: rgba(10, 34, 62, 0.46);
+  inset: -3px 53px 10px 3px;
+  border-radius: 20px 18px 24px 18px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 18% 14%, rgba(160, 227, 255, 0.11), rgba(160, 227, 255, 0) 22%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0) 15%),
+    linear-gradient(90deg, rgba(156, 221, 255, 0.08), rgba(156, 221, 255, 0) 18%);
+  filter: blur(0.2px);
+  opacity: 0.84;
+}
+
+.mio-dialogue-chrome {
+  position: absolute;
+  inset: -10px -22px -10px -8px;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.mio-dialogue-chrome svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.mio-dialogue-glow {
+  fill: none;
+  stroke: rgba(106, 205, 255, 0.22);
+  stroke-width: 5.2;
+  filter: blur(6.5px);
+}
+
+.mio-dialogue-fill {
+  fill: rgba(26, 67, 118, 0.56);
+}
+
+.mio-dialogue-outline {
+  fill: none;
+  stroke: rgba(235, 248, 255, 0.88);
+  stroke-width: 1.02;
+  filter: drop-shadow(0 0 6px rgba(111, 205, 255, 0.18));
+}
+
+.mio-dialogue-outline-soft {
+  fill: none;
+  stroke: rgba(129, 214, 255, 0.18);
+  stroke-width: 1.65;
+  filter: blur(1.2px);
+}
+
+.mio-dialogue-highlight {
+  fill: none;
+  stroke: rgba(246, 252, 255, 0.4);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  filter: blur(0.3px);
+}
+
+.mio-dialogue-tail-highlight {
+  fill: none;
+  stroke: rgba(151, 229, 255, 0.36);
+  stroke-width: 1.05;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .mio-dialogue-head {
-  gap: 16px;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   color: #eff8ff;
-  font-size: clamp(16px, 1.2vw, 18px);
-  margin-bottom: 18px;
+  min-height: 22px;
+  margin-top: 2px;
 }
 
-.mio-dialogue-head img {
-  width: 108px;
-  height: 22px;
-  object-fit: contain;
-  object-position: left center;
+.mio-dialogue-name {
+  font-size: clamp(16px, 1.08vw, 18px);
+  font-weight: 500;
+  letter-spacing: 0.015em;
+}
+
+.mio-dialogue-wave {
+  width: 104px;
+  height: 13px;
+  color: rgba(95, 221, 255, 0.8);
+  opacity: 0.86;
+}
+
+.mio-dialogue-wave svg {
+  width: 100%;
+  height: 100%;
+}
+
+.mio-dialogue-wave path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.15;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 5px rgba(94, 220, 255, 0.28));
 }
 
 .mio-dialogue p {
@@ -464,25 +656,51 @@ a {
   z-index: 1;
   margin: 0;
   color: #f1f9ff;
-  font-size: clamp(15px, 1.15vw, 19px);
-  line-height: 1.62;
+  font-size: clamp(14px, 1vw, 17px);
+  line-height: 1.54;
   white-space: pre-wrap;
+  text-shadow: 0 0 10px rgba(120, 203, 255, 0.1);
 }
 
-.mio-typing {
-  display: block;
-  margin-top: 18px;
-  color: #a9d4f4;
-  letter-spacing: 6px;
+.mio-dialogue-dots {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 1px;
+}
+
+.mio-dialogue-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(155, 215, 255, 0.64);
+  box-shadow: 0 0 7px rgba(106, 211, 255, 0.14);
+}
+
+.mio-dialogue-dots span:first-child {
+  background: #7ad6ff;
+  box-shadow: 0 0 10px rgba(108, 220, 255, 0.34);
+}
+
+.mio-dialogue-dots span:nth-child(4) {
+  opacity: 0.68;
 }
 
 .mio-stage-wrap {
-  position: absolute;
+  position: relative;
   z-index: 2;
-  inset: 60px clamp(260px, 20vw, 300px) 101px 96px;
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  height: calc(100% + var(--mio-layout-padding-top));
+  margin-top: calc(-1 * var(--mio-layout-padding-top));
   display: grid;
   place-items: center;
   isolation: isolate;
+  overflow: hidden;
 }
 
 .mio-stage-wrap::before {
@@ -532,17 +750,20 @@ a {
 .mio-stage {
   position: relative;
   z-index: 2;
-  width: min(70vw, 1100px);
+  width: 100%;
   height: 100%;
-  min-height: 600px;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
 }
 
 .mio-stage-bottom-fade {
   position: absolute;
   z-index: 5;
-  left: 30px;
-  right: 30px;
-  bottom: 101px;
+  left: 20px;
+  right: 20px;
+  bottom: 0;
   height: 70px;
   pointer-events: none;
   background:
@@ -552,9 +773,11 @@ a {
 }
 
 .mio-stage-canvas {
-  width: 100%;
+  width: auto;
   height: 100%;
   min-height: 0;
+  aspect-ratio: 3 / 4;
+  flex: 0 0 auto;
 }
 
 .mio-stage-status {
@@ -606,17 +829,39 @@ a {
 }
 
 .mio-right-rail {
-  position: absolute;
+  position: relative;
   z-index: 4;
-  right: clamp(20px, 3vw, 42px);
-  top: 156px;
-  width: clamp(248px, 22vw, 304px);
+  width: var(--mio-right-rail-width);
+  flex: 0 0 var(--mio-right-rail-width);
+  height: calc(100% - var(--mio-side-panels-bottom-gap));
+  margin-bottom: var(--mio-side-panels-bottom-gap);
+  min-height: 0;
   display: grid;
-  gap: 18px;
+  grid-template-rows: auto repeat(3, minmax(0, 1fr));
+  align-content: start;
+  gap: var(--mio-right-rail-gap);
+  overflow: hidden;
+}
+
+.mio-right-rail.is-collapsed {
+  width: 54px;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.mio-right-rail.is-collapsed .mio-card {
+  display: none;
+}
+
+.mio-panel-toggle-right {
+  justify-self: end;
 }
 
 .mio-card {
-  padding: 18px 18px 16px;
+  padding: var(--mio-card-padding-y) var(--mio-card-padding-x);
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   border: 1px solid rgba(139, 219, 255, 0.34);
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(22, 58, 96, 0.68), rgba(9, 31, 60, 0.74));
@@ -624,11 +869,19 @@ a {
   backdrop-filter: blur(14px);
 }
 
+.mio-card-copy {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: var(--mio-card-copy-gap);
+  overflow: hidden;
+}
+
 .mio-card h2 {
   gap: 10px;
-  margin: 0 0 12px;
+  margin: 0 0 clamp(8px, 1vh, 12px);
   color: #effaff;
-  font-size: 20px;
+  font-size: var(--mio-card-title-size);
   font-weight: 500;
 }
 
@@ -643,7 +896,7 @@ a {
 
 .mio-card small {
   color: rgba(209, 231, 245, 0.7);
-  font-size: 11px;
+  font-size: clamp(9px, 0.64vw, 11px);
   font-weight: 500;
 }
 
@@ -651,15 +904,15 @@ a {
 .mio-check-list {
   margin: 0;
   color: rgba(238, 248, 255, 0.9);
-  font-size: 13px;
-  line-height: 1.8;
+  font-size: var(--mio-card-body-size);
+  line-height: clamp(1.45, 1.5vh, 1.8);
 }
 
 .mio-check-list {
   list-style: none;
   padding: 0;
   display: grid;
-  gap: 8px;
+  gap: clamp(5px, 0.8vh, 8px);
 }
 
 .mio-check-list li::before {
@@ -679,8 +932,8 @@ a {
 .mio-trace-card a {
   width: 100%;
   display: block;
-  margin-top: 16px;
-  padding: 10px 12px;
+  margin-top: var(--mio-card-button-gap);
+  padding: clamp(8px, 1vh, 10px) 12px;
   border-radius: 8px;
   font: inherit;
   text-align: center;
@@ -689,21 +942,62 @@ a {
 
 .mio-trace-list {
   display: grid;
-  gap: 8px;
+  gap: clamp(5px, 0.8vh, 8px);
 }
 
 .mio-trace-list div {
   display: grid;
   grid-template-columns: 48px 1fr 38px 36px;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   color: rgba(233, 245, 255, 0.88);
-  font-size: 12px;
+  font-size: clamp(10px, 0.68vw, 12px);
 }
 
 .mio-trace-list strong {
   color: #72e0b9;
-  font-size: 12px;
+  font-size: clamp(10px, 0.68vw, 12px);
+}
+
+@media (max-height: 920px) {
+  :root {
+    --mio-right-rail-gap: 12px;
+    --mio-card-padding-y: 12px;
+    --mio-card-padding-x: 12px;
+    --mio-card-title-size: 17px;
+    --mio-card-body-size: 11px;
+    --mio-card-button-gap: 10px;
+    --mio-card-copy-gap: 6px;
+  }
+}
+
+@media (max-height: 820px) {
+  :root {
+    --mio-right-rail-gap: 10px;
+    --mio-card-padding-y: 10px;
+    --mio-card-padding-x: 11px;
+    --mio-card-title-size: 16px;
+    --mio-card-body-size: 10px;
+    --mio-card-button-gap: 8px;
+    --mio-card-copy-gap: 5px;
+  }
+
+  .mio-card h2 img {
+    width: 20px;
+    height: 20px;
+  }
+
+  .mio-check-list li::before {
+    width: 16px;
+    height: 16px;
+    margin-right: 8px;
+    font-size: 11px;
+  }
+
+  .mio-trace-list div {
+    grid-template-columns: 40px 1fr 32px 30px;
+    gap: 4px;
+  }
 }
 
 .mio-command-bar {
@@ -711,11 +1005,11 @@ a {
   z-index: 6;
   left: 16px;
   right: 16px;
-  bottom: 18px;
+  bottom: var(--mio-command-bar-bottom);
   display: block;
   width: auto;
-  height: 83px;
-  min-height: 83px;
+  height: var(--mio-command-bar-height);
+  min-height: var(--mio-command-bar-height);
   aspect-ratio: auto;
   gap: 0;
   padding: 0;
@@ -833,17 +1127,51 @@ a {
 .mio-advanced-panel {
   position: absolute;
   z-index: 7;
-  right: 30px;
-  bottom: calc(42px + 76px + 16px);
-  width: min(380px, calc(100vw - 60px));
+  right: 0;
+  bottom: calc(100% + 12px);
+  width: min(420px, calc(100vw - 32px));
+  max-width: 100%;
+  max-height: min(70vh, calc(100dvh - 132px));
   display: grid;
-  gap: 14px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
   padding: 16px;
   border: 1px solid rgba(140, 213, 255, 0.32);
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(10, 31, 61, 0.94), rgba(6, 20, 43, 0.94));
   backdrop-filter: blur(18px);
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.mio-advanced-panel-scroll {
+  min-height: 0;
+  display: grid;
+  gap: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 4px;
+}
+
+.mio-advanced-panel-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.mio-advanced-panel-scroll::-webkit-scrollbar-track {
+  background: rgba(8, 28, 56, 0.28);
+  border-radius: 999px;
+}
+
+.mio-advanced-panel-scroll::-webkit-scrollbar-thumb {
+  background: rgba(108, 224, 255, 0.35);
+  border-radius: 999px;
+}
+
+.mio-advanced-library {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
 }
 
 .mio-advanced-panel-head {
@@ -1072,6 +1400,12 @@ a {
 .mio-advanced-tabs {
   display: flex;
   gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -4px;
+  padding: 4px 4px 8px;
+  background: linear-gradient(180deg, rgba(8, 24, 48, 0.98), rgba(8, 24, 48, 0.9) 72%, rgba(8, 24, 48, 0));
 }
 
 .mio-advanced-tab {
@@ -1152,8 +1486,11 @@ a {
 .mio-advanced-list-scroll {
   display: grid;
   gap: 10px;
-  max-height: 320px;
+  max-height: min(38vh, 320px);
+  min-height: 160px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding-right: 6px;
 }
 
@@ -1466,7 +1803,7 @@ a {
   flex: 1;
   height: 45px;
   border: 1px solid rgba(106, 186, 251, 0.38);
-  border-radius: 19px;
+  border-radius: 8px;
   background:
     linear-gradient(180deg,rgba(16, 45, 88, 0.57) 17%, rgba(10, 33, 71, 0.36) 64%, rgba(8, 26, 55, 0.32) 92%, rgba(6, 17, 32, 0.37) 100%),
     radial-gradient(ellipse at 46% 4%, rgba(214, 247, 255, 0.07), transparent 34%),
@@ -1498,7 +1835,7 @@ a {
   background: transparent;
   color: rgba(170, 186, 206, 0.88);
   font: inherit;
-  font-size: 10.6px;
+  font-size: 14px;
   font-weight: 400;
   line-height: 1.02;
   letter-spacing: 0.01em;
@@ -1520,7 +1857,7 @@ a {
   flex: 0 0 auto;
   border: 0;
   border-left: 1px solid rgba(199, 240, 255, 0.26);
-  border-radius: 14px 18px 18px 14px;
+  border-radius: 8px 8px 8px 8px;
   background:
     linear-gradient(90deg, #5d76fc 0%, #8a59e8 100%),
     radial-gradient(circle at 24% 18%, rgba(215, 245, 255, 0.24), transparent 34%),
@@ -1677,6 +2014,13 @@ a {
 }
 
 @media (max-width: 1180px) {
+  :root {
+    --mio-bottom-safe-gap: calc(var(--mio-command-bar-height) + var(--mio-command-bar-bottom) + 18px);
+    --mio-side-panels-bottom-gap: var(--mio-bottom-safe-gap);
+    --mio-layout-gap: 14px;
+    --mio-right-rail-width: 248px;
+  }
+
   .mio-topbar {
     grid-template-columns: auto 1fr;
   }
@@ -1686,30 +2030,21 @@ a {
   }
 
   .mio-dialogue {
-    top: 28px;
-    left: 18px;
-    width: min(330px, calc(40% - 18px));
-    max-width: calc(40% - 18px);
-  }
-
-  .mio-stage-wrap {
-    inset: 88px 300px 101px 96px;
+    top: 20px;
+    left: 20px;
+    width: min(322px, calc(39% - 16px));
+    max-width: calc(39% - 16px);
+    min-height: 182px;
+    padding: 20px 36px 18px 24px;
   }
 
   .mio-stage {
-    width: min(60vw, 780px);
-  }
-
-  .mio-right-rail {
-    top: 132px;
-    width: 248px;
-    right: 20px;
-    gap: 14px;
+    width: 100%;
+    height: 100%;
   }
 
   .mio-advanced-panel {
-    right: 20px;
-    width: min(340px, calc(100vw - 40px));
+    width: min(380px, calc(100vw - 32px));
   }
 
   .mio-command-shell {
@@ -1717,18 +2052,51 @@ a {
     gap: 12px;
     padding-inline: 14px;
   }
+
+  .mio-hud.is-compact .mio-sidebar {
+    width: 52px;
+  }
+
+  .mio-hud.is-compact .mio-sidebar .mio-nav-button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .mio-hud.is-compact .mio-sidebar .mio-nav-glyph {
+    width: 20px;
+    height: 20px;
+  }
+
+  .mio-hud.is-compact .mio-right-rail {
+    width: 54px;
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .mio-hud.is-compact .mio-right-rail .mio-card {
+    display: none;
+  }
+
 }
 
 @media (max-width: 860px) {
+  :root {
+    --mio-command-bar-bottom: max(10px, env(safe-area-inset-bottom));
+    --mio-bottom-safe-gap: calc(var(--mio-command-bar-height) + var(--mio-command-bar-bottom) + 18px);
+    --mio-side-panels-bottom-gap: 0px;
+    --mio-layout-padding-top: 12px;
+  }
+
   .mio-hud {
-    min-height: 1000px;
-    overflow: auto;
+    min-height: 100dvh;
+    overflow: hidden;
   }
 
   .mio-topbar {
-    position: fixed;
+    position: sticky;
+    top: 0;
     grid-template-columns: 1fr;
-    height: auto;
+    min-height: auto;
     gap: 8px;
     padding: 12px 18px;
   }
@@ -1737,49 +2105,68 @@ a {
     font-size: 12px;
   }
 
-  .mio-sidebar {
-    top: 108px;
-    left: 10px;
+  .mio-layout {
+    flex: 1 1 auto;
+    height: auto;
+    flex-direction: column;
+    min-height: 0;
+    padding-inline: 10px;
+    gap: 10px;
+    overflow: hidden;
   }
 
   .mio-dialogue {
     top: 16px;
     left: 16px;
-    width: min(286px, calc(42vw - 18px));
-    max-width: calc(42vw - 18px);
+    width: min(272px, calc(41vw - 18px));
+    max-width: calc(41vw - 18px);
+    min-height: 154px;
+    padding: 16px 28px 14px 18px;
   }
 
   .mio-stage-wrap {
-    inset: 330px 0 300px 0;
+    flex: 1 1 auto;
+    min-height: max(
+      340px,
+      calc(100dvh - var(--mio-command-bar-height) - var(--mio-command-bar-bottom) - var(--mio-topbar-height))
+    );
+    height: calc(100% + var(--mio-layout-padding-top));
   }
 
   .mio-stage {
-    width: 100vw;
-    min-height: 420px;
+    flex: 1 1 auto;
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
   }
 
+  .mio-sidebar,
   .mio-right-rail {
-    top: 700px;
-    left: 86px;
-    right: 14px;
     width: auto;
+    flex-basis: auto;
+    flex-shrink: 0;
+  }
+
+  .mio-sidebar {
+    max-height: 128px;
   }
 
   .mio-advanced-panel {
-    left: 86px;
-    right: 14px;
-    bottom: calc(10px + 76px + 16px);
-    width: auto;
+    right: 0;
+    left: auto;
+    bottom: calc(100% + 10px);
+    width: min(360px, calc(100vw - 32px));
+    max-height: min(68vh, calc(100dvh - 128px));
   }
 
   .mio-command-bar {
     position: fixed;
     left: 16px;
     right: 16px;
-    bottom: max(10px, env(safe-area-inset-bottom));
+    bottom: var(--mio-command-bar-bottom);
     width: auto;
-    height: 83px;
-    min-height: 83px;
+    height: var(--mio-command-bar-height);
+    min-height: var(--mio-command-bar-height);
     aspect-ratio: auto;
     transform: none;
   }
@@ -1803,11 +2190,11 @@ a {
     padding: 0 12px;
   }
 
-    .mio-stage-bottom-fade {
-      left: 10px;
-      right: 10px;
-      bottom: calc(10px + 76px);
-    }
+  .mio-stage-bottom-fade {
+    left: 10px;
+    right: 10px;
+    bottom: 0;
+  }
 
   .mio-avatar-meta {
     display: none;
@@ -1820,5 +2207,14 @@ a {
 
   .mio-mode {
     flex: 0 0 auto;
+  }
+}
+
+@media (max-height: 760px) {
+  .mio-stage-wrap {
+    min-height: max(
+      300px,
+      calc(100dvh - var(--mio-command-bar-height) - var(--mio-command-bar-bottom) - var(--mio-topbar-height))
+    );
   }
 }
