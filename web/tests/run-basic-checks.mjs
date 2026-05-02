@@ -40,8 +40,10 @@ function run() {
     assert.match(cssSource, /\.mio-command-surface/);
     assert.match(cssSource, /\.mio-toast-layer/);
     assert.match(cssSource, /\.mio-toast/);
-    assert.match(cssSource, /inset: 60px clamp\(260px, 20vw, 300px\) 101px 96px;/);
-    assert.match(cssSource, /bottom: 101px;/);
+    assert.match(cssSource, /\.mio-layout\s*\{/);
+    assert.match(cssSource, /display: flex;/);
+    assert.match(cssSource, /padding: var\(--mio-layout-padding-top\) var\(--mio-layout-padding-x\) 0;/);
+    assert.match(cssSource, /margin-bottom: var\(--mio-side-panels-bottom-gap\);/);
   }
 
   {

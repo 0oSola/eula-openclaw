@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import type { FormEvent } from "react";
 
 type TtsMode = "browser" | "server";
@@ -12,6 +13,7 @@ type CompanionCommandBarProps = {
   ttsEnabled: boolean;
   ttsMode: TtsMode;
   isAdvancedPanelOpen: boolean;
+  advancedPanel?: ReactNode;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
   onInputChange: (value: string) => void;
   onTtsEnabledChange: (enabled: boolean) => void;
@@ -27,6 +29,7 @@ export function CompanionCommandBar({
   ttsEnabled,
   ttsMode,
   isAdvancedPanelOpen,
+  advancedPanel,
   onSubmit,
   onInputChange,
   onTtsEnabledChange,
@@ -122,6 +125,7 @@ export function CompanionCommandBar({
         </div>
       </div>
 
+      {advancedPanel}
       {error ? <p className="mio-error">{error}</p> : null}
     </form>
   );
