@@ -15,6 +15,7 @@ import {
 import { resolvePlaybackPlan } from "@/features/mapping/resolveAction.js";
 import { MMDStage, type MMDStageHandle } from "@/features/stage/MMDStage";
 import { CompanionCommandBar } from "./CompanionCommandBar";
+import { CompanionRightRail, type RightPanelView } from "./CompanionRightRail";
 import {
   DEFAULT_VMD_PLAYBACK_RATE,
 } from "@/features/stage/builtInMotionPreferences.js";
@@ -76,13 +77,13 @@ function normalizeRenderPipeline(value?: string): RenderPipeline {
   return "genshin";
 }
 
-const navIcons = [
-  { key: "menu", label: "\u83dc\u5355" },
-  { key: "chat", label: "\u5bf9\u8bdd", active: true },
-  { key: "tasks", label: "\u4efb\u52a1" },
-  { key: "tools", label: "\u5de5\u5177" },
-  { key: "memory", label: "\u8bb0\u5fc6" },
-  { key: "skills", label: "\u80fd\u529b" },
+const navIcons: ReadonlyArray<{ key: "menu" | "chat" | "tasks" | "tools" | "memory" | "skills"; label: string; view: RightPanelView }> = [
+  { key: "menu", label: "\u83dc\u5355", view: "overview" },
+  { key: "chat", label: "\u5bf9\u8bdd", view: "chat" },
+  { key: "tasks", label: "\u4efb\u52a1", view: "tasks" },
+  { key: "tools", label: "\u5de5\u5177", view: "tools" },
+  { key: "memory", label: "\u8bb0\u5fc6", view: "memory" },
+  { key: "skills", label: "\u80fd\u529b", view: "skills" },
 ] as const;
 
 function renderSidebarIcon(icon: (typeof navIcons)[number]["key"] | "settings"): ReactNode {
@@ -240,7 +241,8 @@ export default function CompanionPage() {
   const [pendingAutoResume, setPendingAutoResume] = useState(false);
   const [isCompactHud, setIsCompactHud] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [isRightRailCollapsed, setIsRightRailCollapsed] = useState(false);
+  const [isRightRailCollapsed, setIsRightRailCollapsed] = useState(true);
+  const [activeRightPanelView, setActiveRightPanelView] = useState<RightPanelView>("overview");
 
   useEffect(() => {
     const saved = loadSession();
@@ -279,14 +281,18 @@ export default function CompanionPage() {
       });
   }, [session]);
 
+  function handleRightPanelViewChange(view: RightPanelView) {
+    setActiveRightPanelView(view);
+    setIsRightRailCollapsed(false);
+  }
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     const mediaQuery = window.matchMedia("(max-width: 1180px), (max-height: 860px)");
     const syncCompact = (matches: boolean) => {
       setIsCompactHud(matches);
-      setIsSidebarCollapsed(matches);
-      setIsRightRailCollapsed(false);
+      setIsRightRailCollapsed(!matches);
     };
 
     syncCompact(mediaQuery.matches);
@@ -870,9 +876,11 @@ export default function CompanionPage() {
           {navIcons.map((icon) => (
             <button
               key={icon.label}
-              className={`mio-nav-button ${icon.active ? "is-active" : ""}`}
+              className={`mio-nav-button ${activeRightPanelView === icon.view ? "is-active" : ""}`}
               type="button"
               aria-label={icon.label}
+              aria-pressed={activeRightPanelView === icon.view}
+              onClick={() => handleRightPanelViewChange(icon.view)}
             >
               <span className="mio-nav-glyph" aria-hidden="true">
                 {renderSidebarIcon(icon.key)}
@@ -952,73 +960,24 @@ export default function CompanionPage() {
           <div className="mio-stage-bottom-fade" data-testid="mio-stage-bottom-fade" aria-hidden="true" />
         </div>
 
-        <section
-          className={`mio-right-rail${isRightRailCollapsed ? " is-collapsed" : ""}`}
-          data-testid="mio-right-rail"
-          aria-label={"\u72b6\u6001\u9762\u677f"}
-        >
-          <button
-            className="mio-panel-toggle mio-panel-toggle-right"
-            type="button"
-            aria-label={isRightRailCollapsed ? "展开右侧面板" : "收起右侧面板"}
-            aria-pressed={isRightRailCollapsed}
-            onClick={() => setIsRightRailCollapsed((current) => !current)}
-          >
-            {isRightRailCollapsed ? "‹" : "›"}
-          </button>
-          <article className="mio-card">
-            <h2>
-              <img src={`${SPRITE}/asset-013.png`} alt="" />
-              {"\u4e0b\u4e00\u6b65\u5efa\u8bae"} <small>NEXT STEPS</small>
-            </h2>
-            <div className="mio-card-copy">
-              <ul className="mio-check-list">
-                {nextSteps.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </div>
-            <button type="button">{"\u67e5\u770b\u66f4\u591a\u5efa\u8bae\uff086\uff09"}</button>
-          </article>
-
-          <article className="mio-card">
-            <h2>
-              <img src={`${SPRITE}/asset-008.png`} alt="" />
-              {"\u8bb0\u5fc6\u6458\u8981"} <small>MEMORY</small>
-            </h2>
-            <div className="mio-card-copy">
-              {memoryNotes.map((item) => (
-                <p key={item}>{item}</p>
-              ))}
-            </div>
-            <button type="button">{"\u67e5\u770b\u5b8c\u6574\u8bb0\u5fc6"}</button>
-          </article>
-
-          <article className="mio-card mio-trace-card">
-            <h2>
-              <img src={`${SPRITE}/asset-022.png`} alt="" />
-              {"Trace / \u8bf7\u6c42\u72b6\u6001"} <small>TRACE</small>
-            </h2>
-            <div className="mio-card-copy">
-              <div className="mio-trace-list">
-                {traceRows.map(([method, path, status, time]) => (
-                  <div key={`${method}-${path}`}>
-                    <span>{method}</span>
-                    <span>{path}</span>
-                    <strong>{status}</strong>
-                    <span>{time}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <Link href="/traces">{"\u8fdb\u5165 Trace \u9875\u9762"}</Link>
-          </article>
-        </section>
+        <CompanionRightRail
+          collapsed={isRightRailCollapsed}
+          activeView={activeRightPanelView}
+          messages={messages}
+          loading={loading}
+          error={error}
+          ttsEnabled={ttsEnabled}
+          nextSteps={nextSteps}
+          memoryNotes={memoryNotes}
+          traceRows={traceRows}
+          onToggleCollapsed={() => setIsRightRailCollapsed((current) => !current)}
+        />
       </div>
       <CompanionCommandBar
         input={input}
         inputLabel={INPUT_LABEL}
         loading={loading}
+        sendDisabled={!session || !input.trim()}
         error={error}
         ttsEnabled={ttsEnabled}
         ttsMode={ttsMode}
