@@ -176,10 +176,10 @@ const STAGE_PRESENTATION_PRESETS = {
     fog: null,
     camera: {
       fov: 33,
-      position: [-2.150011, 5.38729, 24.17144],
-      target: [-2.150011, 3.946847, 0.237922],
-      minDistance: 13,
-      maxDistance: 27,
+      position: [-2.075385, 0.017334, 46.985286],
+      target: [-2.075385, -2.771828, 0.642287],
+      minDistance: 6,
+      maxDistance: 60,
       maxPolarAngle: Math.PI * 0.46,
     },
     character: {
@@ -208,10 +208,10 @@ const STAGE_PRESENTATION_PRESETS = {
     fog: null,
     camera: {
       fov: 33,
-      position: [-2.150011, 5.38729, 24.17144],
-      target: [-2.150011, 3.946847, 0.237922],
-      minDistance: 12,
-      maxDistance: 25,
+      position: [-2.075385, 0.017334, 46.985286],
+      target: [-2.075385, -2.771828, 0.642287],
+      minDistance: 6,
+      maxDistance: 60,
       maxPolarAngle: Math.PI * 0.41,
     },
     character: {
@@ -287,10 +287,10 @@ const STAGE_PRESENTATION_PRESETS = {
     fog: null,
     camera: {
       fov: 33,
-      position: [-2.150011, 5.38729, 24.17144],
-      target: [-2.150011, 3.946847, 0.237922],
-      minDistance: 13,
-      maxDistance: 27,
+      position: [-2.075385, 0.017334, 46.985286],
+      target: [-2.075385, -2.771828, 0.642287],
+      minDistance: 6,
+      maxDistance: 60,
       maxPolarAngle: Math.PI * 0.5,
       locked: false,
     },
@@ -1031,21 +1031,23 @@ export class MMDCompanionRuntime {
     if (stageHeight <= 0) return null;
 
     const stageWidth = stageElement?.clientWidth || this.container.clientWidth || 0;
-    const canvasWidth = Math.max(1, Math.round(stageHeight * STAGE_CANVAS_ASPECT_RATIO));
+    const coverWidth = Math.max(
+      stageWidth,
+      stageHeight * STAGE_CANVAS_ASPECT_RATIO,
+    );
+    const canvasWidth = Math.max(1, Math.round(coverWidth));
+    const canvasHeight = Math.max(1, Math.round(canvasWidth / STAGE_CANVAS_ASPECT_RATIO));
 
-    this.container.style.height = `${stageHeight}px`;
-    this.container.style.minHeight = `${stageHeight}px`;
+    this.container.style.height = `${canvasHeight}px`;
+    this.container.style.minHeight = `${canvasHeight}px`;
+    this.container.style.maxHeight = "none";
     this.container.style.width = `${canvasWidth}px`;
     this.container.style.minWidth = `${canvasWidth}px`;
     this.container.style.maxWidth = "none";
 
-    if (stageWidth > 0) {
-      this.container.style.maxHeight = `${stageHeight}px`;
-    }
-
     return {
       width: canvasWidth,
-      height: stageHeight,
+      height: canvasHeight,
     };
   }
 
