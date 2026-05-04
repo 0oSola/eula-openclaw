@@ -97,6 +97,20 @@ const FIXED_MORPH_HINTS = {
   mouthU: ["u", "mouth_u", "\u3046"],
 };
 
+const FIXED_EXPRESSION_MORPH_NAMES = {
+  smirk: ["\u306b\u3084\u308a"],
+  mouthSmile: ["\u53e3\u89d2\u4e0a\u3052"],
+  mouthFrown: ["\u53e3\u89d2\u4e0b\u3052"],
+  mouthWide: ["\u30ef"],
+  joy: ["\u559c\u3073"],
+  softSmile: ["\u306b\u3053\u308a"],
+  troubled: ["\u56f0\u308b"],
+  serious: ["\u771f\u9762\u76ee"],
+  glare: ["\u3058\u3068\u76ee", "\u30b8\u30c8\u76ee"],
+  surprised: ["\u3073\u3063\u304f\u308a"],
+  angry: ["\u6012\u308a"],
+};
+
 const FIXED_VMD_ANCHOR_BONE_HINTS = [
   ["allparent", "\u5168\u3066\u306e\u89aa"],
   ["center", "\u30bb\u30f3\u30bf\u30fc"],
@@ -117,8 +131,9 @@ const ACTION_DURATION = {
   headshake: 1300,
 };
 
-const VMD_TRANSITION_FADE_SECONDS = 0.24;
+const VMD_TRANSITION_FADE_SECONDS = 0.5;
 const STAGE_CANVAS_ASPECT_RATIO = 3 / 4;
+const BREATHING_CYCLE_SECONDS = 4.2;
 
 const smooth = (current, target, lambda, dt) => THREE.MathUtils.damp(current, target, lambda, dt);
 
@@ -498,6 +513,7 @@ function pickLoopMotionUrl(urls, currentUrl, loopMode) {
  *     standbyVmdUrl?: string,
  *     loopGapMs?: number,
  *     loopMode?: string,
+ *     vmdLoopEmotionByUrl?: Record<string, string>,
  *     playbackRate?: number
  *   },
  *   resolveUrl?: (url: string) => string
@@ -512,12 +528,18 @@ export function applyStageRuntimeState(runtime, { speaking = false, interaction,
       ? interaction.vmdLoopUrls.map((url) => resolveUrl(url))
       : undefined;
     const standbyUrl = interaction.standbyVmdUrl ? resolveUrl(interaction.standbyVmdUrl) : "";
-    runtime.applyInteraction?.(interaction);
-    runtime.playVmd?.(resolveUrl(interaction.vmdUrl), interaction.playbackRate, loopUrls, {
+    const loopOptions = {
       standbyUrl,
       loopGapMs: interaction.loopGapMs,
       loopMode: interaction.loopMode,
-    });
+    };
+    if (interaction.vmdLoopEmotionByUrl) {
+      loopOptions.emotionByUrl = Object.fromEntries(
+        Object.entries(interaction.vmdLoopEmotionByUrl).map(([url, emotion]) => [resolveUrl(url), emotion]),
+      );
+    }
+    runtime.applyInteraction?.(interaction);
+    runtime.playVmd?.(resolveUrl(interaction.vmdUrl), interaction.playbackRate, loopUrls, loopOptions);
     return;
   }
   runtime.applyInteraction?.(interaction);
@@ -981,6 +1003,7 @@ export class MMDCompanionRuntime {
     this.currentVmdLoopGapMs = 0;
     this.currentVmdLoopMode = "random";
     this.currentVmdLoopPhase = "loop";
+    this.currentVmdEmotionByUrl = {};
     this.pendingVmdLoopUrl = "";
     this.lastPlayedLoopMotionUrl = "";
     this.currentVmdUrl = "";
@@ -993,6 +1016,7 @@ export class MMDCompanionRuntime {
     this.currentAction = null;
     this.currentSequence = null;
     this.activeEmotion = "neutral";
+    this.activeAction = "idle";
     this.isSpeaking = false;
     this.destroyed = false;
     this.presentation = null;
@@ -1004,6 +1028,7 @@ export class MMDCompanionRuntime {
     this.vmdAnchorBones = [];
     this.animationBuildTarget = null;
     this.morphSlots = {};
+    this.expressionMorphSlots = {};
 
     this.toonRampTexture = null;
     this.outlineObjects = [];
@@ -1420,6 +1445,7 @@ export class MMDCompanionRuntime {
     this.currentVmdLoopGapMs = 0;
     this.currentVmdLoopMode = "random";
     this.currentVmdLoopPhase = "loop";
+    this.currentVmdEmotionByUrl = {};
     this.pendingVmdLoopUrl = "";
     this.lastPlayedLoopMotionUrl = "";
     this.currentVmdUrl = "";
@@ -1570,13 +1596,13 @@ export class MMDCompanionRuntime {
     };
 
     this.bones = {
-      upperBody: findBone(["upperbody", "spine", "chest"]),
-      neck: findBone(["neck"]),
-      head: findBone(["head"]),
-      leftArm: findBone(["leftarm", "arm_l", "l_shoulder"]),
-      rightArm: findBone(["rightarm", "arm_r", "r_shoulder"]),
-      leftElbow: findBone(["leftelbow", "forearm_l", "l_forearm"]),
-      rightElbow: findBone(["rightelbow", "forearm_r", "r_forearm"]),
+      upperBody: findBone(["upperbody", "spine", "chest", "\u4e0a\u534a\u8eab", "\u4e0a\u534a\u8eab2", "\u4e0a\u534a\u8eab3"]),
+      neck: findBone(["neck", "\u9996"]),
+      head: findBone(["head", "\u982d"]),
+      leftArm: findBone(["leftarm", "arm_l", "l_shoulder", "\u5de6\u8155"]),
+      rightArm: findBone(["rightarm", "arm_r", "r_shoulder", "\u53f3\u8155"]),
+      leftElbow: findBone(["leftelbow", "forearm_l", "l_forearm", "\u5de6\u3072\u3058"]),
+      rightElbow: findBone(["rightelbow", "forearm_r", "r_forearm", "\u53f3\u3072\u3058"]),
     };
     this.baseBoneTransforms = bones.map((bone) => ({
       bone,
@@ -1618,6 +1644,19 @@ export class MMDCompanionRuntime {
       mouthI: this.findMorphIndex(dict, FIXED_MORPH_HINTS.mouthI),
       mouthU: this.findMorphIndex(dict, FIXED_MORPH_HINTS.mouthU),
     };
+    this.expressionMorphSlots = Object.fromEntries(
+      Object.entries(FIXED_EXPRESSION_MORPH_NAMES).map(([slot, names]) => [
+        slot,
+        names
+          .map((name) => this.findMorphIndexExact(dict, name))
+          .filter((index) => typeof index === "number"),
+      ]),
+    );
+  }
+
+  findMorphIndexExact(dictionary, hint) {
+    const entry = Object.entries(dictionary).find(([name]) => name === hint);
+    return entry ? entry[1] : undefined;
   }
 
   findMorphIndex(dictionary, hints) {
@@ -1740,13 +1779,14 @@ export class MMDCompanionRuntime {
   }
 
   shouldCrossfadeVmdTransition({ previousPhase = "loop", nextPhase = "loop" } = {}) {
-    return previousPhase === "loop" && (nextPhase === "standby" || nextPhase === "standby-only");
+    return Boolean(previousPhase && nextPhase);
   }
 
   async playVmd(url, playbackRate = 1, loopUrls = [], loopOptions = {}) {
     if (!this.model) return;
     const normalizedLoopUrls = Array.from(new Set((Array.isArray(loopUrls) ? loopUrls : []).filter(Boolean)));
     const standbyUrl = loopOptions?.standbyUrl || "";
+    const emotionByUrl = loopOptions?.emotionByUrl || this.currentVmdEmotionByUrl || {};
     const loopGapMs = Math.max(0, Number(loopOptions?.loopGapMs) || 0);
     const loopMode = loopOptions?.loopMode === "sequential" ? "sequential" : "random";
     const hadActiveClip = Boolean(this.currentClip);
@@ -1768,7 +1808,10 @@ export class MMDCompanionRuntime {
       this.currentVmdLoopGapMs = loopGapMs;
       this.currentVmdLoopMode = loopMode;
       this.currentVmdLoopPhase = nextPhase;
+      this.currentVmdEmotionByUrl = emotionByUrl;
       this.currentVmdUrl = url || "";
+      if (emotionByUrl[this.currentVmdUrl]) this.activeEmotion = emotionByUrl[this.currentVmdUrl];
+      this.activeAction = "idle";
       if (normalizedLoopUrls.includes(this.currentVmdUrl)) {
         this.lastPlayedLoopMotionUrl = this.currentVmdUrl;
       }
@@ -1813,6 +1856,7 @@ export class MMDCompanionRuntime {
 
   applyInteraction({ emotion = "neutral", action = "idle", sequence = [] }) {
     this.activeEmotion = emotion;
+    this.activeAction = action;
     if (this.currentClip && this.model) {
       this.currentClip = null;
       this.currentVmdPlaybackRate = 1;
@@ -1827,6 +1871,7 @@ export class MMDCompanionRuntime {
     this.currentVmdLoopGapMs = 0;
     this.currentVmdLoopMode = "random";
     this.currentVmdLoopPhase = "loop";
+    this.currentVmdEmotionByUrl = {};
     this.pendingVmdLoopUrl = "";
     this.lastPlayedLoopMotionUrl = "";
     this.currentVmdUrl = "";
@@ -1861,10 +1906,20 @@ export class MMDCompanionRuntime {
     if (!loopUrls.length && !standbyUrl) return;
     if (!this.currentVmdStartedAt) return;
     const loopGapMs = Math.max(0, Number(this.currentVmdLoopGapMs) || 0);
+    const loopStateOptions = {
+      standbyUrl,
+      loopGapMs,
+      loopMode: this.currentVmdLoopMode,
+    };
+    if (this.currentVmdEmotionByUrl && Object.keys(this.currentVmdEmotionByUrl).length) {
+      loopStateOptions.emotionByUrl = this.currentVmdEmotionByUrl;
+    }
     const elapsedMs = nowMs - this.currentVmdStartedAt;
     const measuredDurationMs = Math.max(0, Number(this.currentVmdDurationMs) || 0);
     if (measuredDurationMs > 0) {
-      if (elapsedMs < measuredDurationMs + loopGapMs) return;
+      const transitionLeadMs = loopGapMs > 0 ? 0 : VMD_TRANSITION_FADE_SECONDS * 1000;
+      const advanceAtMs = Math.max(0, measuredDurationMs - transitionLeadMs);
+      if (elapsedMs < advanceAtMs + loopGapMs) return;
     } else {
       const canAdvanceWithoutDuration =
         loopUrls.length && (this.currentVmdLoopPhase === "loop" || this.currentVmdLoopPhase === "standby");
@@ -1873,9 +1928,7 @@ export class MMDCompanionRuntime {
 
     if (standbyUrl && !loopUrls.length) {
       this.playVmd(standbyUrl, this.currentVmdPlaybackRate, [], {
-        standbyUrl,
-        loopGapMs,
-        loopMode: this.currentVmdLoopMode,
+        ...loopStateOptions,
         resumePhase: "standby-only",
       });
       return;
@@ -1883,9 +1936,7 @@ export class MMDCompanionRuntime {
 
     if (this.currentVmdLoopPhase === "loop" && standbyUrl) {
       this.playVmd(standbyUrl, this.currentVmdPlaybackRate, loopUrls, {
-        standbyUrl,
-        loopGapMs,
-        loopMode: this.currentVmdLoopMode,
+        ...loopStateOptions,
         resumePhase: "standby",
       });
       return;
@@ -1895,9 +1946,7 @@ export class MMDCompanionRuntime {
     const nextUrl = pickLoopMotionUrl(loopUrls, currentLoopAnchor, this.currentVmdLoopMode);
     if (!nextUrl) return;
     this.playVmd(nextUrl, this.currentVmdPlaybackRate, loopUrls, {
-      standbyUrl,
-      loopGapMs,
-      loopMode: this.currentVmdLoopMode,
+      ...loopStateOptions,
       resumePhase: "loop",
     });
   }
@@ -1942,6 +1991,7 @@ export class MMDCompanionRuntime {
       for (const step of this.currentSequence.steps) {
         const stepEnd = cursor + step.durationMs;
         if (elapsed <= stepEnd) {
+          this.activeAction = step.action;
           return this.getOffsetsForAction(step.action, (elapsed - cursor) / 1000, step.intensity);
         }
         cursor = stepEnd;
@@ -1959,7 +2009,63 @@ export class MMDCompanionRuntime {
     return this.getOffsetsForAction(this.currentAction.name, elapsed / 1000, 1);
   }
 
+  getExpressionTargets() {
+    const emotion = this.activeEmotion || "neutral";
+    const action = this.activeAction || this.currentAction?.name || "idle";
+    const targets = {
+      smirk: 0,
+      mouthSmile: 0,
+      mouthFrown: 0,
+      mouthWide: 0,
+      joy: 0,
+      softSmile: 0,
+      troubled: 0,
+      serious: 0,
+      glare: 0,
+      surprised: 0,
+      angry: 0,
+    };
+
+    if (emotion === "happy" || action === "wave" || action === "nod") {
+      Object.assign(targets, { mouthSmile: 0.46, smirk: 0.18, joy: 0.18, softSmile: 0.12 });
+    } else if (emotion === "excited" || action === "cheer") {
+      Object.assign(targets, { mouthSmile: 0.38, mouthWide: 0.26, joy: 0.32, surprised: 0.12 });
+    } else if (emotion === "thinking" || action === "think") {
+      Object.assign(targets, { serious: 0.28, glare: 0.14, mouthFrown: 0.08 });
+    } else if (emotion === "caring" || action === "comfort" || action === "lean_in") {
+      Object.assign(targets, { mouthSmile: 0.2, softSmile: 0.16, troubled: 0.16 });
+    } else if (emotion === "sad" || action === "look_away") {
+      Object.assign(targets, { troubled: 0.34, mouthFrown: 0.22 });
+    } else if (action === "headshake") {
+      Object.assign(targets, { serious: 0.24, mouthFrown: 0.12 });
+    } else {
+      Object.assign(targets, { mouthSmile: 0.08 });
+    }
+
+    return targets;
+  }
+
+  getBreathingOffsets(nowMs) {
+    const phase = (nowMs / 1000) * ((Math.PI * 2) / BREATHING_CYCLE_SECONDS);
+    const breathWave = Math.sin(phase);
+    const breathLift = Math.max(0, breathWave);
+    const speakingBoost = this.isSpeaking ? 1.3 : 1;
+    const clipAttenuation = this.currentClip ? 0.92 : 1;
+    const actionAttenuation = this.currentAction || this.currentSequence ? 0.72 : 1;
+    const intensity = speakingBoost * clipAttenuation * actionAttenuation;
+    const shoulderWave = Math.sin(phase - Math.PI * 0.18);
+
+    return {
+      upperBody: { x: (-0.08 - breathLift * 0.16) * intensity, z: breathWave * 0.022 * intensity },
+      neck: { x: (-0.016 + breathLift * 0.05) * intensity, z: breathWave * 0.01 * intensity },
+      head: { x: (0.008 + breathLift * 0.032) * intensity, z: breathWave * 0.014 * intensity },
+      leftArm: { z: (-0.04 - shoulderWave * 0.055) * intensity, x: breathLift * 0.014 * intensity },
+      rightArm: { z: (0.04 + shoulderWave * 0.055) * intensity, x: breathLift * 0.014 * intensity },
+    };
+  }
+
   updateBonePose(delta, nowMs) {
+    const breathingPose = this.getBreathingOffsets(nowMs);
     const actionPose = this.getActionOffsets(nowMs);
     const targets = {
       upperBody: { x: 0, y: 0, z: 0 },
@@ -1970,13 +2076,22 @@ export class MMDCompanionRuntime {
       leftElbow: { x: 0, y: 0, z: 0 },
       rightElbow: { x: 0, y: 0, z: 0 },
     };
+    for (const [slot, values] of Object.entries(breathingPose)) {
+      targets[slot] = { ...targets[slot], ...values };
+    }
     for (const [slot, values] of Object.entries(actionPose)) {
       targets[slot] = { ...targets[slot], ...values };
     }
     for (const [slot, bone] of Object.entries(this.bones)) {
       if (!bone) continue;
-      const base = this.baseBoneRotation[slot] || new THREE.Euler(0, 0, 0);
       const target = targets[slot] || { x: 0, y: 0, z: 0 };
+      if (this.currentClip) {
+        bone.rotation.x += target.x;
+        bone.rotation.y += target.y;
+        bone.rotation.z += target.z;
+        continue;
+      }
+      const base = this.baseBoneRotation[slot] || new THREE.Euler(0, 0, 0);
       bone.rotation.x = smooth(bone.rotation.x, base.x + target.x, 9, delta);
       bone.rotation.y = smooth(bone.rotation.y, base.y + target.y, 9, delta);
       bone.rotation.z = smooth(bone.rotation.z, base.z + target.z, 9, delta);
@@ -1986,26 +2101,30 @@ export class MMDCompanionRuntime {
   updateMorph(delta, nowMs) {
     if (!this.model?.morphTargetInfluences) return;
     const influences = this.model.morphTargetInfluences;
+    const morphSlots = this.morphSlots || {};
+    const expressionMorphSlots = this.expressionMorphSlots || {};
     const setMorph = (index, value) => {
       if (typeof index !== "number" || index >= influences.length) return;
       const current = typeof influences[index] === "number" ? influences[index] : 0;
       influences[index] = smooth(current, value, 12, delta);
     };
 
-    const hints = FIXED_EMOTION_MORPH_HINTS[this.activeEmotion] || [];
-    const shouldSmile = hints.includes("smile") || hints.includes("happy") || hints.includes("\u7b11");
-    const shouldSad = hints.includes("sad") || hints.includes("sorrow") || hints.includes("\u60b2");
+    setMorph(morphSlots.smile, 0);
+    setMorph(morphSlots.sad, 0);
 
-    setMorph(this.morphSlots.smile, shouldSmile ? 0.75 : 0.06);
-    setMorph(this.morphSlots.sad, shouldSad ? 0.7 : 0);
+    setMorph(morphSlots.blink, 0);
 
-    const blinkValue = Math.pow(Math.max(0, Math.sin(nowMs * 0.0051)), 20) * 0.9;
-    setMorph(this.morphSlots.blink, blinkValue);
+    const expressionTargets = this.getExpressionTargets();
+    for (const [slot, target] of Object.entries(expressionTargets)) {
+      for (const index of expressionMorphSlots[slot] || []) {
+        setMorph(index, target);
+      }
+    }
 
     const lipBase = this.isSpeaking ? 0.22 + Math.abs(Math.sin(nowMs * 0.021)) * 0.55 : 0;
-    setMorph(this.morphSlots.mouthA, lipBase);
-    setMorph(this.morphSlots.mouthI, this.isSpeaking ? lipBase * 0.5 : 0);
-    setMorph(this.morphSlots.mouthU, this.isSpeaking ? lipBase * 0.34 : 0);
+    setMorph(morphSlots.mouthA, lipBase);
+    setMorph(morphSlots.mouthI, this.isSpeaking ? lipBase * 0.5 : 0);
+    setMorph(morphSlots.mouthU, this.isSpeaking ? lipBase * 0.34 : 0);
   }
 
   renderFrame() {
@@ -2019,6 +2138,8 @@ export class MMDCompanionRuntime {
     if (this.currentClip) {
       this.stabilizeVmdAnchorBones();
     }
+    this.updateBonePose(delta, nowMs);
+    this.updateMorph(delta, nowMs);
     this.flushExpiredVmdActionCleanups(nowMs);
     this.controls?.update();
     this.renderScene();

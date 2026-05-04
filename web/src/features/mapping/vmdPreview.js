@@ -47,6 +47,7 @@ export function createVmdPreviewInteraction(asset, multiplier = 1) {
     action: "idle",
     mode: "vmd",
     vmdUrl: asset?.url || "",
+    vmdLoopEmotionByUrl: asset?.url ? { [asset.url]: asset?.slot || "neutral" } : {},
     playbackRate: resolveVmdPlaybackRate(asset, multiplier),
     sequence: [],
   };
@@ -64,6 +65,9 @@ export function createDefaultFavoriteLoopInteraction(assets = [], { enabled = tr
     mode: "vmd",
     vmdUrl: leadAsset.url,
     vmdLoopUrls: playableAssets.map((asset) => asset.url),
+    vmdLoopEmotionByUrl: Object.fromEntries(
+      playableAssets.filter((asset) => asset?.url).map((asset) => [asset.url, asset?.slot || "neutral"]),
+    ),
     standbyVmdUrl: "",
     loopMode: loopMode === "sequential" ? "sequential" : "random",
     playbackRate: resolveVmdPlaybackRate(leadAsset),

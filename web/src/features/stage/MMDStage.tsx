@@ -6,12 +6,19 @@ import { getModelDisplayLabel } from "@/features/stage/modelCatalog.js";
 import { applyStageRuntimeState, MMDCompanionRuntime } from "@/features/stage/mmdCompanionRuntime.js";
 import type { MmdCameraSnapshot, MmdModelAsset, RenderPipeline } from "@/lib/types";
 
+declare global {
+  interface Window {
+    __mmdCompanionRuntime?: any;
+  }
+}
+
 type StageInteraction = {
   emotion: string;
   action: string;
   mode?: "procedural" | "vmd";
   vmdUrl?: string;
   vmdLoopUrls?: string[];
+  vmdLoopEmotionByUrl?: Record<string, string>;
   standbyVmdUrl?: string;
   loopGapMs?: number;
   loopMode?: "random" | "sequential";
@@ -110,6 +117,9 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       cameraSnapshot: cameraSnapshotRef.current,
     });
     runtimeRef.current = runtime;
+    if (process.env.NODE_ENV !== "production") {
+      window.__mmdCompanionRuntime = runtime;
+    }
     applyStageRuntimeState(runtime, {
       interaction: currentInteractionRef.current,
       speaking: currentSpeakingRef.current,
@@ -131,6 +141,9 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       });
     return () => {
       disposed = true;
+      if (process.env.NODE_ENV !== "production" && window.__mmdCompanionRuntime === runtime) {
+        delete window.__mmdCompanionRuntime;
+      }
       runtime.dispose();
     };
   }, [modelUrl, renderPipeline]);
@@ -153,6 +166,11 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
           standbyUrl: interaction.standbyVmdUrl ? toAbsolute(interaction.standbyVmdUrl) : "",
           loopGapMs: interaction.loopGapMs,
           loopMode: interaction.loopMode === "sequential" ? "sequential" : "random",
+          emotionByUrl: interaction.vmdLoopEmotionByUrl
+            ? Object.fromEntries(
+                Object.entries(interaction.vmdLoopEmotionByUrl).map(([url, emotion]) => [toAbsolute(url), emotion]),
+              )
+            : undefined,
         },
       );
       return;

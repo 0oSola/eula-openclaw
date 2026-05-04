@@ -341,7 +341,7 @@ test("resetToBasePose restores unmapped bones when the model root has no pose() 
   assert.deepEqual(mesh.morphTargetInfluences, [0]);
 });
 
-test("renderFrame keeps classic morph influences untouched even when the model is speaking", () => {
+test("renderFrame drives mouth morphs while keeping eye-related morphs neutral", () => {
   const runtime = makeRuntime({
     renderPipeline: "classic",
     model: { morphTargetInfluences: [0, 0, 0, 0, 0, 0] },
@@ -359,14 +359,19 @@ test("renderFrame keeps classic morph influences untouched even when the model i
     globalThis.requestAnimationFrame = originalRequestAnimationFrame;
   }
 
-  assert.deepEqual(runtime.model.morphTargetInfluences, [0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(runtime.model.morphTargetInfluences.slice(0, 3), [0, 0, 0]);
+  assert.ok(runtime.model.morphTargetInfluences[3] > 0);
+  assert.ok(runtime.model.morphTargetInfluences[4] > 0);
+  assert.ok(runtime.model.morphTargetInfluences[5] > 0);
 });
 
-test("renderFrame keeps genshin morph influences untouched so runtime speaking stays classic-compatible", () => {
+test("renderFrame ignores missing morph slot maps", () => {
   const runtime = makeRuntime({
     renderPipeline: "genshin",
     presentation: getStagePresentationConfig("genshin"),
     model: { morphTargetInfluences: [0] },
+    morphSlots: undefined,
+    expressionMorphSlots: undefined,
     isSpeaking: true,
   });
 
@@ -383,6 +388,17 @@ test("renderFrame keeps genshin morph influences untouched so runtime speaking s
   } finally {
     globalThis.requestAnimationFrame = originalRequestAnimationFrame;
   }
+});
+
+test("expression targets vary by emotion and action without using blink morphs", () => {
+  const happyRuntime = makeRuntime({ activeEmotion: "happy", activeAction: "wave" });
+  const thinkingRuntime = makeRuntime({ activeEmotion: "thinking", activeAction: "think" });
+  const excitedRuntime = makeRuntime({ activeEmotion: "excited", activeAction: "cheer" });
+
+  assert.ok(happyRuntime.getExpressionTargets().mouthSmile > 0);
+  assert.ok(thinkingRuntime.getExpressionTargets().serious > 0);
+  assert.ok(excitedRuntime.getExpressionTargets().mouthWide > 0);
+  assert.equal("blink" in happyRuntime.getExpressionTargets(), false);
 });
 
 test("renderFrame restores only root transport anchors after helper updates", () => {
@@ -1377,8 +1393,8 @@ test("renderFrame accelerates active VMD clips without applying procedural pose 
   }
 
   assert.deepEqual(helperDeltas, [0.375]);
-  assert.deepEqual(poseDeltas, []);
-  assert.deepEqual(morphCalls, []);
+  assert.deepEqual(poseDeltas, [0.25]);
+  assert.deepEqual(morphCalls, ["morph"]);
   assert.deepEqual(resetCalls, ["reset"]);
 });
 
@@ -1480,7 +1496,7 @@ test("playVmd crossfades into the next VMD when mixer actions are available", as
     ["next", "play"],
     ["existing", "stopFading"],
     ["existing", "stopWarping"],
-    ["next", "crossFadeFrom", existingAction, 0.24, false],
+    ["next", "crossFadeFrom", existingAction, 0.5, false],
   ]);
   assert.equal(runtime.currentClip, replacementClip);
   assert.equal(runtime.currentVmdAction, nextAction);
@@ -1489,7 +1505,7 @@ test("playVmd crossfades into the next VMD when mixer actions are available", as
   assert.equal(runtime.pendingVmdActionCleanups[0].action, existingAction);
 });
 
-test("playVmd falls back to helper swapping when leaving standby for the next loop motion", async () => {
+test("playVmd crossfades when leaving standby for the next loop motion", async () => {
   const helperCalls = [];
   const actionCalls = [];
   const standbyClip = { name: "standby-clip", duration: 1 };
@@ -1511,7 +1527,37 @@ test("playVmd falls back to helper swapping when leaving standby for the next lo
     },
     clipAction(clip) {
       actionCalls.push(["mixer", "clipAction", clip]);
-      return null;
+      return clip === nextLoopClip ? nextAction : null;
+    },
+  };
+  const nextAction = {
+    reset() {
+      actionCalls.push(["next", "reset"]);
+      return this;
+    },
+    stopFading() {
+      actionCalls.push(["next", "stopFading"]);
+      return this;
+    },
+    stopWarping() {
+      actionCalls.push(["next", "stopWarping"]);
+      return this;
+    },
+    setEffectiveTimeScale(value) {
+      actionCalls.push(["next", "timeScale", value]);
+      return this;
+    },
+    setEffectiveWeight(value) {
+      actionCalls.push(["next", "weight", value]);
+      return this;
+    },
+    play() {
+      actionCalls.push(["next", "play"]);
+      return this;
+    },
+    crossFadeFrom(action, duration, warp) {
+      actionCalls.push(["next", "crossFadeFrom", action, duration, warp]);
+      return this;
     },
   };
   const model = { isSkinnedMesh: true };
@@ -1548,11 +1594,19 @@ test("playVmd falls back to helper swapping when leaving standby for the next lo
     resumePhase: "loop",
   });
 
-  assert.deepEqual(actionCalls, []);
-  assert.deepEqual(helperCalls, [
-    ["remove", model],
-    ["add", model, true, false],
+  assert.deepEqual(actionCalls, [
+    ["mixer", "clipAction", nextLoopClip],
+    ["next", "reset"],
+    ["next", "stopFading"],
+    ["next", "stopWarping"],
+    ["next", "timeScale", 1],
+    ["next", "weight", 1],
+    ["next", "play"],
+    ["standby", "stopFading"],
+    ["standby", "stopWarping"],
+    ["next", "crossFadeFrom", standbyAction, 0.5, false],
   ]);
+  assert.deepEqual(helperCalls, []);
   assert.equal(runtime.currentClip, nextLoopClip);
 });
 
@@ -1628,6 +1682,27 @@ test("updateVmdLoop starts another built-in idle motion after the current clip d
       resumePhase: "loop",
     },
   ]]);
+});
+
+test("updateVmdLoop starts loading the next loop before the current clip fully ends", () => {
+  const playCalls = [];
+  const runtime = makeRuntime({
+    currentClip: { name: "motion-clip", duration: 1.2 },
+    currentVmdPlaybackRate: 1.5,
+    currentVmdLoopUrls: ["/motions/idle-a.vmd", "/motions/idle-b.vmd"],
+    currentVmdUrl: "/motions/idle-a.vmd",
+    currentVmdStartedAt: 1000,
+    currentVmdDurationMs: 750,
+    isLoadingVmd: false,
+    playVmd(url) {
+      playCalls.push(url);
+    },
+  });
+
+  runtime.updateVmdLoop(1249);
+  runtime.updateVmdLoop(1250);
+
+  assert.deepEqual(playCalls, ["/motions/idle-b.vmd"]);
 });
 
 test("updateVmdLoop waits for loopGapMs before transitioning to the next loop motion", () => {
