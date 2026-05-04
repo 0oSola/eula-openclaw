@@ -55,6 +55,7 @@ type InteractionState = {
   mode: "procedural" | "vmd";
   vmdUrl: string;
   vmdLoopUrls?: string[];
+  vmdLoopEmotionByUrl?: Record<string, string>;
   standbyVmdUrl?: string;
   loopGapMs?: number;
   loopMode?: "random" | "sequential";
@@ -177,6 +178,7 @@ function createDefaultInteractionState(): InteractionState {
     mode: "procedural",
     vmdUrl: "",
     vmdLoopUrls: [],
+    vmdLoopEmotionByUrl: {},
     standbyVmdUrl: "",
     loopGapMs: 0,
     loopMode: "random",
@@ -411,6 +413,7 @@ export default function CompanionPage() {
       mode: "vmd",
       vmdUrl: preview.vmdUrl,
       vmdLoopUrls: [],
+      vmdLoopEmotionByUrl: preview.vmdLoopEmotionByUrl,
       playbackRate: preview.playbackRate || DEFAULT_VMD_PLAYBACK_RATE,
       sequence: preview.sequence,
     });
@@ -746,6 +749,7 @@ export default function CompanionPage() {
           mode: "vmd",
           vmdUrl: plan.url,
           vmdLoopUrls: [],
+          vmdLoopEmotionByUrl: plan.url ? { [plan.url]: response.emotion } : {},
           playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: plan.url }),
           sequence: [],
         });
@@ -758,6 +762,7 @@ export default function CompanionPage() {
           action: plan.action,
           mode: "procedural",
           vmdUrl: "",
+          vmdLoopEmotionByUrl: {},
           playbackRate: 1,
           sequence: plan.sequence || [],
         });
