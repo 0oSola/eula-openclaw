@@ -117,6 +117,37 @@ const FIXED_VMD_ANCHOR_BONE_HINTS = [
   ["groove", "\u30b0\u30eb\u30fc\u30d6"],
 ];
 
+const LOWER_BODY_BONE_HINTS = [
+  "center",
+  "groove",
+  "waist",
+  "hip",
+  "pelvis",
+  "lowerbody",
+  "leg",
+  "knee",
+  "ankle",
+  "toe",
+  "foot",
+  "ik",
+  "ikparent",
+  "ik parent",
+  "\u30bb\u30f3\u30bf\u30fc",
+  "\u30b0\u30eb\u30fc\u30d6",
+  "\u8170",
+  "\u4e0b\u534a\u8eab",
+  "\u5de6\u8db3",
+  "\u53f3\u8db3",
+  "\u5de6\u3072\u3056",
+  "\u53f3\u3072\u3056",
+  "\u5de6\u8db3\u9996",
+  "\u53f3\u8db3\u9996",
+  "\u5de6\u3064\u307e\u5148",
+  "\u53f3\u3064\u307e\u5148",
+  "\uff29\uff2b\u89aa",
+  "\u3064\u307e\u5148\uff29\uff2b",
+];
+
 // Legacy mojibake hint tables were replaced with ASCII-safe Unicode escapes above.
 
 const ACTION_DURATION = {
@@ -514,6 +545,8 @@ function pickLoopMotionUrl(urls, currentUrl, loopMode) {
  *     loopGapMs?: number,
  *     loopMode?: string,
  *     vmdLoopEmotionByUrl?: Record<string, string>,
+ *     lockLowerBody?: boolean,
+ *     disableCrossfade?: boolean,
  *     playbackRate?: number
  *   },
  *   resolveUrl?: (url: string) => string
@@ -533,6 +566,8 @@ export function applyStageRuntimeState(runtime, { speaking = false, interaction,
       loopGapMs: interaction.loopGapMs,
       loopMode: interaction.loopMode,
     };
+    if (interaction.lockLowerBody) loopOptions.lockLowerBody = true;
+    if (interaction.disableCrossfade) loopOptions.disableCrossfade = true;
     if (interaction.vmdLoopEmotionByUrl) {
       loopOptions.emotionByUrl = Object.fromEntries(
         Object.entries(interaction.vmdLoopEmotionByUrl).map(([url, emotion]) => [resolveUrl(url), emotion]),
@@ -543,6 +578,37 @@ export function applyStageRuntimeState(runtime, { speaking = false, interaction,
     return;
   }
   runtime.applyInteraction?.(interaction);
+}
+
+export function clipAnimatesBone(clip, bone) {
+  if (!clip?.tracks?.length || !bone?.name) return false;
+  const boneName = `${bone.name}`;
+  return clip.tracks.some((track) => `${track?.name || ""}`.includes(`bones[${boneName}]`));
+}
+
+export function resetBonesNotAnimatedByClip(baseBoneTransforms = [], clip) {
+  for (const entry of baseBoneTransforms || []) {
+    const bone = entry?.bone;
+    if (!bone || clipAnimatesBone(clip, bone)) continue;
+    if (entry.position) bone.position?.copy?.(entry.position);
+    if (entry.quaternion) bone.quaternion?.copy?.(entry.quaternion);
+    if (entry.scale) bone.scale?.copy?.(entry.scale);
+  }
+}
+
+export function isLowerBodyBoneName(name) {
+  const lowerName = `${name || ""}`.toLowerCase();
+  return LOWER_BODY_BONE_HINTS.some((hint) => lowerName.includes(hint.toLowerCase()));
+}
+
+export function resetLowerBodyBonesToBase(baseBoneTransforms = []) {
+  for (const entry of baseBoneTransforms || []) {
+    const bone = entry?.bone;
+    if (!bone || !isLowerBodyBoneName(bone.name)) continue;
+    if (entry.position) bone.position?.copy?.(entry.position);
+    if (entry.quaternion) bone.quaternion?.copy?.(entry.quaternion);
+    if (entry.scale) bone.scale?.copy?.(entry.scale);
+  }
 }
 
 function describeMaterial(material) {
@@ -1003,6 +1069,8 @@ export class MMDCompanionRuntime {
     this.currentVmdLoopGapMs = 0;
     this.currentVmdLoopMode = "random";
     this.currentVmdLoopPhase = "loop";
+    this.currentVmdLockLowerBody = false;
+    this.currentVmdDisableCrossfade = false;
     this.currentVmdEmotionByUrl = {};
     this.pendingVmdLoopUrl = "";
     this.lastPlayedLoopMotionUrl = "";
@@ -1445,6 +1513,8 @@ export class MMDCompanionRuntime {
     this.currentVmdLoopGapMs = 0;
     this.currentVmdLoopMode = "random";
     this.currentVmdLoopPhase = "loop";
+    this.currentVmdLockLowerBody = false;
+    this.currentVmdDisableCrossfade = false;
     this.currentVmdEmotionByUrl = {};
     this.pendingVmdLoopUrl = "";
     this.lastPlayedLoopMotionUrl = "";
@@ -1755,6 +1825,16 @@ export class MMDCompanionRuntime {
     this.pendingVmdActionCleanups = pendingEntries;
   }
 
+  resetBonesNotAnimatedByClip(clip) {
+    resetBonesNotAnimatedByClip(this.baseBoneTransforms, clip);
+    this.model?.updateMatrixWorld?.(true);
+  }
+
+  resetLowerBodyBonesToBase() {
+    resetLowerBodyBonesToBase(this.baseBoneTransforms);
+    this.model?.updateMatrixWorld?.(true);
+  }
+
   transitionToVmdClip(previousClip, nextClip, startedAt = performance.now()) {
     if (!previousClip || !nextClip) return false;
     const previousAction = this.currentVmdAction || this.getVmdAction(previousClip);
@@ -1775,10 +1855,13 @@ export class MMDCompanionRuntime {
     this.scheduleVmdActionCleanup(previousClip, previousAction, startedAt);
     this.currentClip = nextClip;
     this.currentVmdAction = nextAction;
+    this.resetBonesNotAnimatedByClip(nextClip);
+    if (this.currentVmdLockLowerBody) this.resetLowerBodyBonesToBase();
     return true;
   }
 
-  shouldCrossfadeVmdTransition({ previousPhase = "loop", nextPhase = "loop" } = {}) {
+  shouldCrossfadeVmdTransition({ previousPhase = "loop", nextPhase = "loop", disableCrossfade = false } = {}) {
+    if (disableCrossfade) return false;
     return Boolean(previousPhase && nextPhase);
   }
 
@@ -1808,6 +1891,8 @@ export class MMDCompanionRuntime {
       this.currentVmdLoopGapMs = loopGapMs;
       this.currentVmdLoopMode = loopMode;
       this.currentVmdLoopPhase = nextPhase;
+      this.currentVmdLockLowerBody = Boolean(loopOptions?.lockLowerBody);
+      this.currentVmdDisableCrossfade = Boolean(loopOptions?.disableCrossfade);
       this.currentVmdEmotionByUrl = emotionByUrl;
       this.currentVmdUrl = url || "";
       if (emotionByUrl[this.currentVmdUrl]) this.activeEmotion = emotionByUrl[this.currentVmdUrl];
@@ -1821,7 +1906,11 @@ export class MMDCompanionRuntime {
       const clip = await loadAnimationSilently(this.loader, url, animationBuildTarget);
       if (this.destroyed || loadToken !== this.vmdLoadToken) return;
       const startedAt = performance.now();
-      const shouldCrossfade = hadActiveClip && this.shouldCrossfadeVmdTransition({ previousPhase, nextPhase });
+      const shouldCrossfade = hadActiveClip && this.shouldCrossfadeVmdTransition({
+        previousPhase,
+        nextPhase,
+        disableCrossfade: this.currentVmdDisableCrossfade,
+      });
       if (!shouldCrossfade || !this.transitionToVmdClip(this.currentClip, clip, startedAt)) {
         this.resetToBasePose();
         try {
@@ -1871,6 +1960,8 @@ export class MMDCompanionRuntime {
     this.currentVmdLoopGapMs = 0;
     this.currentVmdLoopMode = "random";
     this.currentVmdLoopPhase = "loop";
+    this.currentVmdLockLowerBody = false;
+    this.currentVmdDisableCrossfade = false;
     this.currentVmdEmotionByUrl = {};
     this.pendingVmdLoopUrl = "";
     this.lastPlayedLoopMotionUrl = "";
@@ -1911,6 +2002,8 @@ export class MMDCompanionRuntime {
       loopGapMs,
       loopMode: this.currentVmdLoopMode,
     };
+    if (this.currentVmdLockLowerBody) loopStateOptions.lockLowerBody = true;
+    if (this.currentVmdDisableCrossfade) loopStateOptions.disableCrossfade = true;
     if (this.currentVmdEmotionByUrl && Object.keys(this.currentVmdEmotionByUrl).length) {
       loopStateOptions.emotionByUrl = this.currentVmdEmotionByUrl;
     }
@@ -2086,9 +2179,16 @@ export class MMDCompanionRuntime {
       if (!bone) continue;
       const target = targets[slot] || { x: 0, y: 0, z: 0 };
       if (this.currentClip) {
-        bone.rotation.x += target.x;
-        bone.rotation.y += target.y;
-        bone.rotation.z += target.z;
+        if (clipAnimatesBone(this.currentClip, bone)) {
+          bone.rotation.x += target.x;
+          bone.rotation.y += target.y;
+          bone.rotation.z += target.z;
+        } else {
+          const base = this.baseBoneRotation[slot] || new THREE.Euler(0, 0, 0);
+          bone.rotation.x = base.x + target.x;
+          bone.rotation.y = base.y + target.y;
+          bone.rotation.z = base.z + target.z;
+        }
         continue;
       }
       const base = this.baseBoneRotation[slot] || new THREE.Euler(0, 0, 0);
@@ -2137,6 +2237,8 @@ export class MMDCompanionRuntime {
     this.helper.update(helperDelta);
     if (this.currentClip) {
       this.stabilizeVmdAnchorBones();
+      this.resetBonesNotAnimatedByClip(this.currentClip);
+      if (this.currentVmdLockLowerBody) this.resetLowerBodyBonesToBase();
     }
     this.updateBonePose(delta, nowMs);
     this.updateMorph(delta, nowMs);

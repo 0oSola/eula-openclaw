@@ -11,6 +11,7 @@ web/.next
 #api/data
 #api/api/data
 api/tests_runtime
+api/tests/tests_runtime
 api/.pytest_tmp
 __pycache__
 *.pyc

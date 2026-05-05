@@ -7,10 +7,14 @@ import * as runtimeModule from "../src/features/stage/mmdCompanionRuntime.js";
 
 const {
   applyStageRuntimeState,
+  clipAnimatesBone,
   getStagePresentationConfig,
+  isLowerBodyBoneName,
   MMDCompanionRuntime,
   pickNextLoopMotionUrl,
   pickSequentialLoopMotionUrl,
+  resetLowerBodyBonesToBase,
+  resetBonesNotAnimatedByClip,
 } = runtimeModule;
 
 function makeRuntime(overrides = {}) {
@@ -401,7 +405,7 @@ test("expression targets vary by emotion and action without using blink morphs",
   assert.equal("blink" in happyRuntime.getExpressionTargets(), false);
 });
 
-test("renderFrame restores only root transport anchors after helper updates", () => {
+test("renderFrame restores root transport anchors and bones outside the active VMD clip", () => {
   const allParent = new THREE.Bone();
   allParent.name = "全ての親";
   allParent.position.set(0, 0, 0);
@@ -424,7 +428,7 @@ test("renderFrame restores only root transport anchors after helper updates", ()
 
   const runtime = makeRuntime({
     model: mesh,
-    currentClip: { duration: 1 },
+    currentClip: { duration: 1, tracks: [{ name: `.bones[${finger.name}].quaternion` }] },
     helper: {
       update() {
         allParent.position.set(5, 0, 0);
@@ -445,7 +449,7 @@ test("renderFrame restores only root transport anchors after helper updates", ()
   }
 
   assertVectorLikeClose([allParent.position.x, allParent.position.y, allParent.position.z], [0, 0, 0]);
-  assertVectorLikeClose([leftLegIk.position.x, leftLegIk.position.y, leftLegIk.position.z], [2, 0, 0]);
+  assertVectorLikeClose([leftLegIk.position.x, leftLegIk.position.y, leftLegIk.position.z], [0, 0, 0]);
   assertVectorLikeClose([finger.position.x, finger.position.y, finger.position.z], [1, 0, 0]);
 });
 
@@ -1645,6 +1649,165 @@ test("playVmd resets to the base pose before helper-swapping to a replacement VM
     ["add", model, true, false],
   ]);
   assert.equal(runtime.currentClip?.name, "replacement-clip");
+});
+
+test("playVmd skips crossfade when loop options disable it", async () => {
+  const resetCalls = [];
+  const helperCalls = [];
+  const actionCalls = [];
+  const previousAction = {
+    stopFading() {
+      actionCalls.push(["previous", "stopFading"]);
+      return this;
+    },
+    stopWarping() {
+      actionCalls.push(["previous", "stopWarping"]);
+      return this;
+    },
+  };
+  const model = { isSkinnedMesh: true };
+  const runtime = makeRuntime({
+    model,
+    currentClip: { name: "existing-clip", duration: 1 },
+    currentVmdAction: previousAction,
+    helper: {
+      objects: {
+        get(target) {
+          if (target === model) {
+            return {
+              mixer: {
+                existingAction() {
+                  return previousAction;
+                },
+              },
+            };
+          }
+          return null;
+        },
+      },
+      remove(target) {
+        helperCalls.push(["remove", target]);
+      },
+      add(target, options) {
+        helperCalls.push(["add", target, Boolean(options?.animation), Boolean(options?.physics)]);
+      },
+      update() {},
+    },
+    loader: {
+      loadAnimation(_url, _model, onLoad) {
+        onLoad({ name: "replacement-clip", duration: 1 });
+      },
+    },
+    resetToBasePose() {
+      resetCalls.push("reset");
+    },
+    renderScene() {},
+  });
+
+  await runtime.playVmd("/motions/replacement.vmd", 1, [], { disableCrossfade: true });
+
+  assert.deepEqual(resetCalls, ["reset"]);
+  assert.deepEqual(helperCalls, [
+    ["remove", model],
+    ["add", model, true, false],
+  ]);
+  assert.equal(runtime.currentClip?.name, "replacement-clip");
+});
+
+test("breathing offsets do not accumulate on bones that the active VMD clip does not animate", () => {
+  const upperBody = { name: "\u4e0a\u534a\u8eab", rotation: new THREE.Euler(0, 0, 0) };
+  const runtime = makeRuntime({
+    bones: { upperBody },
+    baseBoneRotation: { upperBody: new THREE.Euler(0, 0, 0) },
+    currentClip: { tracks: [{ name: ".bones[\u982d].quaternion" }] },
+  });
+
+  runtime.updateBonePose(1 / 60, 0);
+  const firstX = upperBody.rotation.x;
+  runtime.updateBonePose(1 / 60, 0);
+
+  assert.equal(clipAnimatesBone(runtime.currentClip, upperBody), false);
+  assert.ok(Math.abs(firstX - -0.0736) < 0.00001);
+  assert.ok(Math.abs(upperBody.rotation.x - firstX) < 0.00001);
+});
+
+test("breathing offsets remain additive for bones animated by the active VMD clip", () => {
+  const upperBody = { name: "\u4e0a\u534a\u8eab", rotation: new THREE.Euler(0.2, 0, 0) };
+  const runtime = makeRuntime({
+    bones: { upperBody },
+    baseBoneRotation: { upperBody: new THREE.Euler(0, 0, 0) },
+    currentClip: { tracks: [{ name: ".bones[\u4e0a\u534a\u8eab].quaternion" }] },
+  });
+
+  runtime.updateBonePose(1 / 60, 0);
+
+  assert.equal(clipAnimatesBone(runtime.currentClip, upperBody), true);
+  assert.ok(Math.abs(upperBody.rotation.x - 0.1264) < 0.00001);
+});
+
+test("VMD transitions reset bones not animated by the next clip", () => {
+  const leg = {
+    name: "\u53f3\u8db3\uff29\uff2b",
+    position: new THREE.Vector3(0, 2, 0),
+    quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.8, 0, 0)),
+    scale: new THREE.Vector3(1, 1, 1),
+  };
+  const baseQuaternion = new THREE.Quaternion();
+
+  resetBonesNotAnimatedByClip(
+    [
+      {
+        bone: leg,
+        position: new THREE.Vector3(0, 0, 0),
+        quaternion: baseQuaternion.clone(),
+        scale: new THREE.Vector3(1, 1, 1),
+      },
+    ],
+    { tracks: [{ name: ".bones[\u4e0a\u534a\u8eab].quaternion" }] },
+  );
+
+  assert.deepEqual(leg.position.toArray(), [0, 0, 0]);
+  assert.ok(Math.abs(leg.quaternion.x - baseQuaternion.x) < 0.00001);
+});
+
+test("companion loop lower-body lock restores leg bones even when the VMD animates them", () => {
+  const legIk = {
+    name: "\u53f3\u8db3\uff29\uff2b",
+    position: new THREE.Vector3(0, 2, 0),
+    quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.8, 0, 0)),
+    scale: new THREE.Vector3(1, 1, 1),
+  };
+  const arm = {
+    name: "\u53f3\u8155",
+    position: new THREE.Vector3(1, 0, 0),
+    quaternion: new THREE.Quaternion(),
+    scale: new THREE.Vector3(1, 1, 1),
+  };
+
+  resetLowerBodyBonesToBase([
+    {
+      bone: legIk,
+      position: new THREE.Vector3(0, 0, 0),
+      quaternion: new THREE.Quaternion(),
+      scale: new THREE.Vector3(1, 1, 1),
+    },
+    {
+      bone: arm,
+      position: new THREE.Vector3(0, 0, 0),
+      quaternion: new THREE.Quaternion(),
+      scale: new THREE.Vector3(1, 1, 1),
+    },
+  ]);
+
+  assert.deepEqual(legIk.position.toArray(), [0, 0, 0]);
+  assert.deepEqual(arm.position.toArray(), [1, 0, 0]);
+});
+
+test("lower-body detection covers IK parents and waist chain bones", () => {
+  assert.equal(isLowerBodyBoneName("右足IK親"), true);
+  assert.equal(isLowerBodyBoneName("腰"), true);
+  assert.equal(isLowerBodyBoneName("pelvis"), true);
+  assert.equal(isLowerBodyBoneName("右腕"), false);
 });
 
 test("updateVmdLoop starts another built-in idle motion after the current clip duration elapses", () => {

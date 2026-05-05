@@ -5,6 +5,9 @@ import type {
   MappingConfig,
   MmdMotionAsset,
   MmdModelAsset,
+  OpenClawConfig,
+  OpenClawConfigSaveResult,
+  OpenClawHealthStatus,
   TraceEvent,
   TraceMirror,
   VmdAsset,
@@ -80,6 +83,40 @@ export async function putUserMappings(
     },
   );
   return payload.mappings || {};
+}
+
+export async function getOpenClawConfig(userId: string): Promise<OpenClawConfig> {
+  return requestJSON<OpenClawConfig>("/config/openclaw", {
+    method: "GET",
+    userId,
+  });
+}
+
+export async function putOpenClawConfig(
+  userId: string,
+  payload: {
+    base_url: string;
+    token?: string | null;
+    agent_id: string;
+    model: string;
+    message_channel: string;
+    proxy_url: string;
+    verify_ssl: boolean;
+    timeout_seconds: number;
+  },
+): Promise<OpenClawConfigSaveResult> {
+  return requestJSON<OpenClawConfigSaveResult>("/config/openclaw", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+    userId,
+  });
+}
+
+export async function getOpenClawHealth(userId: string): Promise<OpenClawHealthStatus> {
+  return requestJSON<OpenClawHealthStatus>("/healthz/openclaw", {
+    method: "GET",
+    userId,
+  });
 }
 
 export async function listVmdAssets(userId: string): Promise<VmdAsset[]> {

@@ -270,21 +270,28 @@ a {
   font-size: 13px;
 }
 
-.mio-session > span {
+.mio-session-meta,
+.mio-session-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.mio-session-meta > span {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
 
-.mio-session > span:first-child {
+.mio-session-meta > span:first-child {
   min-width: 138px;
 }
 
-.mio-session > span:nth-child(2) {
+.mio-session-meta > span:nth-child(2) {
   min-width: 140px;
 }
 
-.mio-session > span::before {
+.mio-session-meta > span::before {
   content: "";
   width: 15px;
   height: 15px;
@@ -293,15 +300,147 @@ a {
   color: rgba(236, 247, 255, 0.9);
 }
 
-.mio-session > span:first-child::before {
+.mio-session-meta > span:first-child::before {
   background:
     radial-gradient(circle at 50% 29%, currentColor 0 3px, transparent 3.5px),
     radial-gradient(ellipse at 50% 82%, currentColor 0 6px, transparent 6.5px);
 }
 
-.mio-session > span:nth-child(2)::before {
+.mio-session-meta > span:nth-child(2)::before {
   background: currentColor;
   clip-path: polygon(50% 0, 90% 24%, 90% 76%, 50% 100%, 10% 76%, 10% 24%);
+}
+
+.mio-settings-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 22;
+  pointer-events: none;
+}
+
+.mio-settings-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(4, 12, 24, 0.34);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.mio-settings-panel {
+  position: absolute;
+  top: calc(var(--mio-topbar-height) + 12px);
+  right: 18px;
+  width: min(540px, calc(100vw - 28px));
+  max-height: min(76vh, calc(100dvh - var(--mio-topbar-height) - 28px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(140, 213, 255, 0.32);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(10, 31, 61, 0.98), rgba(6, 20, 43, 0.98));
+  backdrop-filter: blur(18px);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  pointer-events: auto;
+}
+
+.mio-settings-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mio-settings-head strong {
+  display: block;
+  color: #eef8ff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.mio-settings-head span {
+  display: block;
+  margin-top: 4px;
+  color: rgba(205, 228, 243, 0.72);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.mio-settings-body {
+  min-height: 0;
+  display: grid;
+  gap: 14px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.mio-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mio-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.mio-settings-diagnostics {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(136, 211, 255, 0.22);
+  border-radius: 12px;
+  background: rgba(7, 26, 51, 0.54);
+}
+
+.mio-settings-diagnostics-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.mio-settings-diagnostics-head strong {
+  color: #eef8ff;
+  font-size: 13px;
+}
+
+.mio-settings-diagnostics-head span,
+.mio-settings-meta span,
+.mio-settings-probe span,
+.mio-settings-recommendations span {
+  color: rgba(205, 228, 243, 0.72);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.mio-settings-meta,
+.mio-settings-probes,
+.mio-settings-recommendations {
+  display: grid;
+  gap: 8px;
+}
+
+.mio-settings-probe {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(136, 211, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(10, 34, 67, 0.52);
+}
+
+.mio-settings-probe strong {
+  color: #eef8ff;
+  font-size: 12px;
+  text-transform: capitalize;
 }
 
 .mio-trace-button,
@@ -346,7 +485,6 @@ a {
 
 .mio-icon-button img,
 .mio-nav-button img,
-.mio-mic img,
 .mio-mode img {
   width: 28px;
   height: 28px;
@@ -374,6 +512,10 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
 }
 
 .mio-avatar-meta {
@@ -1341,7 +1483,7 @@ a {
 
 .mio-command-center {
   align-self: center;
-  height: 45px;
+  height: 44px;
   gap: 0;
 }
 
@@ -1822,11 +1964,14 @@ a {
   display: grid;
   place-items: center;
   padding: 16px;
+  z-index: 20;
   background: rgba(3, 11, 22, 0.58);
   border-radius: 18px;
 }
 
 .mio-rename-dialog {
+  position: relative;
+  z-index: 1;
   width: min(320px, 100%);
   display: grid;
   gap: 12px;
@@ -1871,7 +2016,6 @@ a {
 }
 
 .mio-tts,
-.mio-mic,
 .mio-mode {
   height: 100%;
   border: 1px solid rgba(143, 213, 255, 0.32);
@@ -1985,44 +2129,55 @@ a {
   -webkit-appearance: none;
 }
 
-.mio-mic {
-  width: 52px;
+.mio-voice-button {
   position: relative;
+  width: 58px;
+  height: 41px;
+  flex: 0 0 58px;
+  border: 0;
+  border-radius: 12px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.mio-voice-button-layer {
+  position: absolute;
+  inset: 0;
   display: grid;
   place-items: center;
-  border-color: rgba(147, 205, 255, 0.5);
-  background:
-    radial-gradient(circle at 24% 18%, rgba(153, 230, 255, 0.28), transparent 31%),
-    radial-gradient(circle at 72% 78%, rgba(175, 83, 255, 0.42), transparent 36%),
-    linear-gradient(135deg, rgba(92, 111, 255, 0.8), rgba(111, 67, 214, 0.82));
-  box-shadow:
-    inset 0 1px 0 rgba(244, 248, 255, 0.24),
-    inset 0 -1px 0 rgba(49, 44, 139, 0.24),
-    0 0 14px rgba(115, 104, 255, 0.28),
-    0 0 0 1px rgba(98, 200, 255, 0.14);
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  transition: opacity 140ms ease-out;
 }
 
-.mio-mic-icon {
-  position: relative;
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
-  display: grid;
-  place-items: center;
+.mio-voice-button-layer-hover {
+  opacity: 0;
 }
 
-.mio-mic-icon svg {
-  width: 17px;
-  height: 17px;
+.mio-voice-button:hover .mio-voice-button-layer-default {
+  opacity: 0;
 }
 
-.mio-mic-icon rect,
-.mio-mic-icon path {
-  fill: none;
-  stroke: rgba(248, 251, 255, 0.98);
-  stroke-width: 1.2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+.mio-voice-button:hover .mio-voice-button-layer-hover {
+  opacity: 1;
+}
+
+.mio-voice-button-picture,
+.mio-voice-button-image {
+  display: block;
+  width: 48px;
+  height: 41px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.mio-voice-button-image {
+  object-fit: contain;
+  user-select: none;
 }
 
 /* 输入框样式 */
@@ -2032,9 +2187,9 @@ a {
   align-items: center;
   min-width: 0;
   flex: 1;
-  height: 45px;
+  height: 44px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 19px;
   overflow: visible;
 }
 
@@ -2043,7 +2198,7 @@ a {
   position: absolute;
   inset: 0;
   border: 1px solid rgba(106, 186, 251, 0.38);
-  border-radius: 12px;
+  border-radius: inherit;
   background:
     linear-gradient(180deg, rgba(16, 45, 88, 0.57) 17%, rgba(10, 33, 71, 0.36) 64%, rgba(8, 26, 55, 0.32) 92%, rgba(6, 17, 32, 0.37) 100%),
     radial-gradient(ellipse at 46% 4%, rgba(214, 247, 255, 0.07), transparent 34%),
@@ -2057,24 +2212,6 @@ a {
   pointer-events: none;
 }
 
-.mio-command-input-shell::after {
-  /* content: "";
-  position: absolute;
-  top: 2px;
-  right: 3px;
-  bottom: 2px;
-  width: 128px;
-  border: 1px solid rgba(93, 152, 232, 0.28);
-  border-radius: 14px;
-  background:
-    linear-gradient(180deg, rgba(10, 43, 90, 0.54), rgba(9, 29, 62, 0.78)),
-    linear-gradient(90deg, rgba(148, 217, 255, 0.06), rgba(148, 217, 255, 0));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    inset 0 0 0 1px rgba(6, 20, 44, 0.16);
-  pointer-events: none; */
-}
-
 .mio-command-copy-wrap {
   position: relative;
   z-index: 1;
@@ -2083,7 +2220,7 @@ a {
   min-width: 0;
   flex: 1;
   height: 100%;
-  padding: 0 86px 0 24px;
+  padding: 0 76px 0 25px;
 }
 
 .mio-command-input {
@@ -2110,111 +2247,51 @@ a {
 
 .mio-send {
   position: absolute;
-  top: 0;
+  top: 50%;
   right: 0;
-  /* transform: translateY(-50%); */
-  width: 70px;
-  height: 54px;
+  z-index: 2;
+  width: 61px;
+  height: 44px;
   display: grid;
   place-items: center;
-  flex: 0 0 auto;
   border: 0;
+  border-radius: 14px;
   background: transparent;
   box-shadow: none;
   cursor: pointer;
   padding: 0;
   overflow: hidden;
-  border-radius: 12px;
   isolation: isolate;
-  z-index: 2;
-}
-
-.mio-send::before {
-  /* content: "";
-  position: absolute;
-  inset: 1px;
-  border-radius: 11px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 52%),
-    radial-gradient(circle at 18% 50%, rgba(117, 202, 255, 0.14), rgba(117, 202, 255, 0) 58%);
-  pointer-events: none;
-  opacity: 0.9; */
-}
-
-/* .mio-send::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow:
-    inset 0 0 0 1px rgba(151, 220, 255, 0.06),
-    0 0 12px rgba(78, 129, 255, 0.08);
-  pointer-events: none;
-} */
-
-.mio-send-art-stack {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-
-.mio-send-art-layer {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 82px;
-  height: 82px;
-  transform: translate(-50%, -54%) scale(1.5);
-  opacity: 0;
+  transform: translateY(-50%);
   transition:
-    opacity 140ms ease-out,
-    filter 140ms ease-out;
-}
-
-.mio-send-art-layer-default {
-  opacity: 1;
-}
-
-.mio-send-art-picture,
-.mio-send-art {
-  width: 100%;
-  height: 100%;
-}
-
-.mio-send-art-picture {
-  display: block;
-}
-
-.mio-send-art {
-  position: relative;
-  display: block;
-  object-fit: contain;
-  user-select: none;
+    filter 140ms ease-out,
+    opacity 140ms ease-out;
 }
 
 .mio-send:disabled {
   cursor: default;
 }
 
-.mio-send:not(:disabled):hover .mio-send-art-layer-default {
-  opacity: 0;
+.mio-send-cut {
+  display: block;
+  width: 61px;
+  height: 44px;
+  border-radius: inherit;
+  object-fit: contain;
+  user-select: none;
+  pointer-events: none;
 }
 
-.mio-send:not(:disabled):hover .mio-send-art-layer-hover {
-  opacity: 1;
+.mio-send:not(:disabled):hover {
+  filter: brightness(1.08) saturate(1.08);
 }
 
-.mio-send[data-send-state="disabled"] .mio-send-art-layer-default,
-.mio-send[data-send-state="loading"] .mio-send-art-layer-default {
-  opacity: 0;
+.mio-send[data-send-state="disabled"] {
+  opacity: 0.54;
+  filter: saturate(0.72) brightness(0.86);
 }
 
-.mio-send[data-send-state="disabled"] .mio-send-art-layer-disabled {
-  opacity: 1;
-}
-
-.mio-send[data-send-state="loading"] .mio-send-art-layer-loading {
-  opacity: 1;
+.mio-send[data-send-state="loading"] {
   animation: mio-send-loading-pulse 1.25s ease-in-out infinite;
 }
 
@@ -2346,6 +2423,10 @@ a {
   }
 
   .mio-session {
+    gap: 10px;
+  }
+
+  .mio-session-meta {
     display: none;
   }
 
@@ -2365,6 +2446,11 @@ a {
 
   .mio-advanced-panel {
     width: min(380px, calc(100vw - 32px));
+  }
+
+  .mio-settings-panel {
+    right: 16px;
+    width: min(460px, calc(100vw - 32px));
   }
 
   .mio-command-shell {
@@ -2425,6 +2511,16 @@ a {
     font-size: 12px;
   }
 
+  .mio-session {
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .mio-session-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
   .mio-layout {
     flex: 1 1 auto;
     height: auto;
@@ -2477,6 +2573,23 @@ a {
     bottom: calc(100% + 10px);
     width: min(360px, calc(100vw - 32px));
     max-height: min(68vh, calc(100dvh - 128px));
+  }
+
+  .mio-settings-panel {
+    top: auto;
+    right: 10px;
+    left: 10px;
+    bottom: calc(var(--mio-command-bar-height) + var(--mio-command-bar-bottom) + 18px);
+    width: auto;
+    max-height: min(62vh, calc(100dvh - 180px));
+  }
+
+  .mio-settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mio-settings-probe {
+    display: grid;
   }
 
   .mio-command-bar {
