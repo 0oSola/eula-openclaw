@@ -2,27 +2,21 @@
 
 import type { ReactNode } from "react";
 import type { FormEvent } from "react";
-import sendIcon1x from "../../../images/send/send_icon_fixed_1x.png";
-import sendIcon2x from "../../../images/send/send_icon_fixed_2x.png";
-import sendIcon3x from "../../../images/send/send_icon_fixed_3x.png";
-import sendIcon4x from "../../../images/send/send_icon_fixed_4x.png";
-import sendIconHover1x from "../../../images/send/send_icon_hover_1x.png";
-import sendIconHover2x from "../../../images/send/send_icon_hover_2x.png";
-import sendIconHover3x from "../../../images/send/send_icon_hover_3x.png";
-import sendIconHover4x from "../../../images/send/send_icon_hover_4x.png";
-import sendIconDisabled1x from "../../../images/send/send_icon_disabled_1x.png";
-import sendIconDisabled2x from "../../../images/send/send_icon_disabled_2x.png";
-import sendIconDisabled3x from "../../../images/send/send_icon_disabled_3x.png";
-import sendIconDisabled4x from "../../../images/send/send_icon_disabled_4x.png";
-import sendIconLoading1x from "../../../images/send/send_icon_loading_1x.png";
-import sendIconLoading2x from "../../../images/send/send_icon_loading_2x.png";
-import sendIconLoading3x from "../../../images/send/send_icon_loading_3x.png";
-import sendIconLoading4x from "../../../images/send/send_icon_loading_4x.png";
+import sendCut from "../../../images/send.png";
+import voiceIcon1x from "../../../images/voice/voice_icon_fixed_1x.png";
+import voiceIcon2x from "../../../images/voice/voice_icon_fixed_2x.png";
+import voiceIcon3x from "../../../images/voice/voice_icon_fixed_3x.png";
+import voiceIcon4x from "../../../images/voice/voice_icon_fixed_4x.png";
+import voiceIconHover1x from "../../../images/voice/voice_icon_hover_1x.png";
+import voiceIconHover2x from "../../../images/voice/voice_icon_hover_2x.png";
+import voiceIconHover3x from "../../../images/voice/voice_icon_hover_3x.png";
+import voiceIconHover4x from "../../../images/voice/voice_icon_hover_4x.png";
 
 type TtsMode = "browser" | "server";
 type SendVisualState = "default" | "hover" | "disabled" | "loading";
-type SendAsset = typeof sendIcon1x;
-type SendAssetSet = readonly [SendAsset, SendAsset, SendAsset, SendAsset];
+type VisualAsset = typeof voiceIcon1x;
+type VisualAssetSet = readonly [VisualAsset, VisualAsset, VisualAsset, VisualAsset];
+type VoiceVisualState = "default" | "hover";
 
 type CompanionCommandBarProps = {
   input: string;
@@ -41,23 +35,50 @@ type CompanionCommandBarProps = {
   onAdvancedToggle: () => void;
 };
 
-const sendVisualAssets: Record<SendVisualState, SendAssetSet> = {
-  default: [sendIcon1x, sendIcon2x, sendIcon3x, sendIcon4x],
-  hover: [sendIconHover1x, sendIconHover2x, sendIconHover3x, sendIconHover4x],
-  disabled: [sendIconDisabled1x, sendIconDisabled2x, sendIconDisabled3x, sendIconDisabled4x],
-  loading: [sendIconLoading1x, sendIconLoading2x, sendIconLoading3x, sendIconLoading4x],
+const voiceVisualAssets: Record<VoiceVisualState, VisualAssetSet> = {
+  default: [voiceIcon1x, voiceIcon2x, voiceIcon3x, voiceIcon4x],
+  hover: [voiceIconHover1x, voiceIconHover2x, voiceIconHover3x, voiceIconHover4x],
 };
 
-function SendStatePicture({ state }: { state: SendVisualState }) {
-  const [asset1x, asset2x, asset3x, asset4x] = sendVisualAssets[state];
+function VoiceButtonPicture({ state }: { state: VoiceVisualState }) {
+  const [asset1x, asset2x, asset3x, asset4x] = voiceVisualAssets[state];
 
   return (
-    <picture className="mio-send-art-picture">
+    <picture className="mio-voice-button-picture">
       <source media="(min-resolution: 3.5dppx)" srcSet={asset4x.src} />
       <source media="(min-resolution: 2.5dppx)" srcSet={asset3x.src} />
       <source media="(min-resolution: 1.5dppx)" srcSet={asset2x.src} />
-      <img className="mio-send-art" src={asset1x.src} alt="" aria-hidden="true" />
+      <img className="mio-voice-button-image" src={asset1x.src} alt="" aria-hidden="true" />
     </picture>
+  );
+}
+
+function VoiceButton() {
+  return (
+    <button className="mio-voice-button" type="button" aria-label={"\u8bed\u97f3\u8f93\u5165"}>
+      <span className="mio-voice-button-layer mio-voice-button-layer-default" aria-hidden="true">
+        <VoiceButtonPicture state="default" />
+      </span>
+      <span className="mio-voice-button-layer mio-voice-button-layer-hover" aria-hidden="true">
+        <VoiceButtonPicture state="hover" />
+      </span>
+    </button>
+  );
+}
+
+function SendButton({ loading, disabled, state }: { loading: boolean; disabled: boolean; state: SendVisualState }) {
+  return (
+    <button
+      className="mio-send"
+      type="submit"
+      disabled={disabled}
+      data-send-state={state}
+      aria-label={loading ? "\u53d1\u9001\u4e2d" : "\u53d1\u9001"}
+      aria-busy={loading || undefined}
+    >
+      <img className="mio-send-cut" src={sendCut.src} alt="" aria-hidden="true" />
+      <span className="mio-send-label">{loading ? "\u53d1\u9001\u4e2d" : "\u53d1\u9001"}</span>
+    </button>
   );
 }
 
@@ -103,15 +124,7 @@ export function CompanionCommandBar({
             />
           </label>
 
-          <button className="mio-mic" type="button" aria-label={"\u8bed\u97f3\u8f93\u5165"}>
-            <span className="mio-mic-icon" aria-hidden="true">
-              <svg viewBox="0 0 18 18" focusable="false" aria-hidden="true">
-                <rect x="5" y="2.2" width="8" height="9.6" rx="4" ry="4" />
-                <path d="M3 10.7c.35 2.5 2.61 4.35 6 4.35s5.65-1.85 6-4.35" />
-                <path d="M9 14.9v2.1" />
-              </svg>
-            </span>
-          </button>
+          <VoiceButton />
         </div>
 
         <div className="mio-command-center">
@@ -126,30 +139,7 @@ export function CompanionCommandBar({
               />
             </div>
 
-            <button
-              className="mio-send"
-              type="submit"
-              disabled={buttonDisabled}
-              data-send-state={sendState}
-              aria-label={loading ? "\u53d1\u9001\u4e2d" : "\u53d1\u9001"}
-              aria-busy={loading || undefined}
-            >
-              <span className="mio-send-art-stack" aria-hidden="true">
-                <span className="mio-send-art-layer mio-send-art-layer-default">
-                  <SendStatePicture state="default" />
-                </span>
-                <span className="mio-send-art-layer mio-send-art-layer-hover">
-                  <SendStatePicture state="hover" />
-                </span>
-                <span className="mio-send-art-layer mio-send-art-layer-disabled">
-                  <SendStatePicture state="disabled" />
-                </span>
-                <span className="mio-send-art-layer mio-send-art-layer-loading">
-                  <SendStatePicture state="loading" />
-                </span>
-              </span>
-              <span className="mio-send-label">{loading ? "\u53d1\u9001\u4e2d" : "\u53d1\u9001"}</span>
-            </button>
+            <SendButton loading={loading} disabled={buttonDisabled} state={sendState} />
           </div>
         </div>
 

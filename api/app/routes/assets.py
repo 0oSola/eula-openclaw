@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import shutil
 import re
+import struct
 from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
@@ -20,9 +21,112 @@ logger = logging.getLogger(__name__)
 ALLOWED_SLOTS = {"neutral", "happy", "sad", "thinking", "excited", "caring"}
 MMD_MODEL_EXTENSIONS = {".pmx", ".pmd"}
 MMD_MOTION_EXTENSIONS = {".vmd"}
+VMD_HEADER_SIZE = 50
+VMD_BONE_FRAME_SIZE = 111
+VMD_LOWER_BODY_MOTION_THRESHOLD = 0.35
+VMD_LOWER_BODY_BONE_NAMES = {
+    "center",
+    "lower body",
+    "left leg",
+    "right leg",
+    "left knee",
+    "right knee",
+    "left ankle",
+    "right ankle",
+    "left toe",
+    "right toe",
+    "left foot ik",
+    "right foot ik",
+    "left toe ik",
+    "right toe ik",
+    "センター",
+    "下半身",
+    "左足",
+    "右足",
+    "左ひざ",
+    "右ひざ",
+    "左足首",
+    "右足首",
+    "左つま先",
+    "右つま先",
+    "左足ＩＫ",
+    "右足ＩＫ",
+    "左つま先ＩＫ",
+    "右つま先ＩＫ",
+}
 
 
-def _asset_public(item: dict) -> dict:
+def _decode_vmd_name(raw_name: bytes) -> str:
+    return raw_name.split(b"\x00", 1)[0].decode("cp932", errors="replace").strip()
+
+
+def _normalize_motion_bone_name(name: str) -> str:
+    return re.sub(r"\s+", " ", (name or "").replace("_", " ").strip().lower())
+
+
+def _analyze_vmd_motion_profile(path: Path) -> dict:
+    profile = {
+        "lower_body_motion_score": 0.0,
+        "lower_body_track_count": 0,
+        "companion_safe": True,
+    }
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return profile
+    if len(data) < VMD_HEADER_SIZE + 4 or not data.startswith(b"Vocaloid Motion Data"):
+        return profile
+
+    try:
+        bone_frame_count = struct.unpack_from("<I", data, VMD_HEADER_SIZE)[0]
+    except struct.error:
+        return profile
+
+    offset = VMD_HEADER_SIZE + 4
+    score = 0.0
+    track_names: set[str] = set()
+    for _ in range(bone_frame_count):
+        if offset + VMD_BONE_FRAME_SIZE > len(data):
+            break
+        name = _decode_vmd_name(data[offset : offset + 15])
+        normalized_name = _normalize_motion_bone_name(name)
+        if name in VMD_LOWER_BODY_BONE_NAMES or normalized_name in VMD_LOWER_BODY_BONE_NAMES:
+            track_names.add(name or normalized_name)
+            try:
+                pos_x, pos_y, pos_z = struct.unpack_from("<3f", data, offset + 19)
+                rot_x, rot_y, rot_z, _rot_w = struct.unpack_from("<4f", data, offset + 31)
+            except struct.error:
+                break
+            score = max(
+                score,
+                abs(pos_x),
+                abs(pos_y),
+                abs(pos_z),
+                abs(rot_x),
+                abs(rot_y),
+                abs(rot_z),
+            )
+        offset += VMD_BONE_FRAME_SIZE
+
+    profile["lower_body_motion_score"] = round(score, 3)
+    profile["lower_body_track_count"] = len(track_names)
+    profile["companion_safe"] = score <= VMD_LOWER_BODY_MOTION_THRESHOLD
+    return profile
+
+
+def _asset_motion_profile(settings, item: dict) -> dict:
+    try:
+        path = _resolve_vmd_asset_file_path(settings, item)
+    except Exception:
+        return {
+            "lower_body_motion_score": 0.0,
+            "lower_body_track_count": 0,
+            "companion_safe": True,
+        }
+    return _analyze_vmd_motion_profile(path)
+
+
+def _asset_public(settings, item: dict) -> dict:
     return {
         "asset_id": item["asset_id"],
         "user_id": item["user_id"],
@@ -35,6 +139,7 @@ def _asset_public(item: dict) -> dict:
         "favorite_model_relative_path": item.get("favorite_model_relative_path"),
         "size_bytes": item["size_bytes"],
         "created_at": item["created_at"],
+        "motion_profile": _asset_motion_profile(settings, item),
         "url": f"/assets/vmd/file/{item['asset_id']}",
     }
 
@@ -327,7 +432,7 @@ async def upload_vmd(
         item["filename"],
         item.get("source_relative_path") or "",
     )
-    return _asset_public(item)
+    return _asset_public(settings, item)
 
 
 @router.get("/vmd")
@@ -364,7 +469,7 @@ def list_vmd_assets(
                 if updated:
                     item = updated
         normalized_items.append(item)
-    return {"items": [_asset_public(item) for item in normalized_items]}
+    return {"items": [_asset_public(settings, item) for item in normalized_items]}
 
 
 @router.patch("/vmd/{asset_id}")
@@ -416,7 +521,7 @@ def update_vmd_asset(
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Asset not found.")
-    return _asset_public(updated)
+    return _asset_public(settings, updated)
 
 
 @router.delete("/vmd/{asset_id}")

@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -22,10 +22,13 @@ import {
 import { getModelDisplayLabel, pickInitialModelSelection } from "@/features/stage/modelCatalog.js";
 import { collectImportableVmdFiles } from "@/features/stage/vmdImportHelpers.js";
 import {
+  getOpenClawConfig,
+  getOpenClawHealth,
   getResolvedMappings,
   listMmdModels,
   listVmdAssets,
   postChat,
+  putOpenClawConfig,
   requestServerTts,
   updateVmdAsset,
   uploadVmdAsset,
@@ -37,6 +40,8 @@ import type {
   MappingConfig,
   MmdCameraSnapshot,
   MmdModelAsset,
+  OpenClawConfig,
+  OpenClawHealthStatus,
   RenderPipeline,
   UserSession,
   VmdAsset,
@@ -59,12 +64,25 @@ type InteractionState = {
   standbyVmdUrl?: string;
   loopGapMs?: number;
   loopMode?: "random" | "sequential";
+  lockLowerBody?: boolean;
+  disableCrossfade?: boolean;
   playbackRate?: number;
   sequence: InteractionStep[];
 };
 
 type InteractionSource = "default" | "autoplay" | "manual-preview" | "chat";
 type ToastState = { id: number; message: string } | null;
+type OpenClawDraft = {
+  base_url: string;
+  token: string;
+  token_configured: boolean;
+  agent_id: string;
+  model: string;
+  message_channel: string;
+  proxy_url: string;
+  verify_ssl: boolean;
+  timeout_seconds: string;
+};
 
 const SPRITE = "/images/sprite-sliced";
 const DEFAULT_MODEL_RELATIVE_PATH = "优菈.pmx";
@@ -187,6 +205,20 @@ function createDefaultInteractionState(): InteractionState {
   };
 }
 
+function createOpenClawDraft(config?: OpenClawConfig | null): OpenClawDraft {
+  return {
+    base_url: config?.base_url || "http://127.0.0.1:18789",
+    token: "",
+    token_configured: Boolean(config?.token_configured),
+    agent_id: config?.agent_id || "main",
+    model: config?.model || "",
+    message_channel: config?.message_channel || "feishu",
+    proxy_url: config?.proxy_url || "",
+    verify_ssl: config?.verify_ssl ?? true,
+    timeout_seconds: String(config?.timeout_seconds ?? 15),
+  };
+}
+
 function makeHistory(messages: ChatMessage[]) {
   return messages
     .filter((item) => item.role === "user" || item.role === "assistant")
@@ -245,6 +277,15 @@ export default function CompanionPage() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isRightRailCollapsed, setIsRightRailCollapsed] = useState(true);
   const [activeRightPanelView, setActiveRightPanelView] = useState<RightPanelView>("overview");
+  const [isOpenClawSettingsOpen, setIsOpenClawSettingsOpen] = useState(false);
+  const [openClawDraft, setOpenClawDraft] = useState<OpenClawDraft>(createOpenClawDraft);
+  const [openClawSavedConfig, setOpenClawSavedConfig] = useState<OpenClawConfig | null>(null);
+  const [openClawHealth, setOpenClawHealth] = useState<OpenClawHealthStatus | null>(null);
+  const [openClawLoading, setOpenClawLoading] = useState(false);
+  const [openClawSaving, setOpenClawSaving] = useState(false);
+  const [openClawTesting, setOpenClawTesting] = useState(false);
+  const [openClawError, setOpenClawError] = useState("");
+  const [openClawMessage, setOpenClawMessage] = useState("");
 
   useEffect(() => {
     const saved = loadSession();
@@ -287,6 +328,42 @@ export default function CompanionPage() {
     setActiveRightPanelView(view);
     setIsRightRailCollapsed(false);
   }
+
+  const loadOpenClawConfig = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (!session) return;
+      if (!silent) {
+        setOpenClawLoading(true);
+        setOpenClawError("");
+        setOpenClawMessage("");
+        setOpenClawHealth(null);
+      }
+      try {
+        const config = await getOpenClawConfig(session.userId);
+        setOpenClawSavedConfig(config);
+        setOpenClawDraft(createOpenClawDraft(config));
+      } catch (err) {
+        if (!silent) {
+          setOpenClawError(err instanceof Error ? err.message : "OpenClaw 配置读取失败。");
+        }
+      } finally {
+        if (!silent) {
+          setOpenClawLoading(false);
+        }
+      }
+    },
+    [session],
+  );
+
+  useEffect(() => {
+    if (!session) return;
+    void loadOpenClawConfig({ silent: true });
+  }, [loadOpenClawConfig, session]);
+
+  useEffect(() => {
+    if (!isOpenClawSettingsOpen || !session) return;
+    void loadOpenClawConfig();
+  }, [isOpenClawSettingsOpen, loadOpenClawConfig, session]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -461,8 +538,83 @@ export default function CompanionPage() {
     setRenameDraft("");
   }
 
-  async function handleRenameAssetSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function openOpenClawSettings() {
+    setIsOpenClawSettingsOpen(true);
+    setOpenClawError("");
+    setOpenClawMessage("");
+    setOpenClawHealth(null);
+  }
+
+  function closeOpenClawSettings() {
+    setIsOpenClawSettingsOpen(false);
+    setOpenClawError("");
+    setOpenClawMessage("");
+    setOpenClawHealth(null);
+  }
+
+  function resetOpenClawDraft() {
+    setOpenClawDraft(createOpenClawDraft(openClawSavedConfig));
+    setOpenClawError("");
+    setOpenClawMessage("已恢复为最近一次读取到的配置。");
+    setOpenClawHealth(null);
+  }
+
+  async function handleOpenClawSave() {
+    if (!session) return;
+    const baseUrl = openClawDraft.base_url.trim();
+    const timeoutSeconds = Number.parseInt(openClawDraft.timeout_seconds, 10);
+    if (!baseUrl) {
+      setOpenClawError("Base URL 不能为空。");
+      return;
+    }
+    if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 300) {
+      setOpenClawError("Timeout Seconds 需要在 1 到 300 之间。");
+      return;
+    }
+
+    setOpenClawSaving(true);
+    setOpenClawError("");
+    setOpenClawMessage("");
+    try {
+      const saved = await putOpenClawConfig(session.userId, {
+        base_url: baseUrl,
+        token: openClawDraft.token.trim() ? openClawDraft.token.trim() : null,
+        agent_id: openClawDraft.agent_id.trim() || "main",
+        model: openClawDraft.model.trim(),
+        message_channel: openClawDraft.message_channel.trim() || "feishu",
+        proxy_url: openClawDraft.proxy_url.trim(),
+        verify_ssl: openClawDraft.verify_ssl,
+        timeout_seconds: timeoutSeconds,
+      });
+      setOpenClawSavedConfig(saved);
+      setOpenClawDraft(createOpenClawDraft(saved));
+      setOpenClawMessage(saved.message);
+      pushToast("OpenClaw 配置已保存。");
+    } catch (err) {
+      setOpenClawError(err instanceof Error ? err.message : "OpenClaw 配置保存失败。");
+    } finally {
+      setOpenClawSaving(false);
+    }
+  }
+
+  async function handleOpenClawTest() {
+    if (!session) return;
+    setOpenClawTesting(true);
+    setOpenClawError("");
+    setOpenClawMessage("");
+    try {
+      const health = await getOpenClawHealth(session.userId);
+      setOpenClawHealth(health);
+      setOpenClawMessage(health.ok ? "当前 API 运行中的 OpenClaw 连接正常。" : "当前 API 运行中的 OpenClaw 连接异常。");
+    } catch (err) {
+      setOpenClawHealth(null);
+      setOpenClawError(err instanceof Error ? err.message : "OpenClaw 连接测试失败。");
+    } finally {
+      setOpenClawTesting(false);
+    }
+  }
+
+  async function handleRenameAssetConfirm() {
     if (!session || !renameTarget) return;
     const nextName = renameDraft.trim();
     if (!nextName) {
@@ -484,6 +636,20 @@ export default function CompanionPage() {
       setAdvancedError(err instanceof Error ? err.message : "Rename failed.");
     } finally {
       setAdvancedBusy(false);
+    }
+  }
+
+  function handleRenameDialogKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeRenameDialog();
+      return;
+    }
+    if (event.key === "Enter") {
+      const target = event.target;
+      if (target instanceof HTMLButtonElement) return;
+      event.preventDefault();
+      void handleRenameAssetConfirm();
     }
   }
 
@@ -841,27 +1007,210 @@ export default function CompanionPage() {
         </div>
 
         <div className="mio-session">
-          <span>USER: {session.userId}</span>
-          <span>SESSION: {sessionId.slice(0, 6).toUpperCase()}</span>
-          <Link href="/traces" className="mio-trace-button">
-            TRACE
-          </Link>
-          <button
-            className="mio-icon-button"
-            type="button"
-            onClick={() => {
-              clearSession();
-              router.push("/");
-            }}
-            aria-label={"\u9000\u51fa\u767b\u5f55"}
-          >
-            <img src={`${SPRITE}/asset-010.png`} alt="" />
-          </button>
-          <div className="mio-avatar-stack">
-            <img className="mio-avatar" src={`${SPRITE}/asset-030.png`} alt={"\u5f53\u524d\u89d2\u8272\u5934\u50cf"} />
+          <div className="mio-session-meta">
+            <span>USER: {session.userId}</span>
+            <span>SESSION: {sessionId.slice(0, 6).toUpperCase()}</span>
+          </div>
+          <div className="mio-session-actions">
+            <Link href="/traces" className="mio-trace-button">
+              TRACE
+            </Link>
+            <button
+              className="mio-icon-button"
+              type="button"
+              aria-label="Open OpenClaw settings"
+              aria-expanded={isOpenClawSettingsOpen}
+              onClick={openOpenClawSettings}
+            >
+              <span className="mio-nav-glyph" aria-hidden="true">
+                {renderSidebarIcon("settings")}
+              </span>
+            </button>
+            <button
+              className="mio-avatar-stack"
+              type="button"
+              onClick={() => {
+                clearSession();
+                router.push("/");
+              }}
+              aria-label={"\u9000\u51fa\u767b\u5f55"}
+            >
+              <img className="mio-avatar" src={`${SPRITE}/asset-030.png`} alt={"\u5f53\u524d\u89d2\u8272\u5934\u50cf"} />
+            </button>
           </div>
         </div>
       </header>
+
+      {isOpenClawSettingsOpen ? (
+        <div className="mio-settings-layer" role="presentation">
+          <button
+            type="button"
+            className="mio-settings-backdrop"
+            aria-label="Close OpenClaw settings"
+            onClick={closeOpenClawSettings}
+          />
+          <section
+            className="mio-settings-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="OpenClaw settings"
+          >
+            <header className="mio-settings-head">
+              <div>
+                <strong>OpenClaw</strong>
+                <span>保存会写入 `api/.env` 并立即刷新当前 API 的 OpenClaw 配置，测试连接读取的是运行中的后端配置。</span>
+              </div>
+              <button type="button" className="mio-advanced-close" onClick={closeOpenClawSettings} aria-label="Close">
+                ×
+              </button>
+            </header>
+
+            <div className="mio-settings-body">
+              {openClawError ? <p className="mio-advanced-error">{openClawError}</p> : null}
+              {openClawMessage && !openClawError ? <p className="mio-advanced-empty">{openClawMessage}</p> : null}
+
+              <div className="mio-settings-grid">
+                <label className="mio-advanced-field mio-advanced-field-wide">
+                  <span>Base URL</span>
+                  <input
+                    type="url"
+                    value={openClawDraft.base_url}
+                    onChange={(event) => setOpenClawDraft((current) => ({ ...current, base_url: event.target.value }))}
+                    disabled={openClawLoading || openClawSaving}
+                  />
+                </label>
+                <label className="mio-advanced-field mio-advanced-field-wide">
+                  <span>Token</span>
+                  <input
+                    type="password"
+                    value={openClawDraft.token}
+                    placeholder={openClawDraft.token_configured ? "已配置，留空则保持不变" : "未配置"}
+                    onChange={(event) => setOpenClawDraft((current) => ({ ...current, token: event.target.value }))}
+                    disabled={openClawLoading || openClawSaving}
+                  />
+                </label>
+                <label className="mio-advanced-field">
+                  <span>Agent ID</span>
+                  <input
+                    value={openClawDraft.agent_id}
+                    onChange={(event) => setOpenClawDraft((current) => ({ ...current, agent_id: event.target.value }))}
+                    disabled={openClawLoading || openClawSaving}
+                  />
+                </label>
+                <label className="mio-advanced-field">
+                  <span>Model</span>
+                  <input
+                    value={openClawDraft.model}
+                    onChange={(event) => setOpenClawDraft((current) => ({ ...current, model: event.target.value }))}
+                    disabled={openClawLoading || openClawSaving}
+                  />
+                </label>
+                <label className="mio-advanced-field">
+                  <span>Message Channel</span>
+                  <input
+                    value={openClawDraft.message_channel}
+                    onChange={(event) =>
+                      setOpenClawDraft((current) => ({ ...current, message_channel: event.target.value }))
+                    }
+                    disabled={openClawLoading || openClawSaving}
+                  />
+                </label>
+                <label className="mio-advanced-field">
+                  <span>Proxy URL</span>
+                  <input
+                    type="url"
+                    value={openClawDraft.proxy_url}
+                    onChange={(event) => setOpenClawDraft((current) => ({ ...current, proxy_url: event.target.value }))}
+                    disabled={openClawLoading || openClawSaving}
+                  />
+                </label>
+                <label className="mio-advanced-field">
+                  <span>Timeout Seconds</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="300"
+                    value={openClawDraft.timeout_seconds}
+                    onChange={(event) =>
+                      setOpenClawDraft((current) => ({ ...current, timeout_seconds: event.target.value }))
+                    }
+                    disabled={openClawLoading || openClawSaving}
+                  />
+                </label>
+                <label className="mio-advanced-field mio-advanced-toggle">
+                  <span>Verify SSL</span>
+                  <input
+                    type="checkbox"
+                    checked={openClawDraft.verify_ssl}
+                    onChange={(event) =>
+                      setOpenClawDraft((current) => ({ ...current, verify_ssl: event.target.checked }))
+                    }
+                    disabled={openClawLoading || openClawSaving}
+                  />
+                </label>
+              </div>
+
+              <div className="mio-settings-actions">
+                <button
+                  type="button"
+                  className="mio-advanced-mini"
+                  onClick={() => void handleOpenClawTest()}
+                  disabled={openClawLoading || openClawSaving || openClawTesting}
+                >
+                  {openClawTesting ? "Testing..." : "Test Connection"}
+                </button>
+                <button
+                  type="button"
+                  className="mio-advanced-mini"
+                  onClick={resetOpenClawDraft}
+                  disabled={openClawLoading || openClawSaving}
+                >
+                  Reset
+                </button>
+                <button
+                  type="button"
+                  className="mio-advanced-mini is-active"
+                  onClick={() => void handleOpenClawSave()}
+                  disabled={openClawLoading || openClawSaving}
+                >
+                  {openClawSaving ? "Saving..." : "Save"}
+                </button>
+              </div>
+
+              {openClawHealth ? (
+                <section className="mio-settings-diagnostics" aria-label="OpenClaw diagnostics">
+                  <div className="mio-settings-diagnostics-head">
+                    <strong>{openClawHealth.ok ? "Runtime OK" : "Runtime Error"}</strong>
+                    <span>{openClawHealth.base_url}</span>
+                  </div>
+                  <div className="mio-settings-meta">
+                    <span>Agent: {openClawHealth.agent_id || "main"}</span>
+                    <span>Model: {openClawHealth.model || "-"}</span>
+                    <span>SSL: {openClawHealth.verify_ssl ? "On" : "Off"}</span>
+                  </div>
+                  <div className="mio-settings-probes">
+                    {Object.entries(openClawHealth.probes || {}).map(([key, probe]) => (
+                      <div key={key} className="mio-settings-probe">
+                        <strong>{key}</strong>
+                        <span>
+                          {probe.status_code ?? "--"} · {probe.detail}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {openClawHealth.recommendations?.length ? (
+                    <div className="mio-settings-recommendations">
+                      {openClawHealth.recommendations.map((item) => (
+                        <span key={item}>{item}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <div className="mio-layout" data-testid="mio-layout">
         <aside
@@ -893,7 +1242,13 @@ export default function CompanionPage() {
             </button>
           ))}
 
-          <button className="mio-nav-button is-bottom" type="button" aria-label={"\u8bbe\u7f6e"}>
+          <button
+            className={`mio-nav-button is-bottom${isOpenClawSettingsOpen ? " is-active" : ""}`}
+            type="button"
+            aria-label={"\u8bbe\u7f6e"}
+            aria-pressed={isOpenClawSettingsOpen}
+            onClick={openOpenClawSettings}
+          >
             <span className="mio-nav-glyph" aria-hidden="true">
               {renderSidebarIcon("settings")}
             </span>
@@ -1282,13 +1637,16 @@ export default function CompanionPage() {
 
               {renameTarget ? (
                 <div className="mio-rename-scrim">
-                  <form
+                  <div
                     className="mio-rename-dialog"
                     data-testid="mio-rename-dialog"
-                    onSubmit={handleRenameAssetSubmit}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="mio-rename-title"
+                    onKeyDown={handleRenameDialogKeyDown}
                   >
                     <div className="mio-rename-copy">
-                      <strong>Rename Motion</strong>
+                      <strong id="mio-rename-title">Rename Motion</strong>
                       <span>{renameTarget.filename}</span>
                     </div>
                     <input
@@ -1303,11 +1661,16 @@ export default function CompanionPage() {
                       <button type="button" className="mio-advanced-mini" onClick={closeRenameDialog} disabled={advancedBusy}>
                         Cancel
                       </button>
-                      <button type="submit" className="mio-advanced-mini is-active" disabled={advancedBusy}>
+                      <button
+                        type="button"
+                        className="mio-advanced-mini is-active"
+                        onClick={() => void handleRenameAssetConfirm()}
+                        disabled={advancedBusy}
+                      >
                         Confirm
                       </button>
                     </div>
-                  </form>
+                  </div>
                 </div>
               ) : null}
             </section>

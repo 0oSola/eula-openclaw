@@ -1,15 +1,31 @@
 ﻿from pathlib import Path
 from uuid import uuid4
+import struct
 from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.routes import config as config_routes
+
+
+def _make_vmd_bytes(frames: list[tuple[str, tuple[float, float, float], tuple[float, float, float, float]]]) -> bytes:
+    header = b"Vocaloid Motion Data 0002".ljust(30, b"\x00")
+    model_name = b"test-model".ljust(20, b"\x00")
+    data = bytearray(header + model_name + struct.pack("<I", len(frames)))
+    for index, (name, position, rotation) in enumerate(frames):
+        encoded_name = name.encode("cp932")[:15].ljust(15, b"\x00")
+        data.extend(encoded_name)
+        data.extend(struct.pack("<I", index))
+        data.extend(struct.pack("<3f", *position))
+        data.extend(struct.pack("<4f", *rotation))
+        data.extend(bytes(64))
+    return bytes(data)
 
 
 def _make_case_dir() -> Path:
-    path = Path("D:/workspace/MMD project/api/tests_runtime") / uuid4().hex
+    path = Path(__file__).resolve().parent / "tests_runtime" / uuid4().hex
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -170,6 +186,91 @@ def test_healthz_openclaw_returns_diagnostic_payload():
     assert payload["scope_header_enabled"] is True
     assert payload["probes"]["models"]["status_code"] == 200
     assert payload["probes"]["responses"]["endpoint"] == "/v1/responses"
+
+
+def test_openclaw_config_route_reads_saved_env_values(monkeypatch):
+    case_dir = _make_case_dir()
+    env_path = case_dir / ".env"
+    monkeypatch.setattr(config_routes, "_openclaw_env_path", lambda: env_path)
+    env_path.write_text(
+        "\n".join(
+            [
+                "OPENCLAW_BASE_URL=http://10.0.0.8:18789/",
+                "OPENCLAW_TOKEN=secret-token",
+                "OPENCLAW_AGENT_ID=beta",
+                "OPENCLAW_MODEL=provider/model",
+                "OPENCLAW_MESSAGE_CHANNEL=custom-channel",
+                "OPENCLAW_PROXY_URL=http://127.0.0.1:7897",
+                "OPENCLAW_VERIFY_SSL=false",
+                "OPENCLAW_TIMEOUT_SECONDS=42",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    app = create_app({"data_dir": str(case_dir), "admin_user_ids": ["admin-1"]})
+    client = TestClient(app)
+
+    response = client.get("/config/openclaw", headers={"x-user-id": "admin-1"})
+    assert response.status_code == 200
+    assert response.json() == {
+        "base_url": "http://10.0.0.8:18789",
+        "token_configured": True,
+        "agent_id": "beta",
+        "model": "provider/model",
+        "message_channel": "custom-channel",
+        "proxy_url": "http://127.0.0.1:7897",
+        "verify_ssl": False,
+        "timeout_seconds": 42,
+    }
+
+
+def test_openclaw_config_route_persists_env_and_preserves_existing_token(monkeypatch):
+    case_dir = _make_case_dir()
+    env_path = case_dir / ".env"
+    monkeypatch.setattr(config_routes, "_openclaw_env_path", lambda: env_path)
+    env_path.write_text(
+        "# existing comment\nOPENCLAW_TOKEN=keep-me\nUNRELATED_KEY=stay-put\n",
+        encoding="utf-8",
+    )
+
+    app = create_app({"data_dir": str(case_dir), "admin_user_ids": ["admin-1"]})
+    client = TestClient(app)
+
+    response = client.put(
+        "/config/openclaw",
+        headers={"x-user-id": "admin-1"},
+        json={
+            "base_url": "http://127.0.0.1:18789/",
+            "token": None,
+            "agent_id": "main",
+            "model": "openclaw/default",
+            "message_channel": "feishu",
+            "proxy_url": "",
+            "verify_ssl": True,
+            "timeout_seconds": 15,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["token_configured"] is True
+    assert response.json()["restart_required"] is False
+    assert response.json()["message"] == "Saved to api/.env and reloaded in the running API."
+
+    saved = env_path.read_text(encoding="utf-8")
+    assert "# existing comment" in saved
+    assert "UNRELATED_KEY=stay-put" in saved
+    assert "OPENCLAW_TOKEN=keep-me" in saved
+    assert "OPENCLAW_BASE_URL=http://127.0.0.1:18789" in saved
+    assert "OPENCLAW_MODEL=openclaw/default" in saved
+    assert "OPENCLAW_VERIFY_SSL=true" in saved
+    assert "OPENCLAW_TIMEOUT_SECONDS=15" in saved
+    assert app.state.settings.openclaw_base_url == "http://127.0.0.1:18789"
+    assert app.state.settings.openclaw_token == "keep-me"
+    assert app.state.settings.openclaw_model == "openclaw/default"
+    assert app.state.openclaw_client.base_url == "http://127.0.0.1:18789"
+    assert app.state.openclaw_client.token == "keep-me"
+    assert app.state.openclaw_client.model == "openclaw/default"
 
 
 def test_vmd_upload_and_list():
@@ -383,6 +484,40 @@ def test_usage_vmd_files_are_synced_into_asset_registry_by_parent_folder():
     fetched = client.get(item["url"])
     assert fetched.status_code == 200
     assert fetched.content == b"Vocaloid Motion Data 0002"
+
+
+def test_vmd_assets_report_companion_motion_safety():
+    case_dir = _make_case_dir()
+    mmd_root = case_dir / "mmd"
+    model_rel = Path("Role/NemesisDefault.pmx")
+    model_abs = mmd_root / model_rel
+    model_abs.parent.mkdir(parents=True, exist_ok=True)
+    model_abs.write_bytes(b"pmx")
+
+    favorite_dir = mmd_root / "usage" / "vmd" / "Role[动作]"
+    favorite_dir.mkdir(parents=True, exist_ok=True)
+    safe_motion = favorite_dir / "Upper Body.vmd"
+    safe_motion.write_bytes(_make_vmd_bytes([("上半身", (0.0, 0.0, 0.0), (0.05, 0.0, 0.0, 1.0))]))
+    unsafe_motion = favorite_dir / "Leg Lift.vmd"
+    unsafe_motion.write_bytes(_make_vmd_bytes([("右足ＩＫ", (0.0, 1.2, 0.0), (0.0, 0.0, 0.0, 1.0))]))
+
+    app = create_app(
+        {
+            "data_dir": str(case_dir / "data"),
+            "admin_user_ids": [],
+            "mmd_root_dir": str(mmd_root),
+        }
+    )
+    client = TestClient(app)
+
+    listed = client.get("/assets/vmd?user_id=u1", headers={"x-user-id": "u1"})
+    assert listed.status_code == 200
+    items = {item["filename"]: item for item in listed.json()["items"]}
+
+    assert items["Upper Body.vmd"]["motion_profile"]["companion_safe"] is True
+    assert items["Leg Lift.vmd"]["motion_profile"]["companion_safe"] is False
+    assert items["Leg Lift.vmd"]["motion_profile"]["lower_body_track_count"] == 1
+    assert items["Leg Lift.vmd"]["motion_profile"]["lower_body_motion_score"] == 1.2
 
 
 def test_mmd_models_list_and_serving_url():

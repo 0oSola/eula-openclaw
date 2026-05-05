@@ -22,6 +22,8 @@ type StageInteraction = {
   standbyVmdUrl?: string;
   loopGapMs?: number;
   loopMode?: "random" | "sequential";
+  lockLowerBody?: boolean;
+  disableCrossfade?: boolean;
   playbackRate?: number;
   sequence?: Array<{
     template: string;
@@ -166,6 +168,8 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
           standbyUrl: interaction.standbyVmdUrl ? toAbsolute(interaction.standbyVmdUrl) : "",
           loopGapMs: interaction.loopGapMs,
           loopMode: interaction.loopMode === "sequential" ? "sequential" : "random",
+          ...(interaction.lockLowerBody ? { lockLowerBody: true } : {}),
+          ...(interaction.disableCrossfade ? { disableCrossfade: true } : {}),
           emotionByUrl: interaction.vmdLoopEmotionByUrl
             ? Object.fromEntries(
                 Object.entries(interaction.vmdLoopEmotionByUrl).map(([url, emotion]) => [toAbsolute(url), emotion]),

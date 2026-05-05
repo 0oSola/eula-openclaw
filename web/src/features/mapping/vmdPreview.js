@@ -22,6 +22,24 @@ export function excludeEntryStandbyAssets(assets = []) {
   return Array.isArray(assets) ? assets.filter((asset) => !isEntryStandbyAsset(asset)) : [];
 }
 
+export function isCompanionSafeVmdAsset(asset) {
+  const profile = asset?.motion_profile;
+  if (!profile) return true;
+  return profile.companion_safe !== false;
+}
+
+export function excludeCompanionUnsafeAssets(assets = []) {
+  return Array.isArray(assets) ? assets.filter((asset) => isCompanionSafeVmdAsset(asset)) : [];
+}
+
+export function getCompanionVmdPlaybackGuards(asset) {
+  if (isCompanionSafeVmdAsset(asset)) return {};
+  return {
+    lockLowerBody: true,
+    disableCrossfade: true,
+  };
+}
+
 function clampPlaybackMultiplier(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 1;
@@ -49,13 +67,15 @@ export function createVmdPreviewInteraction(asset, multiplier = 1) {
     vmdUrl: asset?.url || "",
     vmdLoopEmotionByUrl: asset?.url ? { [asset.url]: asset?.slot || "neutral" } : {},
     playbackRate: resolveVmdPlaybackRate(asset, multiplier),
+    lockLowerBody: true,
+    disableCrossfade: true,
     sequence: [],
   };
 }
 
 export function createDefaultFavoriteLoopInteraction(assets = [], { enabled = true, loopMode = "random" } = {}) {
   if (!enabled) return null;
-  const playableAssets = excludeEntryStandbyAssets(assets).filter((asset) => asset?.url);
+  const playableAssets = excludeCompanionUnsafeAssets(excludeEntryStandbyAssets(assets)).filter((asset) => asset?.url);
   const leadAsset = playableAssets[0];
   if (!leadAsset) return null;
 
@@ -70,6 +90,7 @@ export function createDefaultFavoriteLoopInteraction(assets = [], { enabled = tr
     ),
     standbyVmdUrl: "",
     loopMode: loopMode === "sequential" ? "sequential" : "random",
+    ...getCompanionVmdPlaybackGuards(leadAsset),
     playbackRate: resolveVmdPlaybackRate(leadAsset),
     sequence: [],
   };
