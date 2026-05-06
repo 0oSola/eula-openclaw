@@ -166,48 +166,6 @@ const VMD_TRANSITION_FADE_SECONDS = 0.5;
 const STAGE_CANVAS_ASPECT_RATIO = 3 / 4;
 const BREATHING_CYCLE_SECONDS = 4.2;
 
-const MIO_REFERENCE_EULA_RENDER_PROFILE = Object.freeze({
-  name: "mio_reference_eula_heroic_soft_blue",
-  sourceReference: "companion screenshot target for Eula-like MMD rendering",
-  intent: {
-    look: "clean anime toon with luminous blue ambient fill",
-    priorities: [
-      "bright readable face",
-      "soft skin shading without oily specular hotspots",
-      "cool blue hair and cloth separation",
-      "controlled white-cyan highlights instead of gray shading",
-      "clear silhouette over the bright sky-ocean background",
-    ],
-  },
-  lighting: {
-    ambientIntensity: 0.98,
-    hemisphereIntensity: 0.88,
-    keyIntensity: 1.34,
-    fillIntensity: 0.82,
-    rimIntensity: 0.44,
-    keyColor: "#ffffff",
-    fillColor: "#b6deff",
-    rimColor: "#d8f0ff",
-  },
-  toonRamp: {
-    stops: ["#667da6", "#b7cae8", "#f5fbff"],
-  },
-  materialTuning: {
-    alphaTest: 0.5,
-    face: { shininess: 9, specular: 0.16, emissiveIntensity: 0.08, envMapIntensity: 0.02 },
-    skin: { shininess: 11, specular: 0.2, emissiveIntensity: 0.06, envMapIntensity: 0.02 },
-    hair: { shininess: 18, specular: 0.48, emissiveIntensity: 0.03, envMapIntensity: 0.04 },
-    cloth: { shininess: 15, specular: 0.34, emissiveIntensity: 0.02, envMapIntensity: 0.03 },
-    metal: { shininess: 36, specular: 0.78, emissiveIntensity: 0.02, envMapIntensity: 0.08 },
-    default: { shininess: 18, specular: 0.38, emissiveIntensity: 0.02, envMapIntensity: 0.03 },
-  },
-  suppression: {
-    hideProject2Masks: true,
-    hideHeadFxGlow: true,
-    keepExplicitGlowPurple: true,
-  },
-});
-
 const smooth = (current, target, lambda, dt) => THREE.MathUtils.damp(current, target, lambda, dt);
 
 function isKnownMmdParserConsoleError(args) {
@@ -419,27 +377,11 @@ const STAGE_PRESENTATION_PRESETS = {
       targetHeight: 19.5,
     },
     lights: {
-      ambient: { color: "#f7fbff", intensity: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.ambientIntensity },
-      hemisphere: {
-        sky: "#dff3ff",
-        ground: "#13284b",
-        intensity: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.hemisphereIntensity,
-      },
-      key: {
-        color: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.keyColor,
-        intensity: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.keyIntensity,
-        position: [-11, 18, 24],
-      },
-      fill: {
-        color: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.fillColor,
-        intensity: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.fillIntensity,
-        position: [12, 11, 18],
-      },
-      rim: {
-        color: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.rimColor,
-        intensity: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.rimIntensity,
-        position: [0, 14, -18],
-      },
+      ambient: { color: 0xffffff, intensity: 0.8 },
+      hemisphere: { sky: "#ffffff", ground: "#333333", intensity: 0.6 },
+      key: { color: "#ffffff", intensity: 1.2, position: [-15, 20, 30] },
+      fill: { color: "#ffffff", intensity: 0.5, position: [15, 10, -20] },
+      rim: { color: "#ffffff", intensity: 0, position: [0, 0, 0] },
     },
     shadowMapType: THREE.PCFSoftShadowMap,
     floor: {
@@ -687,11 +629,7 @@ function createToonRampTexture(pipeline = "classic") {
     gradient.addColorStop(0.46, "#92a0b8");
     gradient.addColorStop(0.76, "#92a0b8");
     gradient.addColorStop(0.77, "#eef7ff");
-  } else if (pipeline === "mio-reference") {
-    gradient.addColorStop(0, MIO_REFERENCE_EULA_RENDER_PROFILE.toonRamp.stops[0]);
-    gradient.addColorStop(0.32, MIO_REFERENCE_EULA_RENDER_PROFILE.toonRamp.stops[1]);
-    gradient.addColorStop(0.74, MIO_REFERENCE_EULA_RENDER_PROFILE.toonRamp.stops[2]);
-  } else if (pipeline === "genshin") {
+  } else if (pipeline === "genshin" || pipeline === "mio-reference") {
     gradient.addColorStop(0, "#505050");
     gradient.addColorStop(0.3, "#b4b4b4");
     gradient.addColorStop(0.7, "#ffffff");
@@ -1093,52 +1031,9 @@ export function tuneGenshinMMDMaterial(material, rampTexture) {
   finalizeMMDMaterial(material, rampTexture);
 }
 
-export function tuneMioReferenceMMDMaterial(material, rampTexture) {
-  if (!material) return;
-  const { profile } = primeMMDMaterial(material);
-  const materialName = `${material.name || ""}`;
-  const normalizedName = normalizeGenshinMaterialName(materialName);
-  const isGlowMaterial = isGenshinGlowMaterial(materialName);
-  const isHeadFxMaterial = isGlowMaterial && normalizedName.includes("head");
-  const tuning = MIO_REFERENCE_EULA_RENDER_PROFILE.materialTuning[profile] || MIO_REFERENCE_EULA_RENDER_PROFILE.materialTuning.default;
-
-  cleanLegacyMMDMaterialFlags(material);
-
-  material.alphaTest = Math.max(material.alphaTest || 0, MIO_REFERENCE_EULA_RENDER_PROFILE.materialTuning.alphaTest);
-  material.side = THREE.DoubleSide;
-
-  if ("shininess" in material && typeof material.shininess === "number") {
-    material.shininess = Math.min(material.shininess, tuning.shininess);
-  }
-  if ("specular" in material && material.specular?.isColor) {
-    material.specular.multiplyScalar(tuning.specular);
-  }
-  if ("emissiveIntensity" in material) material.emissiveIntensity = tuning.emissiveIntensity;
-  if ("envMapIntensity" in material) material.envMapIntensity = tuning.envMapIntensity;
-
-  if (isGlowMaterial && MIO_REFERENCE_EULA_RENDER_PROFILE.suppression.keepExplicitGlowPurple) {
-    material.emissive?.setHex?.(0xa7d8ff);
-    if ("emissiveIntensity" in material) material.emissiveIntensity = Math.max(material.emissiveIntensity || 0, 0.2);
-  } else {
-    material.emissive?.setHex?.(0x000000);
-  }
-
-  if (
-    (MIO_REFERENCE_EULA_RENDER_PROFILE.suppression.hideProject2Masks && isGenshinSuppressedMaskMaterial(materialName)) ||
-    (MIO_REFERENCE_EULA_RENDER_PROFILE.suppression.hideHeadFxGlow && isHeadFxMaterial)
-  ) {
-    material.visible = false;
-    material.transparent = true;
-    material.opacity = 0;
-  }
-
-  finalizeMMDMaterial(material, rampTexture);
-}
-
 function tuneMaterialByPipeline(material, toonRampTexture, pipeline) {
   if (pipeline === "hero-shot") return tuneHeroShotMMDMaterial(material, toonRampTexture);
-  if (pipeline === "mio-reference") return tuneMioReferenceMMDMaterial(material, toonRampTexture);
-  if (pipeline === "genshin") return tuneGenshinMMDMaterial(material, toonRampTexture);
+  if (pipeline === "genshin" || pipeline === "mio-reference") return tuneGenshinMMDMaterial(material, toonRampTexture);
   return tuneClassicMMDMaterial(material, toonRampTexture);
 }
 

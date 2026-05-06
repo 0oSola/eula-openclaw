@@ -921,31 +921,18 @@ test("genshin material tuning preserves authored toon ramps while keeping hair p
   assert.equal(hair.emissive.getHex(), 0x000000);
 });
 
-test("mio-reference material tuning applies the softer eula-style face profile", () => {
-  const face = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
-  const ramp = { id: "mio-reference-ramp" };
+test("mio-reference character rendering reuses genshin material tuning", () => {
+  const genshin = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
+  const reference = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
 
-  runtimeModule.tuneMioReferenceMMDMaterial?.(face, ramp);
+  runtimeModule.tuneGenshinMMDMaterial?.(genshin, { id: "genshin-ramp" });
+  runtimeModule.tuneGenshinMMDMaterial?.(reference, { id: "mio-reference-ramp" });
 
-  assert.equal(face.alphaTest, 0.5);
-  assert.equal(face.side, THREE.DoubleSide);
-  assert.equal(face.gradientMap, ramp);
-  assert.equal(face.shininess, 9);
-  assert.ok(face.specular.r <= 0.17);
-  assert.equal(face.emissive.getHex(), 0x000000);
-  assert.ok(face.envMapIntensity <= 0.02);
-  assert.ok(face.emissiveIntensity <= 0.08);
-});
-
-test("mio-reference material tuning keeps explicit glow subtle and blue instead of genshin purple", () => {
-  const glow = makeMaterial({ name: "purple glow fx", shininess: 20 });
-  const ramp = { id: "mio-reference-ramp" };
-
-  runtimeModule.tuneMioReferenceMMDMaterial?.(glow, ramp);
-
-  assert.equal(glow.gradientMap.id, "mio-reference-ramp");
-  assert.equal(glow.emissive.getHex(), 0xa7d8ff);
-  assert.ok(glow.emissiveIntensity <= 0.2);
+  assert.equal(reference.alphaTest, genshin.alphaTest);
+  assert.equal(reference.side, genshin.side);
+  assert.equal(reference.shininess, genshin.shininess);
+  assert.equal(reference.emissive.getHex(), genshin.emissive.getHex());
+  assert.equal(reference.envMapIntensity, genshin.envMapIntensity);
 });
 
 test("hero-shot material tuning differs from classic while preserving alpha safety", () => {
@@ -992,6 +979,7 @@ test("hero-shot face material lift stays below overexposure range", () => {
 test("loadModel selects material tuning by renderPipeline", async () => {
   const classicMaterial = makeMaterial({ name: "Hair Cloth", transparent: true, specular: 0.7, shininess: 40 });
   const genshinMaterial = makeMaterial({ name: "Hair Cloth", transparent: true, specular: 0.7, shininess: 40 });
+  const genshinFaceMaterial = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
   const heroShotMaterial = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
   const mioReferenceMaterial = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
 
@@ -1006,6 +994,13 @@ test("loadModel selects material tuning by renderPipeline", async () => {
   genshinRuntime.loader = {
     load(_url, onLoad) {
       onLoad(makeMesh({ materials: [genshinMaterial] }));
+    },
+  };
+
+  const genshinFaceRuntime = makeRuntime({ renderPipeline: "genshin", toonRampTexture: { id: "genshin-ramp" } });
+  genshinFaceRuntime.loader = {
+    load(_url, onLoad) {
+      onLoad(makeMesh({ materials: [genshinFaceMaterial] }));
     },
   };
 
@@ -1025,6 +1020,7 @@ test("loadModel selects material tuning by renderPipeline", async () => {
 
   await classicRuntime.loadModel("/classic-model.pmx");
   await genshinRuntime.loadModel("/genshin-model.pmx");
+  await genshinFaceRuntime.loadModel("/genshin-face-model.pmx");
   await heroShotRuntime.loadModel("/hero-shot-model.pmx");
   await mioReferenceRuntime.loadModel("/mio-reference-model.pmx");
 
@@ -1044,8 +1040,8 @@ test("loadModel selects material tuning by renderPipeline", async () => {
 
   assert.equal(mioReferenceMaterial.alphaTest, 0.5);
   assert.equal(mioReferenceMaterial.gradientMap.id, "mio-reference-ramp");
-  assert.equal(mioReferenceMaterial.shininess, 9);
-  assert.notEqual(mioReferenceMaterial.shininess, genshinMaterial.shininess);
+  assert.equal(mioReferenceMaterial.shininess, genshinFaceMaterial.shininess);
+  assert.equal(mioReferenceMaterial.emissive.getHex(), genshinFaceMaterial.emissive.getHex());
 });
 
 test("loadModel routes hero-shot face materials through hero-shot tuning instead of classic tuning", async () => {
