@@ -33,9 +33,12 @@
     "**/*.js",
     "**/*.ts",
     "**/*.tsx",
+    "../.next-codex-dev-web/types/**/*.ts",
+    ".next-codex-dev/types/**/*.ts",
+    ".next-codex-preview/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-codex-preview/types/**/*.ts"
+    "..\\..\\..\\tmp\\eula-openclaw-next\\dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

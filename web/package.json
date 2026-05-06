@@ -2,11 +2,10 @@
   "name": "mmd-companion-web",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "next dev -p 3000",
-    "build": "next build",
-    "start": "next start -p 3000",
+    "dev": "node ./scripts/run-next.mjs dev",
+    "build": "node ./scripts/run-next.mjs build",
+    "start": "node ./scripts/run-next.mjs start",
     "check:basic": "node ./tests/run-basic-checks.mjs"
   },
   "dependencies": {
