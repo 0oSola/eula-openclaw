@@ -6,11 +6,15 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1 });
 const captureState = process.env.CAPTURE_SEND_STATE || "disabled";
+const captureRenderPipeline = process.env.CAPTURE_RENDER_PIPELINE || "mio-reference";
 
-await page.addInitScript(() => {
+await page.addInitScript((renderPipeline) => {
   const key = "mmd_companion_session_v1";
-  window.localStorage.setItem(key, JSON.stringify({ userId: "8X29-AF3E", renderPipeline: "classic" }));
-});
+  window.localStorage.setItem(
+    key,
+    JSON.stringify({ userId: "8X29-AF3E", renderPipeline: renderPipeline }),
+  );
+}, captureRenderPipeline);
 
 await page.goto("http://127.0.0.1:3200/companion", { waitUntil: "domcontentloaded" });
 
