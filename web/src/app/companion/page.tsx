@@ -15,6 +15,7 @@ import {
 import { resolvePlaybackPlan } from "@/features/mapping/resolveAction.js";
 import { MMDStage, type MMDStageHandle } from "@/features/stage/MMDStage";
 import { CompanionCommandBar } from "./CompanionCommandBar";
+import { MioModeBackground } from "./MioModeBackground";
 import { CompanionRightRail, type RightPanelView } from "./CompanionRightRail";
 import {
   DEFAULT_VMD_PLAYBACK_RATE,
@@ -92,8 +93,8 @@ const INPUT_LABEL =
   "\u8f93\u5165\u4f60\u7684\u6307\u4ee4 / \u4efb\u52a1 / \u95ee\u9898...\uff08Enter \u53d1\u9001\uff0cShift + Enter \u6362\u884c\uff09";
 
 function normalizeRenderPipeline(value?: string): RenderPipeline {
-  if (value === "classic" || value === "hero-shot" || value === "genshin") return value;
-  return "genshin";
+  if (value === "classic" || value === "hero-shot" || value === "genshin" || value === "mio-reference") return value;
+  return "mio-reference";
 }
 
 const navIcons: ReadonlyArray<{ key: "menu" | "chat" | "tasks" | "tools" | "memory" | "skills"; label: string; view: RightPanelView }> = [
@@ -182,6 +183,7 @@ const traceRows = [
 ] as const;
 
 const renderPipelineOptions: { value: RenderPipeline; label: string; description: string }[] = [
+  { value: "mio-reference", label: "MIO Reference", description: "设计稿星海舞台" },
   { value: "classic", label: "Classic", description: "\u7a33\u5b9a MMD \u821e\u53f0" },
   { value: "hero-shot", label: "Hero Shot", description: "\u7535\u5f71\u611f\u6784\u56fe" },
   { value: "genshin", label: "Genshin", description: "Project2 \u900f\u660e\u98ce\u683c" },
@@ -256,7 +258,7 @@ export default function CompanionPage() {
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [ttsMode, setTtsMode] = useState<"browser" | "server">(DEFAULT_TTS_MODE as "browser" | "server");
   const [speaking, setSpeaking] = useState(false);
-  const [renderPipeline, setRenderPipeline] = useState<RenderPipeline>("genshin");
+  const [renderPipeline, setRenderPipeline] = useState<RenderPipeline>("mio-reference");
   const [isAdvancedPanelOpen, setIsAdvancedPanelOpen] = useState(false);
   const [advancedTab, setAdvancedTab] = useState<"library" | "favorites">("library");
   const [advancedSlot, setAdvancedSlot] = useState<(typeof EMOTION_SLOTS)[number]>("happy");
@@ -289,7 +291,7 @@ export default function CompanionPage() {
 
   useEffect(() => {
     const saved = loadSession();
-    const normalizedPipeline: RenderPipeline = "genshin";
+    const normalizedPipeline: RenderPipeline = "mio-reference";
     const normalizedSession =
       saved && saved.renderPipeline !== normalizedPipeline
         ? { ...saved, renderPipeline: normalizedPipeline }
@@ -993,6 +995,7 @@ export default function CompanionPage() {
       data-testid="mio-hud"
       data-render-pipeline={renderPipeline}
     >
+      <MioModeBackground active={renderPipeline === "mio-reference"} />
       <header className="mio-topbar" data-testid="mio-topbar">
         <div className="mio-brand">
           <img src={`${SPRITE}/asset-082.png`} alt="" />

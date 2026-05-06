@@ -166,6 +166,48 @@ const VMD_TRANSITION_FADE_SECONDS = 0.5;
 const STAGE_CANVAS_ASPECT_RATIO = 3 / 4;
 const BREATHING_CYCLE_SECONDS = 4.2;
 
+const MIO_REFERENCE_EULA_RENDER_PROFILE = Object.freeze({
+  name: "mio_reference_eula_heroic_soft_blue",
+  sourceReference: "companion screenshot target for Eula-like MMD rendering",
+  intent: {
+    look: "clean anime toon with luminous blue ambient fill",
+    priorities: [
+      "bright readable face",
+      "soft skin shading without oily specular hotspots",
+      "cool blue hair and cloth separation",
+      "controlled white-cyan highlights instead of gray shading",
+      "clear silhouette over the bright sky-ocean background",
+    ],
+  },
+  lighting: {
+    ambientIntensity: 0.98,
+    hemisphereIntensity: 0.88,
+    keyIntensity: 1.34,
+    fillIntensity: 0.82,
+    rimIntensity: 0.44,
+    keyColor: "#ffffff",
+    fillColor: "#b6deff",
+    rimColor: "#d8f0ff",
+  },
+  toonRamp: {
+    stops: ["#667da6", "#b7cae8", "#f5fbff"],
+  },
+  materialTuning: {
+    alphaTest: 0.5,
+    face: { shininess: 9, specular: 0.16, emissiveIntensity: 0.08, envMapIntensity: 0.02 },
+    skin: { shininess: 11, specular: 0.2, emissiveIntensity: 0.06, envMapIntensity: 0.02 },
+    hair: { shininess: 18, specular: 0.48, emissiveIntensity: 0.03, envMapIntensity: 0.04 },
+    cloth: { shininess: 15, specular: 0.34, emissiveIntensity: 0.02, envMapIntensity: 0.03 },
+    metal: { shininess: 36, specular: 0.78, emissiveIntensity: 0.02, envMapIntensity: 0.08 },
+    default: { shininess: 18, specular: 0.38, emissiveIntensity: 0.02, envMapIntensity: 0.03 },
+  },
+  suppression: {
+    hideProject2Masks: true,
+    hideHeadFxGlow: true,
+    keepExplicitGlowPurple: true,
+  },
+});
+
 const smooth = (current, target, lambda, dt) => THREE.MathUtils.damp(current, target, lambda, dt);
 
 function isKnownMmdParserConsoleError(args) {
@@ -361,70 +403,65 @@ const STAGE_PRESENTATION_PRESETS = {
     backdrop: { enabled: false },
     postfx: { enabled: false },
   },
+  "mio-reference": {
+    background: null,
+    fog: null,
+    camera: {
+      fov: 32,
+      position: [0, 9.2, 21.6],
+      target: [0, 7.9, 0],
+      minDistance: 8,
+      maxDistance: 40,
+      maxPolarAngle: Math.PI * 0.48,
+      locked: false,
+    },
+    character: {
+      targetHeight: 19.5,
+    },
+    lights: {
+      ambient: { color: "#f7fbff", intensity: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.ambientIntensity },
+      hemisphere: {
+        sky: "#dff3ff",
+        ground: "#13284b",
+        intensity: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.hemisphereIntensity,
+      },
+      key: {
+        color: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.keyColor,
+        intensity: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.keyIntensity,
+        position: [-11, 18, 24],
+      },
+      fill: {
+        color: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.fillColor,
+        intensity: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.fillIntensity,
+        position: [12, 11, 18],
+      },
+      rim: {
+        color: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.rimColor,
+        intensity: MIO_REFERENCE_EULA_RENDER_PROFILE.lighting.rimIntensity,
+        position: [0, 14, -18],
+      },
+    },
+    shadowMapType: THREE.PCFSoftShadowMap,
+    floor: {
+      kind: "shadowCatcher",
+      size: 44,
+      y: -9.75,
+      opacity: 0.04,
+      contactShadow: {
+        enabled: true,
+        size: [10.4, 6.8],
+        opacity: 0.12,
+        position: [0, -9.73, 0.2],
+      },
+    },
+    outline: { enabled: false, color: "#27496d", opacity: 0.9, scale: 1.03 },
+    backdrop: { enabled: false },
+    postfx: { enabled: false },
+  },
 };
 
 function cloneStagePresentationConfig(config) {
-  return {
-    background: config.background,
-    fog: config.fog,
-    camera: {
-      ...config.camera,
-      position: [...config.camera.position],
-      target: [...config.camera.target],
-      locked: Boolean(config.camera.locked),
-    },
-    character: config.character ? { ...config.character } : null,
-    lights: {
-      ambient: { ...config.lights.ambient },
-      hemisphere: { ...config.lights.hemisphere },
-      key: { ...config.lights.key, position: [...config.lights.key.position] },
-      fill: { ...config.lights.fill, position: [...config.lights.fill.position] },
-      rim: { ...config.lights.rim, position: [...config.lights.rim.position] },
-    },
-    shadowMapType: config.shadowMapType,
-    floor: {
-      ...config.floor,
-      glow: config.floor.glow
-        ? {
-            ...config.floor.glow,
-            size: config.floor.glow.size ? [...config.floor.glow.size] : undefined,
-            position: config.floor.glow.position ? [...config.floor.glow.position] : undefined,
-          }
-        : undefined,
-      rings: config.floor.rings
-        ? {
-            ...config.floor.rings,
-            size: config.floor.rings.size ? [...config.floor.rings.size] : undefined,
-            position: config.floor.rings.position ? [...config.floor.rings.position] : undefined,
-          }
-        : undefined,
-      contactShadow: config.floor.contactShadow
-        ? {
-            ...config.floor.contactShadow,
-            size: config.floor.contactShadow.size ? [...config.floor.contactShadow.size] : undefined,
-            position: config.floor.contactShadow.position ? [...config.floor.contactShadow.position] : undefined,
-          }
-        : undefined,
-    },
-    outline: config.outline ? { ...config.outline } : null,
-    backdrop: config.backdrop
-      ? {
-          ...config.backdrop,
-          panelSize: config.backdrop.panelSize ? [...config.backdrop.panelSize] : undefined,
-          panelPosition: config.backdrop.panelPosition ? [...config.backdrop.panelPosition] : undefined,
-          haloSize: config.backdrop.haloSize ? [...config.backdrop.haloSize] : undefined,
-          haloPosition: config.backdrop.haloPosition ? [...config.backdrop.haloPosition] : undefined,
-          ringSize: config.backdrop.ringSize ? [...config.backdrop.ringSize] : undefined,
-          ringPosition: config.backdrop.ringPosition ? [...config.backdrop.ringPosition] : undefined,
-        }
-      : null,
-    postfx: config.postfx
-      ? {
-          ...config.postfx,
-          grade: config.postfx.grade ? { ...config.postfx.grade } : undefined,
-        }
-      : null,
-  };
+  return JSON.parse(JSON.stringify(config));
 }
 
 function readFiniteNumber(value, fallback) {
@@ -650,6 +687,10 @@ function createToonRampTexture(pipeline = "classic") {
     gradient.addColorStop(0.46, "#92a0b8");
     gradient.addColorStop(0.76, "#92a0b8");
     gradient.addColorStop(0.77, "#eef7ff");
+  } else if (pipeline === "mio-reference") {
+    gradient.addColorStop(0, MIO_REFERENCE_EULA_RENDER_PROFILE.toonRamp.stops[0]);
+    gradient.addColorStop(0.32, MIO_REFERENCE_EULA_RENDER_PROFILE.toonRamp.stops[1]);
+    gradient.addColorStop(0.74, MIO_REFERENCE_EULA_RENDER_PROFILE.toonRamp.stops[2]);
   } else if (pipeline === "genshin") {
     gradient.addColorStop(0, "#505050");
     gradient.addColorStop(0.3, "#b4b4b4");
@@ -859,6 +900,64 @@ function createContactShadowTexture() {
   return texture;
 }
 
+function createStarfieldTexture(color = "#d8f5ff") {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 1024;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let index = 0; index < 140; index += 1) {
+    const x = Math.random() * canvas.width;
+    const y = Math.random() * canvas.height * 0.92;
+    const size = 1 + Math.random() * 2.4;
+    const alpha = 0.25 + Math.random() * 0.7;
+    ctx.beginPath();
+    ctx.fillStyle = `${color}${Math.round(alpha * 255).toString(16).padStart(2, "0")}`;
+    ctx.arc(x, y, size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  return texture;
+}
+
+function createWaterlineTexture(topColor, bottomColor) {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 512;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, topColor);
+  gradient.addColorStop(0.55, topColor);
+  gradient.addColorStop(1, bottomColor);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = "rgba(222, 247, 255, 0.26)";
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.72;
+  for (let row = 0; row < 9; row += 1) {
+    const y = 48 + row * 42;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvas.width, y + ((row % 2) ? 6 : -6));
+    ctx.stroke();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  return texture;
+}
+
 function createColorGradeShader(grade = {}) {
   return {
     uniforms: {
@@ -994,8 +1093,51 @@ export function tuneGenshinMMDMaterial(material, rampTexture) {
   finalizeMMDMaterial(material, rampTexture);
 }
 
+export function tuneMioReferenceMMDMaterial(material, rampTexture) {
+  if (!material) return;
+  const { profile } = primeMMDMaterial(material);
+  const materialName = `${material.name || ""}`;
+  const normalizedName = normalizeGenshinMaterialName(materialName);
+  const isGlowMaterial = isGenshinGlowMaterial(materialName);
+  const isHeadFxMaterial = isGlowMaterial && normalizedName.includes("head");
+  const tuning = MIO_REFERENCE_EULA_RENDER_PROFILE.materialTuning[profile] || MIO_REFERENCE_EULA_RENDER_PROFILE.materialTuning.default;
+
+  cleanLegacyMMDMaterialFlags(material);
+
+  material.alphaTest = Math.max(material.alphaTest || 0, MIO_REFERENCE_EULA_RENDER_PROFILE.materialTuning.alphaTest);
+  material.side = THREE.DoubleSide;
+
+  if ("shininess" in material && typeof material.shininess === "number") {
+    material.shininess = Math.min(material.shininess, tuning.shininess);
+  }
+  if ("specular" in material && material.specular?.isColor) {
+    material.specular.multiplyScalar(tuning.specular);
+  }
+  if ("emissiveIntensity" in material) material.emissiveIntensity = tuning.emissiveIntensity;
+  if ("envMapIntensity" in material) material.envMapIntensity = tuning.envMapIntensity;
+
+  if (isGlowMaterial && MIO_REFERENCE_EULA_RENDER_PROFILE.suppression.keepExplicitGlowPurple) {
+    material.emissive?.setHex?.(0xa7d8ff);
+    if ("emissiveIntensity" in material) material.emissiveIntensity = Math.max(material.emissiveIntensity || 0, 0.2);
+  } else {
+    material.emissive?.setHex?.(0x000000);
+  }
+
+  if (
+    (MIO_REFERENCE_EULA_RENDER_PROFILE.suppression.hideProject2Masks && isGenshinSuppressedMaskMaterial(materialName)) ||
+    (MIO_REFERENCE_EULA_RENDER_PROFILE.suppression.hideHeadFxGlow && isHeadFxMaterial)
+  ) {
+    material.visible = false;
+    material.transparent = true;
+    material.opacity = 0;
+  }
+
+  finalizeMMDMaterial(material, rampTexture);
+}
+
 function tuneMaterialByPipeline(material, toonRampTexture, pipeline) {
   if (pipeline === "hero-shot") return tuneHeroShotMMDMaterial(material, toonRampTexture);
+  if (pipeline === "mio-reference") return tuneMioReferenceMMDMaterial(material, toonRampTexture);
   if (pipeline === "genshin") return tuneGenshinMMDMaterial(material, toonRampTexture);
   return tuneClassicMMDMaterial(material, toonRampTexture);
 }
@@ -1350,6 +1492,46 @@ export class MMDCompanionRuntime {
       floorGroup.add(contactShadow);
     }
 
+    if (presentation.floor.water?.enabled) {
+      const waterTexture = createWaterlineTexture(
+        presentation.floor.water.topColor,
+        presentation.floor.water.bottomColor,
+      );
+      if (waterTexture) this.floorTextures.push(waterTexture);
+      const water = new THREE.Mesh(
+        new THREE.PlaneGeometry(...presentation.floor.water.size),
+        new THREE.MeshBasicMaterial({
+          map: waterTexture,
+          transparent: true,
+          opacity: presentation.floor.water.opacity,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      water.rotation.x = -Math.PI / 2;
+      water.position.fromArray(presentation.floor.water.position);
+      floorGroup.add(water);
+    }
+
+    if (presentation.floor.horizonGlow?.enabled) {
+      const horizonGlowTexture = createHaloTexture(presentation.floor.horizonGlow.color);
+      if (horizonGlowTexture) this.floorTextures.push(horizonGlowTexture);
+      const horizonGlow = new THREE.Mesh(
+        new THREE.PlaneGeometry(...presentation.floor.horizonGlow.size),
+        new THREE.MeshBasicMaterial({
+          map: horizonGlowTexture,
+          transparent: true,
+          opacity: presentation.floor.horizonGlow.opacity,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          toneMapped: false,
+        }),
+      );
+      horizonGlow.rotation.x = -Math.PI / 2;
+      horizonGlow.position.fromArray(presentation.floor.horizonGlow.position);
+      floorGroup.add(horizonGlow);
+    }
+
     this.floorGroup = floorGroup;
     this.scene.add(floorGroup);
   }
@@ -1360,64 +1542,153 @@ export class MMDCompanionRuntime {
     if (!presentation.backdrop?.enabled) return;
 
     const backdrop = new THREE.Group();
-    backdrop.name = "genshin-backdrop";
+    backdrop.name = `${this.renderPipeline}-backdrop`;
 
-    const panelTexture = createVerticalGradientTexture(
-      presentation.backdrop.panelColorTop,
-      presentation.backdrop.panelColorBottom,
-    );
-    if (panelTexture) this.backdropTextures.push(panelTexture);
-    const panel = new THREE.Mesh(
-      new THREE.PlaneGeometry(...presentation.backdrop.panelSize),
-      new THREE.MeshBasicMaterial({
-        map: panelTexture,
-        transparent: true,
-        opacity: presentation.backdrop.panelOpacity,
-        depthWrite: false,
-        toneMapped: false,
-      }),
-    );
-    panel.position.fromArray(presentation.backdrop.panelPosition);
-    backdrop.add(panel);
+    if (presentation.backdrop.panelSize) {
+      const panelTexture = createVerticalGradientTexture(
+        presentation.backdrop.panelColorTop,
+        presentation.backdrop.panelColorBottom,
+      );
+      if (panelTexture) this.backdropTextures.push(panelTexture);
+      const panel = new THREE.Mesh(
+        new THREE.PlaneGeometry(...presentation.backdrop.panelSize),
+        new THREE.MeshBasicMaterial({
+          map: panelTexture,
+          transparent: true,
+          opacity: presentation.backdrop.panelOpacity,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      panel.position.fromArray(presentation.backdrop.panelPosition);
+      panel.renderOrder = -8;
+      backdrop.add(panel);
+    }
 
-    const haloTexture = createHaloTexture(presentation.backdrop.haloColor);
-    if (haloTexture) this.backdropTextures.push(haloTexture);
-    const halo = new THREE.Mesh(
-      new THREE.PlaneGeometry(...presentation.backdrop.haloSize),
-      new THREE.MeshBasicMaterial({
-        map: haloTexture,
-        transparent: true,
-        opacity: presentation.backdrop.haloOpacity,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        toneMapped: false,
-      }),
-    );
-    halo.position.fromArray(presentation.backdrop.haloPosition);
-    backdrop.add(halo);
+    if (presentation.backdrop.haloSize) {
+      const haloTexture = createHaloTexture(presentation.backdrop.haloColor);
+      if (haloTexture) this.backdropTextures.push(haloTexture);
+      const halo = new THREE.Mesh(
+        new THREE.PlaneGeometry(...presentation.backdrop.haloSize),
+        new THREE.MeshBasicMaterial({
+          map: haloTexture,
+          transparent: true,
+          opacity: presentation.backdrop.haloOpacity,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          toneMapped: false,
+        }),
+      );
+      halo.position.fromArray(presentation.backdrop.haloPosition);
+      halo.renderOrder = -4;
+      backdrop.add(halo);
+    }
 
-    const ringTexture = createConcentricRingTexture(presentation.backdrop.ringColor);
-    if (ringTexture) this.backdropTextures.push(ringTexture);
-    const ring = new THREE.Mesh(
-      new THREE.PlaneGeometry(...presentation.backdrop.ringSize),
-      new THREE.MeshBasicMaterial({
-        map: ringTexture,
-        transparent: true,
-        opacity: presentation.backdrop.ringOpacity,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        toneMapped: false,
-      }),
-    );
-    ring.position.fromArray(presentation.backdrop.ringPosition);
-    backdrop.add(ring);
+    if (presentation.backdrop.ringSize) {
+      const ringTexture = createConcentricRingTexture(presentation.backdrop.ringColor);
+      if (ringTexture) this.backdropTextures.push(ringTexture);
+      const ring = new THREE.Mesh(
+        new THREE.PlaneGeometry(...presentation.backdrop.ringSize),
+        new THREE.MeshBasicMaterial({
+          map: ringTexture,
+          transparent: true,
+          opacity: presentation.backdrop.ringOpacity,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          toneMapped: false,
+        }),
+      );
+      ring.position.fromArray(presentation.backdrop.ringPosition);
+      ring.renderOrder = -3;
+      backdrop.add(ring);
+    }
+
+    if (presentation.backdrop.skySize) {
+      const skyTexture = createVerticalGradientTexture(
+        presentation.backdrop.skyColorTop,
+        presentation.backdrop.skyColorBottom,
+      );
+      if (skyTexture) this.backdropTextures.push(skyTexture);
+      const sky = new THREE.Mesh(
+        new THREE.PlaneGeometry(...presentation.backdrop.skySize),
+        new THREE.MeshBasicMaterial({
+          map: skyTexture,
+          transparent: true,
+          opacity: presentation.backdrop.skyOpacity ?? 1,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      sky.position.fromArray(presentation.backdrop.skyPosition);
+      sky.renderOrder = -30;
+      backdrop.add(sky);
+    }
+
+    if (presentation.backdrop.starfieldSize) {
+      const starfieldTexture = createStarfieldTexture(presentation.backdrop.starfieldColor);
+      if (starfieldTexture) this.backdropTextures.push(starfieldTexture);
+      const starfield = new THREE.Mesh(
+        new THREE.PlaneGeometry(...presentation.backdrop.starfieldSize),
+        new THREE.MeshBasicMaterial({
+          map: starfieldTexture,
+          transparent: true,
+          opacity: presentation.backdrop.starfieldOpacity ?? 0.7,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          toneMapped: false,
+        }),
+      );
+      starfield.position.fromArray(presentation.backdrop.starfieldPosition);
+      starfield.renderOrder = -24;
+      backdrop.add(starfield);
+    }
+
+    if (presentation.backdrop.nebulaSize) {
+      const nebulaTexture = createHaloTexture(presentation.backdrop.nebulaColor);
+      if (nebulaTexture) this.backdropTextures.push(nebulaTexture);
+      const nebula = new THREE.Mesh(
+        new THREE.PlaneGeometry(...presentation.backdrop.nebulaSize),
+        new THREE.MeshBasicMaterial({
+          map: nebulaTexture,
+          transparent: true,
+          opacity: presentation.backdrop.nebulaOpacity ?? 0.2,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          toneMapped: false,
+        }),
+      );
+      nebula.position.fromArray(presentation.backdrop.nebulaPosition);
+      nebula.renderOrder = -18;
+      backdrop.add(nebula);
+    }
+
+    if (presentation.backdrop.horizonSize) {
+      const horizonTexture = createVerticalGradientTexture(
+        presentation.backdrop.horizonColorTop,
+        presentation.backdrop.horizonColorBottom,
+      );
+      if (horizonTexture) this.backdropTextures.push(horizonTexture);
+      const horizon = new THREE.Mesh(
+        new THREE.PlaneGeometry(...presentation.backdrop.horizonSize),
+        new THREE.MeshBasicMaterial({
+          map: horizonTexture,
+          transparent: true,
+          opacity: presentation.backdrop.horizonOpacity ?? 0.5,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      horizon.position.fromArray(presentation.backdrop.horizonPosition);
+      horizon.renderOrder = -12;
+      backdrop.add(horizon);
+    }
 
     this.backdropGroup = backdrop;
     this.scene.add(backdrop);
   }
 
   setupVisualPipeline(presentation) {
-    if (this.renderPipeline === "genshin") {
+    if (this.renderPipeline === "genshin" || this.renderPipeline === "mio-reference") {
       this.setupGenshinPipeline(presentation);
       return;
     }
@@ -1568,7 +1839,7 @@ export class MMDCompanionRuntime {
 
     mesh.traverse((child) => {
       if (!child.isMesh) return;
-      const isGenshinOutline = this.renderPipeline === "genshin";
+      const isGenshinOutline = this.renderPipeline === "genshin" || this.renderPipeline === "mio-reference";
       const sourceMaterials = Array.isArray(child.material) ? child.material : [child.material];
       const materials = getMaterialArray(child.material);
       if (isGenshinOutline && materials.length && materials.every((material) => material.visible === false)) return;

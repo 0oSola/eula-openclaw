@@ -87,7 +87,7 @@ export type MmdMotionAsset = {
   url: string;
 };
 
-export type RenderPipeline = "classic" | "hero-shot" | "genshin";
+export type RenderPipeline = "classic" | "hero-shot" | "genshin" | "mio-reference";
 
 export type MmdCameraSnapshot = {
   fov: number;

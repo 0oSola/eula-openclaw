@@ -13,7 +13,7 @@ export default function LoginPage() {
     event.preventDefault();
     const value = userId.trim();
     if (!value) return;
-    saveSession({ userId: value, renderPipeline: "classic" });
+    saveSession({ userId: value, renderPipeline: "mio-reference" });
     router.push("/companion");
   }
 

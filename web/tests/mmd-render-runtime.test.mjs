@@ -192,6 +192,7 @@ function createCanvasContextStub() {
     beginPath() {},
     arc() {},
     stroke() {},
+    fill() {},
     moveTo() {},
     lineTo() {},
     fillRect() {},
@@ -599,6 +600,17 @@ test("stage presentation config supports hero-shot while preserving classic fall
   assert.deepEqual(getStagePresentationConfig("unknown"), classic);
 });
 
+test("stage presentation config exposes mio-reference as the screenshot-inspired layered stage", () => {
+  const reference = getStagePresentationConfig("mio-reference");
+
+  assert.equal(reference.background, null);
+  assert.equal(reference.camera.fov, 32);
+  assert.equal(reference.backdrop.enabled, false);
+  assert.equal(reference.floor.opacity, 0.04);
+  assert.equal(reference.floor.contactShadow.enabled, true);
+  assert.equal(reference.postfx.enabled, false);
+});
+
 test("hero-shot presentation keeps portrait staging and lighting restrained", () => {
   const heroShot = getStagePresentationConfig("hero-shot");
 
@@ -909,6 +921,33 @@ test("genshin material tuning preserves authored toon ramps while keeping hair p
   assert.equal(hair.emissive.getHex(), 0x000000);
 });
 
+test("mio-reference material tuning applies the softer eula-style face profile", () => {
+  const face = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
+  const ramp = { id: "mio-reference-ramp" };
+
+  runtimeModule.tuneMioReferenceMMDMaterial?.(face, ramp);
+
+  assert.equal(face.alphaTest, 0.5);
+  assert.equal(face.side, THREE.DoubleSide);
+  assert.equal(face.gradientMap, ramp);
+  assert.equal(face.shininess, 9);
+  assert.ok(face.specular.r <= 0.17);
+  assert.equal(face.emissive.getHex(), 0x000000);
+  assert.ok(face.envMapIntensity <= 0.02);
+  assert.ok(face.emissiveIntensity <= 0.08);
+});
+
+test("mio-reference material tuning keeps explicit glow subtle and blue instead of genshin purple", () => {
+  const glow = makeMaterial({ name: "purple glow fx", shininess: 20 });
+  const ramp = { id: "mio-reference-ramp" };
+
+  runtimeModule.tuneMioReferenceMMDMaterial?.(glow, ramp);
+
+  assert.equal(glow.gradientMap.id, "mio-reference-ramp");
+  assert.equal(glow.emissive.getHex(), 0xa7d8ff);
+  assert.ok(glow.emissiveIntensity <= 0.2);
+});
+
 test("hero-shot material tuning differs from classic while preserving alpha safety", () => {
   const classic = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
   const hero = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
@@ -954,6 +993,7 @@ test("loadModel selects material tuning by renderPipeline", async () => {
   const classicMaterial = makeMaterial({ name: "Hair Cloth", transparent: true, specular: 0.7, shininess: 40 });
   const genshinMaterial = makeMaterial({ name: "Hair Cloth", transparent: true, specular: 0.7, shininess: 40 });
   const heroShotMaterial = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
+  const mioReferenceMaterial = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
 
   const classicRuntime = makeRuntime({ renderPipeline: "classic", toonRampTexture: { id: "classic-ramp" } });
   classicRuntime.loader = {
@@ -976,9 +1016,17 @@ test("loadModel selects material tuning by renderPipeline", async () => {
     },
   };
 
+  const mioReferenceRuntime = makeRuntime({ renderPipeline: "mio-reference", toonRampTexture: { id: "mio-reference-ramp" } });
+  mioReferenceRuntime.loader = {
+    load(_url, onLoad) {
+      onLoad(makeMesh({ materials: [mioReferenceMaterial] }));
+    },
+  };
+
   await classicRuntime.loadModel("/classic-model.pmx");
   await genshinRuntime.loadModel("/genshin-model.pmx");
   await heroShotRuntime.loadModel("/hero-shot-model.pmx");
+  await mioReferenceRuntime.loadModel("/mio-reference-model.pmx");
 
   assert.equal(classicMaterial.alphaTest, 0.5);
   assert.equal(classicMaterial.shininess, 26);
@@ -993,6 +1041,11 @@ test("loadModel selects material tuning by renderPipeline", async () => {
   assert.equal(heroShotMaterial.gradientMap.id, "hero-shot-ramp");
   assert.notEqual(heroShotMaterial.shininess, classicMaterial.shininess);
   assert.notEqual(heroShotMaterial.emissiveIntensity, classicMaterial.emissiveIntensity);
+
+  assert.equal(mioReferenceMaterial.alphaTest, 0.5);
+  assert.equal(mioReferenceMaterial.gradientMap.id, "mio-reference-ramp");
+  assert.equal(mioReferenceMaterial.shininess, 9);
+  assert.notEqual(mioReferenceMaterial.shininess, genshinMaterial.shininess);
 });
 
 test("loadModel routes hero-shot face materials through hero-shot tuning instead of classic tuning", async () => {
@@ -1128,6 +1181,19 @@ test("setupBackdrop stays disabled for classic and genshin once genshin follows 
   assert.deepEqual(genshinAdds, []);
 });
 
+test("setupBackdrop stays disabled for mio-reference while the design bitmap remains the visual base", () => {
+  const adds = [];
+  const runtime = makeRuntime({
+    renderPipeline: "mio-reference",
+    scene: { add(node) { adds.push(node); }, remove() {} },
+  });
+
+  runtime.setupBackdrop(getStagePresentationConfig("mio-reference"));
+
+  assert.equal(runtime.backdropGroup, null);
+  assert.deepEqual(adds, []);
+});
+
 test("setupFloor keeps genshin to a plain shadow catcher without decorative stage layers", () => {
   withStubbedDocument(() => {
     const adds = [];
@@ -1141,6 +1207,23 @@ test("setupFloor keeps genshin to a plain shadow catcher without decorative stag
     assert.ok(runtime.floorGroup);
     assert.equal(runtime.floorGroup.children.length, 1);
     assert.deepEqual(runtime.floorTextures, []);
+  });
+});
+
+test("setupFloor keeps mio-reference to shadow catching plus contact grounding only", () => {
+  withStubbedDocument(() => {
+    const adds = [];
+    const runtime = makeRuntime({
+      renderPipeline: "mio-reference",
+      scene: { add(node) { adds.push(node); }, remove() {} },
+    });
+
+    runtime.setupFloor(getStagePresentationConfig("mio-reference"));
+
+    assert.equal(adds.length, 1);
+    assert.ok(runtime.floorGroup);
+    assert.equal(runtime.floorGroup.children.length, 2);
+    assert.equal(runtime.floorTextures.length, 1);
   });
 });
 
