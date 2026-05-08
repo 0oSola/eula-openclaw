@@ -33,9 +33,17 @@ export type MappingConfig = {
 };
 
 export type ChatMessage = {
+  id?: string;
   role: "user" | "assistant" | "system";
   content: string;
   traceId?: string;
+  tts?: {
+    status: "loading" | "ready" | "failed";
+    mode: "server" | "browser";
+    audio?: Blob;
+    mediaType?: string;
+    error?: string;
+  };
 };
 
 export type ChatResponse = {

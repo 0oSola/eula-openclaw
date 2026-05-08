@@ -11,6 +11,8 @@ type CompanionChatboxProps = {
   loading: boolean;
   error: string;
   ttsEnabled: boolean;
+  activeTtsMessageId: string;
+  onPlayTtsMessage: (message: ChatMessage) => void;
 };
 
 const BOTTOM_THRESHOLD_PX = 32;
@@ -21,7 +23,26 @@ function getRoleLabel(role: ChatMessage["role"]) {
   return "System";
 }
 
-export function CompanionChatbox({ messages, loading, error, ttsEnabled }: CompanionChatboxProps) {
+function getTtsLabel(message: ChatMessage, activeTtsMessageId: string) {
+  if (!message.tts) return "";
+  if (message.tts.status === "loading") return "Voice pending";
+  if (message.tts.status === "failed") return "Voice unavailable";
+  if (message.id && message.id === activeTtsMessageId) return "Playing";
+  return "Play voice";
+}
+
+function canPlayTts(message: ChatMessage) {
+  return message.tts?.status === "ready";
+}
+
+export function CompanionChatbox({
+  messages,
+  loading,
+  error,
+  ttsEnabled,
+  activeTtsMessageId,
+  onPlayTtsMessage,
+}: CompanionChatboxProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const [chatSearch, setChatSearch] = useState("");
   const [chatRoleFilter, setChatRoleFilter] = useState<ChatRoleFilter>("all");
@@ -122,10 +143,32 @@ export function CompanionChatbox({ messages, loading, error, ttsEnabled }: Compa
           </div>
         ) : (
           visibleMessages.map((message, index) => (
-            <article key={`${message.role}-${index}-${message.content.slice(0, 24)}`} className={`mio-chatbox-message is-${message.role}`}>
+            <article
+              key={message.id || `${message.role}-${index}-${message.content.slice(0, 24)}`}
+              className={`mio-chatbox-message is-${message.role}`}
+            >
               <div className="mio-chatbox-message-head">
                 <strong>{getRoleLabel(message.role)}</strong>
-                {message.traceId ? <span>{message.traceId.slice(0, 8)}</span> : null}
+                <div className="mio-chatbox-message-tools">
+                  {message.tts ? (
+                    <button
+                      type="button"
+                      className="mio-message-voice-button"
+                      aria-label={getTtsLabel(message, activeTtsMessageId)}
+                      title={getTtsLabel(message, activeTtsMessageId)}
+                      disabled={!canPlayTts(message)}
+                      data-status={message.tts.status}
+                      data-active={message.id && message.id === activeTtsMessageId ? "true" : "false"}
+                      onClick={() => onPlayTtsMessage(message)}
+                    >
+                      <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
+                        <path d="M4.2 8.2h2.5l3.4-3v9.6l-3.4-3H4.2z" />
+                        <path d="M13.1 7.2a4 4 0 0 1 0 5.6M15.2 5.1a7 7 0 0 1 0 9.8" />
+                      </svg>
+                    </button>
+                  ) : null}
+                  {message.traceId ? <span>{message.traceId.slice(0, 8)}</span> : null}
+                </div>
               </div>
               <div className="mio-chatbox-message-body">{message.content}</div>
             </article>

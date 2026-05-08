@@ -605,6 +605,9 @@ test("stage presentation config exposes mio-reference as the screenshot-inspired
 
   assert.equal(reference.background, null);
   assert.equal(reference.camera.fov, 32);
+  assert.deepEqual(reference.camera.position, [-1.346829, 2.907039, 31.361977]);
+  assert.deepEqual(reference.camera.target, [-1.346829, 0.961375, 0.436541]);
+  assert.equal(reference.camera.locked, false);
   assert.equal(reference.backdrop.enabled, false);
   assert.equal(reference.floor.opacity, 0.04);
   assert.equal(reference.floor.contactShadow.enabled, true);

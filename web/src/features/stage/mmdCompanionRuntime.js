@@ -366,8 +366,8 @@ const STAGE_PRESENTATION_PRESETS = {
     fog: null,
     camera: {
       fov: 32,
-      position: [0, 9.2, 21.6],
-      target: [0, 7.9, 0],
+      position: [-1.346829, 2.907039, 31.361977],
+      target: [-1.346829, 0.961375, 0.436541],
       minDistance: 8,
       maxDistance: 40,
       maxPolarAngle: Math.PI * 0.48,

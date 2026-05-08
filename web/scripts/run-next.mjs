@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
-const nextBin = path.join(rootDir, "node_modules", ".bin", process.platform === "win32" ? "next.cmd" : "next");
+const nextCliEntrypoint = path.join(rootDir, "node_modules", "next", "dist", "bin", "next");
 
 const command = process.argv[2] || "dev";
 const extraArgs = process.argv.slice(3);
@@ -30,7 +30,7 @@ fs.writeFileSync(
   "utf8",
 );
 
-const child = spawn(nextBin, [command, ...extraArgs], {
+const child = spawn(process.execPath, [nextCliEntrypoint, command, ...extraArgs], {
   cwd: rootDir,
   env: {
     ...process.env,

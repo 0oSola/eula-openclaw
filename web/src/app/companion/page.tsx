@@ -73,6 +73,7 @@ type InteractionState = {
 
 type InteractionSource = "default" | "autoplay" | "manual-preview" | "chat";
 type ToastState = { id: number; message: string } | null;
+type ChatMessageTts = NonNullable<ChatMessage["tts"]>;
 type OpenClawDraft = {
   base_url: string;
   token: string;
@@ -228,6 +229,10 @@ function makeHistory(messages: ChatMessage[]) {
     .map((item) => ({ role: item.role, content: item.content }));
 }
 
+function createMessageId(prefix: string) {
+  return `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+}
+
 function buildFavoriteVmdCameraKey(pipeline: RenderPipeline, modelPath: string, assetId: string) {
   return `${pipeline}::${encodeURIComponent(modelPath)}::${encodeURIComponent(assetId)}`;
 }
@@ -242,6 +247,7 @@ export default function CompanionPage() {
   const [sessionId] = useState(() => crypto.randomUUID());
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
+      id: "assistant-welcome",
       role: "assistant",
       content: DEFAULT_ASSISTANT_COPY,
     },
@@ -258,6 +264,8 @@ export default function CompanionPage() {
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [ttsMode, setTtsMode] = useState<"browser" | "server">(DEFAULT_TTS_MODE as "browser" | "server");
   const [speaking, setSpeaking] = useState(false);
+  const [activeTtsMessageId, setActiveTtsMessageId] = useState("");
+  const [backgroundActivityPulse, setBackgroundActivityPulse] = useState(0);
   const [renderPipeline, setRenderPipeline] = useState<RenderPipeline>("mio-reference");
   const [isAdvancedPanelOpen, setIsAdvancedPanelOpen] = useState(false);
   const [advancedTab, setAdvancedTab] = useState<"library" | "favorites">("library");
@@ -424,18 +432,25 @@ export default function CompanionPage() {
     );
   }, [selectedModel?.relative_path, visibleRecentVmdAssets]);
 
+  const currentModelAutoplayAssets = useMemo(() => {
+    if (!selectedModel?.relative_path) return [];
+    return recentVmdAssets.filter(
+      (asset) => asset.is_favorite && asset.favorite_model_relative_path === selectedModel.relative_path,
+    );
+  }, [selectedModel?.relative_path, recentVmdAssets]);
+
   const filteredFavoriteAssets = useMemo(() => {
     if (advancedFavoriteSlotFilter === "all") return currentModelFavoriteAssets;
     return currentModelFavoriteAssets.filter((asset) => asset.slot === advancedFavoriteSlotFilter);
   }, [advancedFavoriteSlotFilter, currentModelFavoriteAssets]);
 
   const autoFavoriteInteraction = useMemo<InteractionState | null>(() => {
-    return buildAutoFavoriteInteraction(currentModelFavoriteAssets) as InteractionState | null;
-  }, [currentModelFavoriteAssets]);
+    return buildAutoFavoriteInteraction(currentModelAutoplayAssets) as InteractionState | null;
+  }, [currentModelAutoplayAssets]);
 
   const autoplayResumeInteraction = useMemo<InteractionState | null>(() => {
-    return buildAutoplayResumeInteraction(currentModelFavoriteAssets) as InteractionState | null;
-  }, [currentModelFavoriteAssets]);
+    return buildAutoplayResumeInteraction(currentModelAutoplayAssets) as InteractionState | null;
+  }, [currentModelAutoplayAssets]);
 
   const activeFavoriteVmdAsset = useMemo(() => {
     if (!activeVmdAssetId) return null;
@@ -447,8 +462,8 @@ export default function CompanionPage() {
       ? buildFavoriteVmdCameraKey(renderPipeline, selectedModel.relative_path, activeFavoriteVmdAsset.asset_id)
       : "";
 
-  const latestAssistantMessage =
-    [...messages].reverse().find((item) => item.role === "assistant")?.content || DEFAULT_ASSISTANT_COPY;
+  const latestAssistantMessage = [...messages].reverse().find((item) => item.role === "assistant");
+  const latestAssistantMessageText = latestAssistantMessage?.content || DEFAULT_ASSISTANT_COPY;
   const activeCameraSnapshot =
     (activeFavoriteVmdCameraKey ? session?.mmdCameraByFavoriteVmd?.[activeFavoriteVmdCameraKey] : null) ??
     session?.mmdCamera?.[renderPipeline] ??
@@ -459,9 +474,11 @@ export default function CompanionPage() {
     if (interactionSource !== "default" && interactionSource !== "autoplay") return;
     setInteraction(autoFavoriteInteraction);
     setInteractionSource("autoplay");
-    setActiveVmdAssetId(currentModelFavoriteAssets[0]?.asset_id || "");
+    setActiveVmdAssetId(
+      currentModelAutoplayAssets.find((asset) => asset.url === autoFavoriteInteraction.vmdUrl)?.asset_id || "",
+    );
     setPendingAutoResume(false);
-  }, [autoFavoriteInteraction, currentModelFavoriteAssets, interactionSource, selectedModel?.relative_path]);
+  }, [autoFavoriteInteraction, currentModelAutoplayAssets, interactionSource, selectedModel?.relative_path]);
 
   useEffect(() => {
     if (autoFavoriteInteraction || interactionSource !== "autoplay") return;
@@ -792,6 +809,7 @@ export default function CompanionPage() {
     if (updateSpeaking) {
       setSpeaking(false);
     }
+    setActiveTtsMessageId("");
   }
 
   function stopSpeechPlayback() {
@@ -810,8 +828,13 @@ export default function CompanionPage() {
     pushToast(message);
   }
 
-  async function playServerAudio(audioBlob: Blob) {
+  function updateMessageTts(messageId: string, tts: ChatMessageTts) {
+    setMessages((current) => current.map((message) => (message.id === messageId ? { ...message, tts } : message)));
+  }
+
+  async function playServerAudio(audioBlob: Blob, messageId = "") {
     stopSpeechPlayback();
+    setActiveTtsMessageId(messageId);
     const controller = await playServerTtsAudio(audioBlob, {
       setSpeaking: (value?: boolean) => setSpeaking(Boolean(value)),
       onCleanup: ({ audio }: { audio?: HTMLAudioElement } = {}) => {
@@ -819,49 +842,73 @@ export default function CompanionPage() {
           serverAudioRef.current = null;
           serverAudioCleanupRef.current = null;
         }
+        setActiveTtsMessageId((current) => (current === messageId ? "" : current));
       },
     });
     serverAudioRef.current = controller.audio as HTMLAudioElement;
     serverAudioCleanupRef.current = controller.cleanup;
   }
 
-  function browserSpeak(text: string) {
+  function browserSpeak(text: string, messageId = "") {
     stopServerAudio();
     if (!("speechSynthesis" in window)) {
       handleTtsFailure("当前环境不支持浏览器语音播放。");
       return;
     }
     window.speechSynthesis.cancel();
+    setActiveTtsMessageId(messageId);
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = "zh-CN";
     utter.rate = 1.03;
     utter.pitch = 1.08;
     utter.onstart = () => setSpeaking(true);
-    utter.onend = () => setSpeaking(false);
+    utter.onend = () => {
+      setSpeaking(false);
+      setActiveTtsMessageId((current) => (current === messageId ? "" : current));
+    };
     utter.onerror = () => {
       setSpeaking(false);
+      setActiveTtsMessageId((current) => (current === messageId ? "" : current));
       handleTtsFailure("浏览器语音播放失败。");
     };
     try {
       window.speechSynthesis.speak(utter);
     } catch {
       setSpeaking(false);
+      setActiveTtsMessageId((current) => (current === messageId ? "" : current));
       handleTtsFailure("浏览器语音播放失败。");
     }
   }
 
-  async function speak(text: string) {
+  async function prepareAndPlayAssistantTts(messageId: string, text: string) {
     if (!ttsEnabled || !session) return;
     if (ttsMode === "browser") {
-      browserSpeak(text);
+      updateMessageTts(messageId, { status: "ready", mode: "browser" });
+      browserSpeak(text, messageId);
       return;
     }
     const result = await requestServerTts(session.userId, text, sessionId);
     if (!result.configured) {
-      browserSpeak(text);
+      updateMessageTts(messageId, { status: "ready", mode: "browser" });
+      browserSpeak(text, messageId);
       return;
     }
-    await playServerAudio(result.audio);
+    updateMessageTts(messageId, {
+      status: "ready",
+      mode: "server",
+      audio: result.audio,
+      mediaType: result.mediaType,
+    });
+    await playServerAudio(result.audio, messageId);
+  }
+
+  function playMessageAudio(message: ChatMessage) {
+    if (message.tts?.status !== "ready") return;
+    if (message.tts.mode === "server" && message.tts.audio) {
+      void playServerAudio(message.tts.audio, message.id || "");
+      return;
+    }
+    browserSpeak(message.content, message.id || "");
   }
 
   async function onSubmit(event: FormEvent) {
@@ -869,10 +916,14 @@ export default function CompanionPage() {
     if (!session || !input.trim() || loading) return;
 
     const userText = input.trim();
-    const historyMessages = [...messages, { role: "user", content: userText } satisfies ChatMessage];
+    const historyMessages = [
+      ...messages,
+      { id: createMessageId("user"), role: "user", content: userText } satisfies ChatMessage,
+    ];
     ignoreNextStageCompletionResetRef.current = false;
     setInput("");
     setError("");
+    setBackgroundActivityPulse((current) => current + 1);
     setLoading(true);
     setMessages(historyMessages);
     const traceId = crypto.randomUUID();
@@ -888,14 +939,18 @@ export default function CompanionPage() {
         traceId,
       );
 
+      const assistantMessageId = createMessageId("assistant");
       setMessages((prev) => [
         ...prev,
         {
+          id: assistantMessageId,
           role: "assistant",
           content: response.text,
           traceId: response.trace_id,
+          tts: ttsEnabled ? { status: "loading", mode: ttsMode } : undefined,
         },
       ]);
+      setLoading(false);
 
       const plan = resolvePlaybackPlan({
         slot: response.emotion,
@@ -937,8 +992,13 @@ export default function CompanionPage() {
       }
 
       try {
-        await speak(response.text);
+        await prepareAndPlayAssistantTts(assistantMessageId, response.text);
       } catch (speakError) {
+        updateMessageTts(assistantMessageId, {
+          status: "failed",
+          mode: ttsMode,
+          error: speakError instanceof Error ? speakError.message : "语音播放失败。",
+        });
         handleTtsFailure(speakError instanceof Error ? `语音播放失败：${speakError.message}` : "语音播放失败。");
       }
     } catch (err) {
@@ -995,7 +1055,13 @@ export default function CompanionPage() {
       data-testid="mio-hud"
       data-render-pipeline={renderPipeline}
     >
-      <MioModeBackground active={renderPipeline === "mio-reference"} />
+      <MioModeBackground
+        active={renderPipeline === "mio-reference"}
+        speaking={speaking}
+        emotion={interaction.emotion}
+        action={interaction.action}
+        activityPulse={backgroundActivityPulse}
+      />
       <header className="mio-topbar" data-testid="mio-topbar">
         <div className="mio-brand">
           <img src={`${SPRITE}/asset-082.png`} alt="" />
@@ -1297,8 +1363,37 @@ export default function CompanionPage() {
                   <path d="M2 8h11m5 0h4m5 0h2l2-3 2 6 3-10 3 13 3-8h2l2 3h4m5 0h4l2-4 2 8 3-12 3 10 2-5h4m7 0h28" />
                 </svg>
               </span>
+              {latestAssistantMessage?.tts ? (
+                <button
+                  type="button"
+                  className="mio-dialogue-voice-button"
+                  aria-label={
+                    latestAssistantMessage.tts.status === "loading"
+                      ? "Voice pending"
+                      : latestAssistantMessage.tts.status === "failed"
+                        ? "Voice unavailable"
+                        : "Play voice"
+                  }
+                  title={
+                    latestAssistantMessage.tts.status === "loading"
+                      ? "Voice pending"
+                      : latestAssistantMessage.tts.status === "failed"
+                        ? "Voice unavailable"
+                        : "Play voice"
+                  }
+                  disabled={latestAssistantMessage.tts.status !== "ready"}
+                  data-status={latestAssistantMessage.tts.status}
+                  data-active={latestAssistantMessage.id && latestAssistantMessage.id === activeTtsMessageId ? "true" : "false"}
+                  onClick={() => playMessageAudio(latestAssistantMessage)}
+                >
+                  <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
+                    <path d="M4.2 8.2h2.5l3.4-3v9.6l-3.4-3H4.2z" />
+                    <path d="M13.1 7.2a4 4 0 0 1 0 5.6M15.2 5.1a7 7 0 0 1 0 9.8" />
+                  </svg>
+                </button>
+              ) : null}
             </div>
-            <p>{latestAssistantMessage}</p>
+            <p>{latestAssistantMessageText}</p>
             <div className="mio-dialogue-dots" aria-hidden="true">
               <span />
               <span />
@@ -1330,10 +1425,12 @@ export default function CompanionPage() {
           loading={loading}
           error={error}
           ttsEnabled={ttsEnabled}
+          activeTtsMessageId={activeTtsMessageId}
           nextSteps={nextSteps}
           memoryNotes={memoryNotes}
           traceRows={traceRows}
           onToggleCollapsed={() => setIsRightRailCollapsed((current) => !current)}
+          onPlayTtsMessage={playMessageAudio}
         />
       </div>
       <CompanionCommandBar

@@ -17,10 +17,12 @@ type CompanionRightRailProps = {
   loading: boolean;
   error: string;
   ttsEnabled: boolean;
+  activeTtsMessageId: string;
   nextSteps: string[];
   memoryNotes: string[];
   traceRows: readonly TraceRow[];
   onToggleCollapsed: () => void;
+  onPlayTtsMessage: (message: ChatMessage) => void;
 };
 
 function PlaceholderWorkspace({
@@ -113,10 +115,12 @@ export function CompanionRightRail({
   loading,
   error,
   ttsEnabled,
+  activeTtsMessageId,
   nextSteps,
   memoryNotes,
   traceRows,
   onToggleCollapsed,
+  onPlayTtsMessage,
 }: CompanionRightRailProps) {
   const workspaceClassName =
     activeView === "overview" ? "mio-right-rail-overview" : activeView === "chat" ? "mio-right-rail-chat" : "mio-right-rail-workspace";
@@ -141,7 +145,14 @@ export function CompanionRightRail({
         activeView === "overview" ? (
           <OverviewWorkspace nextSteps={nextSteps} memoryNotes={memoryNotes} traceRows={traceRows} />
         ) : activeView === "chat" ? (
-          <CompanionChatbox messages={messages} loading={loading} error={error} ttsEnabled={ttsEnabled} />
+          <CompanionChatbox
+            messages={messages}
+            loading={loading}
+            error={error}
+            ttsEnabled={ttsEnabled}
+            activeTtsMessageId={activeTtsMessageId}
+            onPlayTtsMessage={onPlayTtsMessage}
+          />
         ) : activeView === "tasks" ? (
           <PlaceholderWorkspace
             title="任务面板"
