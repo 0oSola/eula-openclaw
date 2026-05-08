@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { BUILT_IN_VMD_PLAYBACK_RATE, DEFAULT_VMD_PLAYBACK_RATE } from "../src/features/stage/builtInMotionPreferences.js";
 import {
@@ -14,15 +16,46 @@ import { buildTraceHeaders } from "../src/lib/trace.js";
 
 function run() {
   {
+    const webRoot = fileURLToPath(new URL("../", import.meta.url));
+    const result = spawnSync(process.execPath, ["./scripts/run-next.mjs", "build", "--help"], {
+      cwd: webRoot,
+      encoding: "utf8",
+    });
+
+    assert.equal(
+      result.status,
+      0,
+      `run-next wrapper should launch Next CLI without Windows spawn errors.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert.match(`${result.stdout}\n${result.stderr}`, /next(?:\s+build)?/i);
+  }
+
+  {
     const commandBarSource = readFileSync(new URL("../src/app/companion/CompanionCommandBar.tsx", import.meta.url), "utf8");
     const companionPageSource = readFileSync(new URL("../src/app/companion/page.tsx", import.meta.url), "utf8");
+    const chatboxSource = readFileSync(new URL("../src/app/companion/CompanionChatbox.tsx", import.meta.url), "utf8");
+    const rightRailSource = readFileSync(new URL("../src/app/companion/CompanionRightRail.tsx", import.meta.url), "utf8");
+    const typesSource = readFileSync(new URL("../src/lib/types.ts", import.meta.url), "utf8");
+    const backgroundSource = readFileSync(new URL("../src/app/companion/MioModeBackground.tsx", import.meta.url), "utf8");
     const cssSource = readFileSync(new URL("../src/app/globals.css", import.meta.url), "utf8");
+    const runtimeSource = readFileSync(new URL("../src/features/stage/mmdCompanionRuntime.js", import.meta.url), "utf8");
 
     assert.match(commandBarSource, /export function CompanionCommandBar/);
     assert.doesNotMatch(commandBarSource, /ttsNotice: string/);
     assert.doesNotMatch(commandBarSource, /className="mio-notice"/);
     assert.match(commandBarSource, /mio-command-shell/);
     assert.match(companionPageSource, /<CompanionCommandBar/);
+    assert.match(typesSource, /tts\?:\s*\{/);
+    assert.match(typesSource, /status:\s*"loading"\s*\|\s*"ready"\s*\|\s*"failed"/);
+    assert.match(chatboxSource, /onPlayTtsMessage: \(message: ChatMessage\) => void;/);
+    assert.match(chatboxSource, /className="mio-message-voice-button"/);
+    assert.match(rightRailSource, /onPlayTtsMessage=\{onPlayTtsMessage\}/);
+    assert.match(companionPageSource, /function updateMessageTts\(/);
+    assert.match(companionPageSource, /async function prepareAndPlayAssistantTts\(/);
+    assert.match(companionPageSource, /function playMessageAudio\(message: ChatMessage\)/);
+    assert.match(companionPageSource, /const latestAssistantMessage = \[\.\.\.messages\]\.reverse\(\)\.find\(\(item\) => item\.role === "assistant"\)/);
+    assert.match(companionPageSource, /className="mio-dialogue-voice-button"/);
+    assert.match(companionPageSource, /onClick=\{\(\) => playMessageAudio\(latestAssistantMessage\)\}/);
     assert.match(companionPageSource, /const \[toast, setToast\] = useState/);
     assert.match(companionPageSource, /ignoreNextStageCompletionResetRef = useRef\(false\)/);
     assert.match(companionPageSource, /function handleTtsFailure\(message: string\)/);
@@ -31,19 +64,174 @@ function run() {
     assert.doesNotMatch(companionPageSource, /<form className="mio-command-bar"/);
     assert.match(
       companionPageSource,
-      /const response = await postChat\([\s\S]*?try\s*\{\s*await speak\(response\.text\);\s*\}\s*catch\s*\(speakError\)/,
+      /const response = await postChat\([\s\S]*?const assistantMessageId = createMessageId\("assistant"\)[\s\S]*?try\s*\{\s*await prepareAndPlayAssistantTts\(assistantMessageId, response\.text\);[\s\S]*?\}\s*catch\s*\(speakError\)/,
     );
     assert.match(companionPageSource, /catch\s*\(err\)\s*\{\s*pushToast\(/);
     assert.doesNotMatch(companionPageSource, /发送失败，请检查 API 服务状态和配置/);
     assert.match(companionPageSource, /if \(ignoreNextStageCompletionResetRef\.current\) \{/);
+    assert.match(backgroundSource, /type MioModeBackgroundProps = \{[\s\S]*speaking: boolean;[\s\S]*emotion: string;[\s\S]*action: string;[\s\S]*\}/);
+    assert.match(backgroundSource, /data-speaking=\{speaking \? "true" : "false"\}/);
+    assert.match(backgroundSource, /data-emotion=\{emotion\}/);
+    assert.match(backgroundSource, /data-action=\{action\}/);
+    assert.match(backgroundSource, /data-activity=\{activityPulse > 0 \? "pulse" : "idle"\}/);
+    assert.match(backgroundSource, /data-time-tone=\{timeTone\}/);
+    assert.match(backgroundSource, /activityPulse: number;/);
+    assert.match(backgroundSource, /mio-background-stars/);
+    assert.match(backgroundSource, /mio-background-star/);
+    assert.match(backgroundSource, /mio-background-particles/);
+    assert.match(backgroundSource, /LIGHT_PILLAR_SPEC/);
+    assert.match(backgroundSource, /vertical_cyan_light_columns/);
+    assert.match(backgroundSource, /soft cyan bloom/);
+    assert.match(backgroundSource, /mio-background-meteors/);
+    assert.match(backgroundSource, /mio-background-meteor/);
+    assert.match(backgroundSource, /mio-background-reflection/);
+    assert.match(backgroundSource, /mio-background-moonlight/);
+    assert.match(backgroundSource, /mio-background-caustics/);
+    assert.match(backgroundSource, /mio-background-nebula/);
+    assert.match(backgroundSource, /mio-background-clouds/);
+    assert.match(backgroundSource, /mio-background-cloud mio-background-cloud-one/);
+    assert.match(backgroundSource, /mio-background-light-pillars/);
+    assert.match(backgroundSource, /mio-background-light-pillar mio-background-light-pillar-one/);
+    assert.match(backgroundSource, /mio-background-backlight/);
+    assert.match(backgroundSource, /mio-background-voice-ripples/);
+    assert.match(backgroundSource, /mio-background-ripple mio-background-ripple-one/);
+    assert.match(backgroundSource, /mio-background-ripple mio-background-ripple-two/);
+    assert.match(backgroundSource, /mio-background-orbiters/);
+    assert.match(backgroundSource, /mio-background-orbiter mio-background-orbiter-one/);
+    assert.doesNotMatch(backgroundSource, /mio-background-ring-three/);
+    assert.match(backgroundSource, /mio-background-ring-scans/);
+    assert.match(backgroundSource, /mio-background-ring-scan mio-background-ring-scan-one/);
+    assert.doesNotMatch(backgroundSource, /mio-background-ring-scan-three/);
+    assert.match(backgroundSource, /mio-background-send-wave" key=\{activityPulse\}/);
+    assert.match(backgroundSource, /mio-background-emotion-particles/);
+    assert.match(backgroundSource, /mio-background-foreground-particles/);
+    assert.match(backgroundSource, /mio-background-stage-trails/);
+    assert.match(backgroundSource, /travel:/);
+    assert.match(backgroundSource, /kind:/);
+    assert.match(backgroundSource, /glow:/);
+    assert.doesNotMatch(backgroundSource, /kind:\s*"petal"/);
+    assert.match(companionPageSource, /const \[backgroundActivityPulse, setBackgroundActivityPulse\] = useState\(0\)/);
+    assert.match(companionPageSource, /setBackgroundActivityPulse\(\(current\) => current \+ 1\)/);
+    assert.match(companionPageSource, /<MioModeBackground[\s\S]*active=\{renderPipeline === "mio-reference"\}[\s\S]*speaking=\{speaking\}[\s\S]*emotion=\{interaction\.emotion\}[\s\S]*action=\{interaction\.action\}[\s\S]*activityPulse=\{backgroundActivityPulse\}/);
     assert.match(cssSource, /\.mio-command-shell/);
     assert.match(cssSource, /\.mio-command-surface/);
     assert.match(cssSource, /\.mio-toast-layer/);
     assert.match(cssSource, /\.mio-toast/);
+    assert.match(cssSource, /\.mio-background\[data-speaking="true"\]/);
+    assert.match(cssSource, /\.mio-background\[data-emotion="happy"\]/);
+    assert.match(cssSource, /\.mio-background\[data-action="wave"\]/);
+    assert.doesNotMatch(backgroundSource, /mio-background-sweep/);
+    assert.doesNotMatch(cssSource, /\.mio-background-sweep/);
+    assert.doesNotMatch(cssSource, /@keyframes mio-background-sweep/);
+    assert.match(cssSource, /\.mio-background\[data-action="idle"\] \.mio-background-aura/);
+    assert.match(cssSource, /\.mio-background\[data-action="idle"\] \.mio-background-circle/);
+    assert.match(cssSource, /\.mio-background\[data-action="idle"\] \.mio-background-particle/);
+    assert.match(cssSource, /@keyframes mio-idle-circle-swell/);
+    assert.match(cssSource, /\.mio-background-stars/);
+    assert.match(cssSource, /\.mio-background-star/);
+    assert.match(cssSource, /\.mio-background-meteors/);
+    assert.match(cssSource, /\.mio-background-meteor/);
+    assert.match(cssSource, /\.mio-background-meteor::before/);
+    assert.match(cssSource, /\.mio-background-meteor::after/);
+    assert.match(cssSource, /\.mio-background-reflection/);
+    assert.match(cssSource, /\.mio-background-moonlight/);
+    assert.match(cssSource, /\.mio-background-caustics/);
+    assert.match(cssSource, /\.mio-background-nebula/);
+    assert.match(cssSource, /\.mio-background-clouds/);
+    assert.match(cssSource, /\.mio-background-cloud/);
+    assert.match(cssSource, /\.mio-background-light-pillars/);
+    assert.match(cssSource, /\.mio-background-light-pillar/);
+    assert.match(cssSource, /\.mio-background-backlight/);
+    assert.match(cssSource, /\.mio-background-voice-ripples/);
+    assert.match(cssSource, /\.mio-background-ripple/);
+    assert.match(cssSource, /\.mio-background\[data-speaking="true"\] \.mio-background-ripple/);
+    assert.match(cssSource, /\.mio-background-orbiters/);
+    assert.match(cssSource, /\.mio-background-orbiter/);
+    assert.match(cssSource, /\.mio-background-ring-scans/);
+    assert.match(cssSource, /\.mio-background-ring-scan/);
+    assert.doesNotMatch(cssSource, /\.mio-background-ring-scan-three/);
+    assert.doesNotMatch(cssSource, /\.mio-background-ring-three/);
+    assert.doesNotMatch(cssSource, /@keyframes mio-ring-breathe/);
+    assert.match(cssSource, /\.mio-background-send-wave/);
+    assert.match(cssSource, /\.mio-background\[data-activity="pulse"\] \.mio-background-send-wave/);
+    assert.match(cssSource, /\.mio-background-emotion-particles/);
+    assert.match(cssSource, /\.mio-background-emotion-particle/);
+    assert.match(cssSource, /\.mio-background-foreground-particles/);
+    assert.match(cssSource, /\.mio-background-foreground-particle/);
+    assert.match(cssSource, /\.mio-background-foreground-particles::before/);
+    assert.match(cssSource, /\.mio-background-stage-trails/);
+    assert.match(cssSource, /\.mio-background-stage-trail/);
+    assert.match(cssSource, /\.mio-background\[data-time-tone="dawn"\]/);
+    assert.match(cssSource, /\.mio-background\[data-time-tone="deep-night"\]/);
+    assert.doesNotMatch(cssSource, /\.mio-hud \.mio-topbar::before/);
+    assert.doesNotMatch(cssSource, /\.mio-hud \.mio-sidebar::before/);
+    assert.doesNotMatch(cssSource, /\.mio-hud \.mio-right-rail::before/);
+    assert.match(cssSource, /\.select,\s*[\s\S]*?\.mio-model-select select,\s*[\s\S]*?\.mio-advanced-field select,\s*[\s\S]*?\.mio-advanced-filter select,\s*[\s\S]*?\.mio-chatbox-filter\s*\{[\s\S]*?appearance: none;[\s\S]*?-webkit-appearance: none;[\s\S]*?background-image:/);
+    assert.match(cssSource, /\.select,\s*[\s\S]*?\.mio-model-select select,\s*[\s\S]*?\.mio-advanced-field select,\s*[\s\S]*?\.mio-advanced-filter select,\s*[\s\S]*?\.mio-chatbox-filter\s*\{[\s\S]*?background-repeat: no-repeat;[\s\S]*?background-position: right 12px center;[\s\S]*?background-size: 12px 12px;/);
+    assert.match(cssSource, /\.mio-chatbox-toolbar\s*\{[\s\S]*?grid-template-columns: minmax\(112px, 1fr\) minmax\(92px, auto\) minmax\(112px, auto\);/);
+    assert.match(cssSource, /\.mio-chatbox-jump\s*\{[^}]*?cursor: pointer;[^}]*?\}/);
+    assert.doesNotMatch(cssSource.match(/\.mio-chatbox-jump\s*\{[^}]*?\}/)?.[0] || "", /grid-column: 1 \/ -1;/);
+    assert.match(cssSource, /\.mio-chatbox-search::-webkit-search-cancel-button\s*\{[\s\S]*?-webkit-appearance: none;[\s\S]*?appearance: none;/);
+    assert.match(cssSource, /\.mio-right-rail\s*\{[\s\S]*?container-type: inline-size;/);
+    assert.match(cssSource, /@container \(max-width: 350px\)\s*\{[\s\S]*?\.mio-chatbox-toolbar\s*\{[\s\S]*?grid-template-columns: minmax\(112px, 1fr\) minmax\(92px, auto\);[\s\S]*?\}/);
+    assert.match(cssSource, /@container \(max-width: 350px\)\s*\{[\s\S]*?\.mio-chatbox-jump\s*\{[\s\S]*?grid-column: 1 \/ -1;[\s\S]*?\}/);
+    assert.match(cssSource, /@container \(max-width: 235px\)\s*\{[\s\S]*?\.mio-chatbox-toolbar\s*\{[\s\S]*?grid-template-columns: 1fr;[\s\S]*?\}/);
+    assert.match(cssSource, /@container \(max-width: 235px\)\s*\{[\s\S]*?\.mio-chatbox-jump\s*\{[\s\S]*?grid-column: auto;[\s\S]*?\}/);
+    assert.match(cssSource, /\.mio-tts-switch\s*\{[\s\S]*?background: linear-gradient\(180deg, rgba\(37, 62, 96, 0\.82\), rgba\(13, 30, 57, 0\.92\)\);/);
+    assert.match(cssSource, /\.mio-tts-switch\.is-on\s*\{[\s\S]*?background: linear-gradient\(180deg, #58adff, #3f81fb\);/);
+    assert.match(cssSource, /\.mio-background\[data-emotion="sad"\]/);
+    assert.match(cssSource, /\.mio-background\[data-emotion="thinking"\]/);
+    assert.match(cssSource, /\.mio-background\[data-emotion="caring"\]/);
+    assert.match(cssSource, /--meteor-travel/);
+    assert.match(cssSource, /--meteor-head-size/);
+    assert.match(cssSource, /\.mio-background-particle::before/);
+    assert.match(cssSource, /--particle-drift-x/);
+    assert.match(cssSource, /--particle-drift-y/);
+    assert.match(cssSource, /#63CFFF/i);
+    assert.match(cssSource, /@keyframes mio-meteor-fall/);
+    assert.match(cssSource, /@keyframes mio-meteor-head-bloom/);
+    assert.match(cssSource, /@keyframes mio-reflection-shimmer/);
+    assert.match(cssSource, /@keyframes mio-voice-ripple/);
+    assert.match(cssSource, /@keyframes mio-moonlight-roam/);
+    assert.match(cssSource, /@keyframes mio-caustics-flow/);
+    assert.match(cssSource, /@keyframes mio-nebula-flow/);
+    assert.match(cssSource, /@keyframes mio-cloud-drift/);
+    assert.match(cssSource, /@keyframes mio-light-pillar-bloom/);
+    assert.match(cssSource, /@keyframes mio-ring-scan-sweep/);
+    assert.match(cssSource, /@keyframes mio-send-wave-burst/);
+    assert.match(cssSource, /@keyframes mio-emotion-spark/);
+    assert.doesNotMatch(cssSource, /@keyframes mio-panel-glint/);
+    assert.match(cssSource, /@keyframes mio-orbiter-lap/);
+    assert.match(cssSource, /@keyframes mio-foreground-particle-float/);
+    assert.match(cssSource, /@keyframes mio-stage-trail-glide/);
+    assert.match(cssSource, /@keyframes mio-star-drift/);
+    assert.match(cssSource, /@keyframes mio-star-twinkle/);
+    assert.match(cssSource, /@keyframes mio-particle-float/);
     assert.match(cssSource, /\.mio-layout\s*\{/);
     assert.match(cssSource, /display: flex;/);
     assert.match(cssSource, /padding: var\(--mio-layout-padding-top\) var\(--mio-layout-padding-x\) 0;/);
     assert.match(cssSource, /margin-bottom: var\(--mio-side-panels-bottom-gap\);/);
+    assert.match(cssSource, /\.mio-topbar\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto;[\s\S]*?gap: clamp\(8px, 2vw, 20px\);/);
+    assert.match(cssSource, /\.mio-system-state\s*\{[\s\S]*?display: none;[\s\S]*?\}/);
+    assert.match(cssSource, /\.mio-brand::before\s*\{[\s\S]*?width: 34px;[\s\S]*?height: 34px;[\s\S]*?flex: 0 0 34px;/);
+    assert.match(cssSource, /@media \(max-width: 860px\)\s*\{[\s\S]*?\.mio-topbar\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto;[\s\S]*?gap: 8px;[\s\S]*?\}/);
+    assert.doesNotMatch(cssSource.match(/\.mio-system-state\s*\{[^}]*?\}/)?.[0] || "", /grid-column: 1 \/ -1;/);
+    assert.doesNotMatch(runtimeSource, /mio-petals-atlas/);
+    assert.doesNotMatch(runtimeSource, /PETAL_/);
+    assert.doesNotMatch(runtimeSource, /anime_stage_petal_flow/);
+    assert.doesNotMatch(runtimeSource, /background_petals/);
+    assert.doesNotMatch(runtimeSource, /midground_petals/);
+    assert.doesNotMatch(runtimeSource, /foreground_petals/);
+    assert.doesNotMatch(runtimeSource, /setupPetalSystem/);
+    assert.doesNotMatch(runtimeSource, /resetPetalParticle/);
+    assert.doesNotMatch(runtimeSource, /updatePetalSystem/);
+    assert.doesNotMatch(runtimeSource, /disposePetalSystem/);
+    assert.doesNotMatch(runtimeSource, /getPetalGuideTargets/);
+    assert.doesNotMatch(runtimeSource, /petalGuide/);
+    assert.match(
+      runtimeSource,
+      /"mio-reference":\s*\{[\s\S]*?camera:\s*\{[\s\S]*?fov:\s*32[\s\S]*?position:\s*\[-1\.346829,\s*2\.907039,\s*31\.361977\][\s\S]*?target:\s*\[-1\.346829,\s*0\.961375,\s*0\.436541\][\s\S]*?locked:\s*false/,
+    );
   }
 
   {
@@ -141,6 +329,10 @@ function run() {
         mode: "vmd",
         vmdUrl: "/assets/vmd/file/asset-2",
         vmdLoopUrls: ["/assets/vmd/file/asset-2", "/assets/vmd/file/asset-1"],
+        vmdLoopEmotionByUrl: {
+          "/assets/vmd/file/asset-2": "sad",
+          "/assets/vmd/file/asset-1": "happy",
+        },
         standbyVmdUrl: "",
         loopMode: "random",
         playbackRate: DEFAULT_VMD_PLAYBACK_RATE,
@@ -176,7 +368,16 @@ function run() {
         action: "idle",
         mode: "vmd",
         vmdUrl: "/assets/vmd/file/asset-2",
-        vmdLoopUrls: ["/assets/vmd/file/asset-2", "/assets/vmd/file/asset-1"],
+        vmdLoopUrls: [
+          "/assets/vmd/file/asset-standby",
+          "/assets/vmd/file/asset-2",
+          "/assets/vmd/file/asset-1",
+        ],
+        vmdLoopEmotionByUrl: {
+          "/assets/vmd/file/asset-standby": "neutral",
+          "/assets/vmd/file/asset-2": "sad",
+          "/assets/vmd/file/asset-1": "happy",
+        },
         standbyVmdUrl: "",
         loopMode: "random",
         playbackRate: DEFAULT_VMD_PLAYBACK_RATE,
@@ -212,7 +413,16 @@ function run() {
         action: "idle",
         mode: "vmd",
         vmdUrl: "/assets/vmd/file/asset-2",
-        vmdLoopUrls: ["/assets/vmd/file/asset-2", "/assets/vmd/file/asset-1"],
+        vmdLoopUrls: [
+          "/assets/vmd/file/asset-standby",
+          "/assets/vmd/file/asset-2",
+          "/assets/vmd/file/asset-1",
+        ],
+        vmdLoopEmotionByUrl: {
+          "/assets/vmd/file/asset-standby": "neutral",
+          "/assets/vmd/file/asset-2": "sad",
+          "/assets/vmd/file/asset-1": "happy",
+        },
         standbyVmdUrl: "",
         loopMode: "random",
         playbackRate: DEFAULT_VMD_PLAYBACK_RATE,
@@ -230,6 +440,67 @@ function run() {
         },
       ]),
       null,
+    );
+    assert.deepEqual(
+      buildAutoFavoriteInteraction(
+        [
+          {
+            asset_id: "asset-first",
+            slot: "neutral",
+            filename: "回答-介绍.vmd",
+            display_name: "回答-介绍.vmd",
+            source_relative_path: "usage/vmd/Eula[动作]/回答-介绍.vmd",
+            url: "/assets/vmd/file/asset-first",
+          },
+          {
+            asset_id: "asset-greet",
+            slot: "happy",
+            filename: "打招呼1.vmd",
+            display_name: "打招呼1.vmd",
+            source_relative_path: "usage/vmd/Eula[动作]/打招呼1.vmd",
+            url: "/assets/vmd/file/asset-greet",
+          },
+          {
+            asset_id: "asset-shy",
+            slot: "happy",
+            filename: "腼腆打招呼.vmd",
+            display_name: "腼腆打招呼.vmd",
+            source_relative_path: "usage/vmd/Eula[动作]/腼腆打招呼.vmd",
+            url: "/assets/vmd/file/asset-shy",
+          },
+          {
+            asset_id: "asset-bow",
+            slot: "happy",
+            filename: "行礼1.vmd",
+            display_name: "行礼1.vmd",
+            source_relative_path: "usage/vmd/Eula[动作]/行礼1.vmd",
+            url: "/assets/vmd/file/asset-bow",
+          },
+        ],
+        { randomValue: 0.99 },
+      ),
+      {
+        emotion: "happy",
+        action: "idle",
+        mode: "vmd",
+        vmdUrl: "/assets/vmd/file/asset-bow",
+        vmdLoopUrls: [
+          "/assets/vmd/file/asset-first",
+          "/assets/vmd/file/asset-greet",
+          "/assets/vmd/file/asset-shy",
+          "/assets/vmd/file/asset-bow",
+        ],
+        vmdLoopEmotionByUrl: {
+          "/assets/vmd/file/asset-first": "neutral",
+          "/assets/vmd/file/asset-greet": "happy",
+          "/assets/vmd/file/asset-shy": "happy",
+          "/assets/vmd/file/asset-bow": "happy",
+        },
+        standbyVmdUrl: "",
+        loopMode: "random",
+        playbackRate: DEFAULT_VMD_PLAYBACK_RATE,
+        sequence: [],
+      },
     );
   }
 

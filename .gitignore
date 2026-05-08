@@ -8,6 +8,8 @@ dist
 **/.env.local
 web/node_modules
 web/.next
+web/.next-codex-dev
+web/.next-codex-build
 #api/data
 #api/api/data
 api/tests_runtime

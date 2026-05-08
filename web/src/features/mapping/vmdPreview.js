@@ -2,6 +2,7 @@ import { DEFAULT_VMD_PLAYBACK_RATE } from "../stage/builtInMotionPreferences.js"
 
 const IDLE_ANIMATIONS_PACK_PLAYBACK_RATE = 2.5;
 const ENTRY_STANDBY_HINTS = ["\u8fdb\u573a\u5f85\u673a", "\u6769\u6d98\u6e80\u5bf0\u546e\u6e80", "entry idle"];
+const ENTRY_GREETING_FILENAMES = ["\u6253\u62db\u547c1.vmd", "\u817c\u8146\u6253\u62db\u547c.vmd", "\u884c\u793c1.vmd"];
 function describeVmdAsset(asset) {
   return [asset?.source_relative_path, asset?.filename, asset?.display_name, asset?.url]
     .filter(Boolean)
@@ -11,6 +12,17 @@ function describeVmdAsset(asset) {
 
 function describeAssetName(asset) {
   return [asset?.display_name, asset?.filename].filter(Boolean).join(" ").toLowerCase();
+}
+
+function normalizeAssetFilename(asset) {
+  const name = asset?.filename || asset?.display_name || "";
+  return name.trim().toLowerCase();
+}
+
+function pickRandomItem(items, randomValue = Math.random()) {
+  if (!items.length) return null;
+  const clamped = Math.min(0.999999, Math.max(0, Number(randomValue) || 0));
+  return items[Math.floor(clamped * items.length)] || items[0] || null;
 }
 
 export function isEntryStandbyAsset(asset) {
@@ -96,8 +108,37 @@ export function createDefaultFavoriteLoopInteraction(assets = [], { enabled = tr
   };
 }
 
+export function createEntryGreetingFolderLoopInteraction(
+  assets = [],
+  { enabled = true, loopMode = "random", randomValue = Math.random() } = {},
+) {
+  if (!enabled) return null;
+  const playableAssets = (Array.isArray(assets) ? assets : []).filter((asset) => asset?.url);
+  if (!playableAssets.length) return null;
+
+  const greetingAssets = playableAssets.filter((asset) => ENTRY_GREETING_FILENAMES.includes(normalizeAssetFilename(asset)));
+  const fallbackLeadAssets = excludeEntryStandbyAssets(playableAssets);
+  const leadAsset = greetingAssets.length ? pickRandomItem(greetingAssets, randomValue) : fallbackLeadAssets[0] || playableAssets[0];
+  if (!leadAsset) return null;
+
+  return {
+    emotion: leadAsset?.slot || "neutral",
+    action: "idle",
+    mode: "vmd",
+    vmdUrl: leadAsset.url,
+    vmdLoopUrls: playableAssets.map((asset) => asset.url),
+    vmdLoopEmotionByUrl: Object.fromEntries(
+      playableAssets.filter((asset) => asset?.url).map((asset) => [asset.url, asset?.slot || "neutral"]),
+    ),
+    standbyVmdUrl: "",
+    loopMode: loopMode === "sequential" ? "sequential" : "random",
+    playbackRate: resolveVmdPlaybackRate(leadAsset),
+    sequence: [],
+  };
+}
+
 export function buildAutoFavoriteInteraction(assets = [], options = {}) {
-  return createDefaultFavoriteLoopInteraction(assets, options);
+  return createEntryGreetingFolderLoopInteraction(assets, options);
 }
 
 export function buildAutoplayResumeInteraction(assets = [], options = {}) {

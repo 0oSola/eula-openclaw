@@ -54,6 +54,10 @@ class Settings:
     ndjson_compress_after_days: int
     mmd_root_dir: Path
     tts_service_enabled: bool
+    tts_service_base_url: str
+    tts_service_timeout_seconds: int
+    tts_service_poll_interval_seconds: float
+    tts_service_max_poll_attempts: int
 
     @classmethod
     def from_env(cls, overrides: dict | None = None) -> "Settings":
@@ -105,5 +109,15 @@ class Settings:
             tts_service_enabled=_parse_bool(
                 resolve_value("tts_service_enabled", "TTS_SERVICE_ENABLED", False),
                 default=False,
+            ),
+            tts_service_base_url=str(
+                resolve_value("tts_service_base_url", "TTS_SERVICE_BASE_URL", "http://10.11.252.164:5555")
+            ).rstrip("/"),
+            tts_service_timeout_seconds=int(resolve_value("tts_service_timeout_seconds", "TTS_SERVICE_TIMEOUT_SECONDS", 30)),
+            tts_service_poll_interval_seconds=float(
+                resolve_value("tts_service_poll_interval_seconds", "TTS_SERVICE_POLL_INTERVAL_SECONDS", 3)
+            ),
+            tts_service_max_poll_attempts=int(
+                resolve_value("tts_service_max_poll_attempts", "TTS_SERVICE_MAX_POLL_ATTEMPTS", 40)
             ),
         )

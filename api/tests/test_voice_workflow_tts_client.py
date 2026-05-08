@@ -1,0 +1,124 @@
+import asyncio
+import json
+
+import httpx
+import pytest
+
+from app.services.voice_workflow_tts_client import VoiceWorkflowTtsClient, VoiceWorkflowTtsError
+
+
+def test_voice_workflow_tts_submits_polls_and_downloads_audio():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "body": json.loads(request.content.decode("utf-8")) if request.content else None,
+            }
+        )
+        if request.method == "POST" and request.url.path == "/api/v1/tts":
+            return httpx.Response(status_code=202, json={"task_id": "task-1", "status": "pending"})
+        if request.method == "GET" and request.url.path == "/api/v1/tasks/task-1":
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "task_id": "task-1",
+                    "status": "completed",
+                    "emotion_label": "关心温柔",
+                    "audio_url": "/api/v1/audio/2026/04/30/tts_task-1.wav",
+                    "duration_seconds": 1.2,
+                    "chunks_count": 1,
+                    "created_at": "2026-04-30T02:15:00Z",
+                    "completed_at": "2026-04-30T02:15:02Z",
+                    "error": None,
+                },
+            )
+        if request.method == "GET" and request.url.path == "/api/v1/audio/2026/04/30/tts_task-1.wav":
+            return httpx.Response(status_code=200, content=b"fake-wav", headers={"content-type": "audio/wav"})
+        return httpx.Response(status_code=404)
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = VoiceWorkflowTtsClient(
+                base_url="http://tts.local",
+                timeout_seconds=5,
+                poll_interval_seconds=0,
+                max_poll_attempts=3,
+                http_client=http_client,
+            )
+            return await client.synthesize(
+                text="辛苦了",
+                emotion_label="关心温柔",
+                pause_profile="podcast",
+            )
+
+    result = asyncio.run(run_case())
+
+    assert result.audio == b"fake-wav"
+    assert result.media_type == "audio/wav"
+    assert result.task_id == "task-1"
+    assert result.audio_url == "/api/v1/audio/2026/04/30/tts_task-1.wav"
+    assert calls == [
+        {
+            "method": "POST",
+            "path": "/api/v1/tts",
+            "body": {"text": "辛苦了", "pause_profile": "podcast", "emotion_label": "关心温柔"},
+        },
+        {"method": "GET", "path": "/api/v1/tasks/task-1", "body": None},
+        {"method": "GET", "path": "/api/v1/audio/2026/04/30/tts_task-1.wav", "body": None},
+    ]
+
+
+def test_voice_workflow_tts_omits_default_voice_as_emotion_label():
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            bodies.append(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(status_code=202, json={"task_id": "task-1", "status": "pending"})
+        if request.url.path == "/api/v1/tasks/task-1":
+            return httpx.Response(status_code=200, json={"task_id": "task-1", "status": "completed", "audio_url": "/a.wav"})
+        return httpx.Response(status_code=200, content=b"wav")
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = VoiceWorkflowTtsClient(
+                base_url="http://tts.local",
+                timeout_seconds=5,
+                poll_interval_seconds=0,
+                http_client=http_client,
+            )
+            await client.synthesize(text="hello", emotion_label="default")
+
+    asyncio.run(run_case())
+
+    assert bodies == [{"text": "hello", "pause_profile": "podcast"}]
+
+
+def test_voice_workflow_tts_raises_when_task_fails():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(status_code=202, json={"task_id": "task-1", "status": "pending"})
+        return httpx.Response(
+            status_code=200,
+            json={"task_id": "task-1", "status": "failed", "error": "model failed"},
+        )
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = VoiceWorkflowTtsClient(
+                base_url="http://tts.local",
+                timeout_seconds=5,
+                poll_interval_seconds=0,
+                max_poll_attempts=1,
+                http_client=http_client,
+            )
+            await client.synthesize(text="hello")
+
+    with pytest.raises(VoiceWorkflowTtsError, match="model failed"):
+        asyncio.run(run_case())

@@ -114,6 +114,10 @@ def _build_settings_with_openclaw_config(current: Settings, saved: dict[str, Any
         ndjson_compress_after_days=current.ndjson_compress_after_days,
         mmd_root_dir=current.mmd_root_dir,
         tts_service_enabled=current.tts_service_enabled,
+        tts_service_base_url=current.tts_service_base_url,
+        tts_service_timeout_seconds=current.tts_service_timeout_seconds,
+        tts_service_poll_interval_seconds=current.tts_service_poll_interval_seconds,
+        tts_service_max_poll_attempts=current.tts_service_max_poll_attempts,
     )
 
 

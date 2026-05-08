@@ -15,6 +15,7 @@ from app.routes.health import router as health_router
 from app.routes.trace import router as trace_router
 from app.routes.tts import router as tts_router
 from app.services.openclaw_client import OpenClawClient
+from app.services.voice_workflow_tts_client import VoiceWorkflowTtsClient
 
 
 def create_app(overrides: dict | None = None) -> FastAPI:
@@ -32,10 +33,17 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         verify_ssl=settings.openclaw_verify_ssl,
         timeout_seconds=settings.openclaw_timeout_seconds,
     )
+    tts_client = VoiceWorkflowTtsClient(
+        base_url=settings.tts_service_base_url,
+        timeout_seconds=settings.tts_service_timeout_seconds,
+        poll_interval_seconds=settings.tts_service_poll_interval_seconds,
+        max_poll_attempts=settings.tts_service_max_poll_attempts,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         yield
+        await app.state.tts_client.close()
         await app.state.openclaw_client.close()
         app.state.trace_store.close()
 
@@ -50,6 +58,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.trace_store = trace_store
     app.state.openclaw_client = openclaw_client
+    app.state.tts_client = tts_client
     app.state.last_cleanup_check = datetime.now(UTC)
 
     app.include_router(health_router)
