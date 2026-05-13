@@ -1,5 +1,6 @@
 import { buildTraceHeaders } from "@/lib/trace.js";
 import { requestServerTtsAudio } from "@/lib/ttsClient.js";
+export { sessionVoiceWebSocketUrl } from "@/lib/realtimeVoiceQueue.js";
 import type {
   ChatResponse,
   MappingConfig,
