@@ -88,6 +88,45 @@ class RealtimeVoiceQueue:
 
 
 @dataclass(slots=True)
+class RealtimeVoiceChunkReference:
+    session_id: str
+    job_id: str
+    sequence: int
+    user_id: str
+    remote_audio_url: str
+    media_type: str = "audio/wav"
+
+
+class RealtimeVoiceChunkRegistry:
+    def __init__(self) -> None:
+        self._items: dict[tuple[str, str, int], RealtimeVoiceChunkReference] = {}
+
+    def register(
+        self,
+        *,
+        session_id: str,
+        job_id: str,
+        sequence: int,
+        user_id: str,
+        remote_audio_url: str,
+        media_type: str = "audio/wav",
+    ) -> RealtimeVoiceChunkReference:
+        reference = RealtimeVoiceChunkReference(
+            session_id=session_id,
+            job_id=job_id,
+            sequence=sequence,
+            user_id=user_id,
+            remote_audio_url=remote_audio_url,
+            media_type=media_type,
+        )
+        self._items[(session_id, job_id, sequence)] = reference
+        return reference
+
+    def get(self, *, session_id: str, job_id: str, sequence: int) -> RealtimeVoiceChunkReference | None:
+        return self._items.get((session_id, job_id, sequence))
+
+
+@dataclass(slots=True)
 class CircuitDecision:
     accepted: bool
     state: str
