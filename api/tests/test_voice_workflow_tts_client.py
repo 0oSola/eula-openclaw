@@ -118,6 +118,106 @@ def test_voice_workflow_tts_reference_does_not_download_audio():
     ]
 
 
+def test_voice_workflow_tts_chunk_returns_reference():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "body": json.loads(request.content.decode("utf-8")) if request.content else None,
+            }
+        )
+        if request.method == "POST" and request.url.path == "/api/v1/tts/chunk":
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "session_id": "tts-session",
+                    "sequence": 1,
+                    "status": "ready",
+                    "audio_url": "/api/v1/audio/realtime/tts-session/0001.wav",
+                    "duration": 1.6,
+                    "elapsed_seconds": 15.817,
+                },
+            )
+        return httpx.Response(status_code=404)
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = VoiceWorkflowTtsClient(
+                base_url="http://tts.local",
+                timeout_seconds=5,
+                http_client=http_client,
+            )
+            return await client.synthesize_chunk(
+                text="hello",
+                emotion_label="daily",
+                pause_profile="podcast",
+                session_id="tts-session",
+                sequence=1,
+            )
+
+    result = asyncio.run(run_case())
+
+    assert result.session_id == "tts-session"
+    assert result.sequence == 1
+    assert result.status == "ready"
+    assert result.audio_url == "http://tts.local/api/v1/audio/realtime/tts-session/0001.wav"
+    assert result.duration_seconds == 1.6
+    assert result.elapsed_seconds == 15.817
+    assert calls == [
+        {
+            "method": "POST",
+            "path": "/api/v1/tts/chunk",
+            "body": {
+                "text": "hello",
+                "pause_profile": "podcast",
+                "emotion_label": "daily",
+                "session_id": "tts-session",
+                "sequence": 1,
+            },
+        }
+    ]
+
+
+def test_voice_workflow_tts_chunk_rejects_missing_audio_url():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={"session_id": "tts-session", "sequence": 1, "status": "ready"},
+        )
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = VoiceWorkflowTtsClient(base_url="http://tts.local", http_client=http_client)
+            await client.synthesize_chunk(text="hello")
+
+    with pytest.raises(VoiceWorkflowTtsError, match="audio_url"):
+        asyncio.run(run_case())
+
+
+def test_voice_workflow_tts_cancel_realtime_posts_session_cancel():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append({"method": request.method, "path": request.url.path})
+        if request.method == "POST" and request.url.path == "/api/v1/tts/realtime/session-1/cancel":
+            return httpx.Response(status_code=200, json={"cancelled": True})
+        return httpx.Response(status_code=404)
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = VoiceWorkflowTtsClient(base_url="http://tts.local", http_client=http_client)
+            return await client.cancel_realtime("session-1")
+
+    assert asyncio.run(run_case()) is True
+    assert calls == [{"method": "POST", "path": "/api/v1/tts/realtime/session-1/cancel"}]
+
+
 def test_voice_workflow_tts_omits_default_voice_as_emotion_label():
     bodies = []
 

@@ -62,6 +62,14 @@ class Settings:
     tts_job_worker_interval_seconds: float
     tts_job_lock_timeout_seconds: int
     message_service_tts_retention_days: int
+    realtime_voice_enabled: bool
+    realtime_voice_max_queue_size: int
+    realtime_voice_chunk_timeout_seconds: int
+    realtime_voice_circuit_failure_threshold: int
+    realtime_voice_circuit_window_seconds: int
+    realtime_voice_circuit_open_seconds: int
+    realtime_voice_max_queue_wait_seconds: int
+    openclaw_stream_mode: str
 
     @classmethod
     def from_env(cls, overrides: dict | None = None) -> "Settings":
@@ -134,4 +142,32 @@ class Settings:
             message_service_tts_retention_days=int(
                 resolve_value("message_service_tts_retention_days", "MESSAGE_SERVICE_TTS_RETENTION_DAYS", 14)
             ),
+            realtime_voice_enabled=_parse_bool(
+                resolve_value("realtime_voice_enabled", "REALTIME_VOICE_ENABLED", False),
+                default=False,
+            ),
+            realtime_voice_max_queue_size=int(
+                resolve_value("realtime_voice_max_queue_size", "REALTIME_VOICE_MAX_QUEUE_SIZE", 3)
+            ),
+            realtime_voice_chunk_timeout_seconds=int(
+                resolve_value("realtime_voice_chunk_timeout_seconds", "REALTIME_VOICE_CHUNK_TIMEOUT_SECONDS", 30)
+            ),
+            realtime_voice_circuit_failure_threshold=int(
+                resolve_value(
+                    "realtime_voice_circuit_failure_threshold",
+                    "REALTIME_VOICE_CIRCUIT_FAILURE_THRESHOLD",
+                    5,
+                )
+            ),
+            realtime_voice_circuit_window_seconds=int(
+                resolve_value("realtime_voice_circuit_window_seconds", "REALTIME_VOICE_CIRCUIT_WINDOW_SECONDS", 60)
+            ),
+            realtime_voice_circuit_open_seconds=int(
+                resolve_value("realtime_voice_circuit_open_seconds", "REALTIME_VOICE_CIRCUIT_OPEN_SECONDS", 120)
+            ),
+            realtime_voice_max_queue_wait_seconds=int(
+                resolve_value("realtime_voice_max_queue_wait_seconds", "REALTIME_VOICE_MAX_QUEUE_WAIT_SECONDS", 120)
+            ),
+            openclaw_stream_mode=str(resolve_value("openclaw_stream_mode", "OPENCLAW_STREAM_MODE", "http_sse")).strip()
+            or "http_sse",
         )

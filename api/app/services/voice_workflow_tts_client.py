@@ -28,6 +28,16 @@ class VoiceWorkflowTtsReference:
     chunks_count: int | None = None
 
 
+@dataclass(slots=True)
+class VoiceWorkflowTtsChunk:
+    session_id: str
+    sequence: int
+    status: str
+    audio_url: str
+    duration_seconds: float | None = None
+    elapsed_seconds: float | None = None
+
+
 class VoiceWorkflowTtsClient:
     def __init__(
         self,
@@ -158,6 +168,66 @@ class VoiceWorkflowTtsClient:
         if not audio_url.startswith("/"):
             audio_url = f"/{audio_url}"
         return f"{self.base_url}{audio_url}"
+
+    async def synthesize_chunk(
+        self,
+        *,
+        text: str,
+        emotion_label: str | None = None,
+        pause_profile: str = "podcast",
+        session_id: str | None = None,
+        sequence: int | None = None,
+    ) -> VoiceWorkflowTtsChunk:
+        payload: dict[str, Any] = {
+            "text": text,
+            "pause_profile": pause_profile or "podcast",
+        }
+        normalized_label = self._normalize_emotion_label(emotion_label)
+        if normalized_label:
+            payload["emotion_label"] = normalized_label
+        if session_id:
+            payload["session_id"] = session_id
+        if sequence is not None:
+            payload["sequence"] = sequence
+
+        response = await self.http_client.post(
+            f"{self.base_url}/api/v1/tts/chunk",
+            json=payload,
+            timeout=self.timeout_seconds,
+        )
+        if not response.is_success:
+            raise VoiceWorkflowTtsError(self._format_response_error("Voice workflow TTS chunk", response))
+
+        data = response.json()
+        audio_url = data.get("audio_url")
+        if not isinstance(audio_url, str) or not audio_url:
+            raise VoiceWorkflowTtsError("Voice workflow TTS chunk returned no audio_url.")
+
+        response_session_id = data.get("session_id")
+        response_sequence = data.get("sequence")
+        duration = data.get("duration", data.get("duration_seconds"))
+        elapsed = data.get("elapsed_seconds")
+        return VoiceWorkflowTtsChunk(
+            session_id=response_session_id if isinstance(response_session_id, str) else (session_id or ""),
+            sequence=response_sequence if isinstance(response_sequence, int) else (sequence or 1),
+            status=str(data.get("status") or "ready"),
+            audio_url=self._absolute_audio_url(audio_url),
+            duration_seconds=duration if isinstance(duration, (int, float)) else None,
+            elapsed_seconds=elapsed if isinstance(elapsed, (int, float)) else None,
+        )
+
+    async def cancel_realtime(self, session_id: str) -> bool:
+        safe_session_id = session_id.strip()
+        if not safe_session_id:
+            raise VoiceWorkflowTtsError("Voice workflow TTS realtime cancel requires session_id.")
+        response = await self.http_client.post(
+            f"{self.base_url}/api/v1/tts/realtime/{safe_session_id}/cancel",
+            timeout=self.timeout_seconds,
+        )
+        if not response.is_success:
+            raise VoiceWorkflowTtsError(self._format_response_error("Voice workflow TTS realtime cancel", response))
+        data = response.json()
+        return bool(data.get("cancelled"))
 
     async def synthesize_reference(
         self,
