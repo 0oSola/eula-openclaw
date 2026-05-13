@@ -16,11 +16,13 @@ from app.routes.config import router as config_router
 from app.routes.health import router as health_router
 from app.routes.message_bridge import router as message_bridge_router
 from app.routes.message_service import router as message_service_router
+from app.routes.realtime_voice import router as realtime_voice_router
 from app.routes.trace import router as trace_router
 from app.routes.tts import router as tts_router
 from app.services.message_tts_worker import run_message_tts_worker
 from app.services.message_bridge import MessageBridgeService, OpenClawGatewayProvider
 from app.services.openclaw_client import OpenClawClient
+from app.services.realtime_voice import RealtimeVoiceChunkRegistry
 from app.services.voice_workflow_tts_client import VoiceWorkflowTtsClient
 
 
@@ -98,12 +100,15 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.state.openclaw_client = openclaw_client
     app.state.tts_client = tts_client
     app.state.message_bridge_service = message_bridge_service
+    app.state.realtime_voice_registry = RealtimeVoiceChunkRegistry()
+    app.state.realtime_voice_queues = {}
     app.state.last_cleanup_check = datetime.now(UTC)
 
     app.include_router(health_router)
     app.include_router(chat_router)
     app.include_router(message_bridge_router)
     app.include_router(message_service_router)
+    app.include_router(realtime_voice_router)
     app.include_router(trace_router)
     app.include_router(config_router)
     app.include_router(assets_router)
