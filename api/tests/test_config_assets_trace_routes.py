@@ -100,6 +100,14 @@ def test_settings_default_openclaw_gateway_values(monkeypatch):
     assert settings.openclaw_message_channel == "feishu"
     assert settings.openclaw_proxy_url == ""
     assert settings.openclaw_verify_ssl is True
+    assert settings.realtime_voice_enabled is False
+    assert settings.realtime_voice_max_queue_size == 3
+    assert settings.realtime_voice_chunk_timeout_seconds == 30
+    assert settings.realtime_voice_circuit_failure_threshold == 5
+    assert settings.realtime_voice_circuit_window_seconds == 60
+    assert settings.realtime_voice_circuit_open_seconds == 120
+    assert settings.realtime_voice_max_queue_wait_seconds == 120
+    assert settings.openclaw_stream_mode == "http_sse"
 
 
 

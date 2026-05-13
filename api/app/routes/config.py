@@ -122,6 +122,14 @@ def _build_settings_with_openclaw_config(current: Settings, saved: dict[str, Any
         tts_job_worker_interval_seconds=current.tts_job_worker_interval_seconds,
         tts_job_lock_timeout_seconds=current.tts_job_lock_timeout_seconds,
         message_service_tts_retention_days=current.message_service_tts_retention_days,
+        realtime_voice_enabled=current.realtime_voice_enabled,
+        realtime_voice_max_queue_size=current.realtime_voice_max_queue_size,
+        realtime_voice_chunk_timeout_seconds=current.realtime_voice_chunk_timeout_seconds,
+        realtime_voice_circuit_failure_threshold=current.realtime_voice_circuit_failure_threshold,
+        realtime_voice_circuit_window_seconds=current.realtime_voice_circuit_window_seconds,
+        realtime_voice_circuit_open_seconds=current.realtime_voice_circuit_open_seconds,
+        realtime_voice_max_queue_wait_seconds=current.realtime_voice_max_queue_wait_seconds,
+        openclaw_stream_mode=current.openclaw_stream_mode,
     )
 
 
