@@ -32,7 +32,7 @@ Browser / Next.js UI
 | Next.js API Proxy | `/api/backend/*` | 浏览器同源转发到 FastAPI | 本项目内 | 前端请求是否 2xx |
 | FastAPI API | `api/`, 默认 `http://127.0.0.1:8000` | 会话、消息、OpenClaw/TTS 代理、资源、trace、admin API | 本项目内 | `GET /healthz` |
 | OpenClaw Gateway HTTP | `http://10.11.252.164:18789` | `/v1/models`、`/v1/responses` 文本生成 | 外部服务 | `GET /healthz/openclaw` |
-| OpenClaw Gateway WebSocket RPC | `ws://10.11.252.164:18789` | Feishu session 列表、history、实时消息订阅 | 外部服务 | Bridge admin 状态、`sessions.list` |
+| OpenClaw Gateway WebSocket RPC | `ws://10.11.252.164:18789` | Feishu session 列表、history、实时消息订阅、agent/chat delta 事件 | 外部服务 | Bridge admin 状态、`sessions.list` |
 | Voice Workflow TTS | `http://10.11.252.164:5555` | 提交 TTS、查询任务、返回音频 URL | 外部服务 | `POST /api/v1/tts` + `GET /api/v1/tasks/{task_id}` |
 | SQLite | `api/data/sqlite/trace.db` | 会话、消息、TTS、Bridge、trace、资源索引 | 本地数据 | API 查询和测试 |
 | NDJSON logs | `api/data/logs/*.ndjson` | trace 双写日志 | 本地数据 | 直接查日志 |
@@ -43,7 +43,7 @@ Browser / Next.js UI
 ```env
 OPENCLAW_BASE_URL=http://10.11.252.164:18789
 OPENCLAW_MODEL=openclaw
-OPENCLAW_AGENT_ID=gpt-5-4
+OPENCLAW_AGENT_ID=main
 OPENCLAW_MESSAGE_CHANNEL=feishu
 OPENCLAW_PROXY_URL=http://127.0.0.1:7897
 OPENCLAW_VERIFY_SSL=true
@@ -61,11 +61,11 @@ ADMIN_USER_IDS=admin-1,sola
 
 ```text
 payload.model = openclaw
-x-openclaw-agent-id = gpt-5-4
+x-openclaw-agent-id = main
 x-openclaw-message-channel = feishu
 ```
 
-不要把 `OPENCLAW_MODEL` 配成 `minimax-portal/MiniMax-M2.7`。当前 Gateway 对这种 model 名会返回无效模型或导致链路不可用。OpenClaw `/v1/audio/speech` 当前实测为 404，实际音频链路不走这个接口。
+不要把 `OPENCLAW_MODEL` 配成 `minimax-portal/MiniMax-M2.7`。当前 Gateway 对这种 model 名会返回无效模型或导致链路不可用。OpenClaw 默认 agent 当前走 `main`，默认模型由 OpenClaw 侧维护；MMD 项目不固定到业务专用 agent。OpenClaw `/v1/audio/speech` 当前实测为 404，实际音频链路不走这个接口。
 
 ## 4. 主调用链：前端发消息
 
@@ -262,7 +262,7 @@ Upload VMD
 ```text
 本项目调用 /v1/responses。
 payload model 固定为 openclaw。
-目标 agent 通过 x-openclaw-agent-id 传递，当前为 gpt-5-4。
+目标 agent 使用 OpenClaw 默认配置，当前为 main；如需固定 agent，可改成 openclaw/<agentId>。
 channel 通过 x-openclaw-message-channel=feishu 传递。
 session 通过 x-openclaw-session-key 传递。
 HTTP 请求带 x-openclaw-scopes。
@@ -272,10 +272,11 @@ HTTP 请求带 x-openclaw-scopes。
 
 | 优化点 | 背景 |
 | --- | --- |
-| `/v1/responses` 响应稳定性 | `main` agent 曾出现读超时，`gpt-5-4` 当前可用 |
+| `/v1/responses` 响应稳定性 | `model=openclaw` 当前可走默认 `main`，OpenClaw 侧默认模型已切到 `custom/gpt-5.5` |
+| `/v1/responses stream=true` | 已验证返回 `text/event-stream`、`response.output_text.delta`、`response.completed` |
 | model 参数约束 | 当前 responses 要求 `model` 字符串，`openclaw` 有效 |
 | `/v1/audio/speech` | 当前返回 404，如要统一音频需 Gateway 侧支持 |
-| WebSocket RPC | Bridge 依赖 `sessions.list`, `chat.history`, `sessions.messages.subscribe` |
+| WebSocket RPC | Bridge 依赖 `sessions.list`, `chat.history`, `sessions.messages.subscribe`；realtime 可选用 `agent`/`chat` delta 事件 |
 
 ### 9.2 给 TTS 服务
 
@@ -318,6 +319,27 @@ VMD 动作 URL 来自 /assets/vmd/file/{asset_id}。
 | 动作 fallback | `motion_resolution.status` 可能 fallback_idle |
 | 资源加载错误 | PMX 贴图依赖原包相对路径 |
 
+### 9.4 给 realtime voice 实现侧
+
+当前 realtime voice 仍是规划链路，不是已上线主链路。第一版熔断和限流边界：
+
+```text
+只做 session 级 realtime voice circuit breaker。
+不做全局 user/workspace 级 rate limit。
+queue_full 立即 rejected(queue_full, fallback=message_tts)，并计入 session failure window。
+TTS chunk timeout/failed、OpenClaw stream failed、proxy failed、frontend playback failed 计入同一 session failure window。
+failure window 达到阈值后，该 session circuit 进入 open，新 job rejected(circuit_open, fallback=message_tts)。
+half_open 只允许一个探测 job，其余 job 仍 fallback。
+```
+
+第一版 WebSocket 身份合同：
+
+```text
+WS /ws/sessions/{session_id}/voice?user_id={user_id}
+```
+
+后端将 query `user_id` 映射到 Message Service v2 当前使用的 `x-user-id` 权限模型。缺失、为空或无权访问 `session_id` / workspace 时拒绝连接。第一版不使用首个 `auth` message，也不引入 token。
+
 ## 10. 排障入口
 
 | 症状 | 优先检查 |
@@ -325,7 +347,7 @@ VMD 动作 URL 来自 /assets/vmd/file/{asset_id}。
 | 前端请求 502 | Next.js `/api/backend/*` 到 FastAPI 的转发 |
 | FastAPI 不可用 | `GET /healthz` |
 | OpenClaw 文本失败 | `GET /healthz/openclaw` |
-| OpenClaw 超时 | 检查 `OPENCLAW_AGENT_ID`, `OPENCLAW_MODEL`, Gateway 状态 |
+| OpenClaw 超时 | 检查 `OPENCLAW_MODEL`, OpenClaw 默认 agent/model, Gateway 状态 |
 | TTS 无声音 | 查 `message_tts.status`, `tts_jobs`, TTS 服务任务状态 |
 | 音频 URL 过期 | `POST /message-tts/{tts_id}/mark-expired` 或重新生成 |
 | Bridge 不同步 | `GET /admin/message-bridge/status` |
@@ -339,10 +361,13 @@ VMD 动作 URL 来自 /assets/vmd/file/{asset_id}。
 | 项 | 当前事实 |
 | --- | --- |
 | OpenClaw `/v1/models` | 可用 |
-| OpenClaw `/v1/responses` | 用 `openclaw` + `gpt-5-4` 可用 |
-| OpenClaw `/v1/chat/completions` | 用 `gpt-5-4` 可用，但主链路当前走 responses |
+| OpenClaw `/v1/responses` | `model=openclaw` 可用，默认走 OpenClaw 当前默认 agent/model |
+| OpenClaw `/v1/responses stream=true` | 可用，返回 `response.output_text.delta` |
+| OpenClaw `/v1/chat/completions` | 可返回 SSE envelope，但主链路当前走 responses |
 | OpenClaw `/v1/audio/speech` | 当前 404 |
-| OpenClaw WebSocket RPC | 可连接，`sessions.list` 可返回 Feishu sessions |
+| OpenClaw WebSocket RPC | 可连接，`sessions.list` 可返回 Feishu sessions；`agentId=main` 可返回 assistant delta |
+| Voice Workflow TTS `/api/v1/tts` | 可用；2026-05-13 优化后 smoke test：提交 `202` 耗时 147ms，约 17.456s ready，返回 `audio/wav` 184400 bytes，`RIFF` header |
+| Voice Workflow TTS `/api/v1/tts/chunk` | 可用；2026-05-13 优化后 smoke test：响应字段包含 `duration`，两次短句请求耗时 14.992s / 14.687s，服务端 `elapsed_seconds=14.975/14.675`，返回 `audio/wav` 138320 bytes，`RIFF` header；较旧基线约 22.7s / `20.063s` 改善，但仍是 realtime 首段延迟瓶颈 |
 | Voice Workflow TTS | 当前作为实际服务端语音链路 |
 | 本地健康检查 | `/healthz/openclaw` 已用于 models/responses 探测 |
 
