@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -314,6 +315,78 @@ class OpenClawClient:
                 endpoint_used="/v1/responses",
                 status_code=resp.status_code,
             )
+        except Exception as error:
+            if isinstance(error, OpenClawInvocationError):
+                raise
+            raise OpenClawInvocationError(self._describe_exception(error)) from error
+
+    @staticmethod
+    def _stream_error_message(event: dict[str, Any]) -> str:
+        error = event.get("error")
+        if isinstance(error, dict):
+            message = error.get("message") or error.get("detail")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+        if isinstance(error, str) and error.strip():
+            return error.strip()
+        message = event.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+        return "OpenClaw stream returned an error event."
+
+    async def stream_reply(
+        self,
+        user_id: str,
+        session_id: str | None,
+        message: str,
+        history: list[dict[str, str]],
+    ):
+        payload_model, _, _ = self._resolve_request_target()
+        headers = self._headers(session_id)
+        payload = {
+            "model": payload_model,
+            "input": message,
+            "user": user_id,
+            "stream": True,
+        }
+
+        try:
+            async with self.http_client.stream(
+                "POST",
+                f"{self.base_url}/v1/responses",
+                json=payload,
+                headers=headers,
+                timeout=self.timeout_seconds,
+            ) as response:
+                if not response.is_success:
+                    raise OpenClawInvocationError(self._format_error(response))
+
+                async for line in response.aiter_lines():
+                    line = line.strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+
+                    data = line.removeprefix("data:").strip()
+                    if data == "[DONE]":
+                        return
+
+                    try:
+                        event = json.loads(data)
+                    except json.JSONDecodeError as error:
+                        raise OpenClawInvocationError("OpenClaw stream returned invalid JSON.") from error
+                    if not isinstance(event, dict):
+                        continue
+
+                    event_type = event.get("type")
+                    if event_type in {"response.error", "error"} or "error" in event:
+                        raise OpenClawInvocationError(self._stream_error_message(event))
+                    if event_type == "response.output_text.delta":
+                        delta = event.get("delta")
+                        if isinstance(delta, str) and delta:
+                            yield delta
+                        continue
+                    if event_type in {"response.output_text.done", "response.completed"}:
+                        return
         except Exception as error:
             if isinstance(error, OpenClawInvocationError):
                 raise
