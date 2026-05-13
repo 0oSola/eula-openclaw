@@ -31,11 +31,11 @@ Companion UI
 ## 2. 目标
 
 - 在不替换现有 Message Service v2 的前提下，新增浏览器可用的实时语音侧链路。
-- 后端负责通过 OpenClaw Gateway WebSocket 事件或本项目自包 adapter 接入文本 streaming、分句、维护 session 级 voice job queue、调用 Voice Workflow TTS 短 chunk API、代理音频 URL、处理显式取消和 trace。
+- 后端负责通过 OpenClaw `/v1/responses stream=true` HTTP SSE 接入文本 streaming、分句、维护 session 级 voice job queue、调用 Voice Workflow TTS 短 chunk API、代理音频 URL、处理显式取消和 trace。
 - 前端负责 WebSocket 连接、按 message/job/sequence 排队播放、显式停止、兜底到现有长任务 TTS。
 - MMD 舞台从单一 `speaking:boolean` 演进到可表达 buffering、speaking、ended、cancelled、error 的状态模型。
-- Phase 1 目标是真文本 streaming：OpenClaw 运行时内部已有流式事件，但 MMD 项目侧要通过 Gateway WebSocket 事件，或自包一层把 Gateway/session 事件转换成统一 text delta。
-- 不把 `/v1/responses stream=true` 作为已确认外部合同；如果没有可消费的 Gateway event schema 或 adapter，本项目只能降级为“完整 assistant 文本返回后再分句合成”，该降级不满足真 streaming 验收。
+- Phase 1 目标是真文本 streaming：优先消费已验证的 `/v1/responses stream=true` HTTP SSE 事件，尤其是 `response.output_text.delta`。
+- Gateway WebSocket `agent` 事件保留为增强/备用 adapter；如果 HTTP SSE 和 Gateway WS 都不可用，本项目只能降级为“完整 assistant 文本返回后再分句合成”，该降级不满足真 streaming 验收。
 
 ## 3. 非目标
 
@@ -72,7 +72,7 @@ Companion UI
 ```text
 POST /sessions/{session_id}/messages
   -> FastAPI OpenClawStreamAdapter
-  -> OpenClaw Gateway WebSocket / session stream events
+  -> OpenClaw /v1/responses stream=true HTTP SSE
   -> adapter 归一化为 text delta
   -> FastAPI sentence buffer 凑句
   -> session voice job queue 按 message/job 顺序排队
@@ -106,21 +106,22 @@ REALTIME_VOICE_MAX_CHARS=25
 REALTIME_VOICE_MIN_SEGMENT_CHARS=10
 REALTIME_VOICE_MAX_SEGMENTS=24
 REALTIME_VOICE_CHUNK_TIMEOUT_SECONDS=30
-REALTIME_VOICE_MAX_QUEUE_SIZE=16
+REALTIME_VOICE_MAX_QUEUE_SIZE=3
 REALTIME_VOICE_WORKERS_PER_SESSION=1
 REALTIME_VOICE_CIRCUIT_FAILURE_THRESHOLD=5
 REALTIME_VOICE_CIRCUIT_WINDOW_SECONDS=60
 REALTIME_VOICE_CIRCUIT_OPEN_SECONDS=120
 REALTIME_VOICE_MAX_QUEUE_WAIT_SECONDS=120
-OPENCLAW_STREAM_MODE=gateway_ws
+OPENCLAW_STREAM_MODE=http_sse
 OPENCLAW_STREAM_RAW_LOG_ENABLED=false
 ```
 
 约束：
 
 - `TTS_SERVICE_ENABLED=false` 时，实时语音 WebSocket 应返回明确错误事件，前端降级。
-- 当前 OpenClaw 配置不变：`OPENCLAW_MODEL=openclaw`，`OPENCLAW_AGENT_ID=gpt-5-4`，`OPENCLAW_MESSAGE_CHANNEL=feishu`。
-- 真 streaming 的外部接入方式优先使用 OpenClaw Gateway WebSocket 事件；HTTP SSE `stream=true` 只能作为未来可选模式。
+- 当前 OpenClaw realtime voice 默认不固定到业务专用 agent：`OPENCLAW_MODEL=openclaw`，`OPENCLAW_AGENT_ID=main`，让 Gateway 跟随当前默认 agent/model。
+- 真 streaming 的外部接入方式优先使用 `/v1/responses stream=true` HTTP SSE；Gateway WebSocket 事件作为备用/增强模式。
+- 同一 session 的 voice queue 最多保留 3 个等待/运行 job；超过上限直接返回 `rejected(queue_full, fallback=message_tts)`，不继续堆积。
 
 涉及文件：
 
@@ -128,7 +129,7 @@ OPENCLAW_STREAM_RAW_LOG_ENABLED=false
 
 ### 6.2 OpenClaw stream adapter
 
-新增 OpenClaw streaming 适配层，统一屏蔽 Gateway WebSocket、未来 SSE adapter、非流式 fallback 的差异。
+新增 OpenClaw streaming 适配层，统一屏蔽 HTTP SSE、Gateway WebSocket、非流式 fallback 的差异。
 
 推荐接口：
 
@@ -151,10 +152,9 @@ async def stream_reply(
 
 接入优先级：
 
-1. `gateway_ws`：通过 OpenClaw Gateway WebSocket / session event 消费文本增量。需要和 OpenClaw 对齐 event schema、订阅方法、session key 和 final event。
-2. `gateway_sse_adapter`：如果 Gateway 事件只能由内部命令或 SDK 消费，本项目可包一层 adapter，把 Gateway/session 事件转成 FastAPI 内部 async iterator 或 SSE。
-3. `http_sse`：只有 OpenClaw 明确暴露公开 HTTP SSE 合同时才启用，不作为 Phase 1 默认假设。
-4. `final_only`：保底模式，复用当前 `/v1/responses` 最终结果；可生成短句 chunk，但不算真 streaming。
+1. `http_sse`：默认模式，通过 `/v1/responses stream=true` 消费 `response.output_text.delta`、`response.output_text.done`、`response.completed`、`response.error` 和 `[DONE]`。
+2. `gateway_ws`：备用/增强模式，通过 OpenClaw Gateway WebSocket `agent` / `chat` event 消费 `data.delta`、`state=delta`、`state=final`。
+3. `final_only`：保底模式，复用当前 `/v1/responses` 最终结果；可生成短句 chunk，但不算真 streaming。
 
 说明：
 
@@ -227,8 +227,15 @@ def split_assistant_text(text: str, max_chars: int = 25) -> list[str]:
 新增路由：
 
 ```text
-WS /ws/sessions/{session_id}/voice
+WS /ws/sessions/{session_id}/voice?user_id={user_id}
 ```
+
+第一版身份方案：
+
+- 前端通过 WebSocket URL query 参数传 `user_id`。
+- 后端把 query `user_id` 映射到现有 Message Service v2 的 `x-user-id` 权限模型。
+- 缺少 `user_id`、空字符串、用户无权访问该 `session_id` 或 workspace 时，后端必须拒绝 WebSocket 连接，且不得接受 `synthesize`。
+- 第一版不要求首个 `auth` message，也不引入 token；如果后续要更严格鉴权，再升级为 auth message 或 token。
 
 前端发送：
 
@@ -311,7 +318,7 @@ WS /ws/sessions/{session_id}/voice
 - 每个 job 内按 sequence 顺序请求 chunk；如果后续需要并发生成，发给前端的 `job_id + sequence` 必须仍可排序。
 - 收到 `cancel` 后按 `scope` 停止当前 job 或清空全部队列，调用 Voice Workflow TTS cancel API，并推送 `cancelled`。
 - WebSocket 断开时不立即取消已经入队的 job；后端可继续完成当前队列并保留短期代理映射。若 session 被显式关闭或收到 `cancel(scope=all)`，才清空队列。
-- 用户权限应沿用 Message Service v2 的 `x-user-id` 模型。WebSocket 无法稳定带自定义 header 时，前端可通过 query 参数或首个 auth message 传递 user id；实现前必须选择一种并写入拓扑文档。
+- 用户权限沿用 Message Service v2 的 `x-user-id` 模型。WebSocket 第一版通过 query 参数 `user_id` 传递身份，不使用首个 `auth` message。
 
 涉及文件：
 
@@ -353,6 +360,7 @@ voice.realtime.dequeued
 voice.realtime.chunk_requested
 voice.realtime.chunk_ready
 voice.realtime.chunk_failed
+voice.realtime.partial_failed
 voice.realtime.circuit_opened
 voice.realtime.circuit_half_open
 voice.realtime.circuit_closed
@@ -378,6 +386,8 @@ voice.realtime.proxy
 - `remote_audio_url`，可脱敏但要能排查
 - `elapsed_ms`
 - `first_audio_ready_ms`
+- `played_chunk_count`
+- `fallback_mode`，取值如 `auto_before_playback` / `manual_after_partial_playback`
 - `openclaw_stream_mode`
 - `openclaw_first_delta_ms`
 
@@ -395,11 +405,15 @@ half_open 熔断窗口结束后，只允许一个探测 job
 
 触发条件：
 
-- 同一 session 的 voice job 数量超过 `REALTIME_VOICE_MAX_QUEUE_SIZE`。
-- 任一 job 的排队等待超过 `REALTIME_VOICE_MAX_QUEUE_WAIT_SECONDS`。
-- `REALTIME_VOICE_CIRCUIT_WINDOW_SECONDS` 窗口内，TTS chunk 连续失败或超时达到 `REALTIME_VOICE_CIRCUIT_FAILURE_THRESHOLD`。
-- OpenClaw stream 在短时间内连续断流、无 delta 超时或返回协议错误。
-- realtime proxy 连续返回远端 404/410/5xx，说明 chunk registry 或 Voice 服务状态不可用。
+- 第一版只做 session 级 realtime voice circuit breaker；不做全局 user/workspace 级 rate limit。
+- `queue_full`：同一 session 的 voice job 数量超过 `REALTIME_VOICE_MAX_QUEUE_SIZE` 时，当前 job 立即返回 `rejected(queue_full, fallback=message_tts)`，并计入 session failure window。
+- `tts_chunk_timeout`：单个 chunk 超过 `REALTIME_VOICE_CHUNK_TIMEOUT_SECONDS`。
+- `tts_chunk_failed`：Voice Workflow TTS 返回非 2xx、响应缺少 `audio_url`、音频 URL 不可下载或响应结构不符合合同。
+- `openclaw_stream_failed`：OpenClaw stream 断流、首 delta 超时、final 前异常结束或事件结构不符合 adapter 合同。
+- `proxy_failed`：realtime proxy 对已生成 chunk URL 连续返回 404/410/5xx。
+- `playback_failed`：前端对同一 session/job 上报连续音频加载或播放失败。
+- 在 `REALTIME_VOICE_CIRCUIT_WINDOW_SECONDS` 窗口内，上述失败累计达到 `REALTIME_VOICE_CIRCUIT_FAILURE_THRESHOLD` 时，session circuit 进入 `open`。
+- 任一 job 的排队等待超过 `REALTIME_VOICE_MAX_QUEUE_WAIT_SECONDS` 时，该 job 返回 `rejected(queue_wait_timeout, fallback=message_tts)`，并计入 session failure window。
 
 熔断行为：
 
@@ -418,10 +432,11 @@ half_open 熔断窗口结束后，只允许一个探测 job
 - 当前正在播放的前端 AudioQueue 不被强制停止；已经 ready 的 chunk 可以播完。
 - 未开始生成的 queued job 标记为 `rejected`，前端降级到现有长任务 TTS。
 - 熔断窗口结束后进入 `half_open`，只允许一个探测 job；探测成功后恢复 `closed`，失败则重新 `open`。
+- `half_open` 探测期间，除探测 job 外的新 job 继续返回 `rejected(circuit_open, fallback=message_tts)`。
 
 前端播放熔断：
 
-- 单个 job 内连续 2 个 chunk 播放失败，跳过该 job 的剩余 chunk，进入 fallback。
+- 单个 job 内连续 2 个 chunk 播放失败，跳过该 job 的剩余 chunk；如果该 job 尚未播放过任何 chunk，则自动进入长任务 TTS fallback；如果已经播放过 chunk，则标记 `partial_failed`，只提供手动重播完整长任务 TTS。
 - 全局连续 3 个 job 播放失败，当前 session 的 realtime voice 标记为 disabled，直到用户刷新或手动重试。
 - 前端不得因为播放失败反复重新 enqueue 同一个 audio URL。
 
@@ -441,7 +456,9 @@ export function sessionVoiceWebSocketUrl(sessionId: string, userId: string): str
 
 - 浏览器环境下使用当前 origin 推导 `ws://` 或 `wss://`。
 - 保持和 `/api/backend/*` 代理一致的部署假设。
-- user id 传递方式要和后端 WebSocket 权限方案一致。
+- URL 必须包含 `?user_id=${encodeURIComponent(userId)}`。
+- `userId` 来自当前登录用户上下文；不得在前端硬编码默认 admin 用户。
+- 后端拒绝缺失或无权限的 `user_id` 时，前端进入 realtime voice fallback。
 
 ### 7.2 AudioQueue
 
@@ -510,7 +527,9 @@ export class AudioQueue {
   - 停止长任务 server audio
   - 停止 realtime AudioQueue
   - 向 voice WebSocket 发送 `cancel(scope=all)`
-- realtime WebSocket 失败、chunk 失败或播放失败时，降级到现有 `prepareAndPlayAssistantTts()`。
+- realtime WebSocket 失败、chunk 失败或播放失败时，按 `jobId` 判断是否已经播放过任意 chunk：
+  - 未播放过任何 chunk：自动降级到现有 `prepareAndPlayAssistantTts()`。
+  - 已播放过至少一个 chunk：标记 `partial_failed`，不自动播放完整长任务 TTS，只展示手动重播入口。
 
 ### 7.4 Chatbox 状态
 
@@ -524,6 +543,7 @@ type RealtimeVoiceStatus =
   | "cancelled"
   | "rejected"
   | "circuit_open"
+  | "partial_failed"
   | "failed"
   | "fallback";
 ```
@@ -533,6 +553,7 @@ Phase 1 最小要求：
 - 最新 assistant message 的实时语音播放中，按钮显示 active/playing。
 - realtime 熔断时，最新 assistant message 显示 fallback/rejected 状态，但不污染 `message.tts.status`。
 - cancelled 或 failed 后不污染 `message.tts.status`。
+- partial_failed 表示该 job 已播放部分实时音频后失败；不得自动播放完整长任务音频，避免用户听到重复内容。
 - fallback 到长任务 TTS 时，沿用现有 `message.tts` UI。
 
 ## 8. MMD 舞台需求拆解
@@ -635,8 +656,13 @@ User clicks stop/clear voice
 voice WS error / chunk failed / playback failed
   -> SpeakingState.error
   -> trace voice.realtime.chunk_failed
-  -> fallback prepareAndPlayAssistantTts()
-  -> existing message_tts ready/pending/failed flow
+  -> if job has not played any chunk:
+       fallback prepareAndPlayAssistantTts()
+       existing message_tts ready/pending/failed flow
+  -> if job has played at least one chunk:
+       mark realtime voice partial_failed
+       do not auto-play full message_tts audio
+       show manual replay full-audio action
 ```
 
 ### 10.5 熔断降级
@@ -659,7 +685,7 @@ TTS chunk timeouts / queue overflow / repeated playback errors
 - 发送下一条用户消息不会默认取消当前语音；新的 voice job 进入 session queue 异步生成。
 - 用户显式停止/清空语音时，会停止当前音频、清空队列，并触发后端 `cancel(scope=all)`。
 - 队列过长、连续 chunk 失败或播放错误率过高时会触发 realtime voice 熔断，后续 job 降级到长任务 TTS。
-- realtime 失败时，现有长任务 TTS 仍可播放。
+- realtime 在首段播放前失败时，现有长任务 TTS 自动兜底；首段播放后失败时，只提供手动重播完整长任务 TTS，避免重复播放。
 - MMD 口型只在实际音频播放时开启，ended/cancelled/error 后关闭。
 - trace 能区分 OpenClaw 文本耗时、queue wait、TTS chunk 耗时、首段 ready 耗时和取消事件。
 
@@ -667,7 +693,7 @@ TTS chunk timeouts / queue overflow / repeated playback errors
 
 后端：
 
-- `OpenClawStreamAdapter` 覆盖 Gateway WebSocket delta、completed、error、断流和 final_only fallback。
+- `OpenClawStreamAdapter` 覆盖 HTTP SSE delta、done、completed、error、断流和 final_only fallback；另覆盖 Gateway WebSocket adapter mode。
 - `split_assistant_text()` 覆盖中文句号、逗号软切、英文标点、硬切、空白输入。
 - `VoiceWorkflowTtsClient.synthesize_chunk()` 覆盖相对/绝对 `audio_url`、非 2xx、缺字段。
 - WebSocket 覆盖 `synthesize -> audio_ready -> done`。
@@ -675,7 +701,8 @@ TTS chunk timeouts / queue overflow / repeated playback errors
 - WebSocket 覆盖 `cancel(scope=current_job)` 只取消当前 job。
 - WebSocket 覆盖 `cancel(scope=all)` 清空当前 session 队列。
 - WebSocket 覆盖 queue overflow 返回 `rejected(circuit_open | queue_full)`。
-- 熔断测试覆盖 closed -> open -> half_open -> closed。
+- 熔断测试覆盖 session 级 failure window、closed -> open -> half_open -> closed。
+- 熔断测试覆盖 `queue_full` 即时 reject 但只在失败窗口达到阈值后 open circuit。
 - realtime proxy 覆盖成功、远端 404/410、远端 502。
 - trace 覆盖 queued、dequeued、started、chunk_ready、circuit_opened、cancelled、done。
 
@@ -688,7 +715,8 @@ TTS chunk timeouts / queue overflow / repeated playback errors
 - `CompanionPage` 覆盖显式停止/切换会话调用 stop/cancel(scope=all)。
 - `CompanionPage` 覆盖 `rejected(circuit_open)` 时进入长任务 TTS fallback。
 - `AudioQueue` 覆盖连续播放失败后停止当前 job，避免重复 enqueue。
-- realtime 失败时调用现有 fallback TTS 路径。
+- realtime 在未播放任何 chunk 前失败时调用现有 fallback TTS 路径。
+- realtime 在已播放部分 chunk 后失败时进入 `partial_failed`，不自动调用 fallback TTS。
 
 手工联调：
 
@@ -700,10 +728,12 @@ TTS chunk timeouts / queue overflow / repeated playback errors
 ## 13. 风险和待确认
 
 - Qwen3-TTS CPU 推理可能仍然太慢，音频侧短句 chunk 播放的体感收益取决于 chunk API 延迟。
+- 2026-05-13 优化后重测中，`/api/v1/tts` 长任务兼容可用：提交 `202` 耗时 147ms，17 次轮询后约 17.456s ready，返回 `audio/wav`、184400 bytes、`RIFF` header。
+- 2026-05-13 优化后重测中，`/api/v1/tts/chunk` 两个短句均返回可播放 WAV，响应使用 `duration` 表示音频秒数：请求总耗时 14.992s / 14.687s，服务端 `elapsed_seconds=14.975/14.675`，音频均为 `audio/wav`、138320 bytes、`RIFF` header；相比旧基线约 22.7s / `elapsed_seconds=20.063` 已改善，但第一版仍必须把约 15s 首段延迟作为已知瓶颈，并推动 Voice Workflow TTS 侧继续做预热/GPU/缓存优化。
 - 如果没有熔断，异步队列会在 TTS 慢或失败时持续积压；因此 realtime voice 必须先实现 queue limit、timeout 和 circuit breaker。
 - Voice Workflow TTS cancel 不能中断正在跑的模型调用，只能丢弃结果；该能力只用于显式停止/清空队列，不作为新消息默认行为。
-- WebSocket 的 user id 传递方式需要实现前确定，避免绕开 Message Service v2 权限模型。
-- 真文本 streaming 依赖 OpenClaw Gateway 提供可外部消费的 session stream event schema，或本项目实现 Gateway/session event adapter；不能假设已有公开 HTTP SSE。
+- WebSocket 第一版身份通过 query `user_id` 传递，并沿用 Message Service v2 的 `x-user-id` 权限模型；后续如果引入 token/auth message，需要同步更新本文和 topology。
+- 默认跟随 OpenClaw `model=openclaw` 路由意味着 OpenClaw 侧默认 agent/model 变化会影响 MMD；这是预期行为，但 trace 必须记录 `openclaw.stream.model` 和实际响应 model。
 - 内存 registry 在服务重启后会丢 realtime chunk 代理映射；Phase 1 可接受，历史重播依赖长任务 TTS。
 
 ## 14. 实施阶段
@@ -713,7 +743,8 @@ Phase 1：后端基础
 - 配置项
 - `synthesize_chunk()` / `cancel_realtime()`
 - 分句器
-- OpenClaw Gateway stream adapter 和 sentence buffer
+- OpenClaw HTTP SSE stream adapter 和 sentence buffer
+- OpenClaw Gateway WebSocket adapter mode
 - session voice job queue
 - realtime voice 熔断和限流
 - realtime voice WebSocket
@@ -737,7 +768,7 @@ Phase 3：MMD 状态演进
 
 Phase 4：OpenClaw streaming 增强
 
-- 如果 OpenClaw 后续公开 HTTP SSE 或 OpenAI-compatible `stream=true` 合同，可作为 `OpenClawStreamAdapter` 的新增 mode。
+- 固化 `/v1/responses stream=true` SSE 事件合同和错误事件处理。
 - 如 OpenClaw Gateway 暴露更完整的 timing/raw event metadata，同步扩展 trace 和熔断判断。
 
 ## 15. 文档维护要求

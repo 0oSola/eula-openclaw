@@ -4,7 +4,7 @@
 
 Add realtime-feeling voice output to the virtual assistant system while preserving the current Qwen3-TTS `.pt` cloned voice and the existing task-based TTS fallback.
 
-The system should play the first short audio segment as soon as it is ready, continue playing later segments in order, and support user interruption.
+The system should play the first short audio segment as soon as it is ready, continue playing later segments in order, queue later assistant voice jobs asynchronously, and support explicit user interruption.
 
 ## Current System Boundary
 
@@ -37,13 +37,16 @@ This is not realtime because it waits for a full TTS task to complete.
 Add a second voice path:
 
 ```text
-OpenClaw text reply or text delta
+OpenClaw HTTP SSE text delta or Gateway WebSocket text delta
   -> Virtual Assistant API sentence buffer
+  -> Virtual Assistant API session voice job queue
   -> Voice Workflow TTS short chunk API
   -> Virtual Assistant API WebSocket event
   -> Next.js frontend AudioQueue
   -> MMD speaking state
 ```
+
+True text streaming means the Virtual Assistant consumes OpenClaw text delta events before the final assistant text is complete. The verified default path is `/v1/responses stream=true` with `model=openclaw`, which follows OpenClaw's current default agent/model. Gateway WebSocket agent events are also supported and can be used as an adapter mode. A final-text-only fallback may still generate short audio chunks, but it does not satisfy true streaming acceptance.
 
 The current task-based path remains:
 
@@ -59,6 +62,7 @@ GET /api/v1/audio/{path}
 - Do not require browser direct access to the Voice Workflow TTS service.
 - Do not depend on OpenClaw `/v1/audio/speech`; topology says it currently returns 404.
 - Do not claim true model-level audio streaming from Qwen3-TTS Base. The first implementation is short-utterance pseudo-streaming.
+- Do not pin realtime voice to a specific OpenClaw agent unless a future feature explicitly requires it.
 
 ---
 
@@ -178,6 +182,8 @@ Behavior:
 - Do not try to forcibly kill an in-flight model call.
 - Drop the in-flight result after generation if cancelled.
 - Drop queued future work for that session.
+
+This API is for explicit stop/clear behavior. A new assistant message should normally create a new queued voice job instead of calling cancel by default.
 
 ### 1.4 Add startup warmup
 
@@ -332,34 +338,46 @@ Frontend sends:
 ```json
 {
   "type": "synthesize",
+  "job_id": "voice-job-1",
+  "message_id": "assistant-message-1",
   "text": "你好，我已经帮你查到了。这个方案可以分三步处理。",
   "emotion_label": "日常平静"
 }
 ```
 
+Multiple `synthesize` messages for the same `session_id` are queued in receive order. The backend should process one voice job at a time per session, while allowing future jobs to wait without cancelling the current one.
+
 Frontend cancels:
 
 ```json
 {
-  "type": "cancel"
+  "type": "cancel",
+  "scope": "all"
 }
 ```
+
+Supported cancel scopes:
+
+- `current_job`: cancel the current generating/playing voice job and keep later queued jobs.
+- `all`: stop current work and clear the session voice queue.
 
 Backend sends:
 
 ```json
 {
   "type": "synthesis_started",
-  "session_id": "session-1"
+  "session_id": "session-1",
+  "job_id": "voice-job-1"
 }
 ```
 
 ```json
 {
   "type": "audio_ready",
+  "job_id": "voice-job-1",
   "sequence": 1,
   "text": "你好，我已经帮你查到了。",
-  "audio_url": "/tts/proxy/realtime/session-1/0001",
+  "audio_url": "/tts/proxy/realtime/session-1/voice-job-1/0001",
   "duration": 1.2,
   "elapsed_seconds": 0.8
 }
@@ -368,16 +386,37 @@ Backend sends:
 ```json
 {
   "type": "done",
-  "session_id": "session-1"
+  "session_id": "session-1",
+  "job_id": "voice-job-1"
 }
 ```
 
 ```json
 {
   "type": "cancelled",
-  "session_id": "session-1"
+  "session_id": "session-1",
+  "job_id": "voice-job-1",
+  "scope": "all"
 }
 ```
+
+```json
+{
+  "type": "rejected",
+  "session_id": "session-1",
+  "job_id": "voice-job-9",
+  "reason": "queue_full",
+  "fallback": "message_tts"
+}
+```
+
+Fallback and duplicate playback policy:
+
+- Track whether the frontend has started playing any chunk for each `job_id`.
+- If a realtime job fails before any chunk for that job has played, automatically fall back to the existing full `message_tts` audio.
+- If at least one chunk has already played and the same job later fails, mark the realtime job `partial_failed` and expose manual replay for the full `message_tts` audio instead of auto-playing it.
+- `rejected(queue_full|circuit_open, fallback=message_tts)` may still auto-fallback because no realtime chunk has played for that rejected job.
+- Do not enqueue the same fallback audio repeatedly for repeated WebSocket, chunk, or playback errors.
 
 ### 2.4 Proxy audio URLs
 
@@ -390,7 +429,7 @@ The Voice service may return:
 The browser should not fetch Voice Workflow TTS directly. The virtual assistant backend must expose a proxy URL, for example:
 
 ```text
-/tts/proxy/realtime/{session_id}/{sequence}
+/tts/proxy/realtime/{session_id}/{job_id}/{sequence}
 ```
 
 or reuse existing `message_tts` proxy infrastructure if it can store chunk references.
@@ -411,11 +450,18 @@ Content-Type: audio/wav
 
 At minimum, write trace events for:
 
+- `voice.realtime.queued`
+- `voice.realtime.dequeued`
 - `voice.realtime.started`
 - `voice.realtime.chunk_requested`
 - `voice.realtime.chunk_ready`
 - `voice.realtime.chunk_failed`
+- `voice.realtime.partial_failed`
 - `voice.realtime.cancelled`
+- `voice.realtime.rejected`
+- `voice.realtime.circuit_opened`
+- `voice.realtime.circuit_half_open`
+- `voice.realtime.circuit_closed`
 - `voice.realtime.done`
 
 If schema work is acceptable, add per-chunk rows. If not, first version can store chunk state in trace only and leave final message-level `tts.status` as current behavior.
@@ -440,9 +486,9 @@ or a companion endpoint:
 POST /sessions/{session_id}/messages/realtime
 ```
 
-First implementation can wait for full OpenClaw text, split it, then request chunk TTS.
+The preferred implementation consumes `/v1/responses stream=true` through an `OpenClawStreamAdapter`, buffers `response.output_text.delta` into sentence chunks, and starts TTS before the final assistant text is complete.
 
-Later implementation can use OpenClaw text deltas if OpenClaw supports streaming.
+Gateway WebSocket agent events remain a secondary adapter mode. If both streaming modes are unavailable, the backend may fall back to the existing final-text `/v1/responses` result, split it, and request chunk TTS. That fallback preserves playback behavior but does not satisfy true text streaming acceptance.
 
 ## Required Frontend Changes
 
@@ -458,6 +504,7 @@ Required API:
 
 ```ts
 export type AudioQueueItem = {
+  jobId: string;
   sequence: number;
   url: string;
   text?: string;
@@ -474,7 +521,7 @@ export class AudioQueue {
 
 Behavior:
 
-- Sort by `sequence`.
+- Sort by queued `jobId` order, then by `sequence` within each job.
 - Play one item at a time.
 - Start automatically when first item arrives.
 - Skip failed item and continue.
@@ -491,10 +538,16 @@ web/src/lib/api.ts
 Expected:
 
 ```ts
-export function sessionVoiceWebSocketUrl(sessionId: string): string;
+export function sessionVoiceWebSocketUrl(sessionId: string, userId: string): string;
 ```
 
-It must follow existing Next.js proxy conventions.
+It must follow existing Next.js proxy conventions and encode the user identity as a query parameter:
+
+```text
+WS /ws/sessions/{session_id}/voice?user_id={user_id}
+```
+
+The backend maps `user_id` to the same authorization model used by Message Service v2's `x-user-id`. Missing, empty, or unauthorized `user_id` must reject the WebSocket before accepting `synthesize`.
 
 ### 2.9 Update Chatbox/session component
 
@@ -503,10 +556,15 @@ Behavior:
 1. On assistant reply ready, send `synthesize` over voice WebSocket if realtime voice is enabled.
 2. On each `audio_ready`, enqueue audio.
 3. On user new message:
-   - stop queue
-   - send cancel
+   - keep existing playback unless the user explicitly stopped voice
+   - send a new `synthesize` job after the next assistant reply is ready
+   - let backend and frontend queues preserve non-overlapping order
 4. On WebSocket failure:
-   - fall back to existing `assistant_message.tts.proxy_audio_url`
+   - fall back to existing `assistant_message.tts.proxy_audio_url` only if no realtime chunk for the current job has played
+   - otherwise mark the job `partial_failed` and offer manual replay for the full audio
+5. On explicit stop/clear:
+   - stop queue
+   - send `cancel(scope=all)`
 
 ### 2.10 Wire MMD speaking state
 
@@ -528,15 +586,58 @@ MMD stage should:
 - Stop mouth movement when `ended`, `cancelled`, or `error`.
 - Keep existing idle/fallback motion behavior.
 
+### 2.11 Add queue limits and circuit breaker
+
+The Virtual Assistant backend owns session voice queue limits and realtime voice circuit state. This protects OpenClaw streaming, Voice Workflow TTS, proxying, and browser playback from uncontrolled backlog.
+
+Suggested defaults:
+
+```env
+REALTIME_VOICE_MAX_QUEUE_SIZE=3
+REALTIME_VOICE_CHUNK_TIMEOUT_SECONDS=30
+REALTIME_VOICE_CIRCUIT_FAILURE_THRESHOLD=5
+REALTIME_VOICE_CIRCUIT_WINDOW_SECONDS=60
+REALTIME_VOICE_CIRCUIT_OPEN_SECONDS=120
+```
+
+Circuit states:
+
+- `closed`: realtime jobs are accepted.
+- `open`: new realtime jobs are rejected with `fallback=message_tts`.
+- `half_open`: one probe job is allowed after cooldown; success closes the circuit, failure opens it again.
+
+First-version scope is session-level only. Do not add global user-level or workspace-level realtime voice rate limiting in phase 1.
+
+Events that count toward the session circuit window:
+
+- `queue_full`: reject the current job immediately and count one circuit failure.
+- `tts_chunk_timeout`: a chunk exceeds `REALTIME_VOICE_CHUNK_TIMEOUT_SECONDS`.
+- `tts_chunk_failed`: Voice Workflow TTS returns non-2xx, malformed response, missing `audio_url`, or unreachable audio.
+- `openclaw_stream_failed`: stream disconnects before completion, first delta times out, or the adapter sees an invalid event contract.
+- `proxy_failed`: realtime audio proxy returns repeated 404/410/5xx for generated chunk URLs.
+- `playback_failed`: frontend reports repeated audio load/play failures for a job.
+
+Open the circuit when counted failures within `REALTIME_VOICE_CIRCUIT_WINDOW_SECONDS` reach `REALTIME_VOICE_CIRCUIT_FAILURE_THRESHOLD`. `queue_full` still returns `rejected(queue_full, fallback=message_tts)` even when the circuit remains closed.
+
+When the circuit is open:
+
+- Do not enqueue new realtime voice jobs.
+- Return or send `rejected(circuit_open, fallback=message_tts)`.
+- Keep the existing task-based TTS path available.
+- Record trace events for state changes and rejected jobs.
+
 ## Virtual Assistant Acceptance Criteria
 
 1. User sends message and assistant text appears as before.
 2. With realtime voice enabled, first short audio segment starts before all voice segments are ready.
-3. Audio segments play in sequence order.
+3. Audio segments play in job order and sequence order.
 4. No overlapping audio.
-5. Sending another user message cancels current voice and clears queue.
-6. If realtime voice fails, existing task-based TTS fallback still plays.
-7. Trace logs show chunk request/ready/cancel timings.
+5. Sending another user message queues a later voice job instead of cancelling the current one by default.
+6. Explicit stop/clear stops current playback, clears the queue, and sends cancel.
+7. Queue overflow, repeated failures, or repeated playback errors open the realtime voice circuit.
+8. If realtime voice fails before any chunk has played or is rejected before playback starts, existing task-based TTS fallback still plays automatically.
+9. If realtime voice fails after partial playback, the UI marks `partial_failed` and offers manual replay of the full task-based TTS audio without auto-playing a duplicate.
+10. Trace logs show queue, chunk request/ready, cancel, reject, partial failure, and circuit timings.
 
 ---
 
@@ -555,10 +656,12 @@ From topology:
 
 - Main text path uses `/v1/responses`.
 - `payload.model = openclaw`.
-- `x-openclaw-agent-id = gpt-5-4`.
+- Realtime voice should follow the OpenClaw default route, currently `main` with the default model configured on the OpenClaw side.
 - `x-openclaw-message-channel = feishu`.
 - `/v1/audio/speech` currently returns 404.
-- WebSocket RPC is used for Bridge, not current frontend message flow.
+- `/v1/responses stream=true` has been verified to return HTTP SSE events including `response.output_text.delta`.
+- WebSocket RPC `agent` has been verified to return `agent stream=assistant` and `chat state=delta/final` events for `agentId=main`.
+- OpenClaw runtime has internal streaming events and Gateway raw stream recording flags such as `--raw-stream` / `--raw-stream-path`.
 
 ## OpenClaw Responsibilities
 
@@ -576,22 +679,26 @@ OpenClaw does not own:
 
 ## Required OpenClaw Changes
 
-### 3.1 Confirm or add text streaming for `/v1/responses`
+### 3.1 Use `/v1/responses` HTTP SSE as the default stream
 
-Preferred target:
+Default target:
 
 ```text
 POST /v1/responses
+model=openclaw
 stream=true
 ```
 
-The stream should emit text deltas as soon as they are available.
+Do not pin realtime voice to a business-specific agent unless the product explicitly needs it. `model=openclaw` with the default `main` route should follow OpenClaw's current default model.
 
-Suggested event shape:
+Verified event shape:
 
 ```json
 {
   "type": "response.output_text.delta",
+  "item_id": "msg_...",
+  "output_index": 0,
+  "content_index": 0,
   "delta": "你好，"
 }
 ```
@@ -600,7 +707,10 @@ Completion:
 
 ```json
 {
-  "type": "response.completed"
+  "type": "response.completed",
+  "response": {
+    "status": "completed"
+  }
 }
 ```
 
@@ -615,22 +725,57 @@ Error:
 }
 ```
 
-If OpenClaw cannot support streaming yet, no blocker for phase 1. The virtual assistant backend can wait for full text and then split it.
+The adapter should consume `response.output_text.delta`, `response.output_text.done`, `response.completed`, `response.error`, and `[DONE]`, then normalize them to `delta/completed/error`.
 
-### 3.2 Preserve existing non-streaming contract
+### 3.2 Keep Gateway WebSocket as an adapter mode
+
+Gateway WebSocket remains useful for sessions that need Gateway-native agent events:
+
+```text
+method=agent
+agentId=main
+```
+
+Verified event shapes include:
+
+```json
+{
+  "type": "event",
+  "event": "agent",
+  "payload": {
+    "stream": "assistant",
+    "data": {
+      "delta": "你好，"
+    }
+  }
+}
+```
+
+```json
+{
+  "type": "event",
+  "event": "chat",
+  "payload": {
+    "state": "delta"
+  }
+}
+```
+
+Use this mode when the app needs Gateway session event semantics. Otherwise prefer HTTP SSE because it fits the existing `/v1/responses` message flow.
+
+### 3.3 Preserve existing non-streaming contract
 
 Do not break:
 
 ```text
 POST /v1/responses
 model=openclaw
-x-openclaw-agent-id=gpt-5-4
 x-openclaw-message-channel=feishu
 ```
 
 Existing message flow depends on non-streaming response compatibility.
 
-### 3.3 Expose timing metadata if available
+### 3.4 Expose timing metadata if available
 
 Helpful but optional response metadata:
 
@@ -646,7 +791,7 @@ Helpful but optional response metadata:
 
 Virtual assistant trace can use this to separate text latency from TTS latency.
 
-### 3.4 Do not route voice through `/v1/audio/speech`
+### 3.5 Do not route voice through `/v1/audio/speech`
 
 For this plan, voice remains in Voice Workflow TTS because:
 
@@ -658,14 +803,15 @@ For this plan, voice remains in Voice Workflow TTS because:
 Minimum:
 
 1. Existing `/v1/responses` non-streaming behavior remains stable.
-2. Gateway documents whether `stream=true` is supported.
-3. If streaming is supported, text delta event schema is stable.
+2. `/v1/responses stream=true` continues to emit `response.output_text.delta`.
+3. `model=openclaw` follows the OpenClaw default route without pinning to a specific agent.
+4. Gateway WebSocket adapter mode remains available for agent/session event use cases.
 
 Nice-to-have:
 
 1. First-token timing is exposed.
 2. Completion/error events are explicit.
-3. Streaming can preserve Feishu session context.
+3. Raw stream logging can be enabled for diagnostics without becoming a runtime dependency for browser playback.
 
 ---
 
@@ -684,8 +830,14 @@ Test:
 ```bash
 curl -X POST http://127.0.0.1:5555/api/v1/tts/chunk \
   -H "Content-Type: application/json" \
-  -d '{"text":"这是实时语音测试。","emotion_label":"日常平静","session_id":"smoke","sequence":1}'
+  -d '{"text":"\u8fd9\u662f\u5b9e\u65f6\u8bed\u97f3\u6d4b\u8bd5\u3002","emotion_label":"\u65e5\u5e38\u5e73\u9759","session_id":"smoke","sequence":1}'
 ```
+
+Latest MMD-side retest against `http://10.11.252.164:5555` on 2026-05-13:
+
+- Long task `POST /api/v1/tts`: `202` in 147ms, completed after 17 polls / 17.456s, returned `audio/wav` 184400 bytes with `RIFF` header.
+- Chunk `POST /api/v1/tts/chunk`: short prompts returned `200` with response field `duration`; two sampled requests elapsed 14.992s / 14.687s, service `elapsed_seconds` 14.975 / 14.675, returned `audio/wav` 138320 bytes with `RIFF` header.
+- This improves the older chunk baseline of about 22.7s request elapsed / service `elapsed_seconds=20.063`, but TTS remains the first-audio latency bottleneck for realtime voice.
 
 Exit criteria:
 
@@ -698,6 +850,10 @@ Deliver:
 
 - TTS chunk client
 - sentence splitter
+- OpenClaw `/v1/responses` HTTP SSE stream adapter
+- optional OpenClaw Gateway WebSocket adapter
+- session voice job queue
+- realtime voice circuit breaker
 - realtime voice WebSocket
 - proxy URL for chunk audio
 - trace events
@@ -705,6 +861,8 @@ Deliver:
 Exit criteria:
 
 - A WebSocket client receives `audio_ready` events in order.
+- Consecutive synthesize requests are generated as queued jobs, not overlapping playback.
+- Queue overflow or repeated failures return `rejected(..., fallback=message_tts)`.
 - Browser-safe audio URLs can be fetched.
 
 ## Phase 3: Virtual Assistant Frontend
@@ -713,35 +871,40 @@ Deliver:
 
 - `AudioQueue`
 - voice WebSocket integration
-- cancel on new message
+- new message voice jobs enqueue behind current playback
+- explicit stop/clear cancellation
 - MMD speaking state integration
 - fallback to existing TTS
 
 Exit criteria:
 
 - First segment plays before all segments are ready.
-- New message interrupts current playback.
+- New message does not interrupt current playback by default.
+- Explicit stop interrupts current playback and clears queued voice.
 
-## Phase 4: OpenClaw Streaming Optional Upgrade
+## Phase 4: OpenClaw Streaming Hardening
 
 Deliver:
 
-- text delta streaming from OpenClaw if supported
-- backend sentence buffer consumes deltas
+- stable `/v1/responses stream=true` SSE contract
+- Gateway WebSocket/session text delta contract for agent-event mode
+- richer timing/raw event metadata if available
 
 Exit criteria:
 
-- TTS can start before full assistant reply is complete.
+- TTS can start before full assistant reply is complete via HTTP SSE.
+- `OpenClawStreamAdapter` can fall back to final text without breaking existing message flow.
 
 ---
 
 # Key Risks
 
 1. Qwen3-TTS Base does not provide true audio streaming from `generate_voice_clone`.
-2. CPU inference is too slow for production realtime.
-3. OpenClaw may not stream text yet.
+2. CPU inference remains too slow for production realtime; after optimization, short chunk generation still takes about 14.7-15.0s in the 2026-05-13 smoke test.
+3. OpenClaw default route can change; this is intentional for default-following mode, but should be visible in trace.
 4. Browser playback cannot directly fetch external TTS URLs unless proxied.
 5. Cancel cannot interrupt an in-flight model call; it can only discard its result.
+6. Without queue limits and circuit breaker, async generation can build an unbounded backlog.
 
 # Required Metrics
 
@@ -750,12 +913,17 @@ Track these in trace:
 ```text
 openclaw.first_text_ms
 openclaw.total_text_ms
+openclaw.stream_mode
+voice.queue_wait_ms
 tts.chunk.requested_at
 tts.chunk.ready_at
 tts.chunk.elapsed_ms
 voice.first_audio_ready_ms
 frontend.first_audio_play_ms
 voice.cancelled_at
+voice.partial_failed_at
+voice.rejected_reason
+voice.circuit_state
 ```
 
 These metrics determine whether bottleneck is OpenClaw, Voice Workflow TTS, main API orchestration, or frontend playback.
