@@ -103,6 +103,155 @@ class TraceStore:
                 size_bytes INTEGER NOT NULL,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS accounts (
+                id TEXT PRIMARY KEY,
+                external_user_id TEXT NOT NULL UNIQUE,
+                display_name TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                owner_account_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS workspace_members (
+                workspace_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (workspace_id, account_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                openclaw_session_key TEXT NOT NULL,
+                title TEXT NOT NULL,
+                title_source TEXT NOT NULL,
+                selected_model_path TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                trace_id TEXT,
+                openclaw_message_id TEXT,
+                emotion TEXT,
+                action TEXT,
+                tts_emotion_label TEXT,
+                tts_pause_profile TEXT,
+                motion_plan_json TEXT,
+                memory_ops_json TEXT,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                deleted_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS message_tts (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                task_id TEXT,
+                remote_audio_url TEXT,
+                remote_audio_path TEXT,
+                media_type TEXT,
+                duration_seconds REAL,
+                chunks_count INTEGER,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                expires_at TEXT,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS tts_jobs (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                message_tts_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT NOT NULL,
+                locked_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS message_motion_resolution (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                selected_model_path TEXT,
+                source_action TEXT,
+                source_template TEXT,
+                resolved_asset_id TEXT,
+                resolved_asset_url TEXT,
+                resolved_display_name TEXT,
+                status TEXT NOT NULL,
+                fallback_reason TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS motion_context_exports (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                model_key TEXT NOT NULL,
+                model_display_name TEXT NOT NULL,
+                export_json TEXT NOT NULL,
+                motion_count INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS message_bridge_bindings (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                local_session_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                external_session_key TEXT NOT NULL,
+                external_display_name TEXT,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                last_history_sync_at TEXT,
+                last_message_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(workspace_id, account_id, provider, channel, external_session_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS message_bridge_state (
+                provider TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                realtime_drive_character INTEGER NOT NULL DEFAULT 1,
+                websocket_status TEXT NOT NULL DEFAULT 'disconnected',
+                reconnect_attempts INTEGER NOT NULL DEFAULT 0,
+                last_connected_at TEXT,
+                last_error TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(provider, channel)
+            );
             """
         )
         existing_columns = {
@@ -130,6 +279,1050 @@ class TraceStore:
             "ALTER TABLE asset_registry ADD COLUMN favorite_model_relative_path TEXT",
         )
         self._conn.commit()
+
+    @staticmethod
+    def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        return dict(row) if row else None
+
+    @staticmethod
+    def _json_loads(value: str | None, fallback: Any) -> Any:
+        if not value:
+            return fallback
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return fallback
+
+    def resolve_account(self, external_user_id: str) -> dict[str, Any]:
+        external_user_id = external_user_id.strip()
+        if not external_user_id:
+            raise ValueError("external_user_id is required")
+        now = _utc_now_iso()
+        row = self._conn.execute(
+            "SELECT * FROM accounts WHERE external_user_id = ?",
+            (external_user_id,),
+        ).fetchone()
+        if row is None:
+            account_id = str(uuid4())
+            self._conn.execute(
+                """
+                INSERT INTO accounts (id, external_user_id, display_name, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (account_id, external_user_id, external_user_id, now, now),
+            )
+            row = self._conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            self._conn.commit()
+        account = dict(row)
+        self.ensure_personal_workspace(account["id"], external_user_id)
+        return account
+
+    def ensure_personal_workspace(self, account_id: str, external_user_id: str) -> dict[str, Any]:
+        row = self._conn.execute(
+            """
+            SELECT w.*
+            FROM workspaces w
+            JOIN workspace_members wm ON wm.workspace_id = w.id
+            WHERE wm.account_id = ? AND w.kind = 'personal'
+            ORDER BY w.created_at ASC
+            LIMIT 1
+            """,
+            (account_id,),
+        ).fetchone()
+        if row:
+            return dict(row)
+        now = _utc_now_iso()
+        workspace_id = str(uuid4())
+        self._conn.execute(
+            """
+            INSERT INTO workspaces (id, name, kind, owner_account_id, created_at, updated_at)
+            VALUES (?, ?, 'personal', ?, ?, ?)
+            """,
+            (workspace_id, f"{external_user_id}'s workspace", account_id, now, now),
+        )
+        self._conn.execute(
+            """
+            INSERT INTO workspace_members (workspace_id, account_id, role, created_at)
+            VALUES (?, ?, 'owner', ?)
+            """,
+            (workspace_id, account_id, now),
+        )
+        self._conn.commit()
+        return dict(self._conn.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,)).fetchone())
+
+    def get_current_workspace_context(self, external_user_id: str) -> dict[str, Any]:
+        account = self.resolve_account(external_user_id)
+        workspace = self.ensure_personal_workspace(account["id"], account["external_user_id"])
+        membership = self._conn.execute(
+            "SELECT * FROM workspace_members WHERE workspace_id = ? AND account_id = ?",
+            (workspace["id"], account["id"]),
+        ).fetchone()
+        return {"account": account, "workspace": workspace, "membership": dict(membership)}
+
+    def create_session(
+        self,
+        workspace_id: str,
+        account_id: str,
+        *,
+        title: str | None = None,
+        selected_model_path: str | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        session_id = str(uuid4())
+        self._conn.execute(
+            """
+            INSERT INTO sessions (
+                id, workspace_id, account_id, openclaw_session_key, title, title_source,
+                selected_model_path, created_at, updated_at, deleted_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                session_id,
+                workspace_id,
+                account_id,
+                f"openclaw:{session_id}",
+                (title or "新对话").strip() or "新对话",
+                "manual" if title else "default",
+                selected_model_path,
+                now,
+                now,
+            ),
+        )
+        self._conn.commit()
+        return self.get_session(workspace_id, account_id, session_id)  # type: ignore[return-value]
+
+    def list_sessions(self, workspace_id: str, account_id: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM sessions
+            WHERE workspace_id = ? AND account_id = ? AND deleted_at IS NULL
+            ORDER BY updated_at DESC
+            """,
+            (workspace_id, account_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_session(self, workspace_id: str, account_id: str, session_id: str) -> dict[str, Any] | None:
+        return self._row_to_dict(
+            self._conn.execute(
+                """
+                SELECT * FROM sessions
+                WHERE id = ? AND workspace_id = ? AND account_id = ? AND deleted_at IS NULL
+                """,
+                (session_id, workspace_id, account_id),
+            ).fetchone()
+        )
+
+    def update_session(
+        self,
+        workspace_id: str,
+        account_id: str,
+        session_id: str,
+        *,
+        title: str | None = None,
+        selected_model_path: str | None = None,
+    ) -> dict[str, Any] | None:
+        session = self.get_session(workspace_id, account_id, session_id)
+        if session is None:
+            return None
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE sessions
+            SET title = ?, title_source = ?, selected_model_path = COALESCE(?, selected_model_path), updated_at = ?
+            WHERE id = ? AND workspace_id = ? AND account_id = ?
+            """,
+            (
+                (title or session["title"]).strip() or session["title"],
+                "manual" if title else session["title_source"],
+                selected_model_path,
+                now,
+                session_id,
+                workspace_id,
+                account_id,
+            ),
+        )
+        self._conn.commit()
+        return self.get_session(workspace_id, account_id, session_id)
+
+    def soft_delete_session(self, workspace_id: str, account_id: str, session_id: str) -> dict[str, Any] | None:
+        session = self.get_session(workspace_id, account_id, session_id)
+        if session is None:
+            return None
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE sessions SET deleted_at = ?, updated_at = ?
+            WHERE id = ? AND workspace_id = ? AND account_id = ?
+            """,
+            (now, now, session_id, workspace_id, account_id),
+        )
+        self._conn.commit()
+        session["deleted_at"] = now
+        session["updated_at"] = now
+        return session
+
+    def insert_message(
+        self,
+        workspace_id: str,
+        session_id: str,
+        account_id: str,
+        *,
+        role: str,
+        content: str,
+        trace_id: str | None = None,
+        openclaw_message_id: str | None = None,
+        emotion: str | None = None,
+        action: str | None = None,
+        tts_emotion_label: str | None = None,
+        tts_pause_profile: str | None = None,
+        motion_plan: dict[str, Any] | None = None,
+        memory_ops: list[dict[str, Any]] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        message_id = str(uuid4())
+        self._conn.execute(
+            """
+            INSERT INTO messages (
+                id, workspace_id, session_id, account_id, role, content, trace_id, openclaw_message_id,
+                emotion, action, tts_emotion_label, tts_pause_profile, motion_plan_json,
+                memory_ops_json, metadata_json, created_at, deleted_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                message_id,
+                workspace_id,
+                session_id,
+                account_id,
+                role,
+                content,
+                trace_id,
+                openclaw_message_id,
+                emotion,
+                action,
+                tts_emotion_label,
+                tts_pause_profile,
+                json.dumps(motion_plan, ensure_ascii=False) if motion_plan is not None else None,
+                json.dumps(memory_ops or [], ensure_ascii=False),
+                json.dumps(metadata or {}, ensure_ascii=False),
+                now,
+            ),
+        )
+        self._conn.execute(
+            "UPDATE sessions SET updated_at = ? WHERE id = ? AND workspace_id = ?",
+            (now, session_id, workspace_id),
+        )
+        self._conn.commit()
+        return self.get_message(workspace_id, account_id, message_id)  # type: ignore[return-value]
+
+    def get_message_by_openclaw_message_id(
+        self,
+        workspace_id: str,
+        account_id: str,
+        session_id: str,
+        openclaw_message_id: str,
+    ) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE workspace_id = ? AND account_id = ? AND session_id = ?
+              AND openclaw_message_id = ? AND deleted_at IS NULL
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (workspace_id, account_id, session_id, openclaw_message_id),
+        ).fetchone()
+        return self._hydrate_message(row) if row else None
+
+    def insert_message_if_external_missing(
+        self,
+        workspace_id: str,
+        session_id: str,
+        account_id: str,
+        *,
+        role: str,
+        content: str,
+        trace_id: str | None = None,
+        openclaw_message_id: str | None = None,
+        emotion: str | None = None,
+        action: str | None = None,
+        tts_emotion_label: str | None = None,
+        tts_pause_profile: str | None = None,
+        motion_plan: dict[str, Any] | None = None,
+        memory_ops: list[dict[str, Any]] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if openclaw_message_id:
+            existing = self.get_message_by_openclaw_message_id(
+                workspace_id,
+                account_id,
+                session_id,
+                openclaw_message_id,
+            )
+            if existing:
+                return existing
+        return self.insert_message(
+            workspace_id,
+            session_id,
+            account_id,
+            role=role,
+            content=content,
+            trace_id=trace_id,
+            openclaw_message_id=openclaw_message_id,
+            emotion=emotion,
+            action=action,
+            tts_emotion_label=tts_emotion_label,
+            tts_pause_profile=tts_pause_profile,
+            motion_plan=motion_plan,
+            memory_ops=memory_ops,
+            metadata=metadata,
+        )
+
+    def _hydrate_message(self, row: sqlite3.Row) -> dict[str, Any]:
+        message = dict(row)
+        message["motion_plan"] = self._json_loads(message.pop("motion_plan_json", None), None)
+        message["memory_ops"] = self._json_loads(message.pop("memory_ops_json", None), [])
+        message["metadata"] = self._json_loads(message.pop("metadata_json", None), {})
+        message["tts"] = self.get_message_tts(message["workspace_id"], message["id"])
+        message["motion_resolution"] = self.get_message_motion_resolution(message["workspace_id"], message["id"])
+        return message
+
+    def list_messages(self, workspace_id: str, account_id: str, session_id: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE workspace_id = ? AND account_id = ? AND session_id = ? AND deleted_at IS NULL
+            ORDER BY created_at ASC
+            """,
+            (workspace_id, account_id, session_id),
+        ).fetchall()
+        return [self._hydrate_message(row) for row in rows]
+
+    def get_message(self, workspace_id: str, account_id: str, message_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE id = ? AND workspace_id = ? AND account_id = ? AND deleted_at IS NULL
+            """,
+            (message_id, workspace_id, account_id),
+        ).fetchone()
+        return self._hydrate_message(row) if row else None
+
+    def get_workspace_message(self, workspace_id: str, message_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL
+            """,
+            (message_id, workspace_id),
+        ).fetchone()
+        return self._hydrate_message(row) if row else None
+
+    def get_account_external_user_id(self, account_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT external_user_id FROM accounts WHERE id = ?",
+            (account_id,),
+        ).fetchone()
+        return str(row["external_user_id"]) if row and row["external_user_id"] else None
+
+    def create_message_tts(
+        self,
+        workspace_id: str,
+        message_id: str,
+        *,
+        status: str,
+        task_id: str | None,
+        remote_audio_url: str | None,
+        media_type: str | None,
+        duration_seconds: float | None = None,
+        chunks_count: int | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        existing = self.get_message_tts(workspace_id, message_id)
+        version = (existing["version"] + 1) if existing else 1
+        tts_id = str(uuid4())
+        self._conn.execute(
+            """
+            INSERT INTO message_tts (
+                id, workspace_id, message_id, provider, version, status, task_id,
+                remote_audio_url, remote_audio_path, media_type, duration_seconds,
+                chunks_count, error, created_at, completed_at, expires_at, updated_at
+            )
+            VALUES (?, ?, ?, 'voice-workflow', ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?)
+            """,
+            (
+                tts_id,
+                workspace_id,
+                message_id,
+                version,
+                status,
+                task_id,
+                remote_audio_url,
+                media_type,
+                duration_seconds,
+                chunks_count,
+                error,
+                now,
+                now if status == "ready" else None,
+                now,
+            ),
+        )
+        self._conn.commit()
+        return self.get_tts_by_id(workspace_id, tts_id)  # type: ignore[return-value]
+
+    def get_message_tts(self, workspace_id: str, message_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM message_tts
+            WHERE workspace_id = ? AND message_id = ?
+            ORDER BY version DESC
+            LIMIT 1
+            """,
+            (workspace_id, message_id),
+        ).fetchone()
+        tts = dict(row) if row else None
+        if tts:
+            tts["proxy_audio_url"] = f"/tts/proxy/{tts['id']}"
+        return tts
+
+    def get_tts_by_id(self, workspace_id: str, tts_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM message_tts WHERE workspace_id = ? AND id = ?",
+            (workspace_id, tts_id),
+        ).fetchone()
+        tts = dict(row) if row else None
+        if tts:
+            tts["proxy_audio_url"] = f"/tts/proxy/{tts['id']}"
+        return tts
+
+    def finalize_message_tts(
+        self,
+        workspace_id: str,
+        tts_id: str,
+        *,
+        status: str,
+        remote_audio_url: str | None,
+        media_type: str | None,
+        duration_seconds: float | None = None,
+        chunks_count: int | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE message_tts
+            SET status = ?,
+                remote_audio_url = COALESCE(?, remote_audio_url),
+                media_type = COALESCE(?, media_type),
+                duration_seconds = COALESCE(?, duration_seconds),
+                chunks_count = COALESCE(?, chunks_count),
+                error = ?,
+                completed_at = CASE WHEN ? = 'ready' THEN ? ELSE completed_at END,
+                updated_at = ?
+            WHERE id = ? AND workspace_id = ?
+            """,
+            (
+                status,
+                remote_audio_url,
+                media_type,
+                duration_seconds,
+                chunks_count,
+                error,
+                status,
+                now,
+                now,
+                tts_id,
+                workspace_id,
+            ),
+        )
+        self._conn.commit()
+        return self.get_tts_by_id(workspace_id, tts_id)
+
+    def get_message_by_tts_id(self, workspace_id: str, account_id: str, tts_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT m.*
+            FROM message_tts t
+            JOIN messages m ON m.id = t.message_id
+            WHERE t.id = ? AND t.workspace_id = ? AND m.account_id = ? AND m.deleted_at IS NULL
+            """,
+            (tts_id, workspace_id, account_id),
+        ).fetchone()
+        return self._hydrate_message(row) if row else None
+
+    def update_tts_status(
+        self,
+        workspace_id: str,
+        tts_id: str,
+        *,
+        status: str,
+        error: str | None = None,
+    ) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE message_tts
+            SET status = ?, error = COALESCE(?, error), updated_at = ?
+            WHERE id = ? AND workspace_id = ?
+            """,
+            (status, error, now, tts_id, workspace_id),
+        )
+        self._conn.commit()
+        return self.get_tts_by_id(workspace_id, tts_id)
+
+    def create_tts_job(
+        self,
+        workspace_id: str,
+        message_id: str,
+        message_tts_id: str,
+        *,
+        status: str = "pending",
+        next_attempt_at: str | None = None,
+    ) -> dict[str, Any]:
+        job_id = str(uuid4())
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO tts_jobs (
+                id, workspace_id, message_id, message_tts_id, status, attempts,
+                next_attempt_at, locked_at, last_error, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 0, ?, NULL, NULL, ?, ?)
+            """,
+            (job_id, workspace_id, message_id, message_tts_id, status, next_attempt_at or now, now, now),
+        )
+        self._conn.commit()
+        return self.get_tts_job(job_id)  # type: ignore[return-value]
+
+    def get_tts_job(self, job_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute("SELECT * FROM tts_jobs WHERE id = ?", (job_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_tts_job_by_message_tts_id(self, message_tts_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM tts_jobs
+            WHERE message_tts_id = ? AND status IN ('pending', 'running')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (message_tts_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def claim_next_tts_job(self, *, now_iso: str, lock_timeout_seconds: int) -> dict[str, Any] | None:
+        stale_before = (_ensure_utc(datetime.fromisoformat(now_iso)) - timedelta(seconds=lock_timeout_seconds)).isoformat()
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM tts_jobs
+            WHERE
+                (status = 'pending' AND next_attempt_at <= ?)
+                OR
+                (status = 'running' AND (locked_at IS NULL OR locked_at <= ?))
+            ORDER BY next_attempt_at ASC, created_at ASC
+            LIMIT 1
+            """,
+            (now_iso, stale_before),
+        ).fetchone()
+        if not row:
+            return None
+        job_id = str(row["id"])
+        self._conn.execute(
+            """
+            UPDATE tts_jobs
+            SET status = 'running',
+                attempts = attempts + 1,
+                locked_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now_iso, now_iso, job_id),
+        )
+        self._conn.commit()
+        return self.get_tts_job(job_id)
+
+    def complete_tts_job(self, job_id: str) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE tts_jobs
+            SET status = 'completed', locked_at = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, job_id),
+        )
+        self._conn.commit()
+        return self.get_tts_job(job_id)
+
+    def reschedule_tts_job(self, job_id: str, *, next_attempt_at: str, last_error: str | None = None) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE tts_jobs
+            SET status = 'pending',
+                next_attempt_at = ?,
+                locked_at = NULL,
+                last_error = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (next_attempt_at, last_error, now, job_id),
+        )
+        self._conn.commit()
+        return self.get_tts_job(job_id)
+
+    def fail_tts_job(self, job_id: str, *, last_error: str | None = None) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE tts_jobs
+            SET status = 'failed', locked_at = NULL, last_error = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (last_error, now, job_id),
+        )
+        self._conn.commit()
+        return self.get_tts_job(job_id)
+
+    def cancel_tts_jobs_for_message(self, workspace_id: str, message_id: str) -> None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE tts_jobs
+            SET status = 'cancelled', locked_at = NULL, updated_at = ?
+            WHERE workspace_id = ? AND message_id = ? AND status IN ('pending', 'running')
+            """,
+            (now, workspace_id, message_id),
+        )
+        self._conn.commit()
+
+    def cleanup_message_service(self, *, tts_retention_days: int, max_tts_attempts: int) -> dict[str, int]:
+        cutoff = (datetime.now(UTC) - timedelta(days=tts_retention_days)).isoformat()
+        soft_deleted_messages = self._conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM messages
+            WHERE session_id IN (SELECT id FROM sessions WHERE deleted_at IS NOT NULL)
+            """
+        ).fetchone()["count"]
+        soft_deleted_tts = self._conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM message_tts
+            WHERE message_id IN (
+                SELECT id FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE deleted_at IS NOT NULL)
+            )
+            """
+        ).fetchone()["count"]
+        old_terminal_tts = self._conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM message_tts
+            WHERE status IN ('expired', 'failed') AND updated_at < ?
+            """,
+            (cutoff,),
+        ).fetchone()["count"]
+        orphan_tts_jobs = self._conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM tts_jobs
+            WHERE message_tts_id NOT IN (SELECT id FROM message_tts)
+            """
+        ).fetchone()["count"]
+        stale_pending_jobs = self._conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM tts_jobs
+            WHERE status IN ('pending', 'running') AND attempts >= ?
+            """,
+            (max_tts_attempts,),
+        ).fetchone()["count"]
+
+        self._conn.execute(
+            """
+            DELETE FROM tts_jobs
+            WHERE message_tts_id NOT IN (SELECT id FROM message_tts)
+            """
+        )
+        self._conn.execute(
+            """
+            DELETE FROM message_tts
+            WHERE message_id IN (
+                SELECT id FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE deleted_at IS NOT NULL)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            DELETE FROM messages
+            WHERE session_id IN (SELECT id FROM sessions WHERE deleted_at IS NOT NULL)
+            """
+        )
+        self._conn.execute("DELETE FROM sessions WHERE deleted_at IS NOT NULL")
+        self._conn.execute(
+            """
+            DELETE FROM message_tts
+            WHERE status IN ('expired', 'failed') AND updated_at < ?
+            """,
+            (cutoff,),
+        )
+        self._conn.execute(
+            """
+            UPDATE tts_jobs
+            SET status = 'failed', updated_at = ?, locked_at = NULL, last_error = COALESCE(last_error, 'max_attempts_exceeded')
+            WHERE status IN ('pending', 'running') AND attempts >= ?
+            """,
+            (_utc_now_iso(), max_tts_attempts),
+        )
+        self._conn.commit()
+        return {
+            "deleted_soft_deleted_messages": int(soft_deleted_messages),
+            "deleted_soft_deleted_tts": int(soft_deleted_tts),
+            "deleted_old_terminal_tts": int(old_terminal_tts),
+            "deleted_orphan_tts_jobs": int(orphan_tts_jobs),
+            "failed_stale_pending_jobs": int(stale_pending_jobs),
+        }
+
+    def list_favorite_assets_for_model(self, user_id: str, model_relative_path: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT *
+            FROM asset_registry
+            WHERE user_id = ? AND is_favorite = 1 AND favorite_model_relative_path = ?
+            ORDER BY created_at DESC
+            """,
+            (user_id, model_relative_path),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_motion_context_export(
+        self,
+        workspace_id: str,
+        account_id: str,
+        *,
+        model_key: str,
+        model_display_name: str,
+        export_json: dict[str, Any],
+        motion_count: int,
+    ) -> dict[str, Any]:
+        export_id = str(uuid4())
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO motion_context_exports (
+                id, workspace_id, account_id, model_key, model_display_name, export_json, motion_count, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (export_id, workspace_id, account_id, model_key, model_display_name, json.dumps(export_json, ensure_ascii=False), motion_count, now),
+        )
+        self._conn.commit()
+        return self.get_latest_motion_context_export(workspace_id, account_id, model_key)  # type: ignore[return-value]
+
+    def get_latest_motion_context_export(self, workspace_id: str, account_id: str, model_key: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM motion_context_exports
+            WHERE workspace_id = ? AND account_id = ? AND model_key = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (workspace_id, account_id, model_key),
+        ).fetchone()
+        if not row:
+            return None
+        payload = dict(row)
+        payload["export_json"] = self._json_loads(payload["export_json"], {})
+        return payload
+
+    def create_message_motion_resolution(
+        self,
+        workspace_id: str,
+        message_id: str,
+        *,
+        selected_model_path: str | None,
+        source_action: str | None,
+        source_template: str | None,
+        resolved_asset_id: str | None,
+        resolved_asset_url: str | None,
+        resolved_display_name: str | None,
+        status: str,
+        fallback_reason: str | None = None,
+    ) -> dict[str, Any]:
+        resolution_id = str(uuid4())
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO message_motion_resolution (
+                id, workspace_id, message_id, selected_model_path, source_action, source_template,
+                resolved_asset_id, resolved_asset_url, resolved_display_name, status, fallback_reason, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                resolution_id,
+                workspace_id,
+                message_id,
+                selected_model_path,
+                source_action,
+                source_template,
+                resolved_asset_id,
+                resolved_asset_url,
+                resolved_display_name,
+                status,
+                fallback_reason,
+                now,
+            ),
+        )
+        self._conn.commit()
+        return self.get_message_motion_resolution(workspace_id, message_id)  # type: ignore[return-value]
+
+    def get_message_motion_resolution(self, workspace_id: str, message_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM message_motion_resolution
+            WHERE workspace_id = ? AND message_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (workspace_id, message_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    @staticmethod
+    def _hydrate_bridge_binding(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if not row:
+            return None
+        binding = dict(row)
+        binding["is_default"] = bool(binding["is_default"])
+        return binding
+
+    @staticmethod
+    def _hydrate_bridge_state(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if not row:
+            return None
+        state = dict(row)
+        state["enabled"] = bool(state["enabled"])
+        state["realtime_drive_character"] = bool(state["realtime_drive_character"])
+        return state
+
+    def get_message_bridge_state(self, provider: str, channel: str) -> dict[str, Any]:
+        provider = provider.strip() or "openclaw"
+        channel = channel.strip() or "feishu"
+        row = self._conn.execute(
+            "SELECT * FROM message_bridge_state WHERE provider = ? AND channel = ?",
+            (provider, channel),
+        ).fetchone()
+        state = self._hydrate_bridge_state(row)
+        if state:
+            return state
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO message_bridge_state (
+                provider, channel, enabled, realtime_drive_character, websocket_status,
+                reconnect_attempts, last_connected_at, last_error, updated_at
+            )
+            VALUES (?, ?, 1, 1, 'disconnected', 0, NULL, NULL, ?)
+            """,
+            (provider, channel, now),
+        )
+        self._conn.commit()
+        return self.get_message_bridge_state(provider, channel)
+
+    def update_message_bridge_state(
+        self,
+        provider: str,
+        channel: str,
+        *,
+        enabled: bool | None = None,
+        realtime_drive_character: bool | None = None,
+        websocket_status: str | None = None,
+        reconnect_attempts: int | None = None,
+        last_connected_at: str | None = None,
+        last_error: str | None = None,
+    ) -> dict[str, Any]:
+        current = self.get_message_bridge_state(provider, channel)
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE message_bridge_state
+            SET enabled = ?, realtime_drive_character = ?, websocket_status = ?,
+                reconnect_attempts = ?, last_connected_at = COALESCE(?, last_connected_at),
+                last_error = ?, updated_at = ?
+            WHERE provider = ? AND channel = ?
+            """,
+            (
+                int(current["enabled"] if enabled is None else enabled),
+                int(current["realtime_drive_character"] if realtime_drive_character is None else realtime_drive_character),
+                websocket_status or current["websocket_status"],
+                current["reconnect_attempts"] if reconnect_attempts is None else reconnect_attempts,
+                last_connected_at,
+                last_error,
+                now,
+                provider,
+                channel,
+            ),
+        )
+        self._conn.commit()
+        return self.get_message_bridge_state(provider, channel)
+
+    def upsert_message_bridge_binding(
+        self,
+        *,
+        workspace_id: str,
+        account_id: str,
+        local_session_id: str,
+        provider: str,
+        channel: str,
+        external_session_key: str,
+        external_display_name: str | None,
+        is_default: bool,
+        status: str,
+        last_history_sync_at: str | None = None,
+        last_message_at: str | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        if is_default:
+            self._conn.execute(
+                """
+                UPDATE message_bridge_bindings
+                SET is_default = 0, updated_at = ?
+                WHERE workspace_id = ? AND account_id = ? AND provider = ? AND channel = ?
+                """,
+                (now, workspace_id, account_id, provider, channel),
+            )
+        existing = self._conn.execute(
+            """
+            SELECT * FROM message_bridge_bindings
+            WHERE workspace_id = ? AND account_id = ? AND provider = ? AND channel = ?
+              AND external_session_key = ?
+            """,
+            (workspace_id, account_id, provider, channel, external_session_key),
+        ).fetchone()
+        if existing:
+            binding_id = existing["id"]
+            self._conn.execute(
+                """
+                UPDATE message_bridge_bindings
+                SET local_session_id = ?, external_display_name = ?, is_default = ?, status = ?,
+                    last_history_sync_at = COALESCE(?, last_history_sync_at),
+                    last_message_at = COALESCE(?, last_message_at),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    local_session_id,
+                    external_display_name,
+                    int(is_default),
+                    status,
+                    last_history_sync_at,
+                    last_message_at,
+                    now,
+                    binding_id,
+                ),
+            )
+        else:
+            binding_id = str(uuid4())
+            self._conn.execute(
+                """
+                INSERT INTO message_bridge_bindings (
+                    id, workspace_id, account_id, local_session_id, provider, channel,
+                    external_session_key, external_display_name, is_default, status,
+                    last_history_sync_at, last_message_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    binding_id,
+                    workspace_id,
+                    account_id,
+                    local_session_id,
+                    provider,
+                    channel,
+                    external_session_key,
+                    external_display_name,
+                    int(is_default),
+                    status,
+                    last_history_sync_at,
+                    last_message_at,
+                    now,
+                    now,
+                ),
+            )
+        self._conn.commit()
+        return self.get_message_bridge_binding(binding_id)  # type: ignore[return-value]
+
+    def get_message_bridge_binding(self, binding_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM message_bridge_bindings WHERE id = ?",
+            (binding_id,),
+        ).fetchone()
+        return self._hydrate_bridge_binding(row)
+
+    def get_default_message_bridge_binding(
+        self,
+        workspace_id: str,
+        account_id: str,
+        *,
+        provider: str,
+        channel: str,
+    ) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM message_bridge_bindings
+            WHERE workspace_id = ? AND account_id = ? AND provider = ? AND channel = ?
+              AND is_default = 1
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (workspace_id, account_id, provider, channel),
+        ).fetchone()
+        return self._hydrate_bridge_binding(row)
+
+    def list_message_bridge_bindings(self, workspace_id: str, account_id: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM message_bridge_bindings
+            WHERE workspace_id = ? AND account_id = ?
+            ORDER BY is_default DESC, updated_at DESC
+            """,
+            (workspace_id, account_id),
+        ).fetchall()
+        return [self._hydrate_bridge_binding(row) for row in rows if row]
+
+    def update_message_bridge_binding_sync(
+        self,
+        binding_id: str,
+        *,
+        last_history_sync_at: str | None = None,
+        last_message_at: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any] | None:
+        current = self.get_message_bridge_binding(binding_id)
+        if not current:
+            return None
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE message_bridge_bindings
+            SET last_history_sync_at = COALESCE(?, last_history_sync_at),
+                last_message_at = COALESCE(?, last_message_at),
+                status = COALESCE(?, status),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (last_history_sync_at, last_message_at, status, now, binding_id),
+        )
+        self._conn.commit()
+        return self.get_message_bridge_binding(binding_id)
 
     def _add_column_if_missing(self, existing_columns: set[str], column_name: str, statement: str) -> None:
         if column_name in existing_columns:

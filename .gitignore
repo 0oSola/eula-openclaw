@@ -10,6 +10,7 @@ web/node_modules
 web/.next
 web/.next-codex-dev
 web/.next-codex-build
+web/.next-codex-test
 #api/data
 #api/api/data
 api/tests_runtime
@@ -25,3 +26,4 @@ web/tsconfig.tsbuildinfo
 #MMD
 MMD/audio/优菈的所有剧情和语音.优菈语音.1077401401.mp4
 .worktrees/
+MMD/TTS model/

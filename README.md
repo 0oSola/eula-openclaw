@@ -22,6 +22,43 @@ Browser-based MMD virtual companion with OpenClaw chat, interaction mapping, and
 - SQLite + NDJSON dual-write with retention cleanup; SQLite + NDJSON 双写并带保留期清理
 - Browser and server TTS modes; 同时支持浏览器与服务端 TTS 模式
 
+## MMD Model Loading / MMD 模型读取
+
+The current app does not upload MMD models from the Advanced panel. Models are read by scanning the backend `MMD_ROOT_DIR` directory.
+By default, `MMD_ROOT_DIR` is `MMD/` at the repository root. You can override it in `api/.env`:
+
+```env
+MMD_ROOT_DIR=MMD
+```
+
+Supported model files are `.pmx` and `.pmd`. The backend recursively scans the MMD root, so a model can be placed in any subfolder:
+
+```text
+MMD/
+  Eula/
+    Eula.pmx
+    textures/
+      body.png
+      face.png
+  OTs14/
+    GirlsFrontline OTs14SSR0101.pmx
+    Textures/
+      ...
+    spa/
+      ...
+```
+
+Keep each model's textures, toon files, `.spa`, `.sph`, and other relative dependencies next to the model exactly as provided by the original MMD package. The browser loads the selected model through `GET /assets/mmd/{file_path}`, so broken relative paths inside the model package will usually show up as missing textures.
+
+Frontend discovery flow:
+
+- `GET /assets/mmd/models` lists all `.pmx/.pmd` files under `MMD_ROOT_DIR`.
+- The Advanced panel's model selector uses that list directly.
+- Selecting a model passes its `url` to the Three.js MMD stage.
+- `GET /assets/mmd/validate?model_path=<relative_path>` can validate that a specific model file exists.
+
+After adding or removing model files, refresh the web page or restart the API if the running process is using a stale filesystem view.
+
 ## Local Run / 本地运行
 
 ### 1. API / 后端

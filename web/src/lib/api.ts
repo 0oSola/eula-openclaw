@@ -3,6 +3,13 @@ import { requestServerTtsAudio } from "@/lib/ttsClient.js";
 import type {
   ChatResponse,
   MappingConfig,
+  MessageBridgeExternalSession,
+  MessageBridgeStatus,
+  MessageServiceMessage,
+  MessageServiceCleanupResult,
+  MessageServiceSendResponse,
+  MessageServiceSession,
+  MotionContextExport,
   MmdMotionAsset,
   MmdModelAsset,
   OpenClawConfig,
@@ -11,13 +18,39 @@ import type {
   TraceEvent,
   TraceMirror,
   VmdAsset,
+  WorkspaceContext,
 } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
 
+function resolveRuntimeApiBaseUrl(): string {
+  if (typeof window === "undefined") return API_BASE_URL;
+  try {
+    const configured = new URL(API_BASE_URL);
+    const runtimeHostname = window.location.hostname;
+    const configuredHostname = configured.hostname;
+    if (
+      runtimeHostname &&
+      runtimeHostname !== "localhost" &&
+      runtimeHostname !== "127.0.0.1" &&
+      (configuredHostname === "localhost" || configuredHostname === "127.0.0.1")
+    ) {
+      configured.hostname = runtimeHostname;
+      return configured.toString().replace(/\/$/, "");
+    }
+  } catch {
+    return API_BASE_URL;
+  }
+  return API_BASE_URL;
+}
+
 function makeUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path;
-  return `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+  if (typeof window !== "undefined") {
+    return `/api/backend${path.startsWith("/") ? path : `/${path}`}`;
+  }
+  const baseUrl = resolveRuntimeApiBaseUrl();
+  return `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 async function requestJSON<T>(
@@ -34,11 +67,18 @@ async function requestJSON<T>(
     const traceHeaders = buildTraceHeaders(traceId || "", userId || "");
     Object.assign(resolvedHeaders, traceHeaders);
   }
-  const response = await fetch(makeUrl(path), {
-    ...rest,
-    headers: resolvedHeaders,
-    cache: "no-store",
-  });
+  const url = makeUrl(path);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...rest,
+      headers: resolvedHeaders,
+      cache: "no-store",
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`API request failed before reaching backend: ${url}. ${detail}`);
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data?.detail || data?.message || `Request failed: ${response.status}`);
@@ -59,6 +99,142 @@ export async function postChat(input: ChatInput, traceId: string): Promise<ChatR
     body: JSON.stringify(input),
     userId: input.user_id,
     traceId,
+  });
+}
+
+export async function getCurrentWorkspace(userId: string): Promise<WorkspaceContext> {
+  return requestJSON<WorkspaceContext>("/workspaces/current", {
+    method: "GET",
+    userId,
+  });
+}
+
+export async function listChatSessions(userId: string): Promise<MessageServiceSession[]> {
+  const payload = await requestJSON<{ items: MessageServiceSession[] }>("/sessions", {
+    method: "GET",
+    userId,
+  });
+  return payload.items || [];
+}
+
+export async function createChatSession(
+  userId: string,
+  payload: { title?: string; selected_model_path?: string | null } = {},
+): Promise<MessageServiceSession> {
+  const response = await requestJSON<{ session: MessageServiceSession }>("/sessions", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    userId,
+  });
+  return response.session;
+}
+
+export async function getChatSession(userId: string, sessionId: string): Promise<MessageServiceSession> {
+  const response = await requestJSON<{ session: MessageServiceSession }>(`/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "GET",
+    userId,
+  });
+  return response.session;
+}
+
+export async function updateChatSession(
+  userId: string,
+  sessionId: string,
+  payload: { title?: string | null; selected_model_path?: string | null },
+): Promise<MessageServiceSession> {
+  const response = await requestJSON<{ session: MessageServiceSession }>(`/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    userId,
+  });
+  return response.session;
+}
+
+export async function deleteChatSession(userId: string, sessionId: string): Promise<MessageServiceSession> {
+  const response = await requestJSON<{ session: MessageServiceSession }>(`/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+    userId,
+  });
+  return response.session;
+}
+
+export async function listSessionMessages(userId: string, sessionId: string): Promise<MessageServiceMessage[]> {
+  const payload = await requestJSON<{ items: MessageServiceMessage[] }>(
+    `/sessions/${encodeURIComponent(sessionId)}/messages`,
+    {
+      method: "GET",
+      userId,
+    },
+  );
+  return payload.items || [];
+}
+
+export async function getMessageById(userId: string, messageId: string): Promise<MessageServiceMessage> {
+  const payload = await requestJSON<{ message: MessageServiceMessage }>(`/messages/${encodeURIComponent(messageId)}`, {
+    method: "GET",
+    userId,
+  });
+  return payload.message;
+}
+
+export async function postSessionMessage(
+  userId: string,
+  sessionId: string,
+  payload: { content: string; tts_enabled: boolean; selected_model_path?: string | null },
+  traceId: string,
+): Promise<MessageServiceSendResponse> {
+  return requestJSON<MessageServiceSendResponse>(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    userId,
+    traceId,
+  });
+}
+
+export async function regenerateMessageTts(userId: string, messageId: string): Promise<MessageServiceMessage> {
+  const payload = await requestJSON<{ message: MessageServiceMessage }>(
+    `/messages/${encodeURIComponent(messageId)}/tts/regenerate`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+      userId,
+    },
+  );
+  return payload.message;
+}
+
+export async function markMessageTtsExpired(userId: string, ttsId: string): Promise<void> {
+  await requestJSON<{ tts: unknown }>(`/message-tts/${encodeURIComponent(ttsId)}/mark-expired`, {
+    method: "POST",
+    body: JSON.stringify({}),
+    userId,
+  });
+}
+
+export async function createMotionContextExport(userId: string, selectedModelPath: string): Promise<MotionContextExport> {
+  return requestJSON<MotionContextExport>("/motion-context/exports", {
+    method: "POST",
+    body: JSON.stringify({ selected_model_path: selectedModelPath }),
+    userId,
+  });
+}
+
+export async function getLatestMotionContextExport(
+  userId: string,
+  selectedModelPath: string,
+): Promise<MotionContextExport> {
+  const params = new URLSearchParams({ model_key: selectedModelPath });
+  return requestJSON<MotionContextExport>(`/motion-context/exports/latest?${params.toString()}`, {
+    method: "GET",
+    userId,
+  });
+}
+
+export async function cleanupMessageServiceAdmin(userId: string): Promise<MessageServiceCleanupResult> {
+  return requestJSON<MessageServiceCleanupResult>("/admin/message-service/cleanup", {
+    method: "POST",
+    body: JSON.stringify({}),
+    userId,
   });
 }
 
@@ -117,6 +293,47 @@ export async function getOpenClawHealth(userId: string): Promise<OpenClawHealthS
     method: "GET",
     userId,
   });
+}
+
+export async function getMessageBridgeStatus(userId: string): Promise<MessageBridgeStatus> {
+  return requestJSON<MessageBridgeStatus>("/admin/message-bridge/status", {
+    method: "GET",
+    userId,
+  });
+}
+
+export async function patchMessageBridgeSettings(
+  userId: string,
+  payload: { enabled?: boolean; realtime_drive_character?: boolean },
+): Promise<MessageBridgeStatus> {
+  return requestJSON<MessageBridgeStatus>("/admin/message-bridge/settings", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    userId,
+  });
+}
+
+export async function listMessageBridgeFeishuSessions(userId: string): Promise<MessageBridgeExternalSession[]> {
+  const payload = await requestJSON<{ items: MessageBridgeExternalSession[] }>(
+    "/admin/message-bridge/openclaw/feishu/sessions",
+    {
+      method: "GET",
+      userId,
+    },
+  );
+  return payload.items || [];
+}
+
+export async function setDefaultMessageBridgeBinding(
+  userId: string,
+  payload: { provider: string; channel: string; external_session_key: string },
+): Promise<MessageBridgeStatus["binding"]> {
+  const response = await requestJSON<{ binding: MessageBridgeStatus["binding"] }>("/admin/message-bridge/bindings/default", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    userId,
+  });
+  return response.binding;
 }
 
 export async function listVmdAssets(userId: string): Promise<VmdAsset[]> {

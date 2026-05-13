@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-import type { ChatMessage } from "@/lib/types";
+import type { ChatMessage, MessageServiceSession } from "@/lib/types";
 
 import { CompanionChatbox } from "./CompanionChatbox";
 
@@ -13,6 +13,9 @@ type TraceRow = readonly [string, string, string, string];
 type CompanionRightRailProps = {
   collapsed: boolean;
   activeView: RightPanelView;
+  sessions: MessageServiceSession[];
+  activeSessionId: string;
+  sessionBusy: boolean;
   messages: ChatMessage[];
   loading: boolean;
   error: string;
@@ -22,6 +25,10 @@ type CompanionRightRailProps = {
   memoryNotes: string[];
   traceRows: readonly TraceRow[];
   onToggleCollapsed: () => void;
+  onCreateSession: () => void;
+  onSelectSession: (sessionId: string) => void;
+  onRenameSession: (session: MessageServiceSession) => void;
+  onDeleteSession: (session: MessageServiceSession) => void;
   onPlayTtsMessage: (message: ChatMessage) => void;
 };
 
@@ -111,6 +118,9 @@ function OverviewWorkspace({
 export function CompanionRightRail({
   collapsed,
   activeView,
+  sessions,
+  activeSessionId,
+  sessionBusy,
   messages,
   loading,
   error,
@@ -120,6 +130,10 @@ export function CompanionRightRail({
   memoryNotes,
   traceRows,
   onToggleCollapsed,
+  onCreateSession,
+  onSelectSession,
+  onRenameSession,
+  onDeleteSession,
   onPlayTtsMessage,
 }: CompanionRightRailProps) {
   const workspaceClassName =
@@ -146,11 +160,18 @@ export function CompanionRightRail({
           <OverviewWorkspace nextSteps={nextSteps} memoryNotes={memoryNotes} traceRows={traceRows} />
         ) : activeView === "chat" ? (
           <CompanionChatbox
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            sessionBusy={sessionBusy}
             messages={messages}
             loading={loading}
             error={error}
             ttsEnabled={ttsEnabled}
             activeTtsMessageId={activeTtsMessageId}
+            onCreateSession={onCreateSession}
+            onSelectSession={onSelectSession}
+            onRenameSession={onRenameSession}
+            onDeleteSession={onDeleteSession}
             onPlayTtsMessage={onPlayTtsMessage}
           />
         ) : activeView === "tasks" ? (

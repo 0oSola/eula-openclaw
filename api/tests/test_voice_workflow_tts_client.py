@@ -60,7 +60,7 @@ def test_voice_workflow_tts_submits_polls_and_downloads_audio():
     assert result.audio == b"fake-wav"
     assert result.media_type == "audio/wav"
     assert result.task_id == "task-1"
-    assert result.audio_url == "/api/v1/audio/2026/04/30/tts_task-1.wav"
+    assert result.audio_url == "http://tts.local/api/v1/audio/2026/04/30/tts_task-1.wav"
     assert calls == [
         {
             "method": "POST",
@@ -69,6 +69,52 @@ def test_voice_workflow_tts_submits_polls_and_downloads_audio():
         },
         {"method": "GET", "path": "/api/v1/tasks/task-1", "body": None},
         {"method": "GET", "path": "/api/v1/audio/2026/04/30/tts_task-1.wav", "body": None},
+    ]
+
+
+def test_voice_workflow_tts_reference_does_not_download_audio():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append({"method": request.method, "path": request.url.path})
+        if request.method == "POST" and request.url.path == "/api/v1/tts":
+            return httpx.Response(status_code=202, json={"task_id": "task-1"})
+        if request.method == "GET" and request.url.path == "/api/v1/tasks/task-1":
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "task_id": "task-1",
+                    "status": "completed",
+                    "audio_url": "/api/v1/audio/tts_task-1.wav",
+                    "media_type": "audio/wav",
+                    "duration_seconds": 2.5,
+                    "chunks_count": 2,
+                },
+            )
+        return httpx.Response(status_code=500)
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = VoiceWorkflowTtsClient(
+                base_url="http://tts.local",
+                timeout_seconds=5,
+                poll_interval_seconds=0,
+                max_poll_attempts=1,
+                http_client=http_client,
+            )
+            return await client.synthesize_reference(text="hello", emotion_label="关心温柔", pause_profile="none")
+
+    result = asyncio.run(run_case())
+
+    assert result.media_type == "audio/wav"
+    assert result.task_id == "task-1"
+    assert result.audio_url == "http://tts.local/api/v1/audio/tts_task-1.wav"
+    assert result.duration_seconds == 2.5
+    assert result.chunks_count == 2
+    assert calls == [
+        {"method": "POST", "path": "/api/v1/tts"},
+        {"method": "GET", "path": "/api/v1/tasks/task-1"},
     ]
 
 

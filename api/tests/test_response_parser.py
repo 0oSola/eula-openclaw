@@ -82,3 +82,11 @@ def test_synthesizes_motion_plan_from_action_when_missing():
             {"template": "listen_lean", "duration_ms": 1800, "intensity": 0.45},
         ]
     }
+
+
+def test_preserves_motion_key_action_for_local_vmd_resolution():
+    raw = '{"text":"Wave now","emotion":"happy","action":"asset_8f3a21","memory_ops":[]}'
+
+    result = normalize_assistant_reply(raw)
+
+    assert result["action"] == "asset_8f3a21"

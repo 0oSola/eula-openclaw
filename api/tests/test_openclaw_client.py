@@ -297,3 +297,78 @@ def test_openclaw_diagnose_reports_scope_probe_results():
     assert calls[0]["headers"]["x-openclaw-scopes"] == (
         "operator.admin,operator.read,operator.write,operator.approvals,operator.pairing"
     )
+
+
+def test_openclaw_diagnose_reports_failed_responses_probe_without_chat_probe_fallback():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/v1/models"):
+            return httpx.Response(status_code=200, json={"object": "list", "data": []})
+        if request.method == "POST" and request.url.path.endswith("/v1/responses"):
+            return httpx.Response(status_code=500, json={"error": "temporary failure"})
+        return httpx.Response(status_code=404, json={"error": "not found"})
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = OpenClawClient(
+                base_url="http://openclaw.local",
+                token="secret-token",
+                model="openclaw",
+                agent_id="main",
+                timeout_seconds=15,
+                http_client=http_client,
+            )
+            return await client.diagnose()
+
+    result = asyncio.run(run_case())
+
+    assert result["ok"] is False
+    assert result["probes"]["models"]["ok"] is True
+    assert result["probes"]["responses"]["ok"] is False
+    assert result["probes"]["responses"]["status_code"] == 500
+    assert "chat_completions" not in result["probes"]
+
+
+def test_openclaw_empty_timeout_errors_are_described_for_diagnostics_and_invocation():
+    def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("")
+
+    async def run_diagnose():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = OpenClawClient(
+                base_url="http://openclaw.local",
+                token="",
+                model="openclaw",
+                agent_id="main",
+                timeout_seconds=15,
+                http_client=http_client,
+            )
+            return await client.diagnose()
+
+    async def run_generate_reply():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = OpenClawClient(
+                base_url="http://openclaw.local",
+                token="",
+                model="openclaw",
+                agent_id="main",
+                timeout_seconds=15,
+                http_client=http_client,
+            )
+            await client.generate_reply(
+                user_id="u1",
+                session_id="s1",
+                message="hello",
+                history=[],
+            )
+
+    result = asyncio.run(run_diagnose())
+    details = [probe["detail"] for probe in result["probes"].values()]
+    assert all("ReadTimeout" in detail for detail in details)
+
+    with pytest.raises(OpenClawInvocationError) as error:
+        asyncio.run(run_generate_reply())
+
+    assert "ReadTimeout" in str(error.value)
