@@ -37,6 +37,10 @@ function run() {
     const rightRailSource = readFileSync(new URL("../src/app/companion/CompanionRightRail.tsx", import.meta.url), "utf8");
     const typesSource = readFileSync(new URL("../src/lib/types.ts", import.meta.url), "utf8");
     const apiSource = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+    const realtimeVoiceQueueSource = readFileSync(
+      new URL("../src/lib/realtimeVoiceQueue.js", import.meta.url),
+      "utf8",
+    );
     const backendProxySource = readFileSync(new URL("../src/app/api/backend/[...path]/route.ts", import.meta.url), "utf8");
     const backgroundSource = readFileSync(new URL("../src/app/companion/MioModeBackground.tsx", import.meta.url), "utf8");
     const cssSource = readFileSync(new URL("../src/app/globals.css", import.meta.url), "utf8");
@@ -74,6 +78,11 @@ function run() {
     assert.match(apiSource, /runtimeHostname !== "localhost"/);
     assert.match(apiSource, /API request failed before reaching backend/);
     assert.match(apiSource, /\/api\/backend/);
+    assert.match(apiSource, /sessionVoiceWebSocketUrl/);
+    assert.match(realtimeVoiceQueueSource, /export function sessionVoiceWebSocketUrl/);
+    assert.match(realtimeVoiceQueueSource, /export class AudioQueue/);
+    assert.match(realtimeVoiceQueueSource, /manual_after_partial_playback/);
+    assert.match(realtimeVoiceQueueSource, /auto_before_playback/);
     assert.match(backendProxySource, /export async function GET/);
     assert.match(backendProxySource, /proxyBackendRequest/);
     assert.match(backendProxySource, /NEXT_PUBLIC_API_BASE_URL/);
