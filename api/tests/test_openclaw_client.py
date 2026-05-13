@@ -167,6 +167,75 @@ def test_openclaw_sends_feishu_message_channel_header():
     assert calls[0]["headers"]["x-openclaw-message-channel"] == "feishu"
 
 
+def test_openclaw_stream_reply_yields_text_deltas():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append({"path": request.url.path, "body": json.loads(request.content.decode("utf-8"))})
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            content=(
+                'data: {"type":"response.output_text.delta","delta":"A"}\n\n'
+                'data: {"type":"response.output_text.delta","delta":"B"}\n\n'
+                'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+            ).encode("utf-8"),
+        )
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = OpenClawClient(
+                base_url="http://openclaw.local",
+                token="",
+                model="openclaw",
+                agent_id="main",
+                timeout_seconds=15,
+                http_client=http_client,
+            )
+            return [
+                delta
+                async for delta in client.stream_reply(
+                    user_id="u1",
+                    session_id="s1",
+                    message="hello",
+                    history=[],
+                )
+            ]
+
+    assert asyncio.run(run_case()) == ["A", "B"]
+    assert calls[0]["path"] == "/v1/responses"
+    assert calls[0]["body"]["model"] == "openclaw"
+    assert calls[0]["body"]["stream"] is True
+    assert calls[0]["body"]["input"] == "hello"
+    assert calls[0]["body"]["user"] == "u1"
+
+
+def test_openclaw_stream_reply_raises_on_error_event():
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            content='data: {"type":"response.error","error":{"message":"bad stream"}}\n\n'.encode("utf-8"),
+        )
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = OpenClawClient(
+                base_url="http://openclaw.local",
+                token="",
+                model="openclaw",
+                agent_id="main",
+                timeout_seconds=15,
+                http_client=http_client,
+            )
+            return [delta async for delta in client.stream_reply("u1", "s1", "hello", [])]
+
+    with pytest.raises(OpenClawInvocationError, match="bad stream"):
+        asyncio.run(run_case())
+
+
 def test_openclaw_generates_speech_from_audio_speech_endpoint():
     calls = []
 
