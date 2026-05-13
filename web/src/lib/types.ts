@@ -36,12 +36,19 @@ export type ChatMessage = {
   id?: string;
   role: "user" | "assistant" | "system";
   content: string;
+  createdAt?: string;
   traceId?: string;
   tts?: {
-    status: "loading" | "ready" | "failed";
+    id?: string;
+    status: "loading" | "pending" | "ready" | "failed" | "expired";
     mode: "server" | "browser";
+    provider?: string;
+    version?: number;
     audio?: Blob;
     mediaType?: string;
+    remoteAudioUrl?: string;
+    proxyAudioUrl?: string;
+    taskId?: string;
     error?: string;
   };
 };
@@ -57,6 +64,123 @@ export type ChatResponse = {
   endpoint_used: string;
   degraded: boolean;
   fallback_reason?: string | null;
+};
+
+export type MessageServiceSession = {
+  id: string;
+  workspace_id: string;
+  account_id: string;
+  openclaw_session_key: string;
+  title: string;
+  title_source: "default" | "manual" | "generated" | "user_first_message";
+  selected_model_path?: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+};
+
+export type MessageServiceTts = {
+  id: string;
+  provider: string;
+  version: number;
+  status: "pending" | "ready" | "failed" | "expired";
+  task_id?: string | null;
+  remote_audio_url?: string | null;
+  remote_audio_path?: string | null;
+  proxy_audio_url?: string | null;
+  media_type?: string | null;
+  duration_seconds?: number | null;
+  chunks_count?: number | null;
+  error?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+  expires_at?: string | null;
+  updated_at: string;
+};
+
+export type MessageMotionResolution = {
+  id: string;
+  selected_model_path?: string | null;
+  source_action?: string | null;
+  source_template?: string | null;
+  resolved_asset_id?: string | null;
+  resolved_asset_url?: string | null;
+  resolved_display_name?: string | null;
+  status: "matched" | "fallback_idle" | "missing_asset" | "permission_denied" | "model_mismatch";
+  fallback_reason?: string | null;
+  created_at: string;
+};
+
+export type MessageServiceMessage = {
+  id: string;
+  workspace_id: string;
+  session_id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  trace_id?: string | null;
+  emotion?: string | null;
+  action?: string | null;
+  tts_emotion_label?: string | null;
+  tts_pause_profile?: string | null;
+  motion_plan?: MotionPlan | null;
+  motion_resolution?: MessageMotionResolution | null;
+  memory_ops: Array<Record<string, unknown>>;
+  metadata: Record<string, unknown>;
+  tts?: MessageServiceTts | null;
+  created_at: string;
+  deleted_at?: string | null;
+};
+
+export type MessageServiceSendResponse = {
+  session: MessageServiceSession;
+  user_message: MessageServiceMessage;
+  assistant_message: MessageServiceMessage;
+};
+
+export type MessageServiceCleanupResult = {
+  ok: boolean;
+  counts: {
+    deleted_soft_deleted_messages: number;
+    deleted_soft_deleted_tts: number;
+    deleted_old_terminal_tts: number;
+    deleted_orphan_tts_jobs: number;
+    failed_stale_pending_jobs: number;
+  };
+};
+
+export type MotionContextExport = {
+  id: string;
+  workspace_id: string;
+  account_id: string;
+  model_key: string;
+  model_display_name: string;
+  export_json: Record<string, unknown>;
+  motion_count: number;
+  created_at: string;
+};
+
+export type WorkspaceContext = {
+  account: {
+    id: string;
+    external_user_id: string;
+    display_name?: string | null;
+    created_at: string;
+    updated_at: string;
+  };
+  workspace: {
+    id: string;
+    name: string;
+    kind: string;
+    owner_account_id: string;
+    created_at: string;
+    updated_at: string;
+  };
+  membership: {
+    workspace_id: string;
+    account_id: string;
+    role: string;
+    created_at: string;
+  };
 };
 
 export type VmdAsset = {
@@ -129,6 +253,7 @@ export type TraceMirror = {
 
 export type UserSession = {
   userId: string;
+  activeChatSessionId?: string;
   renderPipeline?: RenderPipeline;
   mmdCamera?: Partial<Record<RenderPipeline, MmdCameraSnapshot>>;
   mmdCameraByFavoriteVmd?: Record<string, MmdCameraSnapshot>;
@@ -167,4 +292,38 @@ export type OpenClawHealthStatus = {
   scope_header_enabled: boolean;
   probes: Record<string, OpenClawProbeStatus>;
   recommendations: string[];
+};
+
+export type MessageBridgeBinding = {
+  id: string;
+  local_session_id: string;
+  provider: string;
+  channel: string;
+  external_session_key: string;
+  external_display_name?: string | null;
+  is_default: boolean;
+  status: string;
+  last_history_sync_at?: string | null;
+  last_message_at?: string | null;
+  updated_at: string;
+};
+
+export type MessageBridgeStatus = {
+  provider: string;
+  channel: string;
+  enabled: boolean;
+  realtime_drive_character: boolean;
+  websocket_status: string;
+  reconnect_attempts: number;
+  last_connected_at?: string | null;
+  last_error?: string | null;
+  binding?: MessageBridgeBinding | null;
+};
+
+export type MessageBridgeExternalSession = {
+  provider: string;
+  channel: string;
+  external_session_key: string;
+  external_display_name?: string | null;
+  updated_at?: string | null;
 };

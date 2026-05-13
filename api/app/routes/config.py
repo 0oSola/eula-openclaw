@@ -118,6 +118,10 @@ def _build_settings_with_openclaw_config(current: Settings, saved: dict[str, Any
         tts_service_timeout_seconds=current.tts_service_timeout_seconds,
         tts_service_poll_interval_seconds=current.tts_service_poll_interval_seconds,
         tts_service_max_poll_attempts=current.tts_service_max_poll_attempts,
+        tts_sync_wait_seconds=current.tts_sync_wait_seconds,
+        tts_job_worker_interval_seconds=current.tts_job_worker_interval_seconds,
+        tts_job_lock_timeout_seconds=current.tts_job_lock_timeout_seconds,
+        message_service_tts_retention_days=current.message_service_tts_retention_days,
     )
 
 

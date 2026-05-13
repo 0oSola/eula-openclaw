@@ -58,6 +58,10 @@ class Settings:
     tts_service_timeout_seconds: int
     tts_service_poll_interval_seconds: float
     tts_service_max_poll_attempts: int
+    tts_sync_wait_seconds: float
+    tts_job_worker_interval_seconds: float
+    tts_job_lock_timeout_seconds: int
+    message_service_tts_retention_days: int
 
     @classmethod
     def from_env(cls, overrides: dict | None = None) -> "Settings":
@@ -119,5 +123,15 @@ class Settings:
             ),
             tts_service_max_poll_attempts=int(
                 resolve_value("tts_service_max_poll_attempts", "TTS_SERVICE_MAX_POLL_ATTEMPTS", 40)
+            ),
+            tts_sync_wait_seconds=float(resolve_value("tts_sync_wait_seconds", "TTS_SYNC_WAIT_SECONDS", 8)),
+            tts_job_worker_interval_seconds=float(
+                resolve_value("tts_job_worker_interval_seconds", "TTS_JOB_WORKER_INTERVAL_SECONDS", 2)
+            ),
+            tts_job_lock_timeout_seconds=int(
+                resolve_value("tts_job_lock_timeout_seconds", "TTS_JOB_LOCK_TIMEOUT_SECONDS", 30)
+            ),
+            message_service_tts_retention_days=int(
+                resolve_value("message_service_tts_retention_days", "MESSAGE_SERVICE_TTS_RETENTION_DAYS", 14)
             ),
         )

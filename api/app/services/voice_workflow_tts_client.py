@@ -19,6 +19,15 @@ class VoiceWorkflowTtsAudio:
     audio_url: str
 
 
+@dataclass(slots=True)
+class VoiceWorkflowTtsReference:
+    media_type: str
+    task_id: str
+    audio_url: str
+    duration_seconds: float | None = None
+    chunks_count: int | None = None
+
+
 class VoiceWorkflowTtsClient:
     def __init__(
         self,
@@ -54,7 +63,7 @@ class VoiceWorkflowTtsClient:
             return None
         return label
 
-    async def _submit(self, *, text: str, emotion_label: str | None, pause_profile: str) -> str:
+    async def submit_task(self, *, text: str, emotion_label: str | None, pause_profile: str) -> str:
         payload: dict[str, Any] = {
             "text": text,
             "pause_profile": pause_profile or "podcast",
@@ -77,40 +86,91 @@ class VoiceWorkflowTtsClient:
             raise VoiceWorkflowTtsError("Voice workflow TTS submit returned no task_id.")
         return task_id
 
-    async def _poll_completed(self, task_id: str) -> dict[str, Any]:
-        for attempt in range(self.max_poll_attempts):
-            response = await self.http_client.get(
-                f"{self.base_url}/api/v1/tasks/{task_id}",
-                timeout=self.timeout_seconds,
-            )
-            if not response.is_success:
-                raise VoiceWorkflowTtsError(self._format_response_error("Voice workflow TTS task status", response))
-
-            data = response.json()
-            status = data.get("status")
-            if status == "completed":
-                return data
-            if status == "failed":
-                raise VoiceWorkflowTtsError(str(data.get("error") or "Voice workflow TTS task failed."))
-
-            if attempt < self.max_poll_attempts - 1:
-                await asyncio.sleep(self.poll_interval_seconds)
-
-        raise VoiceWorkflowTtsError(f"Voice workflow TTS task {task_id} did not complete before timeout.")
-
-    async def _download(self, audio_url: str) -> tuple[bytes, str]:
-        if not audio_url.startswith("/"):
-            audio_url = f"/{audio_url}"
+    async def get_task_status(self, task_id: str) -> dict[str, Any]:
         response = await self.http_client.get(
-            f"{self.base_url}{audio_url}",
+            f"{self.base_url}/api/v1/tasks/{task_id}",
             timeout=self.timeout_seconds,
         )
+        if not response.is_success:
+            raise VoiceWorkflowTtsError(self._format_response_error("Voice workflow TTS task status", response))
+        return response.json()
+
+    def build_reference(self, task_id: str, task: dict[str, Any]) -> VoiceWorkflowTtsReference:
+        status = str(task.get("status") or "").strip().lower()
+        if status == "failed":
+            raise VoiceWorkflowTtsError(str(task.get("error") or "Voice workflow TTS task failed."))
+        if status != "completed":
+            raise VoiceWorkflowTtsError(f"Voice workflow TTS task {task_id} is not completed.")
+
+        audio_url = task.get("audio_url")
+        if not isinstance(audio_url, str) or not audio_url:
+            raise VoiceWorkflowTtsError(f"Voice workflow TTS task {task_id} completed without audio_url.")
+        media_type = str(task.get("media_type") or task.get("content_type") or "audio/wav")
+        duration = task.get("duration_seconds")
+        chunks_count = task.get("chunks_count")
+        return VoiceWorkflowTtsReference(
+            media_type=media_type,
+            task_id=task_id,
+            audio_url=self._absolute_audio_url(audio_url),
+            duration_seconds=duration if isinstance(duration, (int, float)) else None,
+            chunks_count=chunks_count if isinstance(chunks_count, int) else None,
+        )
+
+    async def wait_for_reference(
+        self,
+        task_id: str,
+        *,
+        max_wait_seconds: float | None = None,
+    ) -> VoiceWorkflowTtsReference | None:
+        attempts = 0
+        started = asyncio.get_running_loop().time()
+        while True:
+            task = await self.get_task_status(task_id)
+            status = str(task.get("status") or "").strip().lower()
+            if status == "completed":
+                return self.build_reference(task_id, task)
+            if status == "failed":
+                raise VoiceWorkflowTtsError(str(task.get("error") or "Voice workflow TTS task failed."))
+
+            attempts += 1
+            if max_wait_seconds is None:
+                if attempts >= self.max_poll_attempts:
+                    raise VoiceWorkflowTtsError(f"Voice workflow TTS task {task_id} did not complete before timeout.")
+            else:
+                if asyncio.get_running_loop().time() - started >= max_wait_seconds:
+                    return None
+
+            await asyncio.sleep(self.poll_interval_seconds)
+
+    async def _download(self, audio_url: str) -> tuple[bytes, str]:
+        request_url = self._absolute_audio_url(audio_url)
+        response = await self.http_client.get(request_url, timeout=self.timeout_seconds)
         if not response.is_success:
             raise VoiceWorkflowTtsError(self._format_response_error("Voice workflow TTS audio download", response))
         if not response.content:
             raise VoiceWorkflowTtsError("Voice workflow TTS returned empty audio.")
         media_type = response.headers.get("content-type", "audio/wav").split(";", 1)[0] or "audio/wav"
         return response.content, media_type
+
+    def _absolute_audio_url(self, audio_url: str) -> str:
+        if audio_url.startswith(("http://", "https://")):
+            return audio_url
+        if not audio_url.startswith("/"):
+            audio_url = f"/{audio_url}"
+        return f"{self.base_url}{audio_url}"
+
+    async def synthesize_reference(
+        self,
+        *,
+        text: str,
+        emotion_label: str | None = None,
+        pause_profile: str = "podcast",
+    ) -> VoiceWorkflowTtsReference:
+        task_id = await self.submit_task(text=text, emotion_label=emotion_label, pause_profile=pause_profile)
+        reference = await self.wait_for_reference(task_id, max_wait_seconds=None)
+        if reference is None:
+            raise VoiceWorkflowTtsError(f"Voice workflow TTS task {task_id} did not complete before timeout.")
+        return reference
 
     async def synthesize(
         self,
@@ -119,15 +179,14 @@ class VoiceWorkflowTtsClient:
         emotion_label: str | None = None,
         pause_profile: str = "podcast",
     ) -> VoiceWorkflowTtsAudio:
-        task_id = await self._submit(text=text, emotion_label=emotion_label, pause_profile=pause_profile)
-        task = await self._poll_completed(task_id)
-        audio_url = task.get("audio_url")
-        if not isinstance(audio_url, str) or not audio_url:
-            raise VoiceWorkflowTtsError(f"Voice workflow TTS task {task_id} completed without audio_url.")
-        audio, media_type = await self._download(audio_url)
+        task_id = await self.submit_task(text=text, emotion_label=emotion_label, pause_profile=pause_profile)
+        reference = await self.wait_for_reference(task_id, max_wait_seconds=None)
+        if reference is None:
+            raise VoiceWorkflowTtsError(f"Voice workflow TTS task {task_id} did not complete before timeout.")
+        audio, media_type = await self._download(reference.audio_url)
         return VoiceWorkflowTtsAudio(
             audio=audio,
             media_type=media_type,
             task_id=task_id,
-            audio_url=audio_url,
+            audio_url=reference.audio_url,
         )

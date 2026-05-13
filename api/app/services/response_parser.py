@@ -181,20 +181,23 @@ def _normalize_motion_plan(payload: dict[str, Any], text: str, emotion: str, act
 
 def _normalize_from_object(payload: dict[str, Any], fallback_text: str, mode: str) -> dict[str, Any]:
     emotion = str(payload.get("emotion") or "neutral").lower()
-    action = str(payload.get("action") or "idle").lower()
+    raw_action = str(payload.get("action") or "idle").strip()
+    action = raw_action.lower()
     text = str(payload.get("text") or fallback_text or "").strip()
     if not text:
         text = FALLBACK_TEXT
     if emotion not in ALLOWED_EMOTIONS:
         emotion = "neutral"
     if action not in ALLOWED_ACTIONS:
-        action = "idle"
+        action = raw_action[:120] if raw_action else "idle"
     return {
         "text": text,
         "emotion": emotion,
         "action": action,
         "motion_plan": _normalize_motion_plan(payload, text, emotion, action),
         "memory_ops": _safe_list(payload.get("memory_ops")),
+        "tts_emotion_label": payload.get("tts_emotion_label") if isinstance(payload.get("tts_emotion_label"), str) else None,
+        "tts_pause_profile": payload.get("tts_pause_profile") if payload.get("tts_pause_profile") in {"podcast", "none"} else "podcast",
         "parse_mode": mode,
     }
 
@@ -208,6 +211,8 @@ def normalize_assistant_reply(raw_text: str) -> dict[str, Any]:
             "action": "idle",
             "motion_plan": None,
             "memory_ops": [],
+            "tts_emotion_label": None,
+            "tts_pause_profile": "podcast",
             "parse_mode": "empty",
         }
 
@@ -238,5 +243,7 @@ def normalize_assistant_reply(raw_text: str) -> dict[str, Any]:
         "action": action,
         "motion_plan": _synthesize_motion_plan(raw, emotion, action),
         "memory_ops": [],
+        "tts_emotion_label": None,
+        "tts_pause_profile": "podcast",
         "parse_mode": "heuristic",
     }

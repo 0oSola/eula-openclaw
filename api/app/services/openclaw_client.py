@@ -116,6 +116,13 @@ class OpenClawClient:
             "endpoint": endpoint,
         }
 
+    @staticmethod
+    def _describe_exception(error: BaseException) -> str:
+        message = str(error).strip()
+        if message:
+            return message
+        return type(error).__name__
+
     async def _probe_endpoint(
         self,
         endpoint: str,
@@ -128,7 +135,7 @@ class OpenClawClient:
                 endpoint=endpoint,
                 ok=False,
                 status_code=None,
-                detail=str(error),
+                detail=self._describe_exception(error),
             )
 
         if response.is_success:
@@ -196,6 +203,7 @@ class OpenClawClient:
         if any(
             "connection attempts failed" in detail.lower()
             or "timed out" in detail.lower()
+            or "timeout" in detail.lower()
             or "refused" in detail.lower()
             for detail in probe_details
         ):
@@ -205,7 +213,7 @@ class OpenClawClient:
             )
 
         return {
-            "ok": models_probe["ok"] is True and (responses_probe["ok"] is True or chat_probe["ok"] is True),
+            "ok": models_probe["ok"] is True and responses_probe["ok"] is True,
             "base_url": self.base_url,
             "agent_id": self.agent_id or "main",
             "model": self.model,
@@ -309,7 +317,7 @@ class OpenClawClient:
         except Exception as error:
             if isinstance(error, OpenClawInvocationError):
                 raise
-            raise OpenClawInvocationError(str(error)) from error
+            raise OpenClawInvocationError(self._describe_exception(error)) from error
 
     async def generate_speech(
         self,
@@ -343,4 +351,4 @@ class OpenClawClient:
         except Exception as error:
             if isinstance(error, OpenClawInvocationError):
                 raise
-            raise OpenClawInvocationError(str(error)) from error
+            raise OpenClawInvocationError(self._describe_exception(error)) from error

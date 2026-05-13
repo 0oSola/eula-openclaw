@@ -23,14 +23,27 @@ import {
 import { getModelDisplayLabel, pickInitialModelSelection } from "@/features/stage/modelCatalog.js";
 import { collectImportableVmdFiles } from "@/features/stage/vmdImportHelpers.js";
 import {
+  cleanupMessageServiceAdmin,
+  createMotionContextExport,
+  createChatSession,
+  deleteChatSession,
+  getLatestMotionContextExport,
+  getMessageBridgeStatus,
   getOpenClawConfig,
   getOpenClawHealth,
+  getMessageById,
   getResolvedMappings,
+  listMessageBridgeFeishuSessions,
+  listChatSessions,
   listMmdModels,
+  listSessionMessages,
   listVmdAssets,
-  postChat,
+  postSessionMessage,
+  patchMessageBridgeSettings,
   putOpenClawConfig,
-  requestServerTts,
+  regenerateMessageTts,
+  setDefaultMessageBridgeBinding,
+  updateChatSession,
   updateVmdAsset,
   uploadVmdAsset,
 } from "@/lib/api";
@@ -39,6 +52,12 @@ import { DEFAULT_TTS_MODE, playServerTtsAudio } from "@/lib/ttsPlayback.js";
 import type {
   ChatMessage,
   MappingConfig,
+  MessageServiceCleanupResult,
+  MessageServiceMessage,
+  MessageServiceSession,
+  MessageBridgeExternalSession,
+  MessageBridgeStatus,
+  MotionContextExport,
   MmdCameraSnapshot,
   MmdModelAsset,
   OpenClawConfig,
@@ -87,6 +106,7 @@ type OpenClawDraft = {
 };
 
 const SPRITE = "/images/sprite-sliced";
+const MESSAGE_BRIDGE_POLL_INTERVAL_MS = 2500;
 const DEFAULT_MODEL_RELATIVE_PATH = "优菈.pmx";
 const DEFAULT_ASSISTANT_COPY =
   "\u6211\u7406\u89e3\u4f60\u7684\u9700\u6c42\u4e86\uff5e\n\u6b63\u5728\u5e2e\u4f60\u62c6\u89e3\u4efb\u52a1\u5e76\u89c4\u5212\u6b65\u9aa4\uff01";
@@ -233,6 +253,42 @@ function createMessageId(prefix: string) {
   return `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 }
 
+function mapServerTtsToChatTts(messageTts?: MessageServiceMessage["tts"] | null): ChatMessage["tts"] | undefined {
+  if (!messageTts) return undefined;
+  return {
+    id: messageTts.id,
+    status: messageTts.status,
+    mode: "server",
+    provider: messageTts.provider,
+    version: messageTts.version,
+    mediaType: messageTts.media_type || undefined,
+    remoteAudioUrl: messageTts.remote_audio_url || undefined,
+    proxyAudioUrl: messageTts.proxy_audio_url || undefined,
+    taskId: messageTts.task_id || undefined,
+    error: messageTts.error || undefined,
+  };
+}
+
+function mapServerMessageToChatMessage(message: MessageServiceMessage): ChatMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    createdAt: message.created_at,
+    traceId: message.trace_id || undefined,
+    tts: mapServerTtsToChatTts(message.tts),
+  };
+}
+
+function formatMessageBridgeSessionLabel(item: MessageBridgeExternalSession): string {
+  const name = item.external_display_name || "Feishu";
+  const keyTail = item.external_session_key.split(":").slice(-2).join(":");
+  const isTargetDirect =
+    item.external_session_key === "agent:main:feishu:direct:ou_229011826b88e09badbbb6f43ad38ba3";
+  const channelKind = item.external_session_key.includes(":direct:") ? "direct" : "session";
+  return `${isTargetDirect ? "[当前直连] " : ""}${name} · ${channelKind} · ${keyTail}`;
+}
+
 function buildFavoriteVmdCameraKey(pipeline: RenderPipeline, modelPath: string, assetId: string) {
   return `${pipeline}::${encodeURIComponent(modelPath)}::${encodeURIComponent(assetId)}`;
 }
@@ -243,16 +299,14 @@ export default function CompanionPage() {
   const serverAudioRef = useRef<HTMLAudioElement | null>(null);
   const serverAudioCleanupRef = useRef<(() => void) | null>(null);
   const ignoreNextStageCompletionResetRef = useRef(false);
+  const pendingTtsPollersRef = useRef<Set<string>>(new Set());
   const [session, setSession] = useState<UserSession | null>(null);
-  const [sessionId] = useState(() => crypto.randomUUID());
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "assistant-welcome",
-      role: "assistant",
-      content: DEFAULT_ASSISTANT_COPY,
-    },
-  ]);
+  const [chatSessions, setChatSessions] = useState<MessageServiceSession[]>([]);
+  const [chatSessionId, setChatSessionId] = useState("");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
+  const [chatBootstrapping, setChatBootstrapping] = useState(false);
+  const [sessionBusy, setSessionBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState<ToastState>(null);
@@ -277,6 +331,7 @@ export default function CompanionPage() {
   const [advancedBusy, setAdvancedBusy] = useState(false);
   const [advancedError, setAdvancedError] = useState("");
   const [advancedMessage, setAdvancedMessage] = useState("");
+  const [latestMotionContextExport, setLatestMotionContextExport] = useState<MotionContextExport | null>(null);
   const [cameraEditMode, setCameraEditMode] = useState(false);
   const [activeVmdAssetId, setActiveVmdAssetId] = useState("");
   const [renameTarget, setRenameTarget] = useState<VmdAsset | null>(null);
@@ -296,6 +351,12 @@ export default function CompanionPage() {
   const [openClawTesting, setOpenClawTesting] = useState(false);
   const [openClawError, setOpenClawError] = useState("");
   const [openClawMessage, setOpenClawMessage] = useState("");
+  const [messageBridgeStatus, setMessageBridgeStatus] = useState<MessageBridgeStatus | null>(null);
+  const [messageBridgeSessions, setMessageBridgeSessions] = useState<MessageBridgeExternalSession[]>([]);
+  const [messageBridgeSelectedSessionKey, setMessageBridgeSelectedSessionKey] = useState("");
+  const [messageBridgeLoading, setMessageBridgeLoading] = useState(false);
+  const [messageBridgeSaving, setMessageBridgeSaving] = useState(false);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
 
   useEffect(() => {
     const saved = loadSession();
@@ -313,12 +374,23 @@ export default function CompanionPage() {
 
   useEffect(() => {
     if (!session) return;
+    let cancelled = false;
+    setChatBootstrapping(true);
 
-    Promise.all([getResolvedMappings(session.userId), listVmdAssets(session.userId), listMmdModels()])
-      .then(([mappingRows, assetRows, modelRows]) => {
+    (async () => {
+      try {
+        const [mappingRows, assetRows, modelRows, sessionRows] = await Promise.all([
+          getResolvedMappings(session.userId),
+          listVmdAssets(session.userId),
+          listMmdModels(),
+          listChatSessions(session.userId),
+        ]);
+        if (cancelled) return;
+
         setMappings(mappingRows);
         setAssets(assetRows);
         setModels(modelRows);
+        setChatSessions(sessionRows);
         setSelectedModelPath((current) => {
           if (current && modelRows.some((item) => item.relative_path === current)) {
             return current;
@@ -328,10 +400,40 @@ export default function CompanionPage() {
             pickInitialModelSelection(modelRows, DEFAULT_MODEL_RELATIVE_PATH);
           return preferred?.relative_path || "";
         });
-      })
-      .catch((err: Error) => {
-        setError(err.message);
-      });
+
+        let activeSession =
+          sessionRows.find((item) => item.id === session.activeChatSessionId) ||
+          sessionRows[0] ||
+          null;
+        if (!activeSession) {
+          activeSession = await createChatSession(session.userId);
+          if (cancelled) return;
+        }
+
+        const nextSessionId = activeSession.id;
+        setChatSessionId(nextSessionId);
+        if (session.activeChatSessionId !== nextSessionId) {
+          const nextUserSession = { ...session, activeChatSessionId: nextSessionId };
+          setSession(nextUserSession);
+          saveSession(nextUserSession);
+        }
+
+        const serverMessages = await listSessionMessages(session.userId, nextSessionId);
+        if (cancelled) return;
+        setMessages(serverMessages.map(mapServerMessageToChatMessage));
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "会话初始化失败。");
+      } finally {
+        if (!cancelled) {
+          setChatBootstrapping(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [session]);
 
   function handleRightPanelViewChange(view: RightPanelView) {
@@ -365,6 +467,53 @@ export default function CompanionPage() {
     [session],
   );
 
+  const loadMessageBridgeStatus = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (!session) return;
+      if (!silent) {
+        setMessageBridgeLoading(true);
+      }
+      try {
+        const [status, sessions] = await Promise.all([
+          getMessageBridgeStatus(session.userId),
+          listMessageBridgeFeishuSessions(session.userId),
+        ]);
+        setMessageBridgeStatus(status);
+        setMessageBridgeSessions(sessions);
+        setMessageBridgeSelectedSessionKey(status.binding?.external_session_key || sessions[0]?.external_session_key || "");
+      } catch (err) {
+        setMessageBridgeStatus(null);
+        setMessageBridgeSessions([]);
+        if (!silent) {
+          setOpenClawError(err instanceof Error ? err.message : "消息桥状态读取失败。");
+        }
+      } finally {
+        if (!silent) {
+          setMessageBridgeLoading(false);
+        }
+      }
+    },
+    [session],
+  );
+
+  const loadLatestMotionContextExport = useCallback(async () => {
+    if (!session || !selectedModelPath) {
+      setLatestMotionContextExport(null);
+      return;
+    }
+    try {
+      const exported = await getLatestMotionContextExport(session.userId, selectedModelPath);
+      setLatestMotionContextExport(exported);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Motion context export load failed.";
+      if (/not found/i.test(message)) {
+        setLatestMotionContextExport(null);
+        return;
+      }
+      throw err;
+    }
+  }, [selectedModelPath, session]);
+
   useEffect(() => {
     if (!session) return;
     void loadOpenClawConfig({ silent: true });
@@ -373,7 +522,26 @@ export default function CompanionPage() {
   useEffect(() => {
     if (!isOpenClawSettingsOpen || !session) return;
     void loadOpenClawConfig();
-  }, [isOpenClawSettingsOpen, loadOpenClawConfig, session]);
+    void loadMessageBridgeStatus();
+  }, [isOpenClawSettingsOpen, loadMessageBridgeStatus, loadOpenClawConfig, session]);
+
+  useEffect(() => {
+    if (!session || !chatSessionId || !messageBridgeStatus?.enabled) return;
+    const timer = window.setInterval(() => {
+      void refreshActiveSessionMessages({ driveBridgeMessages: true }).catch(() => {
+        // Polling is best-effort; explicit user actions still surface errors.
+      });
+      void loadMessageBridgeStatus({ silent: true });
+    }, MESSAGE_BRIDGE_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [chatSessionId, loadMessageBridgeStatus, messageBridgeStatus?.enabled, session]);
+
+  useEffect(() => {
+    if (!isAdvancedPanelOpen) return;
+    void loadLatestMotionContextExport().catch(() => {
+      setAdvancedError("Motion context export load failed.");
+    });
+  }, [isAdvancedPanelOpen, loadLatestMotionContextExport]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -397,6 +565,45 @@ export default function CompanionPage() {
     }, 3200);
     return () => window.clearTimeout(timeoutId);
   }, [toast]);
+
+  useEffect(() => {
+    const latestReadyAssistant = [...messages].reverse().find((item) => item.role === "assistant");
+    if (latestReadyAssistant?.tts?.status !== "ready" || !latestReadyAssistant.tts.remoteAudioUrl) return;
+    const audio = new Audio();
+    audio.preload = "metadata";
+    audio.src = latestReadyAssistant.tts.remoteAudioUrl;
+    return () => {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+    };
+  }, [messages]);
+
+  useEffect(() => {
+    if (!session) return;
+    const pendingMessages = messages.filter(
+      (message) => message.role === "assistant" && message.id && message.tts?.status === "pending",
+    );
+    for (const message of pendingMessages) {
+      const messageId = message.id as string;
+      if (pendingTtsPollersRef.current.has(messageId)) continue;
+      pendingTtsPollersRef.current.add(messageId);
+      void (async () => {
+        try {
+          for (let attempt = 0; attempt < 10; attempt += 1) {
+            await new Promise((resolve) => window.setTimeout(resolve, 1200));
+            const refreshed = await refreshMessageFromServer(messageId);
+            const status = refreshed?.tts?.status;
+            if (!status || status === "ready" || status === "failed" || status === "expired") {
+              break;
+            }
+          }
+        } finally {
+          pendingTtsPollersRef.current.delete(messageId);
+        }
+      })();
+    }
+  }, [messages, session]);
 
   const assetIndex = useMemo(() => {
     const next: Record<string, VmdAsset> = {};
@@ -462,6 +669,10 @@ export default function CompanionPage() {
       ? buildFavoriteVmdCameraKey(renderPipeline, selectedModel.relative_path, activeFavoriteVmdAsset.asset_id)
       : "";
 
+  const currentChatSession = useMemo(
+    () => chatSessions.find((item) => item.id === chatSessionId) || null,
+    [chatSessionId, chatSessions],
+  );
   const latestAssistantMessage = [...messages].reverse().find((item) => item.role === "assistant");
   const latestAssistantMessageText = latestAssistantMessage?.content || DEFAULT_ASSISTANT_COPY;
   const activeCameraSnapshot =
@@ -607,7 +818,15 @@ export default function CompanionPage() {
       });
       setOpenClawSavedConfig(saved);
       setOpenClawDraft(createOpenClawDraft(saved));
-      setOpenClawMessage(saved.message);
+      if (messageBridgeStatus && messageBridgeSelectedSessionKey) {
+        const bridgeMessage = await applyMessageBridgeBinding(messageBridgeSelectedSessionKey, {
+          openingCurrentMessage: "Bridge Chat 已打开。",
+          switchedMessage: "Bridge Session 已切换并打开。",
+        });
+        setOpenClawMessage(`${saved.message} ${bridgeMessage}`);
+      } else {
+        setOpenClawMessage(saved.message);
+      }
       pushToast("OpenClaw 配置已保存。");
     } catch (err) {
       setOpenClawError(err instanceof Error ? err.message : "OpenClaw 配置保存失败。");
@@ -630,6 +849,136 @@ export default function CompanionPage() {
       setOpenClawError(err instanceof Error ? err.message : "OpenClaw 连接测试失败。");
     } finally {
       setOpenClawTesting(false);
+    }
+  }
+
+  async function handleMessageServiceCleanup() {
+    if (!session) return;
+    setCleanupBusy(true);
+    setOpenClawError("");
+    setOpenClawMessage("");
+    try {
+      const result: MessageServiceCleanupResult = await cleanupMessageServiceAdmin(session.userId);
+      setOpenClawMessage(
+        `清理完成：messages ${result.counts.deleted_soft_deleted_messages}，tts ${result.counts.deleted_soft_deleted_tts}，old terminal ${result.counts.deleted_old_terminal_tts}，orphan jobs ${result.counts.deleted_orphan_tts_jobs}，stale jobs ${result.counts.failed_stale_pending_jobs}。`,
+      );
+      if (chatSessionId) {
+        const nextSessions = await listChatSessions(session.userId);
+        setChatSessions(nextSessions);
+        if (!nextSessions.some((item) => item.id === chatSessionId)) {
+          const fallbackSession = nextSessions[0] || (await createChatSession(session.userId));
+          setChatSessions((current) =>
+            current.some((item) => item.id === fallbackSession.id) ? current : [fallbackSession, ...current],
+          );
+          await switchChatSession(fallbackSession);
+        }
+      }
+    } catch (err) {
+      setOpenClawError(err instanceof Error ? err.message : "消息服务清理失败。");
+    } finally {
+      setCleanupBusy(false);
+    }
+  }
+
+  async function handleMessageBridgeSettingChange(payload: { enabled?: boolean; realtime_drive_character?: boolean }) {
+    if (!session) return;
+    setMessageBridgeSaving(true);
+    setOpenClawError("");
+    setOpenClawMessage("");
+    try {
+      const updated = await patchMessageBridgeSettings(session.userId, payload);
+      setMessageBridgeStatus((current) => ({ ...(current || updated), ...updated }));
+      await loadMessageBridgeStatus({ silent: true });
+      setOpenClawMessage("消息桥设置已更新。");
+    } catch (err) {
+      setOpenClawError(err instanceof Error ? err.message : "消息桥设置更新失败。");
+    } finally {
+      setMessageBridgeSaving(false);
+    }
+  }
+
+  function buildFallbackSessionFromBridgeBinding(
+    binding: NonNullable<MessageBridgeStatus["binding"]>,
+  ): MessageServiceSession {
+    return {
+      id: binding.local_session_id,
+      workspace_id: "",
+      account_id: "",
+      openclaw_session_key: "",
+      title: binding.external_display_name || binding.external_session_key || "Feishu",
+      title_source: "default",
+      created_at: binding.updated_at,
+      updated_at: binding.updated_at,
+    };
+  }
+
+  async function openBridgeBoundChatSession(
+    binding: MessageBridgeStatus["binding"] | null | undefined,
+    sessionsOverride?: MessageServiceSession[],
+  ) {
+    if (!session || !binding?.local_session_id) return false;
+
+    let nextSessions = sessionsOverride || chatSessions;
+    let target = nextSessions.find((item) => item.id === binding.local_session_id) || null;
+    if (!target) {
+      nextSessions = await listChatSessions(session.userId);
+      setChatSessions(nextSessions);
+      target = nextSessions.find((item) => item.id === binding.local_session_id) || null;
+    }
+
+    if (!target) {
+      target = buildFallbackSessionFromBridgeBinding(binding);
+      setChatSessions((current) =>
+        current.some((item) => item.id === target?.id) || !target ? current : [target, ...current],
+      );
+    }
+
+    if (chatSessionId !== target.id) {
+      await switchChatSession(target);
+    }
+    return true;
+  }
+
+  async function applyMessageBridgeBinding(
+    externalSessionKey: string,
+    messages: { openingCurrentMessage: string; switchedMessage: string },
+  ) {
+    if (!session || !messageBridgeStatus || !externalSessionKey) return "";
+    const isOpeningCurrentBinding = externalSessionKey === messageBridgeStatus.binding?.external_session_key;
+    const binding = isOpeningCurrentBinding
+      ? messageBridgeStatus.binding
+      : await setDefaultMessageBridgeBinding(session.userId, {
+          provider: messageBridgeStatus.provider,
+          channel: messageBridgeStatus.channel,
+          external_session_key: externalSessionKey,
+        });
+
+    const [status, nextSessions] = await Promise.all([
+      getMessageBridgeStatus(session.userId),
+      listChatSessions(session.userId),
+    ]);
+    setMessageBridgeStatus(status);
+    setChatSessions(nextSessions);
+    await openBridgeBoundChatSession(status.binding || binding, nextSessions);
+    await loadMessageBridgeStatus({ silent: true });
+    return isOpeningCurrentBinding ? messages.openingCurrentMessage : messages.switchedMessage;
+  }
+
+  async function handleMessageBridgeBindingSwitch() {
+    if (!session || !messageBridgeStatus || !messageBridgeSelectedSessionKey) return;
+    setMessageBridgeSaving(true);
+    setOpenClawError("");
+    setOpenClawMessage("");
+    try {
+      const bridgeMessage = await applyMessageBridgeBinding(messageBridgeSelectedSessionKey, {
+        openingCurrentMessage: "Bridge Chat 已打开。",
+        switchedMessage: "Bridge Session 已切换。",
+      });
+      setOpenClawMessage(bridgeMessage);
+    } catch (err) {
+      setOpenClawError(err instanceof Error ? err.message : "Bridge Session 切换失败。");
+    } finally {
+      setMessageBridgeSaving(false);
     }
   }
 
@@ -812,6 +1161,22 @@ export default function CompanionPage() {
     setActiveTtsMessageId("");
   }
 
+  async function handleExportMotionContext() {
+    if (!session || !selectedModel?.relative_path) return;
+    setAdvancedBusy(true);
+    setAdvancedError("");
+    setAdvancedMessage("");
+    try {
+      const exported = await createMotionContextExport(session.userId, selectedModel.relative_path);
+      setLatestMotionContextExport(exported);
+      setAdvancedMessage(`Exported ${exported.motion_count} favorite motion(s) for ${exported.model_display_name}.`);
+    } catch (err) {
+      setAdvancedError(err instanceof Error ? err.message : "Motion context export failed.");
+    } finally {
+      setAdvancedBusy(false);
+    }
+  }
+
   function stopSpeechPlayback() {
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
@@ -832,6 +1197,187 @@ export default function CompanionPage() {
     setMessages((current) => current.map((message) => (message.id === messageId ? { ...message, tts } : message)));
   }
 
+  async function refreshMessageFromServer(messageId: string) {
+    if (!session) return null;
+    const next = await getMessageById(session.userId, messageId);
+    const mapped = mapServerMessageToChatMessage(next);
+    setMessages((current) => current.map((message) => (message.id === messageId ? { ...message, ...mapped } : message)));
+    return mapped;
+  }
+
+  function driveCharacterFromBridgeMessage(message: MessageServiceMessage) {
+    if (message.role !== "assistant") return;
+    if (message.metadata?.source !== "message_bridge" || message.metadata?.synced_from !== "realtime") return;
+    if (!messageBridgeStatus?.realtime_drive_character) return;
+
+    const motionResolution = message.motion_resolution;
+    if (motionResolution?.status === "matched" && motionResolution.resolved_asset_url) {
+      const plannedAsset = motionResolution.resolved_asset_id ? assetIndex[motionResolution.resolved_asset_id] : undefined;
+      setInteractionSource("chat");
+      setActiveVmdAssetId(motionResolution.resolved_asset_id || "");
+      setPendingAutoResume(Boolean(autoplayResumeInteraction));
+      setInteraction({
+        emotion: message.emotion || "neutral",
+        action: message.action || "idle",
+        mode: "vmd",
+        vmdUrl: motionResolution.resolved_asset_url,
+        vmdLoopUrls: [],
+        vmdLoopEmotionByUrl: { [motionResolution.resolved_asset_url]: message.emotion || "neutral" },
+        playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: motionResolution.resolved_asset_url }),
+        sequence: [],
+      });
+      return;
+    }
+
+    const plan = resolvePlaybackPlan({
+      slot: message.emotion || "neutral",
+      action: message.action || "idle",
+      motionPlan: message.motion_plan || undefined,
+      userMappings: mappings,
+      defaultMappings: {},
+      assetIndex,
+    });
+    setInteractionSource("chat");
+    setPendingAutoResume(Boolean(autoplayResumeInteraction));
+    if (plan.mode === "vmd") {
+      const plannedAsset = Object.values(assetIndex).find((item) => item.url === plan.url);
+      setActiveVmdAssetId(plannedAsset?.asset_id || "");
+      setInteraction({
+        emotion: message.emotion || "neutral",
+        action: message.action || "idle",
+        mode: "vmd",
+        vmdUrl: plan.url,
+        vmdLoopUrls: [],
+        vmdLoopEmotionByUrl: plan.url ? { [plan.url]: message.emotion || "neutral" } : {},
+        playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: plan.url }),
+        sequence: [],
+      });
+      return;
+    }
+
+    setActiveVmdAssetId("");
+    setInteraction({
+      emotion: message.emotion || "neutral",
+      action: plan.action,
+      mode: "procedural",
+      vmdUrl: "",
+      vmdLoopEmotionByUrl: {},
+      playbackRate: 1,
+      sequence: plan.sequence || [],
+    });
+  }
+
+  async function refreshActiveSessionMessages({ driveBridgeMessages = false }: { driveBridgeMessages?: boolean } = {}) {
+    if (!session || !chatSessionId || loading || chatBootstrapping || sessionBusy) return;
+    const serverMessages = await listSessionMessages(session.userId, chatSessionId);
+    let newServerMessages: MessageServiceMessage[] = [];
+    setMessages((current) => {
+      const knownIds = new Set(current.map((message) => message.id).filter(Boolean));
+      newServerMessages = serverMessages.filter((message) => !knownIds.has(message.id));
+      const sameLength = current.length === serverMessages.length;
+      const sameIds = sameLength && current.every((message, index) => message.id === serverMessages[index]?.id);
+      if (sameIds) return current;
+      return serverMessages.map(mapServerMessageToChatMessage);
+    });
+    if (driveBridgeMessages) {
+      for (const message of newServerMessages) {
+        driveCharacterFromBridgeMessage(message);
+      }
+    }
+  }
+
+  async function switchChatSession(nextSession: MessageServiceSession) {
+    if (!session) return;
+    setSessionBusy(true);
+    setError("");
+    try {
+      const serverMessages = await listSessionMessages(session.userId, nextSession.id);
+      setChatSessionId(nextSession.id);
+      setMessages(serverMessages.map(mapServerMessageToChatMessage));
+      if (nextSession.selected_model_path) {
+        setSelectedModelPath(nextSession.selected_model_path);
+      }
+      const nextUserSession = { ...session, activeChatSessionId: nextSession.id };
+      setSession(nextUserSession);
+      saveSession(nextUserSession);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "会话切换失败。");
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
+  async function handleCreateSession() {
+    if (!session) return;
+    setSessionBusy(true);
+    setError("");
+    try {
+      const created = await createChatSession(session.userId, { selected_model_path: selectedModelPath || null });
+      setChatSessions((current) => [created, ...current]);
+      setChatSessionId(created.id);
+      setMessages([]);
+      const nextUserSession = { ...session, activeChatSessionId: created.id };
+      setSession(nextUserSession);
+      saveSession(nextUserSession);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "新会话创建失败。");
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
+  async function handleSelectSession(sessionId: string) {
+    if (sessionId === chatSessionId) return;
+    const target = chatSessions.find((item) => item.id === sessionId);
+    if (!target) return;
+    await switchChatSession(target);
+  }
+
+  async function handleRenameSession(target: MessageServiceSession) {
+    if (!session) return;
+    const nextTitle = window.prompt("重命名会话", target.title)?.trim();
+    if (!nextTitle || nextTitle === target.title) return;
+    setSessionBusy(true);
+    setError("");
+    try {
+      const updated = await updateChatSession(session.userId, target.id, { title: nextTitle });
+      setChatSessions((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "会话重命名失败。");
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
+  async function handleDeleteSession(target: MessageServiceSession) {
+    if (!session) return;
+    if (!window.confirm(`删除会话“${target.title}”？`)) return;
+    setSessionBusy(true);
+    setError("");
+    try {
+      await deleteChatSession(session.userId, target.id);
+      const remaining = chatSessions.filter((item) => item.id !== target.id);
+      setChatSessions(remaining);
+      if (target.id === chatSessionId) {
+        if (remaining.length > 0) {
+          await switchChatSession(remaining[0]);
+        } else {
+          const created = await createChatSession(session.userId, { selected_model_path: selectedModelPath || null });
+          setChatSessions([created]);
+          setChatSessionId(created.id);
+          setMessages([]);
+          const nextUserSession = { ...session, activeChatSessionId: created.id };
+          setSession(nextUserSession);
+          saveSession(nextUserSession);
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "会话删除失败。");
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
   async function playServerAudio(audioBlob: Blob, messageId = "") {
     stopSpeechPlayback();
     setActiveTtsMessageId(messageId);
@@ -847,6 +1393,62 @@ export default function CompanionPage() {
     });
     serverAudioRef.current = controller.audio as HTMLAudioElement;
     serverAudioCleanupRef.current = controller.cleanup;
+  }
+
+  async function playRemoteServerAudio(message: ChatMessage) {
+    const remoteAudioUrl = message.tts?.remoteAudioUrl;
+    const proxyAudioUrl = message.tts?.proxyAudioUrl;
+    if (!remoteAudioUrl) {
+      throw new Error("远端音频地址缺失。");
+    }
+    stopSpeechPlayback();
+    setActiveTtsMessageId(message.id || "");
+
+    const audio = new Audio(remoteAudioUrl);
+    serverAudioRef.current = audio;
+    let usingProxyFallback = false;
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      audio.onplay = null;
+      audio.onended = null;
+      audio.onerror = null;
+      if (serverAudioRef.current === audio) {
+        serverAudioRef.current = null;
+        serverAudioCleanupRef.current = null;
+      }
+      setSpeaking(false);
+      setActiveTtsMessageId((current) => (current === (message.id || "") ? "" : current));
+    };
+    serverAudioCleanupRef.current = cleanup;
+
+    audio.onplay = () => setSpeaking(true);
+    audio.onended = cleanup;
+    audio.onerror = async () => {
+      if (!usingProxyFallback && proxyAudioUrl) {
+        usingProxyFallback = true;
+        audio.src = proxyAudioUrl;
+        try {
+          await audio.play();
+          return;
+        } catch {
+          // fall through to final failure handling
+        }
+      }
+      cleanup();
+      if (message.id && session) {
+        await refreshMessageFromServer(message.id);
+      }
+      handleTtsFailure("远端语音播放失败。");
+    };
+
+    try {
+      await audio.play();
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
   }
 
   function browserSpeak(text: string, messageId = "") {
@@ -880,32 +1482,61 @@ export default function CompanionPage() {
     }
   }
 
-  async function prepareAndPlayAssistantTts(messageId: string, text: string) {
-    if (!ttsEnabled || !session) return;
+  async function prepareAndPlayAssistantTts(message: ChatMessage) {
+    if (!ttsEnabled || !session || !message.id) return;
     if (ttsMode === "browser") {
-      updateMessageTts(messageId, { status: "ready", mode: "browser" });
-      browserSpeak(text, messageId);
+      updateMessageTts(message.id, { status: "ready", mode: "browser" });
+      browserSpeak(message.content, message.id);
       return;
     }
-    const result = await requestServerTts(session.userId, text, sessionId);
-    if (!result.configured) {
-      updateMessageTts(messageId, { status: "ready", mode: "browser" });
-      browserSpeak(text, messageId);
+
+    let currentMessage = message;
+    if (!currentMessage.tts) {
+      const optimisticTts: ChatMessageTts = { status: "pending", mode: "server" };
+      currentMessage = { ...currentMessage, tts: optimisticTts };
+      updateMessageTts(message.id, optimisticTts);
+    }
+    if (currentMessage.tts?.status === "pending") {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1200));
+        const refreshed = await refreshMessageFromServer(message.id);
+        if (!refreshed?.tts) break;
+        currentMessage = refreshed;
+        if (refreshed.tts.status === "ready" || refreshed.tts.status === "failed" || refreshed.tts.status === "expired") {
+          break;
+        }
+      }
+    }
+
+    if (currentMessage.tts?.status === "ready") {
+      await playMessageAudio(currentMessage);
       return;
     }
-    updateMessageTts(messageId, {
-      status: "ready",
-      mode: "server",
-      audio: result.audio,
-      mediaType: result.mediaType,
-    });
-    await playServerAudio(result.audio, messageId);
+
+    if (currentMessage.tts?.status === "failed") {
+      throw new Error(currentMessage.tts.error || "语音生成失败。");
+    }
+
+    if (currentMessage.tts?.status === "expired") {
+      const regenerated = await regenerateMessageTts(session.userId, message.id);
+      currentMessage = mapServerMessageToChatMessage(regenerated);
+      setMessages((current) => current.map((item) => (item.id === message.id ? currentMessage : item)));
+      if (currentMessage.tts?.status === "ready") {
+        await playMessageAudio(currentMessage);
+        return;
+      }
+      throw new Error(currentMessage.tts?.error || "语音重新生成失败。");
+    }
   }
 
-  function playMessageAudio(message: ChatMessage) {
+  async function playMessageAudio(message: ChatMessage) {
     if (message.tts?.status !== "ready") return;
     if (message.tts.mode === "server" && message.tts.audio) {
-      void playServerAudio(message.tts.audio, message.id || "");
+      await playServerAudio(message.tts.audio, message.id || "");
+      return;
+    }
+    if (message.tts.mode === "server" && message.tts.remoteAudioUrl) {
+      await playRemoteServerAudio(message);
       return;
     }
     browserSpeak(message.content, message.id || "");
@@ -913,95 +1544,122 @@ export default function CompanionPage() {
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!session || !input.trim() || loading) return;
+    if (!session || !chatSessionId || !input.trim() || loading || chatBootstrapping) return;
 
     const userText = input.trim();
-    const historyMessages = [
-      ...messages,
-      { id: createMessageId("user"), role: "user", content: userText } satisfies ChatMessage,
-    ];
+    const optimisticUserMessageId = createMessageId("user-pending");
+    const optimisticUserMessage: ChatMessage = {
+      id: optimisticUserMessageId,
+      role: "user",
+      content: userText,
+      createdAt: new Date().toISOString(),
+    };
     ignoreNextStageCompletionResetRef.current = false;
     setInput("");
     setError("");
     setBackgroundActivityPulse((current) => current + 1);
     setLoading(true);
-    setMessages(historyMessages);
+    setMessages((prev) => [...prev, optimisticUserMessage]);
     const traceId = crypto.randomUUID();
 
     try {
-      const response = await postChat(
+      const response = await postSessionMessage(
+        session.userId,
+        chatSessionId,
         {
-          user_id: session.userId,
-          message: userText,
-          session_id: sessionId,
-          history: makeHistory(historyMessages),
+          content: userText,
+          tts_enabled: ttsEnabled && ttsMode === "server",
+          selected_model_path: selectedModelPath || null,
         },
         traceId,
       );
 
-      const assistantMessageId = createMessageId("assistant");
+      const userMessage = mapServerMessageToChatMessage(response.user_message);
+      const assistantMessage = mapServerMessageToChatMessage(response.assistant_message);
+      if (ttsEnabled && ttsMode === "browser" && assistantMessage.id) {
+        assistantMessage.tts = { status: "ready", mode: "browser" };
+      }
+      if (ttsEnabled && ttsMode === "server" && assistantMessage.id && !assistantMessage.tts) {
+        assistantMessage.tts = { status: "pending", mode: "server" };
+      }
       setMessages((prev) => [
-        ...prev,
-        {
-          id: assistantMessageId,
-          role: "assistant",
-          content: response.text,
-          traceId: response.trace_id,
-          tts: ttsEnabled ? { status: "loading", mode: ttsMode } : undefined,
-        },
+        ...prev.filter((message) => message.id !== optimisticUserMessageId),
+        userMessage,
+        assistantMessage,
       ]);
       setLoading(false);
 
-      const plan = resolvePlaybackPlan({
-        slot: response.emotion,
-        action: response.action,
-        motionPlan: response.motion_plan,
-        userMappings: mappings,
-        defaultMappings: {},
-        assetIndex,
-      });
-
-      if (plan.mode === "vmd") {
-        const plannedAsset = Object.values(assetIndex).find((item) => item.url === plan.url);
+      const motionResolution = response.assistant_message.motion_resolution;
+      if (motionResolution?.status === "matched" && motionResolution.resolved_asset_url) {
+        const plannedAsset = motionResolution.resolved_asset_id ? assetIndex[motionResolution.resolved_asset_id] : undefined;
         setInteractionSource("chat");
-        setActiveVmdAssetId(plannedAsset?.asset_id || "");
+        setActiveVmdAssetId(motionResolution.resolved_asset_id || "");
         setPendingAutoResume(Boolean(autoplayResumeInteraction));
         setInteraction({
-          emotion: response.emotion,
-          action: response.action,
+          emotion: response.assistant_message.emotion || "neutral",
+          action: response.assistant_message.action || "idle",
           mode: "vmd",
-          vmdUrl: plan.url,
+          vmdUrl: motionResolution.resolved_asset_url,
           vmdLoopUrls: [],
-          vmdLoopEmotionByUrl: plan.url ? { [plan.url]: response.emotion } : {},
-          playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: plan.url }),
+          vmdLoopEmotionByUrl: { [motionResolution.resolved_asset_url]: response.assistant_message.emotion || "neutral" },
+          playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: motionResolution.resolved_asset_url }),
           sequence: [],
         });
       } else {
-        setInteractionSource("chat");
-        setActiveVmdAssetId("");
-        setPendingAutoResume(Boolean(autoplayResumeInteraction));
-        setInteraction({
-          emotion: response.emotion,
-          action: plan.action,
-          mode: "procedural",
-          vmdUrl: "",
-          vmdLoopEmotionByUrl: {},
-          playbackRate: 1,
-          sequence: plan.sequence || [],
+        const plan = resolvePlaybackPlan({
+          slot: response.assistant_message.emotion || "neutral",
+          action: response.assistant_message.action || "idle",
+          motionPlan: response.assistant_message.motion_plan || undefined,
+          userMappings: mappings,
+          defaultMappings: {},
+          assetIndex,
         });
+
+        if (plan.mode === "vmd") {
+          const plannedAsset = Object.values(assetIndex).find((item) => item.url === plan.url);
+          setInteractionSource("chat");
+          setActiveVmdAssetId(plannedAsset?.asset_id || "");
+          setPendingAutoResume(Boolean(autoplayResumeInteraction));
+          setInteraction({
+          emotion: response.assistant_message.emotion || "neutral",
+          action: response.assistant_message.action || "idle",
+          mode: "vmd",
+          vmdUrl: plan.url,
+          vmdLoopUrls: [],
+          vmdLoopEmotionByUrl: plan.url ? { [plan.url]: response.assistant_message.emotion || "neutral" } : {},
+          playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: plan.url }),
+          sequence: [],
+        });
+        } else {
+          setInteractionSource("chat");
+          setActiveVmdAssetId("");
+          setPendingAutoResume(Boolean(autoplayResumeInteraction));
+          setInteraction({
+            emotion: response.assistant_message.emotion || "neutral",
+            action: plan.action,
+            mode: "procedural",
+            vmdUrl: "",
+            vmdLoopEmotionByUrl: {},
+            playbackRate: 1,
+            sequence: plan.sequence || [],
+          });
+        }
       }
 
       try {
-        await prepareAndPlayAssistantTts(assistantMessageId, response.text);
+        await prepareAndPlayAssistantTts(assistantMessage);
       } catch (speakError) {
-        updateMessageTts(assistantMessageId, {
+        if (assistantMessage.id) {
+          updateMessageTts(assistantMessage.id, {
           status: "failed",
           mode: ttsMode,
           error: speakError instanceof Error ? speakError.message : "语音播放失败。",
         });
+        }
         handleTtsFailure(speakError instanceof Error ? `语音播放失败：${speakError.message}` : "语音播放失败。");
       }
     } catch (err) {
+      setMessages((prev) => prev.filter((message) => message.id !== optimisticUserMessageId));
       pushToast(err instanceof Error ? err.message : "\u8bf7\u6c42\u5931\u8d25\u3002");
     } finally {
       setLoading(false);
@@ -1078,7 +1736,8 @@ export default function CompanionPage() {
         <div className="mio-session">
           <div className="mio-session-meta">
             <span>USER: {session.userId}</span>
-            <span>SESSION: {sessionId.slice(0, 6).toUpperCase()}</span>
+            <span>SESSION: {(chatSessionId || "------").slice(0, 6).toUpperCase()}</span>
+            <span>TITLE: {currentChatSession?.title || "新对话"}</span>
           </div>
           <div className="mio-session-actions">
             <Link href="/traces" className="mio-trace-button">
@@ -1219,6 +1878,88 @@ export default function CompanionPage() {
                 </label>
               </div>
 
+              <section className="mio-settings-diagnostics" aria-label="Message bridge status">
+                <div className="mio-settings-diagnostics-head">
+                  <strong>Message Bridge</strong>
+                  <span>
+                    {messageBridgeLoading
+                      ? "Loading..."
+                      : messageBridgeStatus
+                        ? `${messageBridgeStatus.provider}/${messageBridgeStatus.channel}`
+                        : "Not loaded"}
+                  </span>
+                </div>
+                <div className="mio-settings-meta">
+                  <span>Status: {messageBridgeStatus?.websocket_status || "--"}</span>
+                  <span>Reconnects: {messageBridgeStatus?.reconnect_attempts ?? "--"}</span>
+                  <span>Last connected: {messageBridgeStatus?.last_connected_at || "--"}</span>
+                  <span>Binding: {messageBridgeStatus?.binding?.external_display_name || messageBridgeStatus?.binding?.external_session_key || "--"}</span>
+                  {messageBridgeStatus?.last_error ? <span>Error: {messageBridgeStatus.last_error}</span> : null}
+                </div>
+                <div className="mio-settings-grid">
+                  <label className="mio-advanced-field mio-advanced-field-wide">
+                    <span>Bridge Session</span>
+                    <select
+                      value={messageBridgeSelectedSessionKey}
+                      onChange={(event) => setMessageBridgeSelectedSessionKey(event.target.value)}
+                      disabled={messageBridgeLoading || messageBridgeSaving || messageBridgeSessions.length === 0}
+                    >
+                      {messageBridgeSessions.length === 0 ? <option value="">No Feishu sessions</option> : null}
+                      {messageBridgeSessions.map((item) => (
+                        <option
+                          key={item.external_session_key}
+                          value={item.external_session_key}
+                          title={item.external_session_key}
+                        >
+                          {formatMessageBridgeSessionLabel(item)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="mio-advanced-mini"
+                    onClick={() => void handleMessageBridgeBindingSwitch()}
+                    disabled={
+                      messageBridgeLoading ||
+                      messageBridgeSaving ||
+                      !messageBridgeStatus ||
+                      !messageBridgeSelectedSessionKey ||
+                      (messageBridgeSelectedSessionKey === messageBridgeStatus.binding?.external_session_key &&
+                        messageBridgeStatus.binding?.local_session_id === chatSessionId)
+                    }
+                  >
+                    {messageBridgeSaving
+                      ? "Switching..."
+                      : messageBridgeSelectedSessionKey === messageBridgeStatus?.binding?.external_session_key
+                        ? "Open Bridge Chat"
+                        : "Switch Bridge Session"}
+                  </button>
+                </div>
+                <div className="mio-settings-grid">
+                  <label className="mio-advanced-field mio-advanced-toggle">
+                    <span>Bridge Enabled</span>
+                    <input
+                      type="checkbox"
+                      checked={messageBridgeStatus?.enabled ?? true}
+                      onChange={(event) => void handleMessageBridgeSettingChange({ enabled: event.target.checked })}
+                      disabled={messageBridgeLoading || messageBridgeSaving || !messageBridgeStatus}
+                    />
+                  </label>
+                  <label className="mio-advanced-field mio-advanced-toggle">
+                    <span>Realtime Drive Character</span>
+                    <input
+                      type="checkbox"
+                      checked={messageBridgeStatus?.realtime_drive_character ?? true}
+                      onChange={(event) =>
+                        void handleMessageBridgeSettingChange({ realtime_drive_character: event.target.checked })
+                      }
+                      disabled={messageBridgeLoading || messageBridgeSaving || !messageBridgeStatus}
+                    />
+                  </label>
+                </div>
+              </section>
+
               <div className="mio-settings-actions">
                 <button
                   type="button"
@@ -1232,15 +1973,23 @@ export default function CompanionPage() {
                   type="button"
                   className="mio-advanced-mini"
                   onClick={resetOpenClawDraft}
-                  disabled={openClawLoading || openClawSaving}
+                  disabled={openClawLoading || openClawSaving || cleanupBusy}
                 >
                   Reset
                 </button>
                 <button
                   type="button"
+                  className="mio-advanced-mini"
+                  onClick={() => void handleMessageServiceCleanup()}
+                  disabled={openClawLoading || openClawSaving || cleanupBusy}
+                >
+                  {cleanupBusy ? "Cleaning..." : "Cleanup"}
+                </button>
+                <button
+                  type="button"
                   className="mio-advanced-mini is-active"
                   onClick={() => void handleOpenClawSave()}
-                  disabled={openClawLoading || openClawSaving}
+                  disabled={openClawLoading || openClawSaving || cleanupBusy}
                 >
                   {openClawSaving ? "Saving..." : "Save"}
                 </button>
@@ -1368,17 +2117,21 @@ export default function CompanionPage() {
                   type="button"
                   className="mio-dialogue-voice-button"
                   aria-label={
-                    latestAssistantMessage.tts.status === "loading"
+                    latestAssistantMessage.tts.status === "loading" || latestAssistantMessage.tts.status === "pending"
                       ? "Voice pending"
                       : latestAssistantMessage.tts.status === "failed"
                         ? "Voice unavailable"
+                        : latestAssistantMessage.tts.status === "expired"
+                          ? "Voice expired"
                         : "Play voice"
                   }
                   title={
-                    latestAssistantMessage.tts.status === "loading"
+                    latestAssistantMessage.tts.status === "loading" || latestAssistantMessage.tts.status === "pending"
                       ? "Voice pending"
                       : latestAssistantMessage.tts.status === "failed"
                         ? "Voice unavailable"
+                        : latestAssistantMessage.tts.status === "expired"
+                          ? "Voice expired"
                         : "Play voice"
                   }
                   disabled={latestAssistantMessage.tts.status !== "ready"}
@@ -1393,7 +2146,9 @@ export default function CompanionPage() {
                 </button>
               ) : null}
             </div>
-            <p>{latestAssistantMessageText}</p>
+            <div className="mio-dialogue-copy" aria-live="polite">
+              <p>{latestAssistantMessageText}</p>
+            </div>
             <div className="mio-dialogue-dots" aria-hidden="true">
               <span />
               <span />
@@ -1421,8 +2176,11 @@ export default function CompanionPage() {
         <CompanionRightRail
           collapsed={isRightRailCollapsed}
           activeView={activeRightPanelView}
+          sessions={chatSessions}
+          activeSessionId={chatSessionId}
+          sessionBusy={sessionBusy}
           messages={messages}
-          loading={loading}
+          loading={loading || chatBootstrapping}
           error={error}
           ttsEnabled={ttsEnabled}
           activeTtsMessageId={activeTtsMessageId}
@@ -1430,14 +2188,18 @@ export default function CompanionPage() {
           memoryNotes={memoryNotes}
           traceRows={traceRows}
           onToggleCollapsed={() => setIsRightRailCollapsed((current) => !current)}
+          onCreateSession={handleCreateSession}
+          onSelectSession={(sessionId) => void handleSelectSession(sessionId)}
+          onRenameSession={(target) => void handleRenameSession(target)}
+          onDeleteSession={(target) => void handleDeleteSession(target)}
           onPlayTtsMessage={playMessageAudio}
         />
       </div>
       <CompanionCommandBar
         input={input}
         inputLabel={INPUT_LABEL}
-        loading={loading}
-        sendDisabled={!session || !input.trim()}
+        loading={loading || chatBootstrapping}
+        sendDisabled={!session || !chatSessionId || !input.trim() || chatBootstrapping}
         error={error}
         ttsEnabled={ttsEnabled}
         ttsMode={ttsMode}
@@ -1625,7 +2387,27 @@ export default function CompanionPage() {
                       }}
                     />
                   </label>
+                  <button
+                    type="button"
+                    className="mio-advanced-mini"
+                    onClick={() => void handleExportMotionContext()}
+                    disabled={advancedBusy || !selectedModel?.relative_path}
+                  >
+                    Export Motion Context
+                  </button>
                 </div>
+
+                {latestMotionContextExport ? (
+                  <div className="mio-advanced-empty">
+                    <p>
+                      Motion context ready: {latestMotionContextExport.motion_count} favorite motion(s) for{" "}
+                      {latestMotionContextExport.model_display_name}.
+                    </p>
+                    <pre className="mio-advanced-json-preview" data-testid="mio-motion-context-json">
+                      {JSON.stringify(latestMotionContextExport.export_json, null, 2)}
+                    </pre>
+                  </div>
+                ) : null}
 
                 <section className="mio-advanced-library">
                   <div className="mio-advanced-tabs" role="tablist" aria-label="VMD asset views">
