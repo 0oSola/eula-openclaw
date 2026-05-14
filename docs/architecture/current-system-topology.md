@@ -1,6 +1,6 @@
 # 当前系统拓扑与架构蓝图
 
-更新时间：2026-05-12
+更新时间：2026-05-14
 
 本文用于两类场景：
 
@@ -30,7 +30,7 @@ Browser / Next.js UI
 | --- | --- | --- | --- | --- |
 | Next.js Web | `web/`, 默认 `http://localhost:3000` | UI、MMD 舞台、Chatbox、设置面板、trace 页面 | 本项目内 | 页面访问、`npm --prefix web run check:basic` |
 | Next.js API Proxy | `/api/backend/*` | 浏览器同源转发到 FastAPI | 本项目内 | 前端请求是否 2xx |
-| FastAPI API | `api/`, 默认 `http://127.0.0.1:8000` | 会话、消息、OpenClaw/TTS 代理、资源、trace、admin API | 本项目内 | `GET /healthz` |
+| FastAPI API | `api/`, 默认 `http://127.0.0.1:8000` | 会话、消息、OpenClaw/TTS 代理、realtime voice WebSocket、资源、trace、admin API | 本项目内 | `GET /healthz` |
 | OpenClaw Gateway HTTP | `http://10.11.252.164:18789` | `/v1/models`、`/v1/responses` 文本生成 | 外部服务 | `GET /healthz/openclaw` |
 | OpenClaw Gateway WebSocket RPC | `ws://10.11.252.164:18789` | Feishu session 列表、history、实时消息订阅、agent/chat delta 事件 | 外部服务 | Bridge admin 状态、`sessions.list` |
 | Voice Workflow TTS | `http://10.11.252.164:5555` | 提交 TTS、查询任务、返回音频 URL | 外部服务 | `POST /api/v1/tts` + `GET /api/v1/tasks/{task_id}` |
@@ -51,6 +51,15 @@ OPENCLAW_TIMEOUT_SECONDS=15
 
 TTS_SERVICE_ENABLED=true
 TTS_SERVICE_BASE_URL=http://10.11.252.164:5555
+
+REALTIME_VOICE_ENABLED=true
+REALTIME_VOICE_MAX_QUEUE_SIZE=3
+REALTIME_VOICE_CHUNK_TIMEOUT_SECONDS=30
+REALTIME_VOICE_CIRCUIT_FAILURE_THRESHOLD=5
+REALTIME_VOICE_CIRCUIT_WINDOW_SECONDS=60
+REALTIME_VOICE_CIRCUIT_OPEN_SECONDS=120
+REALTIME_VOICE_MAX_QUEUE_WAIT_SECONDS=120
+OPENCLAW_STREAM_MODE=http_sse
 
 API_DATA_DIR=api/data
 MMD_ROOT_DIR=./MMD
@@ -158,6 +167,34 @@ Frontend requestServerTts()
   -> download audio
   -> FastAPI returns audio bytes
 ```
+
+### 5.3 Realtime Voice 侧链路
+
+Phase 1 已接入为“消息服务主链路 + 语音 WebSocket 侧链路”：
+
+```text
+POST /sessions/{session_id}/messages with tts_enabled=true
+  -> Message Service 保存 user/assistant message
+  -> 长任务 message_tts 仍作为 fallback 兜底
+  -> frontend prepareAndPlayAssistantTts()
+  -> WS /ws/sessions/{session_id}/voice?user_id={user_id}
+  -> send synthesize(message_id, job_id, text)
+  -> FastAPI session voice queue
+  -> VoiceWorkflowTtsClient.synthesize_chunk()
+     POST {TTS_SERVICE_BASE_URL}/api/v1/tts/chunk
+  -> in-memory realtime chunk registry
+  -> audio_ready(job_id, sequence, audio_url)
+  -> frontend AudioQueue ordered playback
+  -> GET /api/backend/tts/proxy/realtime/{session_id}/{job_id}/{sequence}?user_id={user_id}
+  -> FastAPI fetches remote chunk audio and returns bytes
+```
+
+当前前端策略：
+
+- 同一时间只播放一个 realtime chunk，按 job 首次入队顺序 + sequence 顺序播放。
+- 新用户消息不会默认取消正在排队或播放的 realtime voice。
+- 会话切换、新建会话、组件卸载会发送 `cancel(scope="all")` 并清空本地 AudioQueue。
+- chunk 播放前失败时自动回退到长任务 `message_tts`；已经播放过部分 chunk 后失败时标记 `partial_failed`，不自动重播完整语音。
 
 ## 6. OpenClaw Bridge 调用链
 
@@ -315,13 +352,15 @@ VMD 动作 URL 来自 /assets/vmd/file/{asset_id}。
 | 优化点 | 背景 |
 | --- | --- |
 | 消息状态展示 | assistant_message 可能 degraded/fallback |
-| TTS 状态展示 | `tts.status` 可能 ready/pending/failed/expired |
+| TTS 状态展示 | `tts.status` 可能 ready/pending/failed/expired/partial_failed |
 | 动作 fallback | `motion_resolution.status` 可能 fallback_idle |
 | 资源加载错误 | PMX 贴图依赖原包相对路径 |
 
 ### 9.4 给 realtime voice 实现侧
 
-当前 realtime voice 仍是规划链路，不是已上线主链路。第一版熔断和限流边界：
+当前 realtime voice 已有 Phase 1 可用链路：后端提供 session WebSocket、TTS chunk client、session queue、chunk proxy；前端提供 WebSocket URL helper、AudioQueue 和 Companion 页面接入。它仍是语音侧链路，消息文本生成和持久化仍以 Message Service v2 为主链路。
+
+第一版熔断和限流边界：
 
 ```text
 只做 session 级 realtime voice circuit breaker。
@@ -339,6 +378,44 @@ WS /ws/sessions/{session_id}/voice?user_id={user_id}
 ```
 
 后端将 query `user_id` 映射到 Message Service v2 当前使用的 `x-user-id` 权限模型。缺失、为空或无权访问 `session_id` / workspace 时拒绝连接。第一版不使用首个 `auth` message，也不引入 token。
+
+主要 WebSocket 事件：
+
+```text
+client -> synthesize { job_id, message_id, text, emotion_label? }
+server -> queued { queue_position }
+server -> synthesis_started
+server -> audio_ready { job_id, sequence, text, audio_url, duration, elapsed_seconds }
+server -> done
+server -> rejected { reason, fallback=message_tts }
+server -> error { detail }
+client -> cancel { scope=all }
+server -> cancelled
+```
+
+音频代理合同：
+
+```text
+GET /tts/proxy/realtime/{session_id}/{job_id}/{sequence}?user_id={user_id}
+```
+
+前端播放合同：
+
+```text
+sessionVoiceWebSocketUrl(sessionId, userId)
+AudioQueue.enqueue({ jobId, messageId, sequence, url })
+AudioQueue.hasPlayedChunk(jobId)
+AudioQueue.fallbackForJobError(jobId)
+```
+
+fallback 规则：
+
+| 场景 | 行为 |
+| --- | --- |
+| queue/circuit/realtime 失败且该 job 尚未播放任何 chunk | 自动回退到现有长任务 `message_tts` |
+| 已经播放过至少一个 chunk 后失败 | 标记 `tts.status=partial_failed`，只提示手动重播 |
+| 会话切换/新建会话/组件卸载 | 发送 `cancel(scope="all")`，清空本地 AudioQueue |
+| 新用户消息 | 不默认取消旧 realtime voice job |
 
 ## 10. 排障入口
 
@@ -369,6 +446,8 @@ WS /ws/sessions/{session_id}/voice?user_id={user_id}
 | Voice Workflow TTS `/api/v1/tts` | 可用；2026-05-13 优化后 smoke test：提交 `202` 耗时 147ms，约 17.456s ready，返回 `audio/wav` 184400 bytes，`RIFF` header |
 | Voice Workflow TTS `/api/v1/tts/chunk` | 可用；2026-05-13 优化后 smoke test：响应字段包含 `duration`，两次短句请求耗时 14.992s / 14.687s，服务端 `elapsed_seconds=14.975/14.675`，返回 `audio/wav` 138320 bytes，`RIFF` header；较旧基线约 22.7s / `20.063s` 改善，但仍是 realtime 首段延迟瓶颈 |
 | Voice Workflow TTS | 当前作为实际服务端语音链路 |
+| Realtime Voice WebSocket | Phase 1 已接入 `WS /ws/sessions/{session_id}/voice?user_id={user_id}`，后端按 session queue 生成 chunk，前端 AudioQueue 顺序播放 |
+| Realtime Voice audio proxy | Phase 1 已接入 `/tts/proxy/realtime/{session_id}/{job_id}/{sequence}?user_id={user_id}`，使用内存 chunk registry 代理远端 chunk URL |
 | 本地健康检查 | `/healthz/openclaw` 已用于 models/responses 探测 |
 
 ## 12. 系统边界
