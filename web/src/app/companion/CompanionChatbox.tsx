@@ -36,6 +36,7 @@ function getTtsLabel(message: ChatMessage, activeTtsMessageId: string) {
   if (!message.tts) return "";
   if (message.tts.status === "loading" || message.tts.status === "pending") return "Voice pending";
   if (message.tts.status === "failed") return "Voice unavailable";
+  if (message.tts.status === "partial_failed") return "Voice partially failed";
   if (message.tts.status === "expired") return "Voice expired";
   if (message.id && message.id === activeTtsMessageId) return "Playing";
   return "Play voice";
