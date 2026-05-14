@@ -40,7 +40,7 @@ export type ChatMessage = {
   traceId?: string;
   tts?: {
     id?: string;
-    status: "loading" | "pending" | "ready" | "failed" | "expired";
+    status: "loading" | "pending" | "ready" | "failed" | "expired" | "partial_failed";
     mode: "server" | "browser";
     provider?: string;
     version?: number;
@@ -52,6 +52,18 @@ export type ChatMessage = {
     error?: string;
   };
 };
+
+export type RealtimeVoiceStatus =
+  | "idle"
+  | "connecting"
+  | "queued"
+  | "synthesizing"
+  | "playing"
+  | "fallback"
+  | "partial_failed"
+  | "failed";
+
+export type RealtimeVoiceFallbackMode = "auto_before_playback" | "manual_after_partial_playback";
 
 export type ChatResponse = {
   trace_id: string;

@@ -52,7 +52,8 @@ function run() {
     assert.match(commandBarSource, /mio-command-shell/);
     assert.match(companionPageSource, /<CompanionCommandBar/);
     assert.match(typesSource, /tts\?:\s*\{/);
-    assert.match(typesSource, /status:\s*"loading"\s*\|\s*"pending"\s*\|\s*"ready"\s*\|\s*"failed"\s*\|\s*"expired"/);
+    assert.match(typesSource, /status:\s*"loading"\s*\|\s*"pending"\s*\|\s*"ready"\s*\|\s*"failed"\s*\|\s*"expired"\s*\|\s*"partial_failed"/);
+    assert.match(typesSource, /export type RealtimeVoiceStatus/);
     assert.match(typesSource, /export type MessageServiceCleanupResult = \{/);
     assert.match(typesSource, /export type MessageBridgeStatus = \{/);
     assert.match(chatboxSource, /onPlayTtsMessage: \(message: ChatMessage\) => void;/);
@@ -113,6 +114,15 @@ function run() {
     assert.match(companionPageSource, /async function handleDeleteSession\(/);
     assert.match(companionPageSource, /async function handleMessageServiceCleanup\(/);
     assert.match(companionPageSource, /async function prepareAndPlayAssistantTts\(/);
+    assert.match(companionPageSource, /sessionVoiceWebSocketUrl/);
+    assert.match(companionPageSource, /new \w*AudioQueue/);
+    assert.match(companionPageSource, /voiceSocketRef/);
+    assert.match(companionPageSource, /audioQueueRef/);
+    assert.match(companionPageSource, /realtimeVoiceStatus/);
+    assert.match(companionPageSource, /partial_failed/);
+    assert.match(companionPageSource, /cancelRealtimeVoicePlayback[\s\S]*?scope:\s*"all"/);
+    const onSubmitBlock = companionPageSource.match(/async function onSubmit[\s\S]*?\n  function handleCharacterSwitch/)?.[0] || "";
+    assert.doesNotMatch(onSubmitBlock, /cancelRealtimeVoicePlayback\(/);
     assert.match(companionPageSource, /async function playMessageAudio\(message: ChatMessage\)/);
     assert.match(companionPageSource, /const latestAssistantMessage = \[\.\.\.messages\]\.reverse\(\)\.find\(\(item\) => item\.role === "assistant"\)/);
     assert.match(companionPageSource, /className="mio-dialogue-voice-button"/);

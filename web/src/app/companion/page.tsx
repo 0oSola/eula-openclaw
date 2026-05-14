@@ -43,10 +43,12 @@ import {
   putOpenClawConfig,
   regenerateMessageTts,
   setDefaultMessageBridgeBinding,
+  sessionVoiceWebSocketUrl,
   updateChatSession,
   updateVmdAsset,
   uploadVmdAsset,
 } from "@/lib/api";
+import { AudioQueue } from "@/lib/realtimeVoiceQueue.js";
 import { clearSession, loadSession, saveSession } from "@/lib/session";
 import { DEFAULT_TTS_MODE, playServerTtsAudio } from "@/lib/ttsPlayback.js";
 import type {
@@ -62,6 +64,8 @@ import type {
   MmdModelAsset,
   OpenClawConfig,
   OpenClawHealthStatus,
+  RealtimeVoiceFallbackMode,
+  RealtimeVoiceStatus,
   RenderPipeline,
   UserSession,
   VmdAsset,
@@ -104,6 +108,40 @@ type OpenClawDraft = {
   verify_ssl: boolean;
   timeout_seconds: string;
 };
+type RealtimeVoiceServerEvent = {
+  type: "queued" | "synthesis_started" | "audio_ready" | "done" | "rejected" | "error" | "cancelled";
+  session_id?: string;
+  message_id?: string;
+  job_id?: string;
+  queue_position?: number;
+  sequence?: number;
+  text?: string;
+  audio_url?: string;
+  duration?: number | null;
+  elapsed_seconds?: number | null;
+  reason?: string;
+  fallback?: string;
+  detail?: string;
+};
+type RealtimeAudioQueue = {
+  enqueue: (chunk: {
+    jobId: string;
+    messageId?: string;
+    sequence: number;
+    url: string;
+    text?: string;
+    duration?: number | null;
+  }) => void;
+  clear: (options?: { resetHistory?: boolean }) => void;
+  fallbackForJobError: (jobId: string) => RealtimeVoiceFallbackMode;
+  hasPlayedChunk: (jobId: string) => boolean;
+};
+type RealtimeAudioQueueCtor = new (options?: {
+  AudioCtor?: typeof Audio;
+  onError?: (event: { jobId: string; messageId?: string; fallback: RealtimeVoiceFallbackMode; error?: Error }) => void;
+  onChunkStart?: (entry: { jobId: string; messageId?: string }) => void;
+  onChunkEnd?: (entry: { jobId: string; messageId?: string }) => void;
+}) => RealtimeAudioQueue;
 
 const SPRITE = "/images/sprite-sliced";
 const MESSAGE_BRIDGE_POLL_INTERVAL_MS = 2500;
@@ -300,6 +338,12 @@ export default function CompanionPage() {
   const serverAudioCleanupRef = useRef<(() => void) | null>(null);
   const ignoreNextStageCompletionResetRef = useRef(false);
   const pendingTtsPollersRef = useRef<Set<string>>(new Set());
+  const voiceSocketRef = useRef<WebSocket | null>(null);
+  const audioQueueRef = useRef<RealtimeAudioQueue | null>(null);
+  const realtimeVoiceJobMessageRef = useRef<Map<string, string>>(new Map());
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const sessionRef = useRef<UserSession | null>(null);
+  const chatSessionIdRef = useRef("");
   const [session, setSession] = useState<UserSession | null>(null);
   const [chatSessions, setChatSessions] = useState<MessageServiceSession[]>([]);
   const [chatSessionId, setChatSessionId] = useState("");
@@ -319,6 +363,7 @@ export default function CompanionPage() {
   const [ttsMode, setTtsMode] = useState<"browser" | "server">(DEFAULT_TTS_MODE as "browser" | "server");
   const [speaking, setSpeaking] = useState(false);
   const [activeTtsMessageId, setActiveTtsMessageId] = useState("");
+  const [realtimeVoiceStatus, setRealtimeVoiceStatus] = useState<RealtimeVoiceStatus>("idle");
   const [backgroundActivityPulse, setBackgroundActivityPulse] = useState(0);
   const [renderPipeline, setRenderPipeline] = useState<RenderPipeline>("mio-reference");
   const [isAdvancedPanelOpen, setIsAdvancedPanelOpen] = useState(false);
@@ -357,6 +402,18 @@ export default function CompanionPage() {
   const [messageBridgeLoading, setMessageBridgeLoading] = useState(false);
   const [messageBridgeSaving, setMessageBridgeSaving] = useState(false);
   const [cleanupBusy, setCleanupBusy] = useState(false);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  useEffect(() => {
+    chatSessionIdRef.current = chatSessionId;
+  }, [chatSessionId]);
 
   useEffect(() => {
     const saved = loadSession();
@@ -704,7 +761,10 @@ export default function CompanionPage() {
   }, [renderPipeline, selectedModelPath]);
 
   useEffect(() => {
-    return () => stopServerAudio({ updateSpeaking: false });
+    return () => {
+      stopServerAudio({ updateSpeaking: false });
+      cancelRealtimeVoicePlayback({ closeSocket: true });
+    };
   }, []);
 
   function previewVmdAsset(asset: VmdAsset) {
@@ -1197,12 +1257,255 @@ export default function CompanionPage() {
     setMessages((current) => current.map((message) => (message.id === messageId ? { ...message, tts } : message)));
   }
 
+  function patchMessageTts(messageId: string, patch: Partial<ChatMessageTts>) {
+    setMessages((current) =>
+      current.map((message) => {
+        if (message.id !== messageId) return message;
+        return {
+          ...message,
+          tts: {
+            ...(message.tts || { mode: "server" as const, status: "loading" as const }),
+            ...patch,
+          },
+        };
+      }),
+    );
+  }
+
+  function realtimeProxyAudioUrl(audioUrl: string, userId: string) {
+    const separator = audioUrl.includes("?") ? "&" : "?";
+    const authenticatedPath = `${audioUrl}${separator}user_id=${encodeURIComponent(userId)}`;
+    if (/^https?:\/\//i.test(authenticatedPath)) return authenticatedPath;
+    return `/api/backend${authenticatedPath.startsWith("/") ? authenticatedPath : `/${authenticatedPath}`}`;
+  }
+
   async function refreshMessageFromServer(messageId: string) {
     if (!session) return null;
     const next = await getMessageById(session.userId, messageId);
     const mapped = mapServerMessageToChatMessage(next);
     setMessages((current) => current.map((message) => (message.id === messageId ? { ...message, ...mapped } : message)));
     return mapped;
+  }
+
+  function getRealtimeAudioQueue(): RealtimeAudioQueue {
+    if (!audioQueueRef.current) {
+      const RealtimeAudioQueue = AudioQueue as unknown as RealtimeAudioQueueCtor;
+      audioQueueRef.current = new RealtimeAudioQueue({
+        onChunkStart: (entry: { jobId: string; messageId?: string }) => {
+          const messageId = entry.messageId || realtimeVoiceJobMessageRef.current.get(entry.jobId) || "";
+          setSpeaking(true);
+          setActiveTtsMessageId(messageId);
+          setRealtimeVoiceStatus("playing");
+        },
+        onChunkEnd: (entry: { jobId: string; messageId?: string }) => {
+          const messageId = entry.messageId || realtimeVoiceJobMessageRef.current.get(entry.jobId) || "";
+          setSpeaking(false);
+          setActiveTtsMessageId((current) => (current === messageId ? "" : current));
+          setRealtimeVoiceStatus("idle");
+        },
+        onError: (event: { jobId: string; messageId?: string; fallback: RealtimeVoiceFallbackMode; error?: Error }) => {
+          void handleRealtimeVoicePlaybackError(event);
+        },
+      });
+    }
+    return audioQueueRef.current;
+  }
+
+  async function playMessageLevelTtsFallback(messageId: string, reason: string) {
+    const message = messagesRef.current.find((item) => item.id === messageId);
+    if (!message) return;
+    setRealtimeVoiceStatus("fallback");
+    patchMessageTts(messageId, { status: "pending", mode: "server", error: reason });
+    try {
+      await prepareAndPlayMessageTts({
+        ...message,
+        tts: {
+          ...(message.tts || {}),
+          status: "pending",
+          mode: "server",
+          error: reason,
+        },
+      });
+    } catch (error) {
+      patchMessageTts(messageId, {
+        status: "failed",
+        mode: "server",
+        error: error instanceof Error ? error.message : "Voice fallback failed.",
+      });
+      handleTtsFailure(error instanceof Error ? `语音回退失败：${error.message}` : "语音回退失败。");
+    }
+  }
+
+  async function handleRealtimeVoicePlaybackError(event: {
+    jobId: string;
+    messageId?: string;
+    fallback: RealtimeVoiceFallbackMode;
+    error?: Error;
+  }) {
+    const messageId = event.messageId || realtimeVoiceJobMessageRef.current.get(event.jobId) || "";
+    if (!messageId) return;
+    if (event.fallback === "auto_before_playback") {
+      await playMessageLevelTtsFallback(messageId, event.error?.message || "Realtime voice playback failed.");
+      return;
+    }
+    setRealtimeVoiceStatus("partial_failed");
+    patchMessageTts(messageId, {
+      status: "partial_failed",
+      mode: "server",
+      error: event.error?.message || "Realtime voice playback failed after partial playback.",
+    });
+    handleTtsFailure("实时语音已部分播放，后续片段失败。可手动重播完整语音。");
+  }
+
+  function handleRealtimeVoiceFailure(event: RealtimeVoiceServerEvent) {
+    const jobId = event.job_id || "";
+    const messageId = event.message_id || realtimeVoiceJobMessageRef.current.get(jobId) || "";
+    if (!messageId) return;
+    const fallbackMode =
+      jobId && audioQueueRef.current
+        ? audioQueueRef.current.fallbackForJobError(jobId)
+        : ("auto_before_playback" as RealtimeVoiceFallbackMode);
+    const reason = event.detail || event.reason || "Realtime voice synthesis failed.";
+    if (fallbackMode === "auto_before_playback") {
+      void playMessageLevelTtsFallback(messageId, reason);
+      return;
+    }
+    setRealtimeVoiceStatus("partial_failed");
+    patchMessageTts(messageId, { status: "partial_failed", mode: "server", error: reason });
+    handleTtsFailure("实时语音已部分播放，后续片段失败。可手动重播完整语音。");
+  }
+
+  function handleRealtimeVoiceEvent(event: RealtimeVoiceServerEvent) {
+    const messageId = event.message_id || realtimeVoiceJobMessageRef.current.get(event.job_id || "") || "";
+    if (event.type === "queued") {
+      setRealtimeVoiceStatus("queued");
+      if (messageId) patchMessageTts(messageId, { status: "loading", mode: "server" });
+      return;
+    }
+    if (event.type === "synthesis_started") {
+      setRealtimeVoiceStatus("synthesizing");
+      if (messageId) patchMessageTts(messageId, { status: "loading", mode: "server" });
+      return;
+    }
+    if (event.type === "audio_ready" && event.job_id && event.audio_url) {
+      const activeSession = sessionRef.current;
+      if (!activeSession) return;
+      if (messageId) {
+        realtimeVoiceJobMessageRef.current.set(event.job_id, messageId);
+        patchMessageTts(messageId, { status: "loading", mode: "server" });
+      }
+      getRealtimeAudioQueue().enqueue({
+        jobId: event.job_id,
+        messageId,
+        sequence: Number(event.sequence || 0),
+        url: realtimeProxyAudioUrl(event.audio_url, activeSession.userId),
+        text: event.text,
+        duration: event.duration,
+      });
+      return;
+    }
+    if (event.type === "rejected" || event.type === "error") {
+      handleRealtimeVoiceFailure(event);
+      return;
+    }
+    if (event.type === "cancelled" || event.type === "done") {
+      setRealtimeVoiceStatus((current) => (current === "partial_failed" ? current : "idle"));
+    }
+  }
+
+  async function ensureRealtimeVoiceSocket() {
+    const activeSession = sessionRef.current;
+    const activeSessionId = chatSessionIdRef.current;
+    if (!activeSession || !activeSessionId) return null;
+    const existing = voiceSocketRef.current;
+    if (existing?.readyState === WebSocket.OPEN) return existing;
+    if (existing && existing.readyState !== WebSocket.CLOSED) {
+      existing.close();
+    }
+
+    const socket = new WebSocket(sessionVoiceWebSocketUrl(activeSessionId, activeSession.userId));
+    voiceSocketRef.current = socket;
+    setRealtimeVoiceStatus("connecting");
+
+    socket.addEventListener("message", (event) => {
+      try {
+        handleRealtimeVoiceEvent(JSON.parse(String(event.data)) as RealtimeVoiceServerEvent);
+      } catch {
+        setRealtimeVoiceStatus("failed");
+      }
+    });
+    socket.addEventListener("close", () => {
+      if (voiceSocketRef.current === socket) {
+        voiceSocketRef.current = null;
+      }
+      setRealtimeVoiceStatus((current) => (current === "partial_failed" ? current : "idle"));
+    });
+    socket.addEventListener("error", () => {
+      setRealtimeVoiceStatus("failed");
+    });
+
+    return new Promise<WebSocket>((resolve, reject) => {
+      const cleanup = () => {
+        socket.removeEventListener("open", handleOpen);
+        socket.removeEventListener("error", handleError);
+        socket.removeEventListener("close", handleClose);
+      };
+      const handleOpen = () => {
+        cleanup();
+        setRealtimeVoiceStatus("idle");
+        resolve(socket);
+      };
+      const handleError = () => {
+        cleanup();
+        reject(new Error("Realtime voice WebSocket failed."));
+      };
+      const handleClose = () => {
+        cleanup();
+        reject(new Error("Realtime voice WebSocket closed."));
+      };
+      socket.addEventListener("open", handleOpen);
+      socket.addEventListener("error", handleError);
+      socket.addEventListener("close", handleClose);
+    });
+  }
+
+  async function startRealtimeVoiceSynthesis(message: ChatMessage) {
+    if (!session || !chatSessionId || !message.id || !message.content.trim()) return false;
+    try {
+      const socket = await ensureRealtimeVoiceSocket();
+      if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+      const jobId = createMessageId("voice-job");
+      realtimeVoiceJobMessageRef.current.set(jobId, message.id);
+      patchMessageTts(message.id, { status: "loading", mode: "server" });
+      setRealtimeVoiceStatus("queued");
+      socket.send(
+        JSON.stringify({
+          type: "synthesize",
+          job_id: jobId,
+          message_id: message.id,
+          text: message.content,
+        }),
+      );
+      return true;
+    } catch {
+      setRealtimeVoiceStatus("failed");
+      return false;
+    }
+  }
+
+  function cancelRealtimeVoicePlayback({ closeSocket = false }: { closeSocket?: boolean } = {}) {
+    audioQueueRef.current?.clear();
+    setSpeaking(false);
+    setActiveTtsMessageId("");
+    setRealtimeVoiceStatus("idle");
+    const socket = voiceSocketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "cancel", scope: "all" }));
+    }
+    if (closeSocket && socket) {
+      socket.close();
+      voiceSocketRef.current = null;
+    }
   }
 
   function driveCharacterFromBridgeMessage(message: MessageServiceMessage) {
@@ -1290,6 +1593,7 @@ export default function CompanionPage() {
     if (!session) return;
     setSessionBusy(true);
     setError("");
+    cancelRealtimeVoicePlayback({ closeSocket: true });
     try {
       const serverMessages = await listSessionMessages(session.userId, nextSession.id);
       setChatSessionId(nextSession.id);
@@ -1311,6 +1615,7 @@ export default function CompanionPage() {
     if (!session) return;
     setSessionBusy(true);
     setError("");
+    cancelRealtimeVoicePlayback({ closeSocket: true });
     try {
       const created = await createChatSession(session.userId, { selected_model_path: selectedModelPath || null });
       setChatSessions((current) => [created, ...current]);
@@ -1490,8 +1795,20 @@ export default function CompanionPage() {
       return;
     }
 
+    if (await startRealtimeVoiceSynthesis(message)) {
+      return;
+    }
+    await prepareAndPlayMessageTts(message);
+  }
+
+  async function prepareAndPlayMessageTts(message: ChatMessage) {
+    if (!session || !message.id) return;
     let currentMessage = message;
-    if (!currentMessage.tts) {
+    if (
+      !currentMessage.tts ||
+      currentMessage.tts.status === "loading" ||
+      currentMessage.tts.status === "partial_failed"
+    ) {
       const optimisticTts: ChatMessageTts = { status: "pending", mode: "server" };
       currentMessage = { ...currentMessage, tts: optimisticTts };
       updateMessageTts(message.id, optimisticTts);
@@ -2119,7 +2436,7 @@ export default function CompanionPage() {
                   aria-label={
                     latestAssistantMessage.tts.status === "loading" || latestAssistantMessage.tts.status === "pending"
                       ? "Voice pending"
-                      : latestAssistantMessage.tts.status === "failed"
+                      : latestAssistantMessage.tts.status === "failed" || latestAssistantMessage.tts.status === "partial_failed"
                         ? "Voice unavailable"
                         : latestAssistantMessage.tts.status === "expired"
                           ? "Voice expired"
@@ -2128,7 +2445,7 @@ export default function CompanionPage() {
                   title={
                     latestAssistantMessage.tts.status === "loading" || latestAssistantMessage.tts.status === "pending"
                       ? "Voice pending"
-                      : latestAssistantMessage.tts.status === "failed"
+                      : latestAssistantMessage.tts.status === "failed" || latestAssistantMessage.tts.status === "partial_failed"
                         ? "Voice unavailable"
                         : latestAssistantMessage.tts.status === "expired"
                           ? "Voice expired"
