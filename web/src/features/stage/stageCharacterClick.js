@@ -1,0 +1,135 @@
+import {
+  CLICK_FALLBACK_EXCLUDED_VMD_CATEGORIES,
+  CLICK_REACTION_VMD_CATEGORIES,
+  filterVmdAssetsByCategories,
+  isVmdAssetInCategory,
+  resolveVmdPlaybackRate,
+} from "../mapping/vmdPreview.js";
+
+export const STAGE_CLICK_RIPPLE_DURATION_MS = 720;
+export const STAGE_CHARACTER_CLICK_MAX_PRESS_MS = 450;
+export const STAGE_CHARACTER_CLICK_MAX_MOVE_PX = 10;
+
+/** @param {any} value @param {number} min @param {number} max */
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, Number(value) || 0));
+}
+
+/** @param {any[]} items @param {number} [randomValue] */
+function pickRandomItem(items, randomValue = Math.random()) {
+  if (!items.length) return null;
+  const clamped = Math.min(0.999999, Math.max(0, Number(randomValue) || 0));
+  return items[Math.floor(clamped * items.length)] || items[0] || null;
+}
+
+/** @param {any} asset */
+function isPlayableClickAsset(asset) {
+  return Boolean(asset?.url) && asset?.motion_profile?.companion_safe !== false;
+}
+
+/**
+ * @param {{
+ *   id?: string,
+ *   clientX?: number,
+ *   clientY?: number,
+ *   rect?: { left?: number, top?: number, width?: number, height?: number }
+ * }} [options]
+ * @returns {{ id: string, x: number, y: number, xPercent: number, yPercent: number }}
+ */
+export function createStageClickRipple({ id, clientX, clientY, rect } = {}) {
+  const width = Math.max(1, Number(rect?.width) || 1);
+  const height = Math.max(1, Number(rect?.height) || 1);
+  const x = clamp((Number(clientX) || 0) - (Number(rect?.left) || 0), 0, width);
+  const y = clamp((Number(clientY) || 0) - (Number(rect?.top) || 0), 0, height);
+
+  return {
+    id: id || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    x,
+    y,
+    xPercent: Math.round((x / width) * 1000) / 10,
+    yPercent: Math.round((y / height) * 1000) / 10,
+  };
+}
+
+/**
+ * @param {{
+ *   downClientX?: number,
+ *   downClientY?: number,
+ *   upClientX?: number,
+ *   upClientY?: number,
+ *   downTimeMs?: number,
+ *   upTimeMs?: number,
+ *   maxPressMs?: number,
+ *   maxMovePx?: number
+ * }} [options]
+ * @returns {boolean}
+ */
+export function shouldTriggerStageCharacterClick({
+  downClientX = 0,
+  downClientY = 0,
+  upClientX = 0,
+  upClientY = 0,
+  downTimeMs = 0,
+  upTimeMs = 0,
+  maxPressMs = STAGE_CHARACTER_CLICK_MAX_PRESS_MS,
+  maxMovePx = STAGE_CHARACTER_CLICK_MAX_MOVE_PX,
+} = {}) {
+  const pressMs = Number(upTimeMs) - Number(downTimeMs);
+  if (!Number.isFinite(pressMs) || pressMs < 0 || pressMs > maxPressMs) return false;
+  const moveX = Number(upClientX) - Number(downClientX);
+  const moveY = Number(upClientY) - Number(downClientY);
+  return Math.hypot(moveX, moveY) <= maxMovePx;
+}
+
+/**
+ * @param {{ assets?: any[], randomValue?: number }} [options]
+ * @returns {{ activeVmdAssetId: string, interaction: any }}
+ */
+export function resolveStageCharacterClickInteraction({ assets = [], randomValue = Math.random() } = {}) {
+  const sourceAssets = Array.isArray(assets) ? assets : [];
+  const preferredAssets = filterVmdAssetsByCategories(sourceAssets, CLICK_REACTION_VMD_CATEGORIES).filter(
+    isPlayableClickAsset,
+  );
+  const fallbackAssets = sourceAssets.filter(
+    (asset) => isPlayableClickAsset(asset) && !isVmdAssetInCategory(asset, CLICK_FALLBACK_EXCLUDED_VMD_CATEGORIES),
+  );
+  const asset = pickRandomItem(preferredAssets.length ? preferredAssets : fallbackAssets, randomValue);
+  if (asset) {
+    const emotion = asset.slot || "happy";
+    return {
+      activeVmdAssetId: asset.asset_id || "",
+      interaction: {
+        emotion,
+        action: "click_react",
+        mode: "vmd",
+        vmdUrl: asset.url,
+        vmdLoopUrls: [],
+        vmdLoopEmotionByUrl: { [asset.url]: emotion },
+        standbyVmdUrl: "",
+        loopGapMs: 0,
+        loopMode: "random",
+        lockLowerBody: true,
+        disableCrossfade: true,
+        playbackRate: resolveVmdPlaybackRate(asset),
+        sequence: [],
+      },
+    };
+  }
+
+  return {
+    activeVmdAssetId: "",
+    interaction: {
+      emotion: "happy",
+      action: "wave",
+      mode: "procedural",
+      vmdUrl: "",
+      vmdLoopUrls: [],
+      vmdLoopEmotionByUrl: {},
+      standbyVmdUrl: "",
+      loopGapMs: 0,
+      loopMode: "random",
+      playbackRate: 1,
+      sequence: [{ template: "greet_wave", action: "wave", durationMs: 1100, intensity: 0.75 }],
+    },
+  };
+}

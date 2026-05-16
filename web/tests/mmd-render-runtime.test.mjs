@@ -9,12 +9,14 @@ const {
   applyStageRuntimeState,
   clipAnimatesBone,
   getStagePresentationConfig,
+  inferRezeMaterialPreset,
   isLowerBodyBoneName,
   MMDCompanionRuntime,
   pickNextLoopMotionUrl,
   pickSequentialLoopMotionUrl,
   resetLowerBodyBonesToBase,
   resetBonesNotAnimatedByClip,
+  tuneRezeNprMMDMaterial,
 } = runtimeModule;
 
 function makeRuntime(overrides = {}) {
@@ -614,6 +616,58 @@ test("stage presentation config exposes mio-reference as the screenshot-inspired
   assert.equal(reference.postfx.enabled, false);
 });
 
+test("stage presentation config exposes reze-npr as an isolated experimental renderer preset", () => {
+  const classic = getStagePresentationConfig("classic");
+  const reze = getStagePresentationConfig("reze-npr");
+
+  assert.equal(classic.postfx.enabled, false);
+  assert.equal(classic.outline.enabled, false);
+  assert.equal(classic.renderer, undefined);
+
+  assert.equal(reze.background, null);
+  assert.equal(reze.camera.locked, false);
+  assert.equal(reze.character.targetHeight, 19.5);
+  assert.equal(reze.floor.kind, "shadowCatcher");
+  assert.ok(reze.floor.opacity > 0);
+  assert.equal(reze.outline.enabled, true);
+  assert.equal(reze.postfx.enabled, true);
+  assert.equal(reze.postfx.bloomThreshold, 0.5);
+  assert.equal(reze.renderer.toneMapping, "aces");
+  assert.ok(reze.lights.key.intensity > classic.lights.key.intensity);
+});
+
+test("reze-npr material tuning maps PMX material names to renderer-inspired presets", () => {
+  assert.equal(inferRezeMaterialPreset(makeMaterial({ name: "face01" })), "face");
+  assert.equal(inferRezeMaterialPreset(makeMaterial({ name: "body skin" })), "body");
+  assert.equal(inferRezeMaterialPreset(makeMaterial({ name: "hair01" })), "hair");
+  assert.equal(inferRezeMaterialPreset(makeMaterial({ name: "pupil_R" })), "eye");
+  assert.equal(inferRezeMaterialPreset(makeMaterial({ name: "black stockings" })), "stockings");
+  assert.equal(inferRezeMaterialPreset(makeMaterial({ name: "weapon metal" })), "metal");
+  assert.equal(inferRezeMaterialPreset(makeMaterial({ name: "rough jacket" })), "cloth_rough");
+  assert.equal(inferRezeMaterialPreset(makeMaterial({ name: "summer dress" })), "cloth_smooth");
+});
+
+test("reze-npr material tuning uses alpha-hash for stocking and cutout-like materials", () => {
+  const stockings = makeMaterial({ name: "Black Stockings", transparent: true, opacity: 0.62, alphaMap: {} });
+  const eye = makeMaterial({ name: "Pupil_R", shininess: 12, specular: 0.2 });
+
+  tuneRezeNprMMDMaterial(stockings, {});
+  tuneRezeNprMMDMaterial(eye, {});
+
+  assert.equal(stockings.userData.rezePreset, "stockings");
+  assert.equal(stockings.alphaHash, true);
+  assert.equal(stockings.alphaToCoverage, true);
+  assert.equal(stockings.depthWrite, true);
+  assert.equal(stockings.transparent, false);
+  assert.equal(stockings.side, THREE.DoubleSide);
+  assert.ok(stockings.alphaTest > 0);
+  assert.equal(stockings.needsUpdate, true);
+
+  assert.equal(eye.userData.rezePreset, "eye");
+  assert.ok(eye.emissiveIntensity > 0);
+  assert.ok(eye.shininess > 12);
+});
+
 test("hero-shot presentation keeps portrait staging and lighting restrained", () => {
   const heroShot = getStagePresentationConfig("hero-shot");
 
@@ -787,6 +841,32 @@ test("runtime camera controls can be unlocked, moved, captured, and locked again
     locked: true,
   });
   assert.equal(runtime.controls.enabled, false);
+});
+
+test("hitTestModelAtClientPoint returns true only when the pointer intersects the loaded model", () => {
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+  camera.position.set(0, 0, 5);
+  camera.lookAt(0, 0, 0);
+  camera.updateMatrixWorld(true);
+  camera.updateProjectionMatrix();
+
+  const model = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial());
+  model.updateMatrixWorld(true);
+
+  const runtime = makeRuntime({
+    camera,
+    model,
+    renderer: {
+      domElement: {
+        getBoundingClientRect() {
+          return { left: 10, top: 20, width: 100, height: 100 };
+        },
+      },
+    },
+  });
+
+  assert.equal(runtime.hitTestModelAtClientPoint(60, 70), true);
+  assert.equal(runtime.hitTestModelAtClientPoint(10, 20), false);
 });
 
 test("setupScene applies a saved genshin camera snapshot before camera setup", () => {
@@ -1731,6 +1811,35 @@ test("playVmd resets to the base pose before helper-swapping to a replacement VM
     ["add", model, true, false],
   ]);
   assert.equal(runtime.currentClip?.name, "replacement-clip");
+});
+
+test("playVmd reports failure when a requested VMD cannot be loaded", async () => {
+  const statuses = [];
+  const runtime = makeRuntime({
+    model: { isSkinnedMesh: true },
+    loader: {
+      loadAnimation(_url, _model, _onLoad, _onProgress, onError) {
+        onError(new Error("bad motion"));
+      },
+    },
+    setStatus(message) {
+      statuses.push(message);
+    },
+    renderScene() {},
+  });
+
+  const originalConsoleWarn = console.warn;
+  console.warn = () => {};
+  let result;
+  try {
+    result = await runtime.playVmd("/motions/broken.vmd", 1);
+  } finally {
+    console.warn = originalConsoleWarn;
+  }
+
+  assert.equal(result, false);
+  assert.equal(runtime.isLoadingVmd, false);
+  assert.deepEqual(statuses, ["VMD playback failed, fallback to procedural."]);
 });
 
 test("playVmd skips crossfade when loop options disable it", async () => {

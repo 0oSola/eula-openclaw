@@ -60,6 +60,28 @@ class FakeRealtimeTtsClient:
         return httpx.Response(status_code=404)
 
 
+class FailingRealtimeTtsClient(FakeRealtimeTtsClient):
+    async def synthesize_chunk(
+        self,
+        *,
+        text: str,
+        emotion_label: str | None = None,
+        pause_profile: str = "podcast",
+        session_id: str | None = None,
+        sequence: int | None = None,
+    ):
+        self.chunk_calls.append(
+            {
+                "text": text,
+                "emotion_label": emotion_label,
+                "pause_profile": pause_profile,
+                "session_id": session_id,
+                "sequence": sequence,
+            }
+        )
+        raise RuntimeError("chunk backend crashed")
+
+
 def _client() -> tuple[TestClient, object, FakeRealtimeTtsClient]:
     app = create_app(
         {
@@ -146,6 +168,44 @@ def test_voice_websocket_synthesize_emits_audio_ready_and_done():
         {
             "text": "hello.",
             "emotion_label": "daily",
+            "pause_profile": "podcast",
+            "session_id": session_id,
+            "sequence": 1,
+        }
+    ]
+
+
+def test_voice_websocket_reports_unexpected_chunk_errors():
+    client, app, _ = _client()
+    failing_tts = FailingRealtimeTtsClient()
+    app.state.tts_client = failing_tts
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+
+    with client.websocket_connect(f"/ws/sessions/{session_id}/voice?user_id=u1") as websocket:
+        websocket.send_json(
+            {
+                "type": "synthesize",
+                "job_id": "job-1",
+                "message_id": "msg-1",
+                "text": "hello.",
+            }
+        )
+
+        assert websocket.receive_json()["type"] == "queued"
+        assert websocket.receive_json()["type"] == "synthesis_started"
+        error = websocket.receive_json()
+
+    assert error == {
+        "type": "error",
+        "session_id": session_id,
+        "message_id": "msg-1",
+        "job_id": "job-1",
+        "detail": "Realtime voice synthesis failed unexpectedly.",
+    }
+    assert failing_tts.chunk_calls == [
+        {
+            "text": "hello.",
+            "emotion_label": None,
             "pause_profile": "podcast",
             "session_id": session_id,
             "sequence": 1,

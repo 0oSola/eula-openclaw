@@ -111,7 +111,7 @@ class Settings:
                 resolve_value("openclaw_verify_ssl", "OPENCLAW_VERIFY_SSL", True),
                 default=True,
             ),
-            openclaw_timeout_seconds=int(resolve_value("openclaw_timeout_seconds", "OPENCLAW_TIMEOUT_SECONDS", 15)),
+            openclaw_timeout_seconds=int(resolve_value("openclaw_timeout_seconds", "OPENCLAW_TIMEOUT_SECONDS", 120)),
             admin_user_ids=list(ids),
             retention_days=int(resolve_value("retention_days", "RETENTION_DAYS", 30)),
             ndjson_compress_after_days=int(

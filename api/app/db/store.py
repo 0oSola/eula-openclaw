@@ -21,6 +21,30 @@ def _ensure_utc(value: datetime | None) -> datetime:
     return value.astimezone(UTC)
 
 
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return _ensure_utc(parsed)
+
+
+def _normalize_message_content(value: str | None) -> str:
+    return " ".join(str(value or "").split())
+
+
+_BRIDGE_ECHO_SUPPRESSION_WINDOW_SECONDS = 5 * 60
+_BRIDGE_DUPLICATE_SUPPRESSION_WINDOW_SECONDS = 3
+_BRIDGE_DUPLICATE_SYNC_SOURCES = {"realtime", "realtime_backfill"}
+
+
 class TraceStore:
     def __init__(self, db_path: Path, ndjson_dir: Path):
         self.db_path = Path(db_path)
@@ -366,9 +390,13 @@ class TraceStore:
         *,
         title: str | None = None,
         selected_model_path: str | None = None,
+        openclaw_session_key: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now_iso()
         session_id = str(uuid4())
+        resolved_openclaw_session_key = (
+            openclaw_session_key or f"openclaw:{session_id}"
+        ).strip() or f"openclaw:{session_id}"
         self._conn.execute(
             """
             INSERT INTO sessions (
@@ -381,7 +409,7 @@ class TraceStore:
                 session_id,
                 workspace_id,
                 account_id,
-                f"openclaw:{session_id}",
+                resolved_openclaw_session_key,
                 (title or "新对话").strip() or "新对话",
                 "manual" if title else "default",
                 selected_model_path,
@@ -391,6 +419,29 @@ class TraceStore:
         )
         self._conn.commit()
         return self.get_session(workspace_id, account_id, session_id)  # type: ignore[return-value]
+
+    def update_session_openclaw_session_key(
+        self,
+        workspace_id: str,
+        account_id: str,
+        session_id: str,
+        openclaw_session_key: str,
+    ) -> dict[str, Any] | None:
+        session = self.get_session(workspace_id, account_id, session_id)
+        resolved_openclaw_session_key = openclaw_session_key.strip()
+        if session is None or not resolved_openclaw_session_key:
+            return session
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE sessions
+            SET openclaw_session_key = ?, updated_at = ?
+            WHERE id = ? AND workspace_id = ? AND account_id = ?
+            """,
+            (resolved_openclaw_session_key, now, session_id, workspace_id, account_id),
+        )
+        self._conn.commit()
+        return self.get_session(workspace_id, account_id, session_id)
 
     def list_sessions(self, workspace_id: str, account_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
@@ -537,6 +588,63 @@ class TraceStore:
         ).fetchone()
         return self._hydrate_message(row) if row else None
 
+    def find_recent_traced_message_by_role_content(
+        self,
+        workspace_id: str,
+        account_id: str,
+        session_id: str,
+        *,
+        role: str,
+        content: str,
+        max_age_seconds: int = 120,
+    ) -> dict[str, Any] | None:
+        cutoff = (datetime.now(UTC) - timedelta(seconds=max_age_seconds)).isoformat()
+        row = self._conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE workspace_id = ? AND account_id = ? AND session_id = ?
+              AND role = ? AND content = ? AND trace_id IS NOT NULL
+              AND created_at >= ? AND deleted_at IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (workspace_id, account_id, session_id, role, content, cutoff),
+        ).fetchone()
+        return self._hydrate_message(row) if row else None
+
+    def find_recent_message_bridge_duplicate(
+        self,
+        workspace_id: str,
+        account_id: str,
+        session_id: str,
+        *,
+        external_session_key: str,
+        role: str,
+        content: str,
+        max_age_seconds: int = _BRIDGE_DUPLICATE_SUPPRESSION_WINDOW_SECONDS,
+    ) -> dict[str, Any] | None:
+        normalized_content = _normalize_message_content(content)
+        if not normalized_content:
+            return None
+        cutoff = (datetime.now(UTC) - timedelta(seconds=max_age_seconds)).isoformat()
+        rows = self._conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE workspace_id = ? AND account_id = ? AND session_id = ?
+              AND role = ? AND trace_id IS NULL AND metadata_json IS NOT NULL
+              AND created_at >= ? AND deleted_at IS NULL
+            ORDER BY created_at DESC
+            """,
+            (workspace_id, account_id, session_id, role, cutoff),
+        ).fetchall()
+        for row in rows:
+            metadata = self._json_loads(row["metadata_json"], {})
+            if not self._is_message_bridge_duplicate_candidate(metadata, external_session_key):
+                continue
+            if _normalize_message_content(row["content"]) == normalized_content:
+                return self._hydrate_message(row)
+        return None
+
     def insert_message_if_external_missing(
         self,
         workspace_id: str,
@@ -581,6 +689,63 @@ class TraceStore:
             metadata=metadata,
         )
 
+    def soft_delete_message_bridge_echoes(
+        self,
+        workspace_id: str,
+        account_id: str,
+        session_id: str,
+        *,
+        external_session_key: str,
+        role_content_pairs: list[tuple[str, str]],
+        created_after: str | None = None,
+    ) -> int:
+        expected = {(role, content) for role, content in role_content_pairs}
+        if not expected:
+            return 0
+        params: list[Any] = [workspace_id, account_id, session_id]
+        created_filter = ""
+        if created_after:
+            created_filter = "AND created_at >= ?"
+            params.append(created_after)
+        rows = self._conn.execute(
+            f"""
+            SELECT id, role, content, metadata_json
+            FROM messages
+            WHERE workspace_id = ? AND account_id = ? AND session_id = ?
+              AND deleted_at IS NULL AND trace_id IS NULL
+              AND metadata_json IS NOT NULL
+              {created_filter}
+            ORDER BY created_at ASC
+            """,
+            tuple(params),
+        ).fetchall()
+        message_ids: list[str] = []
+        for row in rows:
+            if (row["role"], row["content"]) not in expected:
+                continue
+            metadata = self._json_loads(row["metadata_json"], {})
+            if not isinstance(metadata, dict):
+                continue
+            if metadata.get("source") != "message_bridge":
+                continue
+            if metadata.get("external_session_key") != external_session_key:
+                continue
+            message_ids.append(row["id"])
+        if not message_ids:
+            return 0
+        now = _utc_now_iso()
+        for message_id in message_ids:
+            self._conn.execute(
+                """
+                UPDATE messages
+                SET deleted_at = ?
+                WHERE id = ? AND workspace_id = ? AND account_id = ?
+                """,
+                (now, message_id, workspace_id, account_id),
+            )
+        self._conn.commit()
+        return len(message_ids)
+
     def _hydrate_message(self, row: sqlite3.Row) -> dict[str, Any]:
         message = dict(row)
         message["motion_plan"] = self._json_loads(message.pop("motion_plan_json", None), None)
@@ -600,6 +765,122 @@ class TraceStore:
             (workspace_id, account_id, session_id),
         ).fetchall()
         return [self._hydrate_message(row) for row in rows]
+
+    def list_messages_for_chat(self, workspace_id: str, account_id: str, session_id: str) -> list[dict[str, Any]]:
+        messages = self._suppress_message_bridge_echoes(self.list_messages(workspace_id, account_id, session_id))
+        return self._suppress_nearby_message_bridge_duplicates(messages)
+
+    def _suppress_message_bridge_echoes(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        traced_messages: list[tuple[str, str, datetime]] = []
+        for message in messages:
+            if not message.get("trace_id"):
+                continue
+            content = _normalize_message_content(message.get("content"))
+            created_at = _parse_iso_datetime(message.get("created_at"))
+            if not content or created_at is None:
+                continue
+            traced_messages.append((str(message.get("role") or ""), content, created_at))
+        if not traced_messages:
+            return messages
+
+        output: list[dict[str, Any]] = []
+        for message in messages:
+            metadata = message.get("metadata") or {}
+            if (
+                not message.get("trace_id")
+                and isinstance(metadata, dict)
+                and metadata.get("source") == "message_bridge"
+                and self._matches_traced_message_echo(message, traced_messages)
+            ):
+                continue
+            output.append(message)
+        return output
+
+    def _matches_traced_message_echo(
+        self,
+        message: dict[str, Any],
+        traced_messages: list[tuple[str, str, datetime]],
+    ) -> bool:
+        content = _normalize_message_content(message.get("content"))
+        created_at = _parse_iso_datetime(message.get("created_at"))
+        if not content or created_at is None:
+            return False
+        role = str(message.get("role") or "")
+        for traced_role, traced_content, traced_at in traced_messages:
+            if role != traced_role or content != traced_content:
+                continue
+            age_seconds = abs((created_at - traced_at).total_seconds())
+            if age_seconds <= _BRIDGE_ECHO_SUPPRESSION_WINDOW_SECONDS:
+                return True
+        return False
+
+    def _suppress_nearby_message_bridge_duplicates(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+        recent: dict[tuple[str, str, str], datetime] = {}
+        for message in messages:
+            metadata = message.get("metadata") or {}
+            external_session_key = str(metadata.get("external_session_key") or "") if isinstance(metadata, dict) else ""
+            if self._is_message_bridge_duplicate_candidate(metadata, external_session_key):
+                content = _normalize_message_content(message.get("content"))
+                created_at = _parse_iso_datetime(message.get("created_at"))
+                role = str(message.get("role") or "")
+                key = (external_session_key, role, content)
+                previous_created_at = recent.get(key)
+                if (
+                    content
+                    and created_at is not None
+                    and previous_created_at is not None
+                    and abs((created_at - previous_created_at).total_seconds()) <= _BRIDGE_DUPLICATE_SUPPRESSION_WINDOW_SECONDS
+                ):
+                    continue
+                if content and created_at is not None:
+                    recent[key] = created_at
+            output.append(message)
+        return output
+
+    @staticmethod
+    def _is_message_bridge_duplicate_candidate(metadata: Any, external_session_key: str) -> bool:
+        if not isinstance(metadata, dict):
+            return False
+        if metadata.get("source") != "message_bridge":
+            return False
+        if metadata.get("external_session_key") != external_session_key:
+            return False
+        return str(metadata.get("synced_from") or "") in _BRIDGE_DUPLICATE_SYNC_SOURCES
+
+    def find_message_bridge_session_by_external_key(
+        self,
+        workspace_id: str,
+        account_id: str,
+        *,
+        provider: str,
+        channel: str,
+        external_session_key: str,
+    ) -> dict[str, Any] | None:
+        rows = self._conn.execute(
+            """
+            SELECT session_id, metadata_json
+            FROM messages
+            WHERE workspace_id = ? AND account_id = ? AND deleted_at IS NULL
+              AND metadata_json IS NOT NULL
+            ORDER BY created_at DESC
+            """,
+            (workspace_id, account_id),
+        ).fetchall()
+        for row in rows:
+            metadata = self._json_loads(row["metadata_json"], {})
+            if not isinstance(metadata, dict):
+                continue
+            if (
+                metadata.get("source") == "message_bridge"
+                and metadata.get("provider") == provider
+                and metadata.get("channel") == channel
+                and metadata.get("external_session_key") == external_session_key
+            ):
+                session = self.get_session(workspace_id, account_id, row["session_id"])
+                if session:
+                    return session
+        return None
 
     def get_message(self, workspace_id: str, account_id: str, message_id: str) -> dict[str, Any] | None:
         row = self._conn.execute(
@@ -1264,6 +1545,27 @@ class TraceStore:
         row = self._conn.execute(
             "SELECT * FROM message_bridge_bindings WHERE id = ?",
             (binding_id,),
+        ).fetchone()
+        return self._hydrate_bridge_binding(row)
+
+    def get_message_bridge_binding_by_external_key(
+        self,
+        workspace_id: str,
+        account_id: str,
+        *,
+        provider: str,
+        channel: str,
+        external_session_key: str,
+    ) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM message_bridge_bindings
+            WHERE workspace_id = ? AND account_id = ? AND provider = ? AND channel = ?
+              AND external_session_key = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (workspace_id, account_id, provider, channel, external_session_key),
         ).fetchone()
         return self._hydrate_bridge_binding(row)
 

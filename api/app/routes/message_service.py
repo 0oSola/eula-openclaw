@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
@@ -8,6 +9,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.responses import Response
 
+from app.models.chat import OpenClawReply
 from app.services.openclaw_client import OpenClawInvocationError
 from app.services.response_parser import normalize_assistant_reply
 from app.services.voice_workflow_tts_client import VoiceWorkflowTtsError
@@ -122,6 +124,59 @@ def _history(messages: list[dict]) -> list[dict[str, str]]:
         if message["role"] in {"user", "assistant", "system"}:
             output.append({"role": message["role"], "content": message["content"]})
     return output
+
+
+def _openclaw_http_stream_enabled(request: Request) -> bool:
+    mode = str(getattr(request.app.state.settings, "openclaw_stream_mode", "") or "").strip().lower()
+    return mode in {"http_sse", "sse", "stream", "streaming", "true", "1"}
+
+
+def _is_complete_json_object(raw_text: str) -> bool:
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(payload, dict) and isinstance(payload.get("text"), str) and bool(payload["text"].strip())
+
+
+async def _request_openclaw_reply(
+    request: Request,
+    *,
+    user_id: str,
+    session_id: str | None,
+    message: str,
+    history: list[dict[str, str]],
+) -> OpenClawReply:
+    if not _openclaw_http_stream_enabled(request):
+        return await request.app.state.openclaw_client.generate_reply(
+            user_id=user_id,
+            session_id=session_id,
+            message=message,
+            history=history,
+        )
+
+    chunks: list[str] = []
+    try:
+        async for delta in request.app.state.openclaw_client.stream_reply(
+            user_id=user_id,
+            session_id=session_id,
+            message=message,
+            history=history,
+        ):
+            chunks.append(delta)
+            raw_text = "".join(chunks).strip()
+            if _is_complete_json_object(raw_text):
+                return OpenClawReply(raw_text=raw_text, endpoint_used="/v1/responses?stream=true", status_code=200)
+    except OpenClawInvocationError:
+        raw_text = "".join(chunks).strip()
+        if raw_text:
+            return OpenClawReply(raw_text=raw_text, endpoint_used="/v1/responses?stream=true;partial=true", status_code=206)
+        raise
+
+    raw_text = "".join(chunks).strip()
+    if not raw_text:
+        raise OpenClawInvocationError("OpenClaw stream returned empty content.")
+    return OpenClawReply(raw_text=raw_text, endpoint_used="/v1/responses?stream=true", status_code=200)
 
 
 def _make_session_title(content: str) -> str:
@@ -452,10 +507,11 @@ async def delete_session(session_id: str, request: Request, x_user_id: str | Non
 @router.get("/sessions/{session_id}/messages")
 async def list_messages(session_id: str, request: Request, x_user_id: str | None = Header(default=None)):
     ctx = _context(request, x_user_id)
-    session = _store(request).get_session(ctx["workspace"]["id"], ctx["account"]["id"], session_id)
+    store = _store(request)
+    session = store.get_session(ctx["workspace"]["id"], ctx["account"]["id"], session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    messages = _store(request).list_messages(ctx["workspace"]["id"], ctx["account"]["id"], session_id)
+    messages = store.list_messages_for_chat(ctx["workspace"]["id"], ctx["account"]["id"], session_id)
     return {"items": [_message_response(message) for message in messages]}
 
 
@@ -522,7 +578,7 @@ async def create_message(
             selected_model_path=payload.selected_model_path,
         )
 
-    prior_messages = store.list_messages(ctx["workspace"]["id"], ctx["account"]["id"], session_id)
+    prior_messages = store.list_messages_for_chat(ctx["workspace"]["id"], ctx["account"]["id"], session_id)
     history = _history([message for message in prior_messages if message["id"] != user_message["id"]])
     openclaw_started = perf_counter()
     request.app.state.trace_store.insert_event(
@@ -539,7 +595,8 @@ async def create_message(
         },
     )
     try:
-        reply = await request.app.state.openclaw_client.generate_reply(
+        reply = await _request_openclaw_reply(
+            request,
             user_id=ctx["account"]["external_user_id"],
             session_id=session["openclaw_session_key"],
             message=payload.content,
@@ -631,6 +688,27 @@ async def create_message(
             "degraded": degraded,
         },
     )
+    pruned_bridge_echoes = store.soft_delete_message_bridge_echoes(
+        ctx["workspace"]["id"],
+        ctx["account"]["id"],
+        session_id,
+        external_session_key=session["openclaw_session_key"],
+        role_content_pairs=[
+            ("user", payload.content),
+            ("assistant", assistant_message["content"]),
+        ],
+        created_after=user_message["created_at"],
+    )
+    if pruned_bridge_echoes:
+        request.app.state.trace_store.insert_event(
+            trace_id=trace_id,
+            user_id=ctx["account"]["external_user_id"],
+            session_id=session_id,
+            stage="message_service.bridge_echo_prune",
+            status="ok",
+            latency_ms=None,
+            payload={"count": pruned_bridge_echoes, "openclaw_session_key": session["openclaw_session_key"]},
+        )
     assistant_message["motion_resolution"] = store.create_message_motion_resolution(
         ctx["workspace"]["id"],
         assistant_message["id"],
@@ -783,8 +861,9 @@ async def proxy_tts_audio(
     tts_id: str,
     request: Request,
     x_user_id: str | None = Header(default=None),
+    user_id: str = "",
 ):
-    ctx = _context(request, x_user_id)
+    ctx = _context(request, x_user_id or user_id)
     message = _store(request).get_message_by_tts_id(ctx["workspace"]["id"], ctx["account"]["id"], tts_id)
     if not message:
         raise HTTPException(status_code=404, detail="TTS reference not found")

@@ -287,6 +287,11 @@ def _chat_role(role: str) -> str | None:
     return None
 
 
+def _is_feishu_direct_session_key(session_key: str) -> bool:
+    parts = session_key.strip().split(":")
+    return len(parts) >= 5 and parts[0] == "agent" and parts[2] == "feishu" and parts[3] == "direct" and bool(parts[4])
+
+
 def _normalize_bridge_message(message: ExternalMessage) -> dict[str, Any]:
     role = _chat_role(message.role)
     if role == "assistant":
@@ -321,6 +326,7 @@ class MessageBridgeService:
         self.store = store
         self.provider = provider
         self.history_limit = history_limit
+        self.history_backfill_interval_seconds = 15.0
 
     def sync_default_binding_for_user(self, user_id: str) -> dict[str, Any]:
         return _run_async(self.ensure_default_binding_for_user(user_id))
@@ -348,40 +354,44 @@ class MessageBridgeService:
         if not feishu_sessions:
             raise RuntimeError("No Feishu sessions found from bridge provider.")
 
-        latest = feishu_sessions[0]
         existing = self.store.get_default_message_bridge_binding(
             ctx["workspace"]["id"],
             ctx["account"]["id"],
             provider=self.provider.provider,
             channel=self.provider.channel,
         )
-        if existing and existing["external_session_key"] == latest.key:
-            binding = existing
-        else:
-            session = self.store.create_session(
-                ctx["workspace"]["id"],
-                ctx["account"]["id"],
-                title=latest.display_name or "Feishu",
+        existing_session = None
+        if existing and _is_feishu_direct_session_key(existing["external_session_key"]):
+            existing_session = next(
+                (session for session in feishu_sessions if session.key == existing["external_session_key"]),
+                None,
             )
-            binding = self.store.upsert_message_bridge_binding(
-                workspace_id=ctx["workspace"]["id"],
-                account_id=ctx["account"]["id"],
-                local_session_id=session["id"],
-                provider=self.provider.provider,
-                channel=self.provider.channel,
-                external_session_key=latest.key,
-                external_display_name=latest.display_name,
-                is_default=True,
-                status="active",
-            )
+        target = existing_session or feishu_sessions[0]
+        session = self._resolve_local_session_for_external(ctx, target)
+        binding = self.store.upsert_message_bridge_binding(
+            workspace_id=ctx["workspace"]["id"],
+            account_id=ctx["account"]["id"],
+            local_session_id=session["id"],
+            provider=self.provider.provider,
+            channel=self.provider.channel,
+            external_session_key=target.key,
+            external_display_name=target.display_name,
+            is_default=True,
+            status="active",
+        )
+        if (
+            not existing
+            or existing["external_session_key"] != target.key
+            or existing["local_session_id"] != session["id"]
+        ):
             self._insert_event(
                 user_id=user_id,
                 session_id=session["id"],
                 stage="message_bridge.openclaw.session.bind",
                 status="ok",
                 payload={
-                    "external_session_key": latest.key,
-                    "external_display_name": latest.display_name,
+                    "external_session_key": target.key,
+                    "external_display_name": target.display_name,
                 },
             )
 
@@ -444,8 +454,7 @@ class MessageBridgeService:
                 for session in sessions
                 if session.channel == self.provider.channel or session.provider == self.provider.channel
             ],
-            key=lambda item: item.updated_at,
-            reverse=True,
+            key=lambda item: (not _is_feishu_direct_session_key(item.key), -item.updated_at),
         )
 
     def bind_external_session_for_user(self, user_id: str, external_session_key: str) -> dict[str, Any]:
@@ -463,11 +472,7 @@ class MessageBridgeService:
             provider=self.provider.provider,
             channel=self.provider.channel,
         )
-        session = self.store.create_session(
-            ctx["workspace"]["id"],
-            ctx["account"]["id"],
-            title=target.display_name or "Feishu",
-        )
+        session = self._resolve_local_session_for_external(ctx, target)
         binding = self.store.upsert_message_bridge_binding(
             workspace_id=ctx["workspace"]["id"],
             account_id=ctx["account"]["id"],
@@ -495,24 +500,125 @@ class MessageBridgeService:
         if provider_connected and previous and previous["external_session_key"] != binding["external_session_key"]:
             unsubscribe = getattr(self.provider, "unsubscribe", None)
             if unsubscribe is not None:
-                await unsubscribe(previous["external_session_key"])
-                self._insert_event(
+                await self._refresh_subscription_link(
+                    operation=unsubscribe,
                     user_id=user_id,
                     session_id=previous["local_session_id"],
                     stage="message_bridge.openclaw.unsubscribe",
-                    status="ok",
-                    payload={"external_session_key": previous["external_session_key"]},
+                    external_session_key=previous["external_session_key"],
                 )
         if provider_connected:
-            await self.provider.subscribe(binding["external_session_key"])
-            self._insert_event(
+            await self._refresh_subscription_link(
+                operation=self.provider.subscribe,
                 user_id=user_id,
                 session_id=binding["local_session_id"],
                 stage="message_bridge.openclaw.subscribe",
-                status="ok",
-                payload={"external_session_key": binding["external_session_key"]},
+                external_session_key=binding["external_session_key"],
             )
         return self.store.get_message_bridge_binding(binding["id"]) or binding
+
+    async def _refresh_subscription_link(
+        self,
+        *,
+        operation,
+        user_id: str,
+        session_id: str,
+        stage: str,
+        external_session_key: str,
+    ) -> bool:
+        try:
+            await operation(external_session_key)
+        except Exception as error:
+            self.store.update_message_bridge_state(
+                self.provider.provider,
+                self.provider.channel,
+                websocket_status="reconnecting",
+                last_error=str(error),
+            )
+            self._insert_event(
+                user_id=user_id,
+                session_id=session_id,
+                stage=stage,
+                status="error",
+                error_code=type(error).__name__,
+                payload={
+                    "external_session_key": external_session_key,
+                    "error": str(error),
+                },
+            )
+            with contextlib.suppress(Exception):
+                await self.provider.close()
+            return False
+        self._insert_event(
+            user_id=user_id,
+            session_id=session_id,
+            stage=stage,
+            status="ok",
+            payload={"external_session_key": external_session_key},
+        )
+        return True
+
+    def _resolve_local_session_for_external(self, ctx: dict[str, Any], target: ExternalSession) -> dict[str, Any]:
+        workspace_id = ctx["workspace"]["id"]
+        account_id = ctx["account"]["id"]
+        session = self.store.find_message_bridge_session_by_external_key(
+            workspace_id,
+            account_id,
+            provider=self.provider.provider,
+            channel=self.provider.channel,
+            external_session_key=target.key,
+        )
+        if session:
+            return self._ensure_session_targets_external_key(workspace_id, account_id, session, target.key)
+
+        binding = self.store.get_message_bridge_binding_by_external_key(
+            workspace_id,
+            account_id,
+            provider=self.provider.provider,
+            channel=self.provider.channel,
+            external_session_key=target.key,
+        )
+        if binding:
+            session = self.store.get_session(workspace_id, account_id, binding["local_session_id"])
+            if session:
+                return self._ensure_session_targets_external_key(workspace_id, account_id, session, target.key)
+
+        return self.store.create_session(
+            workspace_id,
+            account_id,
+            title=target.display_name or "Feishu",
+            openclaw_session_key=target.key,
+        )
+
+    def _ensure_local_session_targets_external(self, binding: dict[str, Any]) -> None:
+        session = self.store.get_session(
+            binding["workspace_id"],
+            binding["account_id"],
+            binding["local_session_id"],
+        )
+        if session:
+            self._ensure_session_targets_external_key(
+                binding["workspace_id"],
+                binding["account_id"],
+                session,
+                binding["external_session_key"],
+            )
+
+    def _ensure_session_targets_external_key(
+        self,
+        workspace_id: str,
+        account_id: str,
+        session: dict[str, Any],
+        external_session_key: str,
+    ) -> dict[str, Any]:
+        if session["openclaw_session_key"] == external_session_key:
+            return session
+        return self.store.update_session_openclaw_session_key(
+            workspace_id,
+            account_id,
+            session["id"],
+            external_session_key,
+        ) or session
 
     def sync_history(self, binding: dict[str, Any], *, limit: int, source: str) -> list[dict[str, Any]]:
         return _run_async(self.sync_history_async(binding, limit=limit, source=source))
@@ -560,7 +666,49 @@ class MessageBridgeService:
         if not role:
             return None
         normalized = _normalize_bridge_message(external_message)
+        if self.store.find_recent_traced_message_by_role_content(
+            binding["workspace_id"],
+            binding["account_id"],
+            binding["local_session_id"],
+            role=role,
+            content=normalized["content"],
+        ):
+            self._insert_event(
+                user_id=self._binding_user_id(binding),
+                session_id=binding["local_session_id"],
+                stage="message_bridge.openclaw.message.skipped",
+                status="ok",
+                payload={
+                    "external_session_key": binding["external_session_key"],
+                    "role": role,
+                    "source": source,
+                    "reason": "local_trace_echo",
+                },
+            )
+            return None
         external_id = _external_message_id(self.provider.provider, binding["external_session_key"], external_message)
+        if source in {"realtime", "realtime_backfill"} and self.store.find_recent_message_bridge_duplicate(
+            binding["workspace_id"],
+            binding["account_id"],
+            binding["local_session_id"],
+            external_session_key=binding["external_session_key"],
+            role=role,
+            content=normalized["content"],
+        ):
+            self._insert_event(
+                user_id=self._binding_user_id(binding),
+                session_id=binding["local_session_id"],
+                stage="message_bridge.openclaw.message.skipped",
+                status="ok",
+                payload={
+                    "external_session_key": binding["external_session_key"],
+                    "external_message_id": external_id,
+                    "role": role,
+                    "source": source,
+                    "reason": "nearby_duplicate",
+                },
+            )
+            return None
         message = self.store.insert_message_if_external_missing(
             binding["workspace_id"],
             binding["local_session_id"],
@@ -683,7 +831,19 @@ class MessageBridgeService:
                     last_error=None,
                 )
                 return
-            event = await receive_event()
+            try:
+                event = await asyncio.wait_for(receive_event(), timeout=self.history_backfill_interval_seconds)
+            except TimeoutError:
+                latest_binding = self.store.get_default_message_bridge_binding(
+                    active_binding["workspace_id"],
+                    active_binding["account_id"],
+                    provider=self.provider.provider,
+                    channel=self.provider.channel,
+                )
+                if latest_binding:
+                    active_binding = latest_binding
+                await self.sync_history_async(active_binding, limit=20, source="realtime_backfill")
+                continue
             consumed += 1
             if event.get("event") != "session.message":
                 continue

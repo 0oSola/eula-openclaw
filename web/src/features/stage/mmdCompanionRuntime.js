@@ -88,6 +88,35 @@ const FIXED_CLOTH_MATERIAL_HINTS = [
   "\u56f4\u5dfe",
 ];
 
+const REZE_EYE_MATERIAL_HINTS = ["eye", "pupil", "iris", "eyeball", "hitomi", "\u76ee", "\u773c", "\u77b3"];
+const REZE_STOCKING_MATERIAL_HINTS = [
+  "stocking",
+  "stockings",
+  "tights",
+  "sock",
+  "socks",
+  "pantyhose",
+  "\u889c",
+  "\u4e1d\u889c",
+  "\u9774\u4e0b",
+];
+const REZE_ROUGH_CLOTH_HINTS = ["rough", "jacket", "coat", "pants", "denim", "leather", "\u5916\u5957", "\u5927\u8863", "\u88e4"];
+const REZE_SMOOTH_CLOTH_HINTS = [
+  "shirt",
+  "shorts",
+  "dress",
+  "skirt",
+  "cloth",
+  "sleeve",
+  "ribbon",
+  "shoe",
+  "shoes",
+  "\u670d",
+  "\u88d9",
+  "\u8896",
+  "\u978b",
+];
+
 const FIXED_MORPH_HINTS = {
   smile: ["smile", "happy", "\u7b11", "\u5fae\u7b11"],
   sad: ["sad", "\u60b2", "\u60b2\u4f24"],
@@ -400,6 +429,58 @@ const STAGE_PRESENTATION_PRESETS = {
     backdrop: { enabled: false },
     postfx: { enabled: false },
   },
+  "reze-npr": {
+    background: null,
+    fog: null,
+    renderer: { toneMapping: "aces", exposure: 1.08 },
+    camera: {
+      fov: 32,
+      position: [-1.2, 2.8, 31.5],
+      target: [-1.2, 1.05, 0.45],
+      minDistance: 8,
+      maxDistance: 42,
+      maxPolarAngle: Math.PI * 0.49,
+      locked: false,
+    },
+    character: {
+      targetHeight: 19.5,
+    },
+    lights: {
+      ambient: { color: "#667d9f", intensity: 0.82 },
+      hemisphere: { sky: "#8ea6c9", ground: "#242833", intensity: 0.72 },
+      key: { color: "#fff7f0", intensity: 1.86, position: [0, 16, -30] },
+      fill: { color: "#9fc1ff", intensity: 0.34, position: [18, 8, 14] },
+      rim: { color: "#ff9bce", intensity: 0.2, position: [-12, 10, -18] },
+    },
+    shadowMapType: THREE.PCFSoftShadowMap,
+    floor: {
+      kind: "shadowCatcher",
+      size: 52,
+      y: -9.75,
+      opacity: 0.16,
+      contactShadow: {
+        enabled: true,
+        size: [10.8, 7],
+        opacity: 0.1,
+        position: [0, -9.73, 0.2],
+      },
+    },
+    outline: { enabled: true, color: "#15131d", opacity: 0.84, scale: 1.022 },
+    backdrop: { enabled: false },
+    postfx: {
+      enabled: true,
+      bloomStrength: 0.06,
+      bloomRadius: 0.24,
+      bloomThreshold: 0.5,
+      grade: {
+        exposure: 1.06,
+        contrast: 1.08,
+        saturation: 1.08,
+        warmth: 0.02,
+        shadowLift: 0.005,
+      },
+    },
+  },
 };
 
 function cloneStagePresentationConfig(config) {
@@ -614,6 +695,25 @@ function inferMaterialProfile(material) {
   return "default";
 }
 
+function hasMaterialHint(text, hints) {
+  return hints.some((hint) => text.includes(hint));
+}
+
+export function inferRezeMaterialPreset(material) {
+  const text = describeMaterial(material);
+  const metalHints = ["metal", "armor", "steel", "blade", "weapon", "gun", "mecha", "buckle", "silver", "gold"];
+
+  if (hasMaterialHint(text, REZE_EYE_MATERIAL_HINTS)) return "eye";
+  if (hasMaterialHint(text, REZE_STOCKING_MATERIAL_HINTS)) return "stockings";
+  if (hasMaterialHint(text, metalHints)) return "metal";
+  if (hasMaterialHint(text, FIXED_FACE_MATERIAL_HINTS)) return "face";
+  if (hasMaterialHint(text, FIXED_HAIR_MATERIAL_HINTS)) return "hair";
+  if (hasMaterialHint(text, FIXED_SKIN_MATERIAL_HINTS)) return "body";
+  if (hasMaterialHint(text, REZE_ROUGH_CLOTH_HINTS)) return "cloth_rough";
+  if (hasMaterialHint(text, REZE_SMOOTH_CLOTH_HINTS) || hasMaterialHint(text, FIXED_CLOTH_MATERIAL_HINTS)) return "cloth_smooth";
+  return "default";
+}
+
 function createToonRampTexture(pipeline = "classic") {
   const canvas = document.createElement("canvas");
   canvas.width = 256;
@@ -629,6 +729,12 @@ function createToonRampTexture(pipeline = "classic") {
     gradient.addColorStop(0.46, "#92a0b8");
     gradient.addColorStop(0.76, "#92a0b8");
     gradient.addColorStop(0.77, "#eef7ff");
+  } else if (pipeline === "reze-npr") {
+    gradient.addColorStop(0, "#3d3745");
+    gradient.addColorStop(0.296, "#3d3745");
+    gradient.addColorStop(0.302, "#c98d83");
+    gradient.addColorStop(0.54, "#f2b8a6");
+    gradient.addColorStop(0.545, "#fff1de");
   } else if (pipeline === "genshin" || pipeline === "mio-reference") {
     gradient.addColorStop(0, "#505050");
     gradient.addColorStop(0.3, "#b4b4b4");
@@ -1031,7 +1137,95 @@ export function tuneGenshinMMDMaterial(material, rampTexture) {
   finalizeMMDMaterial(material, rampTexture);
 }
 
+export function tuneRezeNprMMDMaterial(material, rampTexture) {
+  if (!material) return;
+  const { needsCutout } = primeMMDMaterial(material);
+  const preset = inferRezeMaterialPreset(material);
+
+  cleanLegacyMMDMaterialFlags(material);
+
+  material.userData = { ...(material.userData || {}), rezePreset: preset };
+  if ("toneMapped" in material) material.toneMapped = true;
+  if ("depthWrite" in material) material.depthWrite = true;
+
+  if (needsCutout || preset === "stockings") {
+    material.alphaHash = true;
+    material.alphaToCoverage = true;
+    material.alphaTest = Math.max(material.alphaTest || 0, preset === "stockings" ? 0.02 : 0.35);
+    material.transparent = false;
+    material.depthWrite = true;
+  }
+
+  if (needsCutout || preset === "hair" || preset === "stockings" || preset.startsWith("cloth")) {
+    material.side = THREE.DoubleSide;
+  }
+
+  const setEmissive = (hex, intensity) => {
+    material.emissive?.setHex?.(hex);
+    if ("emissiveIntensity" in material) material.emissiveIntensity = intensity;
+  };
+  const multiplySpecular = (scalar) => {
+    if ("specular" in material && material.specular?.isColor) {
+      material.specular.multiplyScalar(scalar);
+    }
+  };
+  const capShininess = (value) => {
+    if ("shininess" in material && typeof material.shininess === "number") {
+      material.shininess = Math.min(material.shininess, value);
+    }
+  };
+  const floorShininess = (value) => {
+    if ("shininess" in material && typeof material.shininess === "number") {
+      material.shininess = Math.max(material.shininess, value);
+    }
+  };
+
+  if (preset === "face" || preset === "body") {
+    capShininess(preset === "face" ? 10 : 12);
+    multiplySpecular(0.32);
+    setEmissive(preset === "face" ? 0x2a100d : 0x24100d, preset === "face" ? 0.12 : 0.1);
+    if ("envMapIntensity" in material) material.envMapIntensity = 0.08;
+  } else if (preset === "hair") {
+    floorShininess(34);
+    multiplySpecular(1.12);
+    setEmissive(0x08070d, 0.08);
+    if ("envMapIntensity" in material) material.envMapIntensity = 0.18;
+  } else if (preset === "eye") {
+    floorShininess(48);
+    multiplySpecular(1.45);
+    setEmissive(0x1f2740, 0.42);
+    if ("envMapIntensity" in material) material.envMapIntensity = 0.32;
+  } else if (preset === "stockings") {
+    capShininess(24);
+    multiplySpecular(0.75);
+    setEmissive(0x111018, 0.12);
+    if ("envMapIntensity" in material) material.envMapIntensity = 0.16;
+  } else if (preset === "metal") {
+    floorShininess(60);
+    multiplySpecular(1.18);
+    setEmissive(0x0c0b10, 0.05);
+    if ("envMapIntensity" in material) material.envMapIntensity = 0.48;
+  } else if (preset === "cloth_rough") {
+    capShininess(12);
+    multiplySpecular(0.38);
+    setEmissive(0x0f0d12, 0.06);
+    if ("envMapIntensity" in material) material.envMapIntensity = 0.08;
+  } else if (preset === "cloth_smooth") {
+    capShininess(22);
+    multiplySpecular(0.58);
+    setEmissive(0x151018, 0.09);
+    if ("envMapIntensity" in material) material.envMapIntensity = 0.14;
+  } else {
+    capShininess(26);
+    multiplySpecular(0.7);
+    if ("envMapIntensity" in material) material.envMapIntensity = 0.1;
+  }
+
+  finalizeMMDMaterial(material, rampTexture);
+}
+
 function tuneMaterialByPipeline(material, toonRampTexture, pipeline) {
+  if (pipeline === "reze-npr") return tuneRezeNprMMDMaterial(material, toonRampTexture);
   if (pipeline === "hero-shot") return tuneHeroShotMMDMaterial(material, toonRampTexture);
   if (pipeline === "genshin" || pipeline === "mio-reference") return tuneGenshinMMDMaterial(material, toonRampTexture);
   return tuneClassicMMDMaterial(material, toonRampTexture);
@@ -1212,8 +1406,8 @@ export class MMDCompanionRuntime {
     this.renderer.setSize(size?.width || this.container.clientWidth, size?.height || this.container.clientHeight);
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.NoToneMapping;
-    this.renderer.toneMappingExposure = 1.04;
+    this.renderer.toneMapping = presentation.renderer?.toneMapping === "aces" ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+    this.renderer.toneMappingExposure = presentation.renderer?.exposure ?? 1.04;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = presentation.shadowMapType;
     this.container.replaceChildren(this.renderer.domElement);
@@ -1656,6 +1850,23 @@ export class MMDCompanionRuntime {
     this.handleResize();
   }
 
+  hitTestModelAtClientPoint(clientX, clientY) {
+    if (!this.model || !this.camera || !this.renderer?.domElement) return false;
+    const rect = this.renderer.domElement.getBoundingClientRect?.();
+    if (!rect?.width || !rect?.height) return false;
+
+    const pointer = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -(((clientY - rect.top) / rect.height) * 2 - 1),
+    );
+    this.model.updateMatrixWorld?.(true);
+    this.camera.updateMatrixWorld?.(true);
+
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(pointer, this.camera);
+    return raycaster.intersectObject(this.model, true).some((hit) => hit?.object?.visible !== false);
+  }
+
   clearModel() {
     this.disposeCharacterOutline();
     if (!this.model) return;
@@ -2092,6 +2303,7 @@ export class MMDCompanionRuntime {
       this.currentVmdDurationMs =
         Number(clip?.duration) > 0 ? (Number(clip.duration) / this.currentVmdPlaybackRate) * 1000 : 0;
       this.setStatus("Playing mapped VMD motion.");
+      return true;
     } catch (error) {
       if (error) {
         console.warn("[mmd-vmd] failed to parse motion", {
@@ -2100,6 +2312,7 @@ export class MMDCompanionRuntime {
         });
       }
       this.setStatus("VMD playback failed, fallback to procedural.");
+      return false;
     } finally {
       if (loadToken === this.vmdLoadToken) this.isLoadingVmd = false;
     }

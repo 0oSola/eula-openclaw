@@ -8,15 +8,32 @@ import { useRouter } from "next/navigation";
 import {
   buildAutoFavoriteInteraction,
   buildAutoplayResumeInteraction,
+  createIdleVmdFallbackInteraction,
   createVmdPreviewInteraction,
   excludeEntryStandbyAssets,
   resolveVmdPlaybackRate,
 } from "@/features/mapping/vmdPreview.js";
-import { resolvePlaybackPlan } from "@/features/mapping/resolveAction.js";
+import { resolvePlaybackPlan, shouldUseIdleVmdFallbackForUnmatchedMotion } from "@/features/mapping/resolveAction.js";
 import { MMDStage, type MMDStageHandle } from "@/features/stage/MMDStage";
 import { CompanionCommandBar } from "./CompanionCommandBar";
 import { MioModeBackground } from "./MioModeBackground";
 import { CompanionRightRail, type RightPanelView } from "./CompanionRightRail";
+import {
+  clearStagePendingAutoResume,
+  completeStageInteraction,
+  createDefaultStageInteraction,
+  resetStageInteraction,
+  startAutoplayLoop,
+  startChatInteraction,
+  startStageClickInteraction,
+  startManualPreview,
+  updateStageActiveVmdAsset,
+} from "@/features/stage/stageInteractionMachine.js";
+import {
+  createStageClickRipple,
+  resolveStageCharacterClickInteraction,
+  STAGE_CLICK_RIPPLE_DURATION_MS,
+} from "@/features/stage/stageCharacterClick.js";
 import {
   DEFAULT_VMD_PLAYBACK_RATE,
 } from "@/features/stage/builtInMotionPreferences.js";
@@ -49,8 +66,9 @@ import {
   uploadVmdAsset,
 } from "@/lib/api";
 import { AudioQueue } from "@/lib/realtimeVoiceQueue.js";
+import { resolveMessageBridgeRefresh, resolveMessageBridgeSessionSync } from "@/lib/messageBridgeSync.js";
 import { clearSession, loadSession, saveSession } from "@/lib/session";
-import { DEFAULT_TTS_MODE, playServerTtsAudio } from "@/lib/ttsPlayback.js";
+import { DEFAULT_TTS_MODE, playRemoteTtsAudio, playServerTtsAudio } from "@/lib/ttsPlayback.js";
 import type {
   ChatMessage,
   MappingConfig,
@@ -94,7 +112,30 @@ type InteractionState = {
   sequence: InteractionStep[];
 };
 
-type InteractionSource = "default" | "autoplay" | "manual-preview" | "chat";
+type InteractionSource = "default" | "autoplay" | "manual-preview" | "chat" | "stage-click";
+type StageInteractionMode =
+  | "default_idle"
+  | "autoplay_loop"
+  | "manual_preview"
+  | "chat_vmd_action"
+  | "chat_procedural_action"
+  | "stage_click_vmd_action"
+  | "stage_click_procedural_action"
+  | "recovering";
+type StageClickRipple = {
+  id: string;
+  x: number;
+  y: number;
+  xPercent?: number;
+  yPercent?: number;
+};
+type StageInteractionViewState = {
+  mode: StageInteractionMode;
+  source: InteractionSource;
+  interaction: InteractionState;
+  activeVmdAssetId: string;
+  pendingAutoResume: boolean;
+};
 type ToastState = { id: number; message: string } | null;
 type ChatMessageTts = NonNullable<ChatMessage["tts"]>;
 type OpenClawDraft = {
@@ -152,7 +193,9 @@ const INPUT_LABEL =
   "\u8f93\u5165\u4f60\u7684\u6307\u4ee4 / \u4efb\u52a1 / \u95ee\u9898...\uff08Enter \u53d1\u9001\uff0cShift + Enter \u6362\u884c\uff09";
 
 function normalizeRenderPipeline(value?: string): RenderPipeline {
-  if (value === "classic" || value === "hero-shot" || value === "genshin" || value === "mio-reference") return value;
+  if (value === "classic" || value === "hero-shot" || value === "genshin" || value === "mio-reference" || value === "reze-npr") {
+    return value;
+  }
   return "mio-reference";
 }
 
@@ -246,24 +289,13 @@ const renderPipelineOptions: { value: RenderPipeline; label: string; description
   { value: "classic", label: "Classic", description: "\u7a33\u5b9a MMD \u821e\u53f0" },
   { value: "hero-shot", label: "Hero Shot", description: "\u7535\u5f71\u611f\u6784\u56fe" },
   { value: "genshin", label: "Genshin", description: "Project2 \u900f\u660e\u98ce\u683c" },
+  { value: "reze-npr", label: "Reze NPR", description: "reze-engine \u5b9e\u9a8c\u98ce\u683c" },
 ];
 
 const EMOTION_SLOTS = ["neutral", "happy", "sad", "thinking", "excited", "caring"] as const;
 
 function createDefaultInteractionState(): InteractionState {
-  return {
-    emotion: "neutral",
-    action: "idle",
-    mode: "procedural",
-    vmdUrl: "",
-    vmdLoopUrls: [],
-    vmdLoopEmotionByUrl: {},
-    standbyVmdUrl: "",
-    loopGapMs: 0,
-    loopMode: "random",
-    playbackRate: DEFAULT_VMD_PLAYBACK_RATE,
-    sequence: [],
-  };
+  return createDefaultStageInteraction() as InteractionState;
 }
 
 function createOpenClawDraft(config?: OpenClawConfig | null): OpenClawDraft {
@@ -334,6 +366,8 @@ function buildFavoriteVmdCameraKey(pipeline: RenderPipeline, modelPath: string, 
 export default function CompanionPage() {
   const router = useRouter();
   const stageRef = useRef<MMDStageHandle | null>(null);
+  const stageActionRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previousInteractionRef = useRef<InteractionState | null>(null);
   const serverAudioRef = useRef<HTMLAudioElement | null>(null);
   const serverAudioCleanupRef = useRef<(() => void) | null>(null);
   const ignoreNextStageCompletionResetRef = useRef(false);
@@ -348,13 +382,20 @@ export default function CompanionPage() {
   const [chatSessions, setChatSessions] = useState<MessageServiceSession[]>([]);
   const [chatSessionId, setChatSessionId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatAutoScrollRevision, setChatAutoScrollRevision] = useState(0);
   const [input, setInput] = useState("");
   const [chatBootstrapping, setChatBootstrapping] = useState(false);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState<ToastState>(null);
-  const [interaction, setInteraction] = useState<InteractionState>(createDefaultInteractionState);
+  const [stageInteractionState, setStageInteractionState] = useState<StageInteractionViewState>(
+    () =>
+      resetStageInteraction({
+        defaultInteraction: createDefaultInteractionState(),
+      }) as StageInteractionViewState,
+  );
+  const [stageClickRipples, setStageClickRipples] = useState<StageClickRipple[]>([]);
   const [mappings, setMappings] = useState<Record<string, MappingConfig>>({});
   const [assets, setAssets] = useState<VmdAsset[]>([]);
   const [models, setModels] = useState<MmdModelAsset[]>([]);
@@ -378,11 +419,8 @@ export default function CompanionPage() {
   const [advancedMessage, setAdvancedMessage] = useState("");
   const [latestMotionContextExport, setLatestMotionContextExport] = useState<MotionContextExport | null>(null);
   const [cameraEditMode, setCameraEditMode] = useState(false);
-  const [activeVmdAssetId, setActiveVmdAssetId] = useState("");
   const [renameTarget, setRenameTarget] = useState<VmdAsset | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [interactionSource, setInteractionSource] = useState<InteractionSource>("default");
-  const [pendingAutoResume, setPendingAutoResume] = useState(false);
   const [isCompactHud, setIsCompactHud] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isRightRailCollapsed, setIsRightRailCollapsed] = useState(true);
@@ -402,6 +440,9 @@ export default function CompanionPage() {
   const [messageBridgeLoading, setMessageBridgeLoading] = useState(false);
   const [messageBridgeSaving, setMessageBridgeSaving] = useState(false);
   const [cleanupBusy, setCleanupBusy] = useState(false);
+  const interaction = stageInteractionState.interaction;
+  const activeVmdAssetId = stageInteractionState.activeVmdAssetId;
+  const interactionSource = stageInteractionState.source;
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -414,6 +455,18 @@ export default function CompanionPage() {
   useEffect(() => {
     chatSessionIdRef.current = chatSessionId;
   }, [chatSessionId]);
+
+  useEffect(() => {
+    if (previousInteractionRef.current === interaction) return;
+    previousInteractionRef.current = interaction;
+    clearStageActionRecoveryTimer();
+  }, [interaction]);
+
+  useEffect(() => {
+    return () => {
+      clearStageActionRecoveryTimer();
+    };
+  }, []);
 
   useEffect(() => {
     const saved = loadSession();
@@ -574,7 +627,8 @@ export default function CompanionPage() {
   useEffect(() => {
     if (!session) return;
     void loadOpenClawConfig({ silent: true });
-  }, [loadOpenClawConfig, session]);
+    void loadMessageBridgeStatus({ silent: true });
+  }, [loadMessageBridgeStatus, loadOpenClawConfig, session]);
 
   useEffect(() => {
     if (!isOpenClawSettingsOpen || !session) return;
@@ -583,15 +637,48 @@ export default function CompanionPage() {
   }, [isOpenClawSettingsOpen, loadMessageBridgeStatus, loadOpenClawConfig, session]);
 
   useEffect(() => {
-    if (!session || !chatSessionId || !messageBridgeStatus?.enabled) return;
+    if (!session || !messageBridgeStatus?.enabled) return;
+    let cancelled = false;
+
+    const syncBridgeSession = async () => {
+      const sync = resolveMessageBridgeSessionSync({
+        status: messageBridgeStatus,
+        currentSessionId: chatSessionIdRef.current,
+        busy: loading || chatBootstrapping || sessionBusy,
+      });
+      if (sync.action === "open") {
+        await openBridgeBoundChatSession(messageBridgeStatus.binding);
+      } else if (sync.action === "refresh") {
+        await refreshActiveSessionMessages({ driveBridgeMessages: true });
+      }
+      if (!cancelled) {
+        await loadMessageBridgeStatus({ silent: true });
+      }
+    };
+
+    void syncBridgeSession().catch(() => {
+      // Polling is best-effort; explicit user actions still surface errors.
+    });
     const timer = window.setInterval(() => {
-      void refreshActiveSessionMessages({ driveBridgeMessages: true }).catch(() => {
+      void syncBridgeSession().catch(() => {
         // Polling is best-effort; explicit user actions still surface errors.
       });
-      void loadMessageBridgeStatus({ silent: true });
     }, MESSAGE_BRIDGE_POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [chatSessionId, loadMessageBridgeStatus, messageBridgeStatus?.enabled, session]);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    chatBootstrapping,
+    chatSessionId,
+    loadMessageBridgeStatus,
+    loading,
+    messageBridgeStatus?.binding?.external_session_key,
+    messageBridgeStatus?.binding?.local_session_id,
+    messageBridgeStatus?.enabled,
+    session,
+    sessionBusy,
+  ]);
 
   useEffect(() => {
     if (!isAdvancedPanelOpen) return;
@@ -740,20 +827,22 @@ export default function CompanionPage() {
   useEffect(() => {
     if (!autoFavoriteInteraction) return;
     if (interactionSource !== "default" && interactionSource !== "autoplay") return;
-    setInteraction(autoFavoriteInteraction);
-    setInteractionSource("autoplay");
-    setActiveVmdAssetId(
-      currentModelAutoplayAssets.find((asset) => asset.url === autoFavoriteInteraction.vmdUrl)?.asset_id || "",
+    setStageInteractionState(
+      startAutoplayLoop({
+        interaction: autoFavoriteInteraction,
+        activeVmdAssetId:
+          currentModelAutoplayAssets.find((asset) => asset.url === autoFavoriteInteraction.vmdUrl)?.asset_id || "",
+      }) as StageInteractionViewState,
     );
-    setPendingAutoResume(false);
   }, [autoFavoriteInteraction, currentModelAutoplayAssets, interactionSource, selectedModel?.relative_path]);
 
   useEffect(() => {
     if (autoFavoriteInteraction || interactionSource !== "autoplay") return;
-    setInteraction(createDefaultInteractionState());
-    setInteractionSource("default");
-    setActiveVmdAssetId("");
-    setPendingAutoResume(false);
+    setStageInteractionState(
+      resetStageInteraction({
+        defaultInteraction: createDefaultInteractionState(),
+      }) as StageInteractionViewState,
+    );
   }, [autoFavoriteInteraction, interactionSource]);
 
   useEffect(() => {
@@ -770,28 +859,33 @@ export default function CompanionPage() {
   function previewVmdAsset(asset: VmdAsset) {
     setAdvancedError("");
     setAdvancedMessage(`Previewing ${asset.display_name || asset.filename}`);
-    setActiveVmdAssetId(asset.asset_id);
     const preview = createVmdPreviewInteraction(asset, Number(advancedPlaybackRate) || 1);
-    setInteractionSource("manual-preview");
-    setPendingAutoResume(Boolean(autoplayResumeInteraction));
-    setInteraction({
-      emotion: preview.emotion,
-      action: preview.action,
-      mode: "vmd",
-      vmdUrl: preview.vmdUrl,
-      vmdLoopUrls: [],
-      vmdLoopEmotionByUrl: preview.vmdLoopEmotionByUrl,
-      playbackRate: preview.playbackRate || DEFAULT_VMD_PLAYBACK_RATE,
-      sequence: preview.sequence,
-    });
+    setStageInteractionState(
+      startManualPreview({
+        interaction: {
+          emotion: preview.emotion,
+          action: preview.action,
+          mode: "vmd",
+          vmdUrl: preview.vmdUrl,
+          vmdLoopUrls: [],
+          vmdLoopEmotionByUrl: preview.vmdLoopEmotionByUrl,
+          playbackRate: preview.playbackRate || DEFAULT_VMD_PLAYBACK_RATE,
+          sequence: preview.sequence,
+        },
+        activeVmdAssetId: asset.asset_id,
+        canAutoResume: Boolean(autoplayResumeInteraction),
+      }) as StageInteractionViewState,
+    );
   }
 
   function resetModelState() {
     stopSpeechPlayback();
-    setInteractionSource("default");
-    setActiveVmdAssetId("");
-    setPendingAutoResume(false);
-    setInteraction(createDefaultInteractionState());
+    clearStageActionRecoveryTimer();
+    setStageInteractionState(
+      resetStageInteraction({
+        defaultInteraction: createDefaultInteractionState(),
+      }) as StageInteractionViewState,
+    );
     setAdvancedError("");
     setAdvancedMessage("Model reset to default state.");
   }
@@ -807,8 +901,14 @@ export default function CompanionPage() {
         model_relative_path: selectedModel.relative_path,
       });
       setAssets((current) => current.map((item) => (item.asset_id === next.asset_id ? next : item)));
-      if (next.is_favorite) setActiveVmdAssetId(next.asset_id);
-      if (!next.is_favorite && activeVmdAssetId === next.asset_id) setActiveVmdAssetId("");
+      if (next.is_favorite) {
+        setStageInteractionState((current) =>
+          updateStageActiveVmdAsset(current, next.asset_id) as StageInteractionViewState,
+        );
+      }
+      if (!next.is_favorite && activeVmdAssetId === next.asset_id) {
+        setStageInteractionState((current) => updateStageActiveVmdAsset(current, "") as StageInteractionViewState);
+      }
       setAdvancedMessage(next.is_favorite ? `Favorited ${next.display_name}` : `Removed ${next.display_name} from favorites`);
     } catch (err) {
       setAdvancedError(err instanceof Error ? err.message : "Favorite update failed.");
@@ -1508,6 +1608,54 @@ export default function CompanionPage() {
     }
   }
 
+  function setChatStageInteraction(nextInteraction: InteractionState, activeVmdAssetId = "") {
+    setStageInteractionState(
+      startChatInteraction({
+        interaction: nextInteraction,
+        activeVmdAssetId,
+        canAutoResume: Boolean(autoplayResumeInteraction),
+      }) as StageInteractionViewState,
+    );
+  }
+
+  function setIdleVmdFallbackStageInteraction(message: MessageServiceMessage) {
+    const fallback = createIdleVmdFallbackInteraction(currentModelAutoplayAssets, {
+      emotion: message.emotion || "neutral",
+      action: "idle",
+    }) as { interaction: InteractionState; activeVmdAssetId: string } | null;
+    if (!fallback) return false;
+    setChatStageInteraction(fallback.interaction, fallback.activeVmdAssetId);
+    return true;
+  }
+
+  function handleStageCharacterClick({
+    clientX,
+    clientY,
+    stageRect,
+  }: {
+    clientX: number;
+    clientY: number;
+    stageRect: DOMRect;
+  }) {
+    const ripple = createStageClickRipple({ clientX, clientY, rect: stageRect }) as StageClickRipple;
+    setStageClickRipples((current) => [...current.slice(-5), ripple]);
+    globalThis.setTimeout(() => {
+      setStageClickRipples((current) => current.filter((item) => item.id !== ripple.id));
+    }, STAGE_CLICK_RIPPLE_DURATION_MS);
+
+    const clickAction = resolveStageCharacterClickInteraction({
+      assets: currentModelFavoriteAssets,
+    }) as { interaction: InteractionState; activeVmdAssetId: string };
+    clearStageActionRecoveryTimer();
+    setStageInteractionState(
+      startStageClickInteraction({
+        interaction: clickAction.interaction,
+        activeVmdAssetId: clickAction.activeVmdAssetId,
+        canAutoResume: Boolean(autoplayResumeInteraction),
+      }) as StageInteractionViewState,
+    );
+  }
+
   function driveCharacterFromBridgeMessage(message: MessageServiceMessage) {
     if (message.role !== "assistant") return;
     if (message.metadata?.source !== "message_bridge" || message.metadata?.synced_from !== "realtime") return;
@@ -1516,19 +1664,19 @@ export default function CompanionPage() {
     const motionResolution = message.motion_resolution;
     if (motionResolution?.status === "matched" && motionResolution.resolved_asset_url) {
       const plannedAsset = motionResolution.resolved_asset_id ? assetIndex[motionResolution.resolved_asset_id] : undefined;
-      setInteractionSource("chat");
-      setActiveVmdAssetId(motionResolution.resolved_asset_id || "");
-      setPendingAutoResume(Boolean(autoplayResumeInteraction));
-      setInteraction({
-        emotion: message.emotion || "neutral",
-        action: message.action || "idle",
-        mode: "vmd",
-        vmdUrl: motionResolution.resolved_asset_url,
-        vmdLoopUrls: [],
-        vmdLoopEmotionByUrl: { [motionResolution.resolved_asset_url]: message.emotion || "neutral" },
-        playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: motionResolution.resolved_asset_url }),
-        sequence: [],
-      });
+      setChatStageInteraction(
+        {
+          emotion: message.emotion || "neutral",
+          action: message.action || "idle",
+          mode: "vmd",
+          vmdUrl: motionResolution.resolved_asset_url,
+          vmdLoopUrls: [],
+          vmdLoopEmotionByUrl: { [motionResolution.resolved_asset_url]: message.emotion || "neutral" },
+          playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: motionResolution.resolved_asset_url }),
+          sequence: [],
+        },
+        motionResolution.resolved_asset_id || "",
+      );
       return;
     }
 
@@ -1540,26 +1688,35 @@ export default function CompanionPage() {
       defaultMappings: {},
       assetIndex,
     });
-    setInteractionSource("chat");
-    setPendingAutoResume(Boolean(autoplayResumeInteraction));
     if (plan.mode === "vmd") {
       const plannedAsset = Object.values(assetIndex).find((item) => item.url === plan.url);
-      setActiveVmdAssetId(plannedAsset?.asset_id || "");
-      setInteraction({
-        emotion: message.emotion || "neutral",
-        action: message.action || "idle",
-        mode: "vmd",
-        vmdUrl: plan.url,
-        vmdLoopUrls: [],
-        vmdLoopEmotionByUrl: plan.url ? { [plan.url]: message.emotion || "neutral" } : {},
-        playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: plan.url }),
-        sequence: [],
-      });
+      setChatStageInteraction(
+        {
+          emotion: message.emotion || "neutral",
+          action: message.action || "idle",
+          mode: "vmd",
+          vmdUrl: plan.url,
+          vmdLoopUrls: [],
+          vmdLoopEmotionByUrl: plan.url ? { [plan.url]: message.emotion || "neutral" } : {},
+          playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: plan.url }),
+          sequence: [],
+        },
+        plannedAsset?.asset_id || "",
+      );
       return;
     }
 
-    setActiveVmdAssetId("");
-    setInteraction({
+    if (
+      shouldUseIdleVmdFallbackForUnmatchedMotion({
+        motionResolution,
+        action: message.action,
+      }) &&
+      setIdleVmdFallbackStageInteraction(message)
+    ) {
+      return;
+    }
+
+    setChatStageInteraction({
       emotion: message.emotion || "neutral",
       action: plan.action,
       mode: "procedural",
@@ -1571,19 +1728,26 @@ export default function CompanionPage() {
   }
 
   async function refreshActiveSessionMessages({ driveBridgeMessages = false }: { driveBridgeMessages?: boolean } = {}) {
-    if (!session || !chatSessionId || loading || chatBootstrapping || sessionBusy) return;
-    const serverMessages = await listSessionMessages(session.userId, chatSessionId);
-    let newServerMessages: MessageServiceMessage[] = [];
-    setMessages((current) => {
-      const knownIds = new Set(current.map((message) => message.id).filter(Boolean));
-      newServerMessages = serverMessages.filter((message) => !knownIds.has(message.id));
-      const sameLength = current.length === serverMessages.length;
-      const sameIds = sameLength && current.every((message, index) => message.id === serverMessages[index]?.id);
-      if (sameIds) return current;
-      return serverMessages.map(mapServerMessageToChatMessage);
+    const activeSession = sessionRef.current || session;
+    const activeChatSessionId = chatSessionIdRef.current || chatSessionId;
+    if (!activeSession || !activeChatSessionId || loading || chatBootstrapping || sessionBusy) return;
+    const serverMessages = await listSessionMessages(activeSession.userId, activeChatSessionId);
+    const refresh = resolveMessageBridgeRefresh({
+      currentMessages: messagesRef.current,
+      serverMessages,
+      requestLatestOnNewBridgeMessages: driveBridgeMessages,
     });
+
+    if (refresh.changed) {
+      const nextMessages = refresh.nextMessages.map(mapServerMessageToChatMessage);
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
+    }
+    if (refresh.shouldRequestLatest) {
+      setChatAutoScrollRevision((current) => current + 1);
+    }
     if (driveBridgeMessages) {
-      for (const message of newServerMessages) {
+      for (const message of refresh.newServerMessages as MessageServiceMessage[]) {
         driveCharacterFromBridgeMessage(message);
       }
     }
@@ -1703,57 +1867,34 @@ export default function CompanionPage() {
   async function playRemoteServerAudio(message: ChatMessage) {
     const remoteAudioUrl = message.tts?.remoteAudioUrl;
     const proxyAudioUrl = message.tts?.proxyAudioUrl;
-    if (!remoteAudioUrl) {
+    if (!session) return;
+    if (!remoteAudioUrl && !proxyAudioUrl) {
       throw new Error("远端音频地址缺失。");
     }
     stopSpeechPlayback();
     setActiveTtsMessageId(message.id || "");
 
-    const audio = new Audio(remoteAudioUrl);
-    serverAudioRef.current = audio;
-    let usingProxyFallback = false;
-    let cleaned = false;
-    const cleanup = () => {
-      if (cleaned) return;
-      cleaned = true;
-      audio.onplay = null;
-      audio.onended = null;
-      audio.onerror = null;
-      if (serverAudioRef.current === audio) {
-        serverAudioRef.current = null;
-        serverAudioCleanupRef.current = null;
-      }
-      setSpeaking(false);
-      setActiveTtsMessageId((current) => (current === (message.id || "") ? "" : current));
-    };
-    serverAudioCleanupRef.current = cleanup;
-
-    audio.onplay = () => setSpeaking(true);
-    audio.onended = cleanup;
-    audio.onerror = async () => {
-      if (!usingProxyFallback && proxyAudioUrl) {
-        usingProxyFallback = true;
-        audio.src = proxyAudioUrl;
-        try {
-          await audio.play();
-          return;
-        } catch {
-          // fall through to final failure handling
+    const controller = await playRemoteTtsAudio({
+      remoteAudioUrl,
+      proxyAudioUrl,
+      userId: session.userId,
+      setSpeaking: (value?: boolean) => setSpeaking(Boolean(value)),
+      onCleanup: ({ audio }: { audio?: HTMLAudioElement } = {}) => {
+        if (audio && serverAudioRef.current === audio) {
+          serverAudioRef.current = null;
+          serverAudioCleanupRef.current = null;
         }
-      }
-      cleanup();
-      if (message.id && session) {
-        await refreshMessageFromServer(message.id);
-      }
-      handleTtsFailure("远端语音播放失败。");
-    };
-
-    try {
-      await audio.play();
-    } catch (error) {
-      cleanup();
-      throw error;
-    }
+        setActiveTtsMessageId((current) => (current === (message.id || "") ? "" : current));
+      },
+      onFinalError: async () => {
+        if (message.id) {
+          await refreshMessageFromServer(message.id);
+        }
+        handleTtsFailure("远端语音播放失败。");
+      },
+    });
+    serverAudioRef.current = controller.audio as HTMLAudioElement;
+    serverAudioCleanupRef.current = controller.cleanup;
   }
 
   function browserSpeak(text: string, messageId = "") {
@@ -1876,6 +2017,7 @@ export default function CompanionPage() {
     setError("");
     setBackgroundActivityPulse((current) => current + 1);
     setLoading(true);
+    setChatAutoScrollRevision((current) => current + 1);
     setMessages((prev) => [...prev, optimisticUserMessage]);
     const traceId = crypto.randomUUID();
 
@@ -1899,6 +2041,7 @@ export default function CompanionPage() {
       if (ttsEnabled && ttsMode === "server" && assistantMessage.id && !assistantMessage.tts) {
         assistantMessage.tts = { status: "pending", mode: "server" };
       }
+      setChatAutoScrollRevision((current) => current + 1);
       setMessages((prev) => [
         ...prev.filter((message) => message.id !== optimisticUserMessageId),
         userMessage,
@@ -1909,19 +2052,19 @@ export default function CompanionPage() {
       const motionResolution = response.assistant_message.motion_resolution;
       if (motionResolution?.status === "matched" && motionResolution.resolved_asset_url) {
         const plannedAsset = motionResolution.resolved_asset_id ? assetIndex[motionResolution.resolved_asset_id] : undefined;
-        setInteractionSource("chat");
-        setActiveVmdAssetId(motionResolution.resolved_asset_id || "");
-        setPendingAutoResume(Boolean(autoplayResumeInteraction));
-        setInteraction({
-          emotion: response.assistant_message.emotion || "neutral",
-          action: response.assistant_message.action || "idle",
-          mode: "vmd",
-          vmdUrl: motionResolution.resolved_asset_url,
-          vmdLoopUrls: [],
-          vmdLoopEmotionByUrl: { [motionResolution.resolved_asset_url]: response.assistant_message.emotion || "neutral" },
-          playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: motionResolution.resolved_asset_url }),
-          sequence: [],
-        });
+        setChatStageInteraction(
+          {
+            emotion: response.assistant_message.emotion || "neutral",
+            action: response.assistant_message.action || "idle",
+            mode: "vmd",
+            vmdUrl: motionResolution.resolved_asset_url,
+            vmdLoopUrls: [],
+            vmdLoopEmotionByUrl: { [motionResolution.resolved_asset_url]: response.assistant_message.emotion || "neutral" },
+            playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: motionResolution.resolved_asset_url }),
+            sequence: [],
+          },
+          motionResolution.resolved_asset_id || "",
+        );
       } else {
         const plan = resolvePlaybackPlan({
           slot: response.assistant_message.emotion || "neutral",
@@ -1934,32 +2077,38 @@ export default function CompanionPage() {
 
         if (plan.mode === "vmd") {
           const plannedAsset = Object.values(assetIndex).find((item) => item.url === plan.url);
-          setInteractionSource("chat");
-          setActiveVmdAssetId(plannedAsset?.asset_id || "");
-          setPendingAutoResume(Boolean(autoplayResumeInteraction));
-          setInteraction({
-          emotion: response.assistant_message.emotion || "neutral",
-          action: response.assistant_message.action || "idle",
-          mode: "vmd",
-          vmdUrl: plan.url,
-          vmdLoopUrls: [],
-          vmdLoopEmotionByUrl: plan.url ? { [plan.url]: response.assistant_message.emotion || "neutral" } : {},
-          playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: plan.url }),
-          sequence: [],
-        });
+          setChatStageInteraction(
+            {
+              emotion: response.assistant_message.emotion || "neutral",
+              action: response.assistant_message.action || "idle",
+              mode: "vmd",
+              vmdUrl: plan.url,
+              vmdLoopUrls: [],
+              vmdLoopEmotionByUrl: plan.url ? { [plan.url]: response.assistant_message.emotion || "neutral" } : {},
+              playbackRate: resolveVmdPlaybackRate(plannedAsset || { url: plan.url }),
+              sequence: [],
+            },
+            plannedAsset?.asset_id || "",
+          );
         } else {
-          setInteractionSource("chat");
-          setActiveVmdAssetId("");
-          setPendingAutoResume(Boolean(autoplayResumeInteraction));
-          setInteraction({
-            emotion: response.assistant_message.emotion || "neutral",
-            action: plan.action,
-            mode: "procedural",
-            vmdUrl: "",
-            vmdLoopEmotionByUrl: {},
-            playbackRate: 1,
-            sequence: plan.sequence || [],
-          });
+          const usedIdleVmdFallback =
+            shouldUseIdleVmdFallbackForUnmatchedMotion({
+              motionResolution,
+              action: response.assistant_message.action,
+            }) &&
+            setIdleVmdFallbackStageInteraction(response.assistant_message);
+
+          if (!usedIdleVmdFallback) {
+            setChatStageInteraction({
+              emotion: response.assistant_message.emotion || "neutral",
+              action: plan.action,
+              mode: "procedural",
+              vmdUrl: "",
+              vmdLoopEmotionByUrl: {},
+              playbackRate: 1,
+              sequence: plan.sequence || [],
+            });
+          }
         }
       }
 
@@ -1985,29 +2134,52 @@ export default function CompanionPage() {
 
   function handleCharacterSwitch(nextPath: string) {
     stopSpeechPlayback();
-    setInteraction(createDefaultInteractionState());
-    setInteractionSource("default");
-    setActiveVmdAssetId("");
-    setPendingAutoResume(false);
+    clearStageActionRecoveryTimer();
+    setStageInteractionState(
+      resetStageInteraction({
+        defaultInteraction: createDefaultInteractionState(),
+      }) as StageInteractionViewState,
+    );
     setSelectedModelPath(nextPath);
   }
 
+  function clearStageActionRecoveryTimer() {
+    if (stageActionRecoveryTimerRef.current === null) return;
+    globalThis.clearTimeout(stageActionRecoveryTimerRef.current);
+    stageActionRecoveryTimerRef.current = null;
+  }
+
+  function getAutoplayResumeAssetId(nextAutoplayResumeInteraction = autoplayResumeInteraction) {
+    if (!nextAutoplayResumeInteraction) return "";
+    return currentModelAutoplayAssets.find((asset) => asset.url === nextAutoplayResumeInteraction.vmdUrl)?.asset_id || "";
+  }
+
+  function resumeStageAfterInteractionComplete() {
+    const nextState = completeStageInteraction({
+      autoplayResumeInteraction,
+      createAutoplayResumeInteraction: () =>
+        buildAutoplayResumeInteraction(currentModelAutoplayAssets) as InteractionState | null,
+      defaultInteraction: createDefaultInteractionState(),
+      resolveAutoplayAssetId: (nextAutoplayResumeInteraction: InteractionState | null) =>
+        getAutoplayResumeAssetId(nextAutoplayResumeInteraction),
+    }) as StageInteractionViewState;
+    setStageInteractionState(nextState);
+  }
+
+  function handleStageInteractionError() {
+    clearStageActionRecoveryTimer();
+    resumeStageAfterInteractionComplete();
+  }
+
   function handleStageInteractionComplete() {
+    clearStageActionRecoveryTimer();
     if (ignoreNextStageCompletionResetRef.current) {
       ignoreNextStageCompletionResetRef.current = false;
-      setPendingAutoResume(false);
+      setStageInteractionState((current) => clearStagePendingAutoResume(current) as StageInteractionViewState);
       return;
     }
 
-    if (pendingAutoResume && autoplayResumeInteraction) {
-      setInteraction(autoplayResumeInteraction);
-      setInteractionSource("autoplay");
-      setPendingAutoResume(false);
-      return;
-    }
-
-    setInteractionSource("default");
-    setPendingAutoResume(false);
+    resumeStageAfterInteractionComplete();
   }
 
   if (!session) {
@@ -2479,6 +2651,9 @@ export default function CompanionPage() {
             interaction={interaction}
             speaking={speaking}
             onInteractionComplete={handleStageInteractionComplete}
+            onInteractionError={handleStageInteractionError}
+            onCharacterClick={handleStageCharacterClick}
+            clickRipples={stageClickRipples}
             models={models}
             selectedModelPath={selectedModelPath}
             modelUrl={selectedModel?.url || ""}
@@ -2497,6 +2672,7 @@ export default function CompanionPage() {
           activeSessionId={chatSessionId}
           sessionBusy={sessionBusy}
           messages={messages}
+          chatAutoScrollRevision={chatAutoScrollRevision}
           loading={loading || chatBootstrapping}
           error={error}
           ttsEnabled={ttsEnabled}

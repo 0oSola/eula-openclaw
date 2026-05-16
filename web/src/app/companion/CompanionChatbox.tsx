@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
 
+import { isChatListNearBottom, shouldAutoScrollChatList } from "@/lib/chatAutoScroll.js";
 import { formatChatMessageTime } from "@/lib/chatMessageTime.js";
 import type { ChatMessage, MessageServiceSession } from "@/lib/types";
 
@@ -13,6 +13,7 @@ type CompanionChatboxProps = {
   activeSessionId: string;
   sessionBusy: boolean;
   messages: ChatMessage[];
+  autoScrollRevision: number;
   loading: boolean;
   error: string;
   ttsEnabled: boolean;
@@ -23,8 +24,6 @@ type CompanionChatboxProps = {
   onDeleteSession: (session: MessageServiceSession) => void;
   onPlayTtsMessage: (message: ChatMessage) => void;
 };
-
-const BOTTOM_THRESHOLD_PX = 32;
 
 function getRoleLabel(role: ChatMessage["role"]) {
   if (role === "user") return "User";
@@ -58,6 +57,7 @@ export function CompanionChatbox({
   activeSessionId,
   sessionBusy,
   messages,
+  autoScrollRevision,
   loading,
   error,
   ttsEnabled,
@@ -69,6 +69,9 @@ export function CompanionChatbox({
   onPlayTtsMessage,
 }: CompanionChatboxProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
+  const previousVisibleMessageCountRef = useRef(0);
+  const wasNearBottomBeforeUpdateRef = useRef(true);
+  const autoScrollRevisionRef = useRef(autoScrollRevision);
   const [chatSearch, setChatSearch] = useState("");
   const [chatRoleFilter, setChatRoleFilter] = useState<ChatRoleFilter>("all");
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
@@ -86,61 +89,56 @@ export function CompanionChatbox({
     });
   }, [chatRoleFilter, chatSearch, messages]);
 
-  const messageVirtualizer = useVirtualizer({
-    count: visibleMessages.length,
-    getScrollElement: () => listRef.current,
-    estimateSize: () => 118,
-    overscan: 8,
-  });
-
   const statusLabel = error ? "Error" : loading ? "Sending" : "Live";
 
-  useEffect(() => {
+  function scrollToLatest() {
     const list = listRef.current;
     if (!list) return;
-    if (visibleMessages.length > 0) {
-      messageVirtualizer.scrollToIndex(visibleMessages.length - 1, { align: "end" });
-    } else {
-      list.scrollTop = list.scrollHeight;
-    }
+    list.scrollTop = list.scrollHeight;
+    wasNearBottomBeforeUpdateRef.current = true;
     setShowJumpToLatest(false);
-  }, []);
+  }
+
+  function readNearBottom() {
+    const list = listRef.current;
+    if (!list) return true;
+    return isChatListNearBottom({
+      scrollHeight: list.scrollHeight,
+      scrollTop: list.scrollTop,
+      clientHeight: list.clientHeight,
+    });
+  }
 
   useEffect(() => {
-    const list = listRef.current;
-    if (!list) return;
+    const autoScrollRequested = autoScrollRevisionRef.current !== autoScrollRevision;
+    const shouldScroll = shouldAutoScrollChatList({
+      previousVisibleMessageCount: previousVisibleMessageCountRef.current,
+      nextVisibleMessageCount: visibleMessages.length,
+      wasNearBottomBeforeUpdate: wasNearBottomBeforeUpdateRef.current,
+      autoScrollRequested,
+    });
 
-    const distanceToBottom = list.scrollHeight - list.scrollTop - list.clientHeight;
-    if (distanceToBottom <= BOTTOM_THRESHOLD_PX) {
-      if (visibleMessages.length > 0) {
-        messageVirtualizer.scrollToIndex(visibleMessages.length - 1, { align: "end" });
-      } else {
-        list.scrollTop = list.scrollHeight;
-      }
-      setShowJumpToLatest(false);
+    previousVisibleMessageCountRef.current = visibleMessages.length;
+    autoScrollRevisionRef.current = autoScrollRevision;
+
+    if (shouldScroll) {
+      scrollToLatest();
       return;
     }
 
-    setShowJumpToLatest(true);
-  }, [messageVirtualizer, visibleMessages]);
+    const nearBottom = readNearBottom();
+    wasNearBottomBeforeUpdateRef.current = nearBottom;
+    setShowJumpToLatest(visibleMessages.length > 0 && !nearBottom);
+  }, [autoScrollRevision, visibleMessages.length]);
 
   function handleListScroll() {
-    const list = listRef.current;
-    if (!list) return;
-
-    const distanceToBottom = list.scrollHeight - list.scrollTop - list.clientHeight;
-    setShowJumpToLatest(distanceToBottom > BOTTOM_THRESHOLD_PX);
+    const nearBottom = readNearBottom();
+    wasNearBottomBeforeUpdateRef.current = nearBottom;
+    setShowJumpToLatest(visibleMessages.length > 0 && !nearBottom);
   }
 
   function jumpToLatest() {
-    const list = listRef.current;
-    if (!list) return;
-    if (visibleMessages.length > 0) {
-      messageVirtualizer.scrollToIndex(visibleMessages.length - 1, { align: "end" });
-    } else {
-      list.scrollTop = list.scrollHeight;
-    }
-    setShowJumpToLatest(false);
+    scrollToLatest();
   }
 
   async function copyTraceId(traceId: string) {
@@ -252,66 +250,51 @@ export function CompanionChatbox({
             <span>Send a message from the command bar to populate this list.</span>
           </div>
         ) : (
-          <div
-            className="mio-chatbox-virtualizer"
-            style={{
-              height: `${messageVirtualizer.getTotalSize()}px`,
-            }}
-          >
-            {messageVirtualizer.getVirtualItems().map((virtualItem) => {
-              const message = visibleMessages[virtualItem.index];
-              return (
-                <div
-                  key={message.id || `${message.role}-${virtualItem.index}-${message.content.slice(0, 24)}`}
-                  className="mio-chatbox-virtual-row"
-                  data-index={virtualItem.index}
-                  ref={messageVirtualizer.measureElement}
-                  style={{
-                    transform: `translateY(${virtualItem.start}px)`,
-                  }}
-                >
-                  <article className={`mio-chatbox-message is-${message.role}`}>
-                    <div className="mio-chatbox-message-head">
-                      <div className="mio-chatbox-message-meta">
-                        <strong>{getRoleLabel(message.role)}</strong>
-                        <span>{formatChatMessageTime(message.createdAt)}</span>
-                      </div>
-                      <div className="mio-chatbox-message-tools">
-                        {message.tts ? (
-                          <button
-                            type="button"
-                            className="mio-message-voice-button"
-                            aria-label={getTtsLabel(message, activeTtsMessageId)}
-                            title={getTtsLabel(message, activeTtsMessageId)}
-                            disabled={!canPlayTts(message)}
-                            data-status={message.tts.status}
-                            data-active={message.id && message.id === activeTtsMessageId ? "true" : "false"}
-                            onClick={() => onPlayTtsMessage(message)}
-                          >
-                            <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
-                              <path d="M4.2 8.2h2.5l3.4-3v9.6l-3.4-3H4.2z" />
-                              <path d="M13.1 7.2a4 4 0 0 1 0 5.6M15.2 5.1a7 7 0 0 1 0 9.8" />
-                            </svg>
-                          </button>
-                        ) : null}
-                        {message.traceId ? (
-                          <button
-                            type="button"
-                            className="mio-message-trace-button"
-                            title="Copy traceId"
-                            aria-label="Copy traceId"
-                            onClick={() => void copyTraceId(message.traceId as string)}
-                          >
-                            {copiedTraceId === message.traceId ? "Copied" : message.traceId.slice(0, 8)}
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                    <div className="mio-chatbox-message-body">{message.content}</div>
-                  </article>
+          <div className="mio-chatbox-message-flow">
+            {visibleMessages.map((message, index) => (
+              <article
+                key={message.id || `${message.role}-${index}-${message.content.slice(0, 24)}`}
+                className={`mio-chatbox-message is-${message.role}`}
+              >
+                <div className="mio-chatbox-message-head">
+                  <div className="mio-chatbox-message-meta">
+                    <strong>{getRoleLabel(message.role)}</strong>
+                    <span>{formatChatMessageTime(message.createdAt)}</span>
+                  </div>
+                  <div className="mio-chatbox-message-tools">
+                    {message.tts ? (
+                      <button
+                        type="button"
+                        className="mio-message-voice-button"
+                        aria-label={getTtsLabel(message, activeTtsMessageId)}
+                        title={getTtsLabel(message, activeTtsMessageId)}
+                        disabled={!canPlayTts(message)}
+                        data-status={message.tts.status}
+                        data-active={message.id && message.id === activeTtsMessageId ? "true" : "false"}
+                        onClick={() => onPlayTtsMessage(message)}
+                      >
+                        <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
+                          <path d="M4.2 8.2h2.5l3.4-3v9.6l-3.4-3H4.2z" />
+                          <path d="M13.1 7.2a4 4 0 0 1 0 5.6M15.2 5.1a7 7 0 0 1 0 9.8" />
+                        </svg>
+                      </button>
+                    ) : null}
+                    {message.traceId ? (
+                      <button
+                        type="button"
+                        className="mio-message-trace-button"
+                        title="Copy traceId"
+                        aria-label="Copy traceId"
+                        onClick={() => void copyTraceId(message.traceId as string)}
+                      >
+                        {copiedTraceId === message.traceId ? "Copied" : message.traceId.slice(0, 8)}
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-              );
-            })}
+                <div className="mio-chatbox-message-body">{message.content}</div>
+              </article>
+            ))}
           </div>
         )}
       </div>

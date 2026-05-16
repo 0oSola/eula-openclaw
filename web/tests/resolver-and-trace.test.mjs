@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { resolveActionConfig, resolvePlaybackPlan } from "../src/features/mapping/resolveAction.js";
+import {
+  resolveActionConfig,
+  resolvePlaybackPlan,
+  shouldUseIdleVmdFallbackForUnmatchedMotion,
+} from "../src/features/mapping/resolveAction.js";
 import { buildTraceHeaders } from "../src/lib/trace.js";
 
 test("resolveActionConfig uses user override before default mapping", () => {
@@ -87,6 +91,32 @@ test("resolvePlaybackPlan can route a motion template to mapped VMD asset", () =
   assert.equal(resolved.mode, "vmd");
   assert.equal(resolved.url, "/assets/vmd/celebrate.vmd");
   assert.equal(resolved.assetId, "celebrate-vmd");
+});
+
+test("shouldUseIdleVmdFallbackForUnmatchedMotion detects missed custom motion keys but not procedural actions", () => {
+  assert.equal(
+    shouldUseIdleVmdFallbackForUnmatchedMotion({
+      motionResolution: {
+        status: "fallback_idle",
+        source_action: "411a73ef-3169-400a-9f32-d193d171e65c",
+        fallback_reason: "no_candidate_matched",
+      },
+      action: "411a73ef-3169-400a-9f32-d193d171e65c",
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldUseIdleVmdFallbackForUnmatchedMotion({
+      motionResolution: {
+        status: "fallback_idle",
+        source_action: "comfort",
+        fallback_reason: "no_candidate_matched",
+      },
+      action: "comfort",
+    }),
+    false,
+  );
 });
 
 test("buildTraceHeaders preserves provided trace id", () => {

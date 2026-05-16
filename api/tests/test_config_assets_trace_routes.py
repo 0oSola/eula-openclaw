@@ -80,6 +80,7 @@ def test_settings_default_openclaw_gateway_values(monkeypatch):
         "OPENCLAW_MESSAGE_CHANNEL",
         "OPENCLAW_PROXY_URL",
         "OPENCLAW_VERIFY_SSL",
+        "OPENCLAW_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -100,6 +101,7 @@ def test_settings_default_openclaw_gateway_values(monkeypatch):
     assert settings.openclaw_message_channel == "feishu"
     assert settings.openclaw_proxy_url == ""
     assert settings.openclaw_verify_ssl is True
+    assert settings.openclaw_timeout_seconds == 120
     assert settings.realtime_voice_enabled is False
     assert settings.realtime_voice_max_queue_size == 3
     assert settings.realtime_voice_chunk_timeout_seconds == 30
