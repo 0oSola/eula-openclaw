@@ -33,7 +33,7 @@ class OpenClawConfigPayload(BaseModel):
     message_channel: str = Field(default="feishu")
     proxy_url: str = Field(default="")
     verify_ssl: bool = True
-    timeout_seconds: int = Field(default=15, ge=1, le=300)
+    timeout_seconds: int = Field(default=120, ge=1, le=300)
 
 
 def _openclaw_env_path() -> Path:
@@ -50,7 +50,7 @@ def _load_saved_openclaw_config() -> dict[str, Any]:
         "message_channel": str(env.get("OPENCLAW_MESSAGE_CHANNEL", "feishu")).strip() or "feishu",
         "proxy_url": str(env.get("OPENCLAW_PROXY_URL", "")).strip(),
         "verify_ssl": _parse_bool(env.get("OPENCLAW_VERIFY_SSL", True), default=True),
-        "timeout_seconds": int(env.get("OPENCLAW_TIMEOUT_SECONDS", 15) or 15),
+        "timeout_seconds": int(env.get("OPENCLAW_TIMEOUT_SECONDS", 120) or 120),
     }
 
 

@@ -1,4 +1,5 @@
 const EMPTY_CONFIG = { kind: "procedural", value: "idle" };
+const PROCEDURAL_ACTIONS = new Set(["idle", "nod", "wave", "think", "cheer", "comfort", "lean_in", "look_away", "headshake"]);
 
 const MOTION_TEMPLATE_LIBRARY = {
   agree_nod: { kind: "procedural", value: "nod", durationMs: 1000, intensity: 0.6 },
@@ -10,6 +11,20 @@ const MOTION_TEMPLATE_LIBRARY = {
   shy_look_away: { kind: "procedural", value: "look_away", durationMs: 1500, intensity: 0.55 },
   thinking_tilt: { kind: "procedural", value: "think", durationMs: 1700, intensity: 0.6 },
 };
+
+export function isKnownProceduralAction(action) {
+  return PROCEDURAL_ACTIONS.has(`${action || ""}`.trim().toLowerCase());
+}
+
+export function shouldUseIdleVmdFallbackForUnmatchedMotion({ motionResolution, action } = {}) {
+  if (!motionResolution || motionResolution.status !== "fallback_idle") return false;
+  if (motionResolution.resolved_asset_url || motionResolution.resolved_asset_id) return false;
+  if (motionResolution.fallback_reason && motionResolution.fallback_reason !== "no_candidate_matched") return false;
+
+  const candidate = `${motionResolution.source_action || action || ""}`.trim();
+  if (!candidate) return false;
+  return !isKnownProceduralAction(candidate);
+}
 
 export function resolveActionConfig({ slot, userMappings, defaultMappings }) {
   if (slot && userMappings && userMappings[slot]) return userMappings[slot];

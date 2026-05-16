@@ -2061,6 +2061,31 @@ a {
   flex: 0 0 auto;
 }
 
+.mio-stage-click-ripples {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.mio-stage-click-ripple {
+  position: absolute;
+  width: clamp(76px, 10vw, 132px);
+  aspect-ratio: 1;
+  border-radius: 999px;
+  transform: translate(-50%, -50%) scale(0.35);
+  border: 1px solid rgba(145, 229, 255, 0.78);
+  background:
+    radial-gradient(circle, rgba(255, 255, 255, 0.38) 0 8%, transparent 9%),
+    radial-gradient(circle, rgba(84, 209, 255, 0.32) 0 30%, rgba(129, 105, 255, 0.18) 46%, transparent 68%);
+  box-shadow:
+    0 0 22px rgba(84, 209, 255, 0.62),
+    inset 0 0 18px rgba(255, 255, 255, 0.34);
+  mix-blend-mode: screen;
+  animation: mio-stage-click-ripple 720ms ease-out forwards;
+}
+
 .mio-stage-status {
   position: absolute;
   left: 50%;
@@ -2346,6 +2371,8 @@ a {
   flex: 1 1 auto;
   display: block;
   overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
   padding: 12px 8px 12px 4px;
   border: 1px solid rgba(133, 215, 255, 0.16);
   border-radius: 18px;
@@ -2362,17 +2389,13 @@ a {
   scrollbar-gutter: stable;
 }
 
-.mio-chatbox-virtualizer {
-  position: relative;
+.mio-chatbox-message-flow {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+  max-width: 100%;
   width: 100%;
-}
-
-.mio-chatbox-virtual-row {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  padding-bottom: 8px;
 }
 
 .mio-chatbox-list::before,
@@ -2430,6 +2453,9 @@ a {
 
 .mio-chatbox-message,
 .mio-chatbox-empty {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 10px 11px;
   border: 1px solid rgba(139, 219, 255, 0.22);
   border-radius: 8px;
@@ -2507,10 +2533,13 @@ a {
 .mio-chatbox-message-body,
 .mio-chatbox-empty span,
 .mio-workspace-card p {
+  min-width: 0;
   color: rgba(238, 248, 255, 0.92);
   font-size: 12px;
   line-height: 1.52;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .mio-chatbox-empty {
@@ -3918,6 +3947,20 @@ a {
   100% {
     opacity: 0;
     transform: scale(1.18);
+  }
+}
+
+@keyframes mio-stage-click-ripple {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.28);
+  }
+  18% {
+    opacity: 0.92;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.22);
   }
 }
 

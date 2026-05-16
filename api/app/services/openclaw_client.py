@@ -33,7 +33,7 @@ class OpenClawClient:
         message_channel: str = "feishu",
         proxy_url: str | None = None,
         verify_ssl: bool = True,
-        timeout_seconds: int = 15,
+        timeout_seconds: int = 120,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -248,6 +248,8 @@ class OpenClawClient:
                     last_error = RuntimeError(f"Server status {response.status_code}: {response.text}")
                     continue
                 return response
+            except httpx.ReadTimeout:
+                raise
             except (httpx.HTTPError, RuntimeError) as error:
                 last_error = error
         if last_error:

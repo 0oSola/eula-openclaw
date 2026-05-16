@@ -166,6 +166,8 @@ a {
 }
 
 .mio-background {
+  --mio-cyan-glow: #63CFFF;
+  --mio-ice-highlight: #BFE9FF;
   position: absolute;
   inset: 0;
   z-index: 0;
@@ -175,10 +177,27 @@ a {
 
 .mio-background-image,
 .mio-background-vignette,
+.mio-background-moonlight,
+.mio-background-reflection,
+.mio-background-caustics,
+.mio-background-nebula,
+.mio-background-clouds,
+.mio-background-stars,
+.mio-background-meteors,
+.mio-background-light-pillars,
+.mio-background-aura,
+.mio-background-backlight,
 .mio-background-arcs,
 .mio-background-horizon,
+.mio-background-stage-trails,
 .mio-background-circle,
-.mio-background-particles {
+.mio-background-orbiters,
+.mio-background-ring-scans,
+.mio-background-voice-ripples,
+.mio-background-send-wave,
+.mio-background-particles,
+.mio-background-emotion-particles,
+.mio-background-foreground-particles {
   position: absolute;
   inset: 0;
 }
@@ -201,6 +220,290 @@ a {
     linear-gradient(180deg, rgba(186, 229, 255, 0.05), rgba(69, 156, 234, 0.05) 34%, rgba(3, 25, 66, 0.16) 100%);
 }
 
+.mio-background-moonlight {
+  inset: -20% 0 34% 0;
+  background:
+    radial-gradient(circle at 48% 16%, rgba(240, 251, 255, 0.3), rgba(169, 228, 255, 0.14) 14%, transparent 34%),
+    conic-gradient(from 186deg at 50% 8%, transparent 0deg, rgba(198, 238, 255, 0.12) 16deg, transparent 38deg);
+  filter: blur(10px);
+  mix-blend-mode: screen;
+  opacity: 0.5;
+  animation: mio-moonlight-roam 26s ease-in-out infinite alternate;
+}
+
+.mio-background-reflection {
+  inset: auto 8% 14% 8%;
+  height: clamp(120px, 20vh, 240px);
+  border-radius: 50%;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(219, 248, 255, 0.12) 0 1px,
+      rgba(99, 207, 255, 0) 1px 10px
+    ),
+    radial-gradient(ellipse at 50% 20%, rgba(229, 250, 255, 0.3), rgba(99, 207, 255, 0.12) 36%, transparent 72%);
+  filter: blur(1px);
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 22%, #000 64%, transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 22%, #000 64%, transparent 100%);
+  mix-blend-mode: screen;
+  opacity: 0.52;
+  transform: perspective(420px) rotateX(62deg) scaleX(1.08);
+  animation: mio-reflection-shimmer 9s ease-in-out infinite;
+}
+
+.mio-background-caustics {
+  inset: auto 15% clamp(74px, 9vh, 118px) 15%;
+  height: clamp(150px, 22vh, 260px);
+  border-radius: 50%;
+  background:
+    repeating-radial-gradient(ellipse at 50% 46%, transparent 0 11px, rgba(218, 249, 255, 0.1) 12px 13px, transparent 14px 28px),
+    repeating-linear-gradient(104deg, transparent 0 18px, rgba(164, 232, 255, 0.1) 19px 21px, transparent 22px 42px);
+  filter: blur(1.2px);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 50%, #000 0%, rgba(0, 0, 0, 0.78) 42%, transparent 76%);
+  mask-image: radial-gradient(ellipse at 50% 50%, #000 0%, rgba(0, 0, 0, 0.78) 42%, transparent 76%);
+  mix-blend-mode: screen;
+  opacity: 0.42;
+  transform: perspective(460px) rotateX(64deg);
+  animation: mio-caustics-flow 11s linear infinite;
+}
+
+.mio-background-nebula {
+  inset: -8% -10% 32% -10%;
+  background:
+    radial-gradient(ellipse at 28% 30%, rgba(160, 219, 255, 0.18), transparent 34%),
+    radial-gradient(ellipse at 72% 20%, rgba(195, 211, 255, 0.15), transparent 32%),
+    radial-gradient(ellipse at 52% 46%, rgba(99, 207, 255, 0.1), transparent 42%);
+  filter: blur(18px);
+  mix-blend-mode: screen;
+  opacity: 0.48;
+  transform: translate3d(0, 0, 0) scale(1.02);
+  animation: mio-nebula-flow 28s ease-in-out infinite alternate;
+}
+
+.mio-background-clouds {
+  overflow: hidden;
+  opacity: 0.46;
+  mix-blend-mode: screen;
+}
+
+.mio-background-cloud {
+  position: absolute;
+  width: clamp(260px, 34vw, 540px);
+  height: clamp(90px, 12vh, 150px);
+  border-radius: 999px;
+  background:
+    radial-gradient(ellipse at 24% 50%, rgba(228, 248, 255, 0.28), transparent 48%),
+    radial-gradient(ellipse at 68% 44%, rgba(142, 214, 255, 0.2), transparent 54%),
+    linear-gradient(90deg, transparent, rgba(169, 226, 255, 0.14), transparent);
+  filter: blur(18px);
+  transform: translate3d(0, 0, 0);
+  animation: mio-cloud-drift var(--cloud-duration, 36s) ease-in-out infinite alternate;
+  animation-delay: var(--cloud-delay, 0s);
+}
+
+.mio-background-cloud-one {
+  --cloud-duration: 42s;
+  --cloud-delay: -9s;
+  left: -12%;
+  top: 16%;
+}
+
+.mio-background-cloud-two {
+  --cloud-duration: 48s;
+  --cloud-delay: -18s;
+  right: -14%;
+  top: 28%;
+  opacity: 0.74;
+}
+
+.mio-background-cloud-three {
+  --cloud-duration: 54s;
+  --cloud-delay: -27s;
+  left: 28%;
+  top: 4%;
+  width: clamp(220px, 26vw, 420px);
+  opacity: 0.52;
+}
+
+.mio-background-stars {
+  inset: 0;
+  opacity: 0.82;
+}
+
+.mio-background-star {
+  position: absolute;
+  left: var(--star-left);
+  top: var(--star-top);
+  width: var(--star-size);
+  height: var(--star-size);
+  border-radius: 50%;
+  background: rgba(236, 248, 255, var(--star-alpha));
+  box-shadow:
+    0 0 10px rgba(178, 228, 255, 0.12),
+    0 0 18px rgba(125, 205, 247, 0.08);
+  opacity: 0.72;
+  transform: translate3d(0, 0, 0);
+  animation:
+    mio-star-drift var(--star-duration) ease-in-out infinite,
+    mio-star-twinkle calc(var(--star-duration) * 0.36) ease-in-out infinite;
+  animation-delay: var(--star-delay), var(--star-delay);
+}
+
+.mio-background-meteors {
+  inset: 0;
+  opacity: 0.86;
+  mix-blend-mode: screen;
+}
+
+.mio-background-meteor {
+  position: absolute;
+  left: var(--meteor-left);
+  top: var(--meteor-top);
+  width: var(--meteor-width);
+  height: var(--meteor-height);
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    rgba(191, 233, 255, calc(var(--meteor-alpha) + 0.16)) 0%,
+    rgba(99, 207, 255, calc(var(--meteor-alpha) * 0.82)) 22%,
+    rgba(99, 207, 255, calc(var(--meteor-alpha) * 0.24)) 74%,
+    rgba(99, 207, 255, 0) 100%
+  );
+  box-shadow:
+    0 0 14px rgba(99, 207, 255, 0.28),
+    0 0 28px rgba(99, 207, 255, 0.12);
+  opacity: 0;
+  transform: translate3d(0, -3vh, 0);
+  animation: mio-meteor-fall var(--meteor-duration) ease-out infinite;
+  animation-delay: var(--meteor-delay);
+}
+
+.mio-background-meteor::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: calc(var(--meteor-head-size) * -0.52);
+  width: var(--meteor-head-size);
+  height: var(--meteor-head-size);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(221, 247, 255, 0.96) 0%, rgba(191, 233, 255, 0.78) 22%, rgba(99, 207, 255, 0.46) 56%, rgba(99, 207, 255, 0) 100%);
+  transform: translateX(-50%) scale(0.45);
+  box-shadow:
+    0 0 20px rgba(191, 233, 255, 0.36),
+    0 0 34px rgba(99, 207, 255, 0.28);
+  animation: mio-meteor-head-bloom var(--meteor-duration) ease-out infinite;
+  animation-delay: var(--meteor-delay);
+}
+
+.mio-background-meteor::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: clamp(22px, 3vw, 40px);
+  height: 14px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(99, 207, 255, 0.18) 0%, rgba(99, 207, 255, 0.08) 38%, rgba(99, 207, 255, 0) 100%);
+  transform: translateX(-50%);
+  filter: blur(4px);
+  opacity: 0.72;
+}
+
+.mio-background-light-pillars {
+  inset: 3% 6% 30% 6%;
+  opacity: 0.7;
+  mix-blend-mode: screen;
+}
+
+.mio-background-light-pillar {
+  position: absolute;
+  left: var(--pillar-left);
+  top: var(--pillar-top);
+  width: var(--pillar-width);
+  height: var(--pillar-height);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(238, 252, 255, 0.58), rgba(99, 207, 255, 0.24) 36%, rgba(99, 207, 255, 0.04) 82%, transparent);
+  box-shadow:
+    0 0 18px rgba(99, 207, 255, 0.2),
+    0 0 42px rgba(99, 207, 255, 0.08);
+  opacity: 0;
+  transform: translate3d(0, -14px, 0) scaleY(0.9);
+  animation: mio-light-pillar-bloom var(--pillar-duration) ease-in-out infinite;
+  animation-delay: var(--pillar-delay);
+}
+
+.mio-background-light-pillar-one {
+  --pillar-left: 13%;
+  --pillar-top: 2%;
+  --pillar-width: 2px;
+  --pillar-height: 34vh;
+  --pillar-duration: 13s;
+  --pillar-delay: -4s;
+}
+
+.mio-background-light-pillar-two {
+  --pillar-left: 27%;
+  --pillar-top: 13%;
+  --pillar-width: 1px;
+  --pillar-height: 22vh;
+  --pillar-duration: 16s;
+  --pillar-delay: -10s;
+}
+
+.mio-background-light-pillar-three {
+  --pillar-left: 51%;
+  --pillar-top: 4%;
+  --pillar-width: 2px;
+  --pillar-height: 32vh;
+  --pillar-duration: 12s;
+  --pillar-delay: -7s;
+}
+
+.mio-background-light-pillar-four {
+  --pillar-left: 72%;
+  --pillar-top: 11%;
+  --pillar-width: 1px;
+  --pillar-height: 25vh;
+  --pillar-duration: 15s;
+  --pillar-delay: -12s;
+}
+
+.mio-background-light-pillar-five {
+  --pillar-left: 88%;
+  --pillar-top: 1%;
+  --pillar-width: 2px;
+  --pillar-height: 36vh;
+  --pillar-duration: 14s;
+  --pillar-delay: -9s;
+}
+
+.mio-background-aura {
+  inset: auto 16% 17% 16%;
+  height: clamp(220px, 34vh, 420px);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 58%, rgba(226, 249, 255, 0.3), rgba(124, 214, 255, 0.18) 28%, rgba(76, 168, 255, 0.08) 54%, transparent 72%);
+  filter: blur(34px);
+  opacity: 0.5;
+  transform: scale(0.94);
+  animation: mio-background-aura 7.5s ease-in-out infinite;
+}
+
+.mio-background-backlight {
+  inset: auto 28% clamp(88px, 10vh, 132px) 28%;
+  height: clamp(260px, 44vh, 560px);
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse at 50% 58%, rgba(239, 252, 255, 0.32), rgba(99, 207, 255, 0.14) 32%, transparent 68%);
+  filter: blur(28px);
+  mix-blend-mode: screen;
+  opacity: 0.48;
+  transform: scale(0.96);
+  animation: mio-backlight-breathe 6.8s ease-in-out infinite;
+}
+
 .mio-background-arcs {
   filter: drop-shadow(0 0 16px rgba(110, 214, 255, 0.22));
 }
@@ -219,6 +522,7 @@ a {
   width: min(86vw, 1280px);
   height: min(30vw, 380px);
   opacity: 0.58;
+  animation: mio-arc-breathe 8s ease-in-out infinite;
 }
 
 .mio-background-arc-two {
@@ -227,6 +531,7 @@ a {
   height: min(20vw, 250px);
   border-color: rgba(158, 178, 255, 0.16);
   opacity: 0.34;
+  animation: mio-arc-breathe 10s ease-in-out infinite reverse;
 }
 
 .mio-background-horizon {
@@ -236,6 +541,46 @@ a {
   background: radial-gradient(circle at 50% 50%, rgba(241, 252, 255, 0.56), rgba(132, 218, 255, 0.34) 34%, rgba(132, 218, 255, 0.12) 58%, transparent 76%);
   filter: blur(18px);
   opacity: 1;
+  animation: mio-horizon-pulse 6.5s ease-in-out infinite;
+}
+
+.mio-background-stage-trails {
+  inset: auto 18% clamp(78px, 9vh, 116px) 18%;
+  height: clamp(56px, 8vh, 92px);
+  opacity: 0.68;
+  mix-blend-mode: screen;
+  filter: drop-shadow(0 0 18px rgba(99, 207, 255, 0.2));
+}
+
+.mio-background-stage-trail {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(52vw, 680px);
+  height: 2px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, transparent, rgba(198, 243, 255, 0.72), rgba(99, 207, 255, 0.28), transparent);
+  opacity: 0.48;
+  transform: translate(-50%, -50%) scaleX(0.82);
+  animation: mio-stage-trail-glide var(--trail-duration, 6.5s) ease-in-out infinite;
+  animation-delay: var(--trail-delay, 0s);
+}
+
+.mio-background-stage-trail-two {
+  --trail-duration: 8s;
+  --trail-delay: -2.4s;
+  top: 34%;
+  width: min(42vw, 560px);
+  opacity: 0.34;
+}
+
+.mio-background-stage-trail-three {
+  --trail-duration: 9.2s;
+  --trail-delay: -4.8s;
+  top: 68%;
+  width: min(36vw, 480px);
+  opacity: 0.28;
 }
 
 .mio-background-circle {
@@ -246,6 +591,10 @@ a {
   aspect-ratio: 1;
   transform: translateX(-50%);
   opacity: 0.9;
+  transition:
+    transform 320ms ease,
+    opacity 320ms ease,
+    filter 320ms ease;
 }
 
 .mio-background-ring {
@@ -276,10 +625,136 @@ a {
   animation: mio-ring-spin-reverse 18s linear infinite;
 }
 
-.mio-background-ring-three {
+.mio-background-orbiters {
+  inset: auto;
+  left: 50%;
+  bottom: clamp(64px, 8vh, 104px);
+  width: min(35vw, 460px);
+  aspect-ratio: 1;
+  transform: translateX(-50%);
+  opacity: 0.86;
+  mix-blend-mode: screen;
+}
+
+.mio-background-orbiter {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  animation: mio-orbiter-lap var(--orbiter-duration, 18s) linear infinite;
+  animation-delay: var(--orbiter-delay, 0s);
+}
+
+.mio-background-orbiter::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  width: var(--orbiter-size, 7px);
+  height: var(--orbiter-size, 7px);
+  border-radius: 50%;
+  background: rgba(233, 251, 255, 0.86);
+  box-shadow:
+    0 0 12px rgba(191, 233, 255, 0.44),
+    0 0 24px rgba(99, 207, 255, 0.24);
+  transform: translateX(-50%);
+}
+
+.mio-background-orbiter-two {
+  --orbiter-duration: 24s;
+  --orbiter-delay: -7s;
+  --orbiter-size: 5px;
+  inset: 12%;
+  opacity: 0.68;
+  animation-direction: reverse;
+}
+
+.mio-background-orbiter-three {
+  --orbiter-duration: 16s;
+  --orbiter-delay: -11s;
+  --orbiter-size: 4px;
   inset: 24%;
-  opacity: 0.66;
-  animation: mio-ring-breathe 4.8s ease-in-out infinite;
+  opacity: 0.58;
+}
+
+.mio-background-orbiter-four {
+  --orbiter-duration: 31s;
+  --orbiter-delay: -17s;
+  --orbiter-size: 6px;
+  inset: -6%;
+  opacity: 0.44;
+  animation-direction: reverse;
+}
+
+.mio-background-ring-scans {
+  inset: auto;
+  left: 50%;
+  bottom: clamp(64px, 8vh, 104px);
+  width: min(35vw, 460px);
+  aspect-ratio: 1;
+  transform: translateX(-50%);
+  opacity: 0.74;
+  mix-blend-mode: screen;
+}
+
+.mio-background-ring-scan {
+  position: absolute;
+  inset: 4%;
+  border-radius: 50%;
+  background:
+    conic-gradient(from 0deg, transparent 0deg 18deg, rgba(223, 250, 255, 0.78) 24deg 34deg, transparent 42deg 360deg);
+  -webkit-mask-image: radial-gradient(circle, transparent 0 48%, #000 49% 51%, transparent 52% 100%);
+  mask-image: radial-gradient(circle, transparent 0 48%, #000 49% 51%, transparent 52% 100%);
+  filter: drop-shadow(0 0 10px rgba(99, 207, 255, 0.3));
+  animation: mio-ring-scan-sweep var(--scan-duration, 9s) linear infinite;
+  animation-delay: var(--scan-delay, 0s);
+}
+
+.mio-background-ring-scan-two {
+  --scan-duration: 13s;
+  --scan-delay: -4s;
+  inset: 16%;
+  opacity: 0.68;
+  animation-direction: reverse;
+}
+
+.mio-background-voice-ripples {
+  inset: auto;
+  left: 50%;
+  bottom: clamp(64px, 8vh, 104px);
+  width: min(42vw, 540px);
+  aspect-ratio: 1;
+  transform: translateX(-50%);
+  opacity: 0;
+  mix-blend-mode: screen;
+}
+
+.mio-background-ripple {
+  position: absolute;
+  inset: 18%;
+  border-radius: 50%;
+  border: 1px solid rgba(222, 250, 255, 0.52);
+  box-shadow:
+    0 0 28px rgba(99, 207, 255, 0.24),
+    inset 0 0 16px rgba(191, 233, 255, 0.1);
+  opacity: 0;
+  transform: scale(0.74);
+}
+
+.mio-background-ripple-two {
+  animation-delay: 0.58s;
+}
+
+.mio-background-send-wave {
+  inset: auto 14% clamp(60px, 7vh, 96px) 14%;
+  height: clamp(92px, 14vh, 150px);
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse at 50% 52%, rgba(240, 252, 255, 0.5), rgba(99, 207, 255, 0.2) 36%, transparent 72%);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 50%, transparent 0 32%, #000 42%, transparent 72%);
+  mask-image: radial-gradient(ellipse at 50% 50%, transparent 0 32%, #000 42%, transparent 72%);
+  mix-blend-mode: screen;
+  opacity: 0;
+  transform: scaleX(0.48) scaleY(0.68);
 }
 
 .mio-background-particle {
@@ -289,15 +764,379 @@ a {
   width: var(--particle-size);
   height: var(--particle-size);
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(245, 252, 255, 0.98) 0%, rgba(142, 224, 255, 0.84) 48%, rgba(99, 207, 255, 0) 100%);
+  background: radial-gradient(circle, rgba(221, 247, 255, calc(var(--particle-alpha) + 0.14)) 0%, color-mix(in srgb, var(--mio-cyan-glow) 88%, transparent) 46%, rgba(99, 207, 255, 0) 100%);
   box-shadow:
-    0 0 18px rgba(114, 214, 255, 0.4),
-    0 0 28px rgba(114, 214, 255, 0.14);
-  opacity: 0.78;
+    0 0 18px color-mix(in srgb, var(--mio-cyan-glow) 40%, transparent),
+    0 0 28px color-mix(in srgb, var(--mio-cyan-glow) 14%, transparent);
+  opacity: var(--particle-alpha);
+  mix-blend-mode: screen;
   animation:
     mio-particle-float var(--particle-duration) ease-in-out infinite,
     mio-particle-twinkle 5.2s ease-in-out infinite;
   animation-delay: var(--particle-delay), var(--particle-delay);
+  will-change: transform, opacity;
+}
+
+.mio-background-particle::before {
+  content: "";
+  position: absolute;
+  inset: -35%;
+  border-radius: inherit;
+  background: radial-gradient(circle, rgba(221, 247, 255, 0.76) 0%, color-mix(in srgb, var(--mio-cyan-glow) 34%, transparent) 44%, rgba(99, 207, 255, 0) 100%);
+  opacity: 0.9;
+}
+
+.mio-background-particle[data-kind="dust"] {
+  box-shadow:
+    0 0 10px rgba(99, 207, 255, 0.24),
+    0 0 18px rgba(99, 207, 255, 0.08);
+}
+
+.mio-background-particle[data-kind="dust"]::before {
+  inset: -25%;
+  background: radial-gradient(circle, rgba(191, 233, 255, 0.52) 0%, rgba(99, 207, 255, 0.22) 48%, rgba(99, 207, 255, 0) 100%);
+}
+
+.mio-background-particle[data-kind="orb"] {
+  box-shadow:
+    0 0 20px rgba(99, 207, 255, 0.44),
+    0 0 34px rgba(99, 207, 255, 0.16);
+}
+
+.mio-background-emotion-particles {
+  opacity: 0;
+  mix-blend-mode: screen;
+}
+
+.mio-background-emotion-particle {
+  position: absolute;
+  left: var(--emotion-left);
+  top: var(--emotion-top);
+  width: var(--emotion-size);
+  height: var(--emotion-size);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 249, 220, 0.96), rgba(255, 203, 105, 0.44) 42%, transparent 74%);
+  box-shadow:
+    0 0 16px rgba(255, 219, 145, 0.28),
+    0 0 28px rgba(99, 207, 255, 0.1);
+  animation: mio-emotion-spark var(--emotion-duration) ease-in-out infinite;
+  animation-delay: var(--emotion-delay);
+}
+
+.mio-background-emotion-particle-one {
+  --emotion-left: 24%;
+  --emotion-top: 62%;
+  --emotion-size: 7px;
+  --emotion-duration: 4.8s;
+  --emotion-delay: -0.8s;
+}
+
+.mio-background-emotion-particle-two {
+  --emotion-left: 34%;
+  --emotion-top: 48%;
+  --emotion-size: 5px;
+  --emotion-duration: 5.6s;
+  --emotion-delay: -3s;
+}
+
+.mio-background-emotion-particle-three {
+  --emotion-left: 58%;
+  --emotion-top: 42%;
+  --emotion-size: 6px;
+  --emotion-duration: 5.2s;
+  --emotion-delay: -1.7s;
+}
+
+.mio-background-emotion-particle-four {
+  --emotion-left: 68%;
+  --emotion-top: 58%;
+  --emotion-size: 8px;
+  --emotion-duration: 6s;
+  --emotion-delay: -4.1s;
+}
+
+.mio-background-emotion-particle-five {
+  --emotion-left: 76%;
+  --emotion-top: 38%;
+  --emotion-size: 4px;
+  --emotion-duration: 4.4s;
+  --emotion-delay: -2.6s;
+}
+
+.mio-background-emotion-particle-six {
+  --emotion-left: 18%;
+  --emotion-top: 36%;
+  --emotion-size: 5px;
+  --emotion-duration: 5.8s;
+  --emotion-delay: -5s;
+}
+
+.mio-background-foreground-particles {
+  opacity: 0.54;
+  mix-blend-mode: screen;
+}
+
+.mio-background-foreground-particles::before {
+  content: "";
+  position: absolute;
+  inset: 58% 8% 4% 8%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 50% 50%, rgba(238, 252, 255, 0.1), transparent 72%);
+  filter: blur(16px);
+  opacity: 0.6;
+  animation: mio-lens-depth-breathe 10s ease-in-out infinite;
+}
+
+.mio-background-foreground-particle {
+  position: absolute;
+  left: var(--fg-left);
+  top: var(--fg-top);
+  width: var(--fg-size);
+  height: var(--fg-size);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(244, 253, 255, 0.78), rgba(99, 207, 255, 0.22) 46%, transparent 74%);
+  box-shadow:
+    0 0 22px rgba(191, 233, 255, 0.28),
+    0 0 42px rgba(99, 207, 255, 0.14);
+  filter: blur(var(--fg-blur, 0.2px));
+  animation: mio-foreground-particle-float var(--fg-duration) ease-in-out infinite;
+  animation-delay: var(--fg-delay);
+}
+
+.mio-background-foreground-particle-one {
+  --fg-left: 16%;
+  --fg-top: 72%;
+  --fg-size: 18px;
+  --fg-duration: 18s;
+  --fg-delay: -5s;
+  --fg-blur: 0.6px;
+}
+
+.mio-background-foreground-particle-two {
+  --fg-left: 28%;
+  --fg-top: 84%;
+  --fg-size: 12px;
+  --fg-duration: 22s;
+  --fg-delay: -12s;
+  --fg-blur: 0.2px;
+}
+
+.mio-background-foreground-particle-three {
+  --fg-left: 70%;
+  --fg-top: 76%;
+  --fg-size: 16px;
+  --fg-duration: 20s;
+  --fg-delay: -8s;
+  --fg-blur: 0.5px;
+}
+
+.mio-background-foreground-particle-four {
+  --fg-left: 84%;
+  --fg-top: 66%;
+  --fg-size: 10px;
+  --fg-duration: 24s;
+  --fg-delay: -16s;
+}
+
+.mio-background-foreground-particle-five {
+  --fg-left: 48%;
+  --fg-top: 88%;
+  --fg-size: 14px;
+  --fg-duration: 26s;
+  --fg-delay: -19s;
+}
+
+.mio-background[data-action="idle"] .mio-background-aura {
+  opacity: 0.72;
+  transform: scale(0.99);
+  animation-duration: 4.6s;
+}
+
+.mio-background[data-action="idle"] .mio-background-horizon {
+  filter: blur(15px);
+  animation-duration: 4.2s;
+}
+
+.mio-background[data-action="idle"] .mio-background-circle {
+  opacity: 0.98;
+  transform: translateX(-50%) scale(1.02);
+  animation: mio-idle-circle-swell 7.8s ease-in-out infinite;
+}
+
+.mio-background[data-action="idle"] .mio-background-ring {
+  border-color: rgba(185, 241, 255, 0.62);
+  box-shadow:
+    0 0 28px rgba(99, 207, 255, 0.34),
+    inset 0 0 20px rgba(240, 250, 255, 0.14);
+}
+
+.mio-background[data-action="idle"] .mio-background-particle {
+  opacity: 0.92;
+  animation-duration: calc(var(--particle-duration) * 0.78), 3.2s;
+}
+
+.mio-background[data-speaking="true"] .mio-background-aura {
+  opacity: 0.92;
+  transform: scale(1.02);
+  animation-duration: 2.4s;
+}
+
+.mio-background[data-speaking="true"] .mio-background-horizon {
+  filter: blur(14px);
+  opacity: 1;
+  animation-duration: 1.8s;
+}
+
+.mio-background[data-speaking="true"] .mio-background-circle {
+  opacity: 1;
+  transform: translateX(-50%) scale(1.04);
+  filter: drop-shadow(0 0 28px rgba(126, 229, 255, 0.3));
+}
+
+.mio-background[data-speaking="true"] .mio-background-ring {
+  border-color: rgba(214, 248, 255, 0.78);
+  box-shadow:
+    0 0 36px rgba(99, 207, 255, 0.46),
+    inset 0 0 24px rgba(240, 250, 255, 0.18);
+}
+
+.mio-background[data-speaking="true"] .mio-background-particle {
+  opacity: 1;
+  animation-duration: calc(var(--particle-duration) * 0.58), 2.1s;
+}
+
+.mio-background[data-speaking="true"] .mio-background-backlight {
+  opacity: 0.72;
+  transform: scale(1.04);
+  animation-duration: 3.4s;
+}
+
+.mio-background[data-speaking="true"] .mio-background-voice-ripples {
+  opacity: 1;
+}
+
+.mio-background[data-speaking="true"] .mio-background-ripple {
+  animation: mio-voice-ripple 1.9s ease-out infinite;
+}
+
+.mio-background[data-speaking="true"] .mio-background-stage-trail {
+  opacity: 0.72;
+  animation-duration: 3.8s;
+}
+
+.mio-background[data-activity="pulse"] .mio-background-send-wave {
+  animation: mio-send-wave-burst 1.35s ease-out both;
+}
+
+.mio-background[data-time-tone="dawn"] .mio-background-moonlight {
+  background:
+    radial-gradient(circle at 48% 16%, rgba(255, 238, 205, 0.28), rgba(134, 220, 255, 0.12) 14%, transparent 34%),
+    conic-gradient(from 186deg at 50% 8%, transparent 0deg, rgba(255, 218, 170, 0.1) 16deg, transparent 38deg);
+}
+
+.mio-background[data-time-tone="day"] .mio-background-moonlight {
+  opacity: 0.34;
+}
+
+.mio-background[data-time-tone="evening"] .mio-background-vignette {
+  background:
+    radial-gradient(circle at 50% 60%, rgba(255, 229, 189, 0.16), rgba(131, 214, 255, 0.12) 18%, transparent 34%),
+    linear-gradient(90deg, rgba(7, 30, 75, 0.24), rgba(7, 30, 75, 0.03) 22%, rgba(7, 30, 75, 0.02) 78%, rgba(7, 30, 75, 0.28)),
+    linear-gradient(180deg, rgba(255, 201, 146, 0.05), rgba(69, 156, 234, 0.05) 34%, rgba(3, 25, 66, 0.16) 100%);
+}
+
+.mio-background[data-time-tone="deep-night"] .mio-background-nebula,
+.mio-background[data-time-tone="deep-night"] .mio-background-stars {
+  opacity: 0.9;
+}
+
+.mio-background[data-emotion="happy"] .mio-background-aura,
+.mio-background[data-emotion="excited"] .mio-background-aura {
+  opacity: 0.82;
+  background:
+    radial-gradient(circle at 50% 58%, rgba(255, 246, 200, 0.34), rgba(153, 229, 255, 0.22) 28%, rgba(93, 194, 255, 0.12) 54%, transparent 72%);
+}
+
+.mio-background[data-emotion="happy"] .mio-background-horizon,
+.mio-background[data-emotion="excited"] .mio-background-horizon {
+  background: radial-gradient(circle at 50% 50%, rgba(255, 250, 226, 0.72), rgba(132, 218, 255, 0.42) 32%, rgba(132, 218, 255, 0.16) 58%, transparent 76%);
+}
+
+.mio-background[data-emotion="happy"] .mio-background-stage-trails,
+.mio-background[data-emotion="excited"] .mio-background-stage-trails {
+  opacity: 0.86;
+  filter: drop-shadow(0 0 22px rgba(255, 235, 190, 0.16)) drop-shadow(0 0 22px rgba(99, 207, 255, 0.2));
+}
+
+.mio-background[data-emotion="happy"] .mio-background-emotion-particles,
+.mio-background[data-emotion="excited"] .mio-background-emotion-particles {
+  opacity: 0.82;
+}
+
+.mio-background[data-emotion="excited"] .mio-background-emotion-particle {
+  animation-duration: calc(var(--emotion-duration) * 0.72);
+}
+
+.mio-background[data-emotion="sad"] .mio-background-image {
+  filter: saturate(0.92) brightness(0.98) hue-rotate(-8deg);
+}
+
+.mio-background[data-emotion="sad"] .mio-background-aura,
+.mio-background[data-emotion="sad"] .mio-background-horizon {
+  opacity: 0.58;
+  background:
+    radial-gradient(circle at 50% 55%, rgba(183, 219, 255, 0.34), rgba(82, 151, 231, 0.16) 36%, transparent 74%);
+}
+
+.mio-background[data-emotion="sad"] .mio-background-clouds,
+.mio-background[data-emotion="sad"] .mio-background-nebula {
+  opacity: 0.34;
+}
+
+.mio-background[data-emotion="sad"] .mio-background-foreground-particle,
+.mio-background[data-emotion="sad"] .mio-background-particle {
+  animation-duration: calc(var(--particle-duration, 20s) * 1.28), 6.4s;
+}
+
+.mio-background[data-emotion="thinking"] .mio-background-aura {
+  opacity: 0.7;
+  background:
+    radial-gradient(circle at 50% 58%, rgba(211, 233, 255, 0.3), rgba(138, 170, 255, 0.2) 32%, rgba(99, 207, 255, 0.08) 58%, transparent 76%);
+  animation-duration: 6.8s;
+}
+
+.mio-background[data-emotion="thinking"] .mio-background-orbiter {
+  animation-duration: calc(var(--orbiter-duration, 18s) * 1.24);
+}
+
+.mio-background[data-emotion="thinking"] .mio-background-ring-scan {
+  animation-duration: calc(var(--scan-duration, 9s) * 1.18);
+}
+
+.mio-background[data-emotion="caring"] .mio-background-aura,
+.mio-background[data-emotion="caring"] .mio-background-horizon {
+  background:
+    radial-gradient(circle at 50% 54%, rgba(255, 236, 211, 0.38), rgba(137, 229, 255, 0.2) 34%, transparent 74%);
+}
+
+.mio-background[data-emotion="caring"] .mio-background-reflection {
+  opacity: 0.64;
+  filter: blur(1px) saturate(1.08);
+}
+
+.mio-background[data-emotion="caring"] .mio-background-foreground-particles {
+  opacity: 0.68;
+}
+
+.mio-background[data-action="wave"] .mio-background-arc,
+.mio-background[data-action="cheer"] .mio-background-arc {
+  border-color: rgba(198, 243, 255, 0.4);
+  opacity: 0.78;
+}
+
+.mio-background[data-action="wave"] .mio-background-stage-trail,
+.mio-background[data-action="cheer"] .mio-background-stage-trail {
+  animation-duration: 3.4s;
 }
 
 .mio-topbar {
@@ -306,10 +1145,10 @@ a {
   flex: 0 0 auto;
   min-height: var(--mio-topbar-height);
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  grid-gap: 68px;
-  gap: 68px;
+  grid-gap: clamp(8px, 2vw, 20px);
+  gap: clamp(8px, 2vw, 20px);
   padding: 0 18px;
   border-bottom: 1px solid rgba(143, 214, 255, 0.16);
   background: linear-gradient(180deg, rgba(4, 13, 31, 0.74), rgba(4, 13, 31, 0.16));
@@ -357,24 +1196,23 @@ a {
 }
 
 .mio-brand {
-  gap: 18px;
+  gap: 12px;
+  min-width: 0;
 }
 
 .mio-brand::before {
   content: "";
-  width: 54px;
-  height: 54px;
-  flex: 0 0 54px;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
   background:
-    radial-gradient(circle at 50% 50%, #f3fbff 0 6%, transparent 7%),
-    linear-gradient(0deg, transparent 37%, rgba(197, 246, 255, 0.95) 43% 57%, transparent 63%),
-    linear-gradient(90deg, transparent 37%, rgba(197, 246, 255, 0.95) 43% 57%, transparent 63%),
-    linear-gradient(45deg, transparent 39%, rgba(104, 211, 255, 0.92) 45% 55%, transparent 61%),
-    linear-gradient(-45deg, transparent 39%, rgba(104, 211, 255, 0.92) 45% 55%, transparent 61%),
-    radial-gradient(circle at 50% 50%, rgba(57, 173, 255, 0.58), transparent 58%);
-  -webkit-clip-path: polygon(50% 0, 60% 33%, 95% 18%, 67% 43%, 100% 50%, 67% 57%, 95% 82%, 60% 67%, 50% 100%, 40% 67%, 5% 82%, 33% 57%, 0 50%, 33% 43%, 5% 18%, 40% 33%);
-          clip-path: polygon(50% 0, 60% 33%, 95% 18%, 67% 43%, 100% 50%, 67% 57%, 95% 82%, 60% 67%, 50% 100%, 40% 67%, 5% 82%, 33% 57%, 0 50%, 33% 43%, 5% 18%, 40% 33%);
-  filter: drop-shadow(0 0 8px rgba(109, 211, 255, 0.9)) drop-shadow(0 0 18px rgba(44, 141, 255, 0.42));
+    radial-gradient(circle at 50% 50%, #f3fbff 0 10%, transparent 11%),
+    linear-gradient(0deg, transparent 33%, rgba(197, 246, 255, 0.95) 43% 57%, transparent 67%),
+    linear-gradient(90deg, transparent 33%, rgba(197, 246, 255, 0.95) 43% 57%, transparent 67%),
+    radial-gradient(circle at 50% 50%, rgba(57, 173, 255, 0.58), transparent 62%);
+  -webkit-clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%);
+          clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%);
+  filter: drop-shadow(0 0 7px rgba(109, 211, 255, 0.82));
 }
 
 .mio-brand img {
@@ -383,8 +1221,13 @@ a {
 
 .mio-brand h1 {
   margin: 0;
-  font: 500 30px/1 "Space Grotesk", sans-serif;
+  font: 500 clamp(22px, 2.2vw, 30px)/1 "Space Grotesk", sans-serif;
   letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.mio-brand span {
+  display: none;
 }
 
 .mio-brand span,
@@ -395,8 +1238,14 @@ a {
 }
 
 .mio-system-state {
-  gap: 18px;
-  color: #75f5e6;
+  display: none;
+}
+
+.mio-system-state > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mio-dot {
@@ -410,6 +1259,7 @@ a {
 .mio-session {
   justify-content: end;
   gap: 16px;
+  min-width: 0;
   white-space: nowrap;
   font-size: 13px;
 }
@@ -418,6 +1268,7 @@ a {
 .mio-session-actions {
   display: flex;
   align-items: center;
+  min-width: 0;
   gap: 16px;
 }
 
@@ -425,6 +1276,9 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .mio-session-meta > span:first-child {
@@ -433,6 +1287,10 @@ a {
 
 .mio-session-meta > span:nth-child(2) {
   min-width: 140px;
+}
+
+.mio-session-meta > span:nth-child(3) {
+  min-width: 180px;
 }
 
 .mio-session-meta > span::before {
@@ -826,18 +1684,26 @@ a {
 }
 
 .mio-dialogue {
+  --mio-dialogue-min-width: 292px;
+  --mio-dialogue-max-width: 348px;
+  --mio-dialogue-min-height: 172px;
+  --mio-dialogue-max-height: 206px;
   position: absolute;
   z-index: 4;
   top: clamp(16px, 2.2vh, 28px);
   left: clamp(14px, 1.6vw, 24px);
-  width: min(308px, calc(35% - 18px));
-  max-width: calc(35% - 18px);
-  min-height: 190px;
-  padding: 22px 30px 20px 28px;
+  width: clamp(var(--mio-dialogue-min-width), 28vw, var(--mio-dialogue-max-width));
+  max-width: min(var(--mio-dialogue-max-width), calc(100vw - 32px));
+  min-width: min(var(--mio-dialogue-min-width), calc(100vw - 32px));
+  height: auto;
+  min-height: var(--mio-dialogue-min-height);
+  max-height: var(--mio-dialogue-max-height);
+  aspect-ratio: 420 / 248;
+  padding: 22px 28px 18px 28px;
   display: grid;
-  grid-template-rows: auto 1fr auto;
-  grid-gap: 14px;
-  gap: 14px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-gap: 10px;
+  gap: 10px;
   overflow: visible;
   background: transparent;
   box-shadow: none;
@@ -949,15 +1815,139 @@ a {
   filter: drop-shadow(0 0 5px rgba(94, 220, 255, 0.28));
 }
 
-.mio-dialogue p {
+.mio-dialogue-voice-button,
+.mio-message-voice-button {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(145, 225, 255, 0.34);
+  border-radius: 8px;
+  color: rgba(239, 250, 255, 0.94);
+  background: rgba(5, 20, 42, 0.5);
+  cursor: pointer;
+}
+
+.mio-dialogue-voice-button {
+  width: 28px;
+  height: 28px;
+  margin-left: 60px;
+  position: relative;
+  z-index: 2;
+}
+
+.mio-message-voice-button {
+  width: 26px;
+  height: 26px;
+}
+
+.mio-dialogue-voice-button svg,
+.mio-message-voice-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.mio-dialogue-voice-button path,
+.mio-message-voice-button path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.45;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mio-dialogue-voice-button[data-active="true"],
+.mio-message-voice-button[data-active="true"] {
+  border-color: rgba(115, 229, 255, 0.7);
+  color: #f7fdff;
+  box-shadow: 0 0 14px rgba(84, 214, 255, 0.24);
+}
+
+.mio-dialogue-voice-button:disabled,
+.mio-message-voice-button:disabled {
+  cursor: default;
+  opacity: 0.48;
+  box-shadow: none;
+}
+
+.mio-dialogue-copy {
   position: relative;
   z-index: 1;
+  min-height: 0;
+  width: calc(100% - 24px);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    transparent 0,
+    rgba(0, 0, 0, 0.55) 10px,
+    #000 24px,
+    #000 calc(100% - 28px),
+    rgba(0, 0, 0, 0.62) calc(100% - 12px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    180deg,
+    transparent 0,
+    rgba(0, 0, 0, 0.55) 10px,
+    #000 24px,
+    #000 calc(100% - 28px),
+    rgba(0, 0, 0, 0.62) calc(100% - 12px),
+    transparent 100%
+  );
+}
+
+.mio-dialogue-copy::before,
+.mio-dialogue-copy::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 12px;
+  z-index: 2;
+  height: 22px;
+  pointer-events: none;
+}
+
+.mio-dialogue-copy::before {
+  top: 0;
+  background: linear-gradient(180deg, rgba(20, 58, 105, 0.66), rgba(20, 58, 105, 0));
+}
+
+.mio-dialogue-copy::after {
+  bottom: 0;
+  background: linear-gradient(0deg, rgba(14, 45, 88, 0.72), rgba(14, 45, 88, 0));
+}
+
+.mio-dialogue-copy p {
+  position: relative;
+  z-index: 1;
+  height: 100%;
   margin: 0;
+  padding: 22px 10px 22px 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   color: #f1f9ff;
-  font-size: clamp(14px, 1vw, 17px);
-  line-height: 1.54;
+  font-size: clamp(13px, 0.96vw, 16px);
+  line-height: 1.5;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   text-shadow: 0 0 10px rgba(120, 203, 255, 0.1);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(143, 222, 255, 0.58) rgba(7, 30, 66, 0.2);
+}
+
+.mio-dialogue-copy p::-webkit-scrollbar {
+  width: 4px;
+}
+
+.mio-dialogue-copy p::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(7, 30, 66, 0.12);
+}
+
+.mio-dialogue-copy p::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(143, 222, 255, 0.48);
 }
 
 .mio-dialogue-dots {
@@ -1092,6 +2082,31 @@ a {
   flex: 0 0 auto;
 }
 
+.mio-stage-click-ripples {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.mio-stage-click-ripple {
+  position: absolute;
+  width: clamp(76px, 10vw, 132px);
+  aspect-ratio: 1;
+  border-radius: 999px;
+  transform: translate(-50%, -50%) scale(0.35);
+  border: 1px solid rgba(145, 229, 255, 0.78);
+  background:
+    radial-gradient(circle, rgba(255, 255, 255, 0.38) 0 8%, transparent 9%),
+    radial-gradient(circle, rgba(84, 209, 255, 0.32) 0 30%, rgba(129, 105, 255, 0.18) 46%, transparent 68%);
+  box-shadow:
+    0 0 22px rgba(84, 209, 255, 0.62),
+    inset 0 0 18px rgba(255, 255, 255, 0.34);
+  mix-blend-mode: screen;
+  animation: mio-stage-click-ripple 720ms ease-out forwards;
+}
+
 .mio-stage-status {
   position: absolute;
   left: 50%;
@@ -1147,6 +2162,7 @@ a {
   z-index: 4;
   width: var(--mio-right-rail-width);
   flex: 0 0 var(--mio-right-rail-width);
+  container-type: inline-size;
   height: calc(100% - var(--mio-side-panels-bottom-gap));
   margin-bottom: var(--mio-side-panels-bottom-gap);
   min-height: 0;
@@ -1208,64 +2224,142 @@ a {
 }
 
 .mio-chatbox-head,
-.mio-chatbox-toolbar,
+.mio-chatbox-sessions,
+.mio-chatbox-actions,
+.mio-chatbox-controls,
 .mio-chatbox-footer {
   border: 1px solid rgba(139, 219, 255, 0.34);
-  border-radius: 18px;
+  border-radius: 12px;
   background: linear-gradient(180deg, rgba(22, 58, 96, 0.68), rgba(9, 31, 60, 0.74));
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   -webkit-backdrop-filter: blur(14px);
           backdrop-filter: blur(14px);
 }
 
-.mio-chatbox-head,
-.mio-chatbox-toolbar,
+.mio-chatbox-controls,
 .mio-chatbox-footer {
-  padding: 14px;
+  padding: 10px;
 }
 
-.mio-chatbox-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.mio-chatbox-head-copy,
-.mio-chatbox-head-meta {
-  display: grid;
-  grid-gap: 4px;
-  gap: 4px;
-}
-
-.mio-chatbox-head-copy strong,
 .mio-workspace-card h2 {
   color: #effaff;
 }
 
-.mio-chatbox-head-copy span,
-.mio-chatbox-head-meta span,
 .mio-chatbox-footer span {
   color: rgba(209, 231, 245, 0.78);
   font-size: 11px;
   letter-spacing: 0.06em;
 }
 
-.mio-chatbox-head-meta {
-  text-align: right;
+.mio-chatbox-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-gap: 8px;
+  gap: 8px;
+  padding: 8px;
 }
 
-.mio-chatbox-head-meta strong {
-  color: #f7fdff;
-  font-size: 18px;
-  font-weight: 600;
+.mio-chatbox-action {
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid rgba(116, 207, 255, 0.24);
+  border-radius: 8px;
+  background: rgba(10, 30, 55, 0.58);
+  color: rgba(234, 246, 255, 0.92);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.mio-chatbox-action:disabled {
+  opacity: 0.44;
+  cursor: default;
+}
+
+.mio-chatbox-controls {
+  display: grid;
+  grid-gap: 8px;
+  gap: 8px;
+}
+
+.mio-chatbox-sessions-head,
+.mio-chatbox-session-item,
+.mio-chatbox-session-tools {
+  display: flex;
+  align-items: center;
+}
+
+.mio-chatbox-sessions-head,
+.mio-chatbox-session-item {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mio-chatbox-sessions-head strong,
+.mio-chatbox-session-main strong {
+  color: #effaff;
+}
+
+.mio-chatbox-session-create,
+.mio-chatbox-session-tool {
+  min-height: 28px;
+  border: 1px solid rgba(116, 207, 255, 0.24);
+  border-radius: 8px;
+  background: rgba(10, 30, 55, 0.74);
+  color: rgba(234, 246, 255, 0.9);
+  padding: 0 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.mio-chatbox-session-list {
+  display: grid;
+  grid-gap: 6px;
+  gap: 6px;
+  max-height: 132px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.mio-chatbox-session-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  display: grid;
+  grid-gap: 4px;
+  gap: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mio-chatbox-session-main span {
+  color: rgba(209, 231, 245, 0.7);
+  font-size: 10px;
+}
+
+.mio-chatbox-session-item {
+  padding: 8px 10px;
+  border: 1px solid rgba(133, 215, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(9, 27, 51, 0.58);
+}
+
+.mio-chatbox-session-item.is-active {
+  border-color: rgba(117, 227, 255, 0.34);
+  box-shadow: inset 2px 0 0 rgba(87, 228, 255, 0.9);
+}
+
+.mio-chatbox-session-tools {
+  gap: 6px;
 }
 
 .mio-chatbox-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  grid-gap: 10px;
-  gap: 10px;
+  grid-template-columns: minmax(112px, 1fr) minmax(82px, auto);
+  grid-gap: 8px;
+  gap: 8px;
 }
 
 .mio-chatbox-search,
@@ -1275,38 +2369,42 @@ a {
   border-radius: 10px;
   background: rgba(4, 19, 38, 0.72);
   color: #dff6ff;
-  padding: 10px 12px;
+  padding: 8px 10px;
   font: inherit;
+  font-size: 12px;
 }
 
 .mio-chatbox-search::placeholder {
   color: rgba(209, 231, 245, 0.56);
 }
 
-.mio-chatbox-jump {
-  border: 1px solid rgba(139, 219, 255, 0.3);
-  border-radius: 10px;
-  background: rgba(8, 34, 64, 0.72);
-  color: #eef8ff;
-  padding: 10px 12px;
-  font: inherit;
-  cursor: pointer;
+.mio-chatbox-search::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
-.mio-chatbox-jump:disabled {
-  opacity: 0.45;
-  cursor: default;
+@container (max-width: 350px) {
+  .mio-chatbox-toolbar {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container (max-width: 235px) {
+  .mio-chatbox-actions,
+  .mio-chatbox-toolbar {
+    grid-template-columns: 1fr;
+  }
 }
 
 .mio-chatbox-list {
+  position: relative;
   min-height: 0;
   flex: 1 1 auto;
-  display: grid;
-  align-content: start;
-  grid-gap: 10px;
-  gap: 10px;
+  display: block;
   overflow-y: auto;
-  padding: 10px 10px 10px 6px;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  padding: 12px 8px 12px 4px;
   border: 1px solid rgba(133, 215, 255, 0.16);
   border-radius: 18px;
   background:
@@ -1320,6 +2418,40 @@ a {
   scrollbar-width: thin;
   scrollbar-color: rgba(123, 226, 255, 0.24) rgba(8, 31, 58, 0.04);
   scrollbar-gutter: stable;
+}
+
+.mio-chatbox-message-flow {
+  display: grid;
+  grid-gap: 8px;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+}
+
+.mio-chatbox-list::before,
+.mio-chatbox-list::after {
+  content: "";
+  position: -webkit-sticky;
+  position: sticky;
+  z-index: 2;
+  left: 0;
+  right: 0;
+  height: 77px;
+  pointer-events: none;
+}
+
+.mio-chatbox-list::before {
+  top: 0;
+  margin-bottom: -77px;
+  background: linear-gradient(180deg, rgba(6, 24, 47, 0.92), rgba(6, 24, 47, 0));
+}
+
+.mio-chatbox-list::after {
+  bottom: 0;
+  margin-top: -16px;
+  background: linear-gradient(0deg, rgba(5, 18, 38, 0.92), rgba(5, 18, 38, 0));
 }
 
 .mio-chatbox-list::-webkit-scrollbar {
@@ -1354,10 +2486,13 @@ a {
 
 .mio-chatbox-message,
 .mio-chatbox-empty {
-  padding: 14px;
-  border: 1px solid rgba(139, 219, 255, 0.28);
-  border-radius: 16px;
-  background: linear-gradient(180deg, rgba(17, 49, 82, 0.72), rgba(8, 28, 55, 0.78));
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 10px 11px;
+  border: 1px solid rgba(139, 219, 255, 0.22);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(17, 49, 82, 0.56), rgba(8, 28, 55, 0.64));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
@@ -1378,7 +2513,21 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+}
+
+.mio-chatbox-message-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mio-chatbox-message-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 
 .mio-chatbox-message-head strong {
@@ -1394,13 +2543,36 @@ a {
   letter-spacing: 0.06em;
 }
 
+.mio-message-trace-button {
+  min-width: 52px;
+  height: 24px;
+  border: 1px solid rgba(116, 207, 255, 0.18);
+  border-radius: 7px;
+  background: rgba(4, 19, 38, 0.46);
+  color: rgba(209, 231, 245, 0.72);
+  padding: 0 7px;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.mio-message-trace-button:hover {
+  border-color: rgba(116, 207, 255, 0.34);
+  color: #effaff;
+}
+
 .mio-chatbox-message-body,
 .mio-chatbox-empty span,
 .mio-workspace-card p {
+  min-width: 0;
   color: rgba(238, 248, 255, 0.92);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1.52;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .mio-chatbox-empty {
@@ -1420,6 +2592,7 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  padding: 8px 10px;
 }
 
 .mio-card-copy {
@@ -2014,6 +3187,20 @@ a {
   background: rgba(7, 26, 51, 0.54);
 }
 
+.mio-advanced-json-preview {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(136, 211, 255, 0.18);
+  background: rgba(4, 18, 37, 0.82);
+  color: rgba(223, 241, 255, 0.88);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
 .mio-advanced-list {
   display: grid;
   grid-gap: 10px;
@@ -2289,8 +3476,8 @@ a {
   height: 21px;
   border: 1px solid rgba(181, 228, 255, 0.26);
   border-radius: 999px;
-  background: linear-gradient(180deg, #4fa6ff, #3d7bff);
-  box-shadow: inset 0 1px 0 rgba(233, 248, 255, 0.16);
+  background: linear-gradient(180deg, rgba(37, 62, 96, 0.82), rgba(13, 30, 57, 0.92));
+  box-shadow: inset 0 1px 0 rgba(233, 248, 255, 0.1);
   position: relative;
   flex: 0 0 auto;
   opacity: 1;
@@ -2532,6 +3719,343 @@ a {
   }
 }
 
+@keyframes mio-background-aura {
+  0%,
+  100% {
+    transform: scale(0.94);
+    opacity: 0.44;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 0.72;
+  }
+}
+
+@keyframes mio-arc-breathe {
+  0%,
+  100% {
+    opacity: 0.34;
+    transform: translateX(-50%) scaleX(0.992);
+  }
+  50% {
+    opacity: 0.72;
+    transform: translateX(-50%) scaleX(1.008);
+  }
+}
+
+@keyframes mio-horizon-pulse {
+  0%,
+  100% {
+    transform: scaleX(0.97) scaleY(0.92);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scaleX(1.03) scaleY(1.06);
+    opacity: 1;
+  }
+}
+
+@keyframes mio-reflection-shimmer {
+  0%,
+  100% {
+    background-position: 0 0, 50% 50%;
+    opacity: 0.42;
+    transform: perspective(420px) rotateX(62deg) scaleX(1.04) translate3d(-0.5%, 0, 0);
+  }
+  50% {
+    background-position: 0 18px, 50% 46%;
+    opacity: 0.68;
+    transform: perspective(420px) rotateX(62deg) scaleX(1.12) translate3d(0.6%, -2px, 0);
+  }
+}
+
+@keyframes mio-moonlight-roam {
+  0% {
+    opacity: 0.38;
+    transform: translate3d(-1.4%, 0, 0) scale(1);
+  }
+  50% {
+    opacity: 0.58;
+    transform: translate3d(1%, -1.2%, 0) scale(1.04);
+  }
+  100% {
+    opacity: 0.46;
+    transform: translate3d(2.2%, 0.8%, 0) scale(1.02);
+  }
+}
+
+@keyframes mio-caustics-flow {
+  from {
+    background-position: 0 0, 0 0;
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.56;
+  }
+  to {
+    background-position: 54px 32px, -72px 48px;
+    opacity: 0.34;
+  }
+}
+
+@keyframes mio-nebula-flow {
+  0% {
+    background-position: 0% 0%, 100% 0%, 50% 50%;
+    transform: translate3d(-1.2%, 0, 0) scale(1.02);
+    opacity: 0.38;
+  }
+  50% {
+    background-position: 8% 4%, 92% 7%, 52% 46%;
+    opacity: 0.56;
+  }
+  100% {
+    background-position: 14% 8%, 84% 12%, 48% 52%;
+    transform: translate3d(1.2%, -1.4%, 0) scale(1.05);
+    opacity: 0.44;
+  }
+}
+
+@keyframes mio-light-pillar-bloom {
+  0%,
+  100% {
+    opacity: 0;
+    transform: translate3d(0, -14px, 0) scaleY(0.86);
+  }
+  22% {
+    opacity: 0.62;
+  }
+  68% {
+    opacity: 0.28;
+    transform: translate3d(0, 14px, 0) scaleY(1.04);
+  }
+}
+
+@keyframes mio-cloud-drift {
+  0% {
+    transform: translate3d(-7%, 0, 0) scale(0.96);
+  }
+  50% {
+    transform: translate3d(4%, -2%, 0) scale(1.03);
+  }
+  100% {
+    transform: translate3d(10%, 1.5%, 0) scale(1);
+  }
+}
+
+@keyframes mio-backlight-breathe {
+  0%,
+  100% {
+    opacity: 0.38;
+    transform: scale(0.94);
+  }
+  50% {
+    opacity: 0.62;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes mio-idle-circle-swell {
+  0%,
+  100% {
+    transform: translateX(-50%) scale(0.985);
+  }
+  50% {
+    transform: translateX(-50%) scale(1.05);
+  }
+}
+
+@keyframes mio-ring-scan-sweep {
+  from {
+    transform: rotate(0deg);
+    opacity: 0.28;
+  }
+  50% {
+    opacity: 0.78;
+  }
+  to {
+    transform: rotate(360deg);
+    opacity: 0.28;
+  }
+}
+
+@keyframes mio-stage-trail-glide {
+  0%,
+  100% {
+    opacity: 0.18;
+    transform: translate(-50%, -50%) scaleX(0.58);
+  }
+  46% {
+    opacity: 0.68;
+    transform: translate(-50%, -50%) scaleX(1.08);
+  }
+  64% {
+    opacity: 0.38;
+    transform: translate(-48%, -50%) scaleX(0.86);
+  }
+}
+
+@keyframes mio-send-wave-burst {
+  0% {
+    opacity: 0;
+    transform: scaleX(0.42) scaleY(0.58);
+  }
+  18% {
+    opacity: 0.78;
+  }
+  100% {
+    opacity: 0;
+    transform: scaleX(1.22) scaleY(1.06);
+  }
+}
+
+@keyframes mio-star-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(10px, -6px, 0);
+  }
+}
+
+@keyframes mio-star-twinkle {
+  0%,
+  100% {
+    opacity: 0.36;
+  }
+  50% {
+    opacity: 0.84;
+  }
+}
+
+@keyframes mio-meteor-fall {
+  0% {
+    transform: translate3d(0, -3vh, 0);
+    opacity: 0;
+  }
+
+  18% {
+    transform: translate3d(0, 2vh, 0);
+    opacity: 0.92;
+  }
+
+  74% {
+    transform: translate3d(0, var(--meteor-travel), 0);
+    opacity: 0.56;
+  }
+
+  100% {
+    transform: translate3d(0, calc(var(--meteor-travel) + 7vh), 0);
+    opacity: 0;
+  }
+}
+
+@keyframes mio-meteor-head-bloom {
+  0% {
+    transform: translateX(-50%) scale(0.45);
+    opacity: 0;
+  }
+
+  20% {
+    transform: translateX(-50%) scale(1);
+    opacity: 1;
+  }
+
+  70% {
+    transform: translateX(-50%) scale(1.08);
+    opacity: 0.8;
+  }
+
+  100% {
+    transform: translateX(-50%) scale(1.18);
+    opacity: 0;
+  }
+}
+
+@keyframes mio-emotion-spark {
+  0%,
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(0.62);
+  }
+  38% {
+    opacity: 0.88;
+    transform: translate3d(10px, -18px, 0) scale(1);
+  }
+  72% {
+    opacity: 0.28;
+    transform: translate3d(-8px, -34px, 0) scale(0.78);
+  }
+}
+
+@keyframes mio-orbiter-lap {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes mio-voice-ripple {
+  0% {
+    opacity: 0;
+    transform: scale(0.68);
+  }
+  16% {
+    opacity: 0.72;
+  }
+  72% {
+    opacity: 0.18;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+
+@keyframes mio-stage-click-ripple {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.28);
+  }
+  18% {
+    opacity: 0.92;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.22);
+  }
+}
+
+@keyframes mio-lens-depth-breathe {
+  0%,
+  100% {
+    opacity: 0.34;
+    transform: scale(0.94);
+  }
+  50% {
+    opacity: 0.72;
+    transform: scale(1.06);
+  }
+}
+
+@keyframes mio-foreground-particle-float {
+  0%,
+  100% {
+    opacity: 0.18;
+    transform: translate3d(0, 0, 0) scale(0.72);
+  }
+  42% {
+    opacity: 0.68;
+    transform: translate3d(18px, -34px, 0) scale(1.05);
+  }
+  76% {
+    opacity: 0.36;
+    transform: translate3d(-10px, -58px, 0) scale(0.9);
+  }
+}
+
 @keyframes mio-ring-spin {
   from {
     transform: rotate(0deg) scale(1);
@@ -2550,25 +4074,15 @@ a {
   }
 }
 
-@keyframes mio-ring-breathe {
-  0%,
-  100% {
-    transform: scale(0.96);
-    opacity: 0.58;
-  }
-  50% {
-    transform: scale(1.04);
-    opacity: 0.9;
-  }
-}
-
 @keyframes mio-particle-float {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0);
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
   }
-  50% {
-    transform: translate3d(10px, -20px, 0);
+  45% {
+    transform: translate3d(var(--particle-drift-x), calc(var(--particle-drift-y) * 0.72), 0) rotate(6deg);
+  }
+  100% {
+    transform: translate3d(calc(var(--particle-drift-x) * 0.66), var(--particle-drift-y), 0) rotate(14deg);
   }
 }
 
@@ -2667,6 +4181,30 @@ a {
   opacity: 0;
 }
 
+.select,
+.mio-model-select select,
+.mio-advanced-field select,
+.mio-advanced-filter select,
+.mio-chatbox-filter {
+  -moz-appearance: none;
+       appearance: none;
+  -webkit-appearance: none;
+  color-scheme: dark;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23DFF6FF' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 12px;
+}
+
+.select::-ms-expand,
+.mio-model-select select::-ms-expand,
+.mio-advanced-field select::-ms-expand,
+.mio-advanced-filter select::-ms-expand,
+.mio-chatbox-filter::-ms-expand {
+  display: none;
+}
+
 .mio-error {
   position: absolute;
   left: 16px;
@@ -2687,7 +4225,8 @@ a {
   }
 
   .mio-topbar {
-    grid-template-columns: auto 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
   }
 
   .mio-session {
@@ -2699,12 +4238,24 @@ a {
   }
 
   .mio-dialogue {
+    --mio-dialogue-min-width: 280px;
+    --mio-dialogue-max-width: 328px;
+    --mio-dialogue-min-height: 165px;
+    --mio-dialogue-max-height: 194px;
     top: 16px;
     left: 16px;
-    width: min(292px, calc(34% - 14px));
-    max-width: calc(34% - 14px);
-    min-height: 182px;
-    padding: 20px 36px 18px 24px;
+    width: clamp(var(--mio-dialogue-min-width), 31vw, var(--mio-dialogue-max-width));
+    max-width: min(var(--mio-dialogue-max-width), calc(100vw - 32px));
+    min-width: min(var(--mio-dialogue-min-width), calc(100vw - 32px));
+    padding: 20px 30px 17px 24px;
+  }
+
+  .mio-dialogue-copy {
+    width: calc(100% - 20px);
+  }
+
+  .mio-dialogue-copy p {
+    padding-block: 20px;
   }
 
   .mio-stage {
@@ -2770,23 +4321,34 @@ a {
     position: -webkit-sticky;
     position: sticky;
     top: 0;
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
     min-height: auto;
     gap: 8px;
     padding: 12px 18px;
   }
 
-  .mio-system-state {
-    font-size: 12px;
+  .mio-brand {
+    gap: 10px;
+  }
+
+  .mio-brand::before {
+    width: 28px;
+    height: 28px;
+    flex-basis: 28px;
+  }
+
+  .mio-brand h1 {
+    font-size: 24px;
   }
 
   .mio-session {
-    justify-content: space-between;
-    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
   }
 
   .mio-session-actions {
-    width: 100%;
+    width: auto;
+    gap: 8px;
     justify-content: flex-end;
   }
 
@@ -2801,12 +4363,32 @@ a {
   }
 
   .mio-dialogue {
+    --mio-dialogue-min-width: 260px;
+    --mio-dialogue-max-width: 304px;
+    --mio-dialogue-min-height: 154px;
+    --mio-dialogue-max-height: 180px;
     top: 16px;
     left: 16px;
-    width: min(272px, calc(41vw - 18px));
-    max-width: calc(41vw - 18px);
-    min-height: 154px;
-    padding: 16px 28px 14px 18px;
+    width: clamp(var(--mio-dialogue-min-width), 42vw, var(--mio-dialogue-max-width));
+    max-width: min(var(--mio-dialogue-max-width), calc(100vw - 28px));
+    min-width: min(var(--mio-dialogue-min-width), calc(100vw - 28px));
+    padding: 16px 24px 14px 18px;
+    gap: 8px;
+  }
+
+  .mio-dialogue-copy {
+    width: calc(100% - 18px);
+  }
+
+  .mio-dialogue-copy::before,
+  .mio-dialogue-copy::after {
+    height: 18px;
+  }
+
+  .mio-dialogue-copy p {
+    padding-block: 18px;
+    font-size: 13px;
+    line-height: 1.46;
   }
 
   .mio-stage-wrap {

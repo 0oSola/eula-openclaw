@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -137,6 +138,47 @@ def test_bridge_external_message_id_is_deduped_and_persisted():
         store.close()
 
 
+def test_chat_list_suppresses_nearby_bridge_duplicates_with_different_external_ids():
+    store = _store()
+    try:
+        ctx = store.get_current_workspace_context("admin-1")
+        session = store.create_session(ctx["workspace"]["id"], ctx["account"]["id"])
+        metadata = {
+            "source": "message_bridge",
+            "provider": "openclaw",
+            "channel": "feishu",
+            "external_session_key": "agent:main:feishu:direct:ou_abc",
+            "synced_from": "realtime",
+        }
+
+        first = store.insert_message(
+            ctx["workspace"]["id"],
+            session["id"],
+            ctx["account"]["id"],
+            role="user",
+            content="MMD test",
+            openclaw_message_id="bridge-long-id",
+            metadata={**metadata, "external_message_id": "bridge-long-id"},
+        )
+        second = store.insert_message(
+            ctx["workspace"]["id"],
+            session["id"],
+            ctx["account"]["id"],
+            role="user",
+            content="MMD test",
+            openclaw_message_id="bridge-short-id",
+            metadata={**metadata, "external_message_id": "bridge-short-id"},
+        )
+
+        raw_messages = store.list_messages(ctx["workspace"]["id"], ctx["account"]["id"], session["id"])
+        chat_messages = store.list_messages_for_chat(ctx["workspace"]["id"], ctx["account"]["id"], session["id"])
+
+        assert [message["id"] for message in raw_messages] == [first["id"], second["id"]]
+        assert [message["id"] for message in chat_messages] == [first["id"]]
+    finally:
+        store.close()
+
+
 class FakeBridgeProvider:
     provider = "openclaw"
     channel = "feishu"
@@ -225,8 +267,10 @@ def test_bridge_binds_latest_feishu_session_and_syncs_history():
         assert binding["external_display_name"] == "最新会话"
 
         ctx = store.get_current_workspace_context("admin-1")
+        session = store.get_session(ctx["workspace"]["id"], ctx["account"]["id"], binding["local_session_id"])
         messages = store.list_messages(ctx["workspace"]["id"], ctx["account"]["id"], binding["local_session_id"])
 
+        assert session["openclaw_session_key"] == binding["external_session_key"]
         assert [message["role"] for message in messages] == ["user", "assistant"]
         assert messages[0]["content"] == "你好"
         assert messages[1]["content"] == "你好呀"
@@ -243,6 +287,75 @@ def test_bridge_binds_latest_feishu_session_and_syncs_history():
         assert "message_bridge.openclaw.history.load" in stages
         assert "message_bridge.openclaw.subscribe" in stages
         assert "message_bridge.openclaw.message.received" in stages
+    finally:
+        store.close()
+
+
+def test_bridge_default_binding_prefers_feishu_direct_over_generic_main_session():
+    store = _store()
+    try:
+        provider = FakeBridgeProvider()
+        provider.sessions.insert(
+            0,
+            ExternalSession(
+                key="agent:main:main",
+                display_name="用户746923",
+                provider="feishu",
+                channel="feishu",
+                updated_at=300,
+                raw={},
+            ),
+        )
+        service = MessageBridgeService(store=store, provider=provider)
+
+        binding = service.sync_default_binding_for_user("admin-1")
+
+        assert binding["external_session_key"] == "agent:main:feishu:direct:new"
+        assert binding["external_display_name"] == "最新会话"
+    finally:
+        store.close()
+
+
+def test_bridge_default_binding_keeps_existing_feishu_direct_session():
+    store = _store()
+    try:
+        provider = FakeBridgeProvider()
+        provider.sessions.insert(
+            0,
+            ExternalSession(
+                key="agent:main:main",
+                display_name="用户746923",
+                provider="feishu",
+                channel="feishu",
+                updated_at=300,
+                raw={},
+            ),
+        )
+        service = MessageBridgeService(store=store, provider=provider)
+        ctx = store.get_current_workspace_context("admin-1")
+        direct_session = store.create_session(
+            ctx["workspace"]["id"],
+            ctx["account"]["id"],
+            title="旧会话",
+            openclaw_session_key="agent:main:feishu:direct:old",
+        )
+        existing = store.upsert_message_bridge_binding(
+            workspace_id=ctx["workspace"]["id"],
+            account_id=ctx["account"]["id"],
+            local_session_id=direct_session["id"],
+            provider="openclaw",
+            channel="feishu",
+            external_session_key="agent:main:feishu:direct:old",
+            external_display_name="旧会话",
+            is_default=True,
+            status="active",
+        )
+
+        binding = service.sync_default_binding_for_user("admin-1")
+
+        assert binding["id"] == existing["id"]
+        assert binding["external_session_key"] == "agent:main:feishu:direct:old"
+        assert binding["local_session_id"] == direct_session["id"]
     finally:
         store.close()
 
@@ -271,6 +384,197 @@ def test_bridge_realtime_message_uses_idle_defaults_when_no_motion_fields():
         assert message["action"] == "idle"
         assert message["metadata"]["synced_from"] == "realtime"
         assert message["motion_resolution"]["status"] == "fallback_idle"
+    finally:
+        store.close()
+
+
+def test_bridge_skips_realtime_echo_when_local_traced_message_exists():
+    store = _store()
+    try:
+        provider = FakeBridgeProvider()
+        service = MessageBridgeService(store=store, provider=provider)
+        binding = service.sync_default_binding_for_user("admin-1")
+        store.insert_message(
+            binding["workspace_id"],
+            binding["local_session_id"],
+            binding["account_id"],
+            role="user",
+            content="hi",
+            trace_id="trace-local",
+        )
+
+        inserted = service.ingest_external_message(
+            binding,
+            ExternalMessage(
+                id="bridge-user-echo",
+                role="user",
+                content="hi",
+                timestamp=301,
+                raw={"role": "user"},
+            ),
+            source="realtime",
+        )
+        messages = store.list_messages(binding["workspace_id"], binding["account_id"], binding["local_session_id"])
+        user_messages = [message for message in messages if message["role"] == "user" and message["content"] == "hi"]
+
+        assert inserted is None
+        assert len(user_messages) == 1
+        assert user_messages[0]["trace_id"] == "trace-local"
+    finally:
+        store.close()
+
+
+def test_bridge_skips_nearby_duplicate_realtime_message_with_different_external_ids():
+    store = _store()
+    try:
+        provider = FakeBridgeProvider()
+        service = MessageBridgeService(store=store, provider=provider)
+        binding = service.sync_default_binding_for_user("admin-1")
+
+        first = service.ingest_external_message(
+            binding,
+            ExternalMessage(
+                id="bridge-long-id",
+                role="user",
+                content="MMD test",
+                timestamp=301,
+                raw={"role": "user"},
+            ),
+            source="realtime",
+        )
+        duplicate = service.ingest_external_message(
+            binding,
+            ExternalMessage(
+                id="bridge-short-id",
+                role="user",
+                content="MMD test",
+                timestamp=302,
+                raw={"role": "user"},
+            ),
+            source="realtime",
+        )
+        messages = store.list_messages(binding["workspace_id"], binding["account_id"], binding["local_session_id"])
+        user_messages = [message for message in messages if message["role"] == "user" and message["content"] == "MMD test"]
+
+        assert first is not None
+        assert duplicate is None
+        assert len(user_messages) == 1
+    finally:
+        store.close()
+
+
+def test_bridge_repairs_existing_binding_session_key_to_feishu_session():
+    store = _store()
+    try:
+        provider = FakeBridgeProvider()
+        service = MessageBridgeService(store=store, provider=provider)
+        ctx = store.get_current_workspace_context("admin-1")
+        stale_session = store.create_session(ctx["workspace"]["id"], ctx["account"]["id"], title="最新会话")
+        binding = store.upsert_message_bridge_binding(
+            workspace_id=ctx["workspace"]["id"],
+            account_id=ctx["account"]["id"],
+            local_session_id=stale_session["id"],
+            provider="openclaw",
+            channel="feishu",
+            external_session_key="agent:main:feishu:direct:new",
+            external_display_name="最新会话",
+            is_default=True,
+            status="active",
+        )
+
+        repaired = service.sync_default_binding_for_user("admin-1")
+        session = store.get_session(ctx["workspace"]["id"], ctx["account"]["id"], binding["local_session_id"])
+
+        assert repaired["id"] == binding["id"]
+        assert session["openclaw_session_key"] == "agent:main:feishu:direct:new"
+    finally:
+        store.close()
+
+
+def test_bridge_switch_reuses_existing_local_session_with_external_messages():
+    store = _store()
+    try:
+        provider = FakeBridgeProvider()
+        service = MessageBridgeService(store=store, provider=provider)
+        ctx = store.get_current_workspace_context("admin-1")
+        reused_session = store.create_session(ctx["workspace"]["id"], ctx["account"]["id"], title="旧会话")
+        store.insert_message(
+            ctx["workspace"]["id"],
+            reused_session["id"],
+            ctx["account"]["id"],
+            role="assistant",
+            content="already synced",
+            openclaw_message_id="old-assistant-1",
+            metadata={
+                "source": "message_bridge",
+                "provider": "openclaw",
+                "channel": "feishu",
+                "external_session_key": "agent:main:feishu:direct:old",
+                "external_message_id": "old-assistant-1",
+                "synced_from": "history",
+            },
+        )
+        service.sync_default_binding_for_user("admin-1")
+
+        binding = service.bind_external_session_for_user("admin-1", "agent:main:feishu:direct:old")
+        session = store.get_session(ctx["workspace"]["id"], ctx["account"]["id"], binding["local_session_id"])
+        messages = store.list_messages(ctx["workspace"]["id"], ctx["account"]["id"], binding["local_session_id"])
+
+        assert binding["local_session_id"] == reused_session["id"]
+        assert session["openclaw_session_key"] == "agent:main:feishu:direct:old"
+        assert [message["content"] for message in messages] == ["already synced"]
+    finally:
+        store.close()
+
+
+def test_bridge_switch_prefers_existing_messages_over_empty_binding_session():
+    store = _store()
+    try:
+        provider = FakeBridgeProvider()
+        service = MessageBridgeService(store=store, provider=provider)
+        ctx = store.get_current_workspace_context("admin-1")
+        reused_session = store.create_session(ctx["workspace"]["id"], ctx["account"]["id"], title="旧会话")
+        empty_session = store.create_session(
+            ctx["workspace"]["id"],
+            ctx["account"]["id"],
+            title="旧会话 empty",
+            openclaw_session_key="agent:main:feishu:direct:old",
+        )
+        store.insert_message(
+            ctx["workspace"]["id"],
+            reused_session["id"],
+            ctx["account"]["id"],
+            role="assistant",
+            content="historical local message",
+            openclaw_message_id="old-assistant-2",
+            metadata={
+                "source": "message_bridge",
+                "provider": "openclaw",
+                "channel": "feishu",
+                "external_session_key": "agent:main:feishu:direct:old",
+                "external_message_id": "old-assistant-2",
+                "synced_from": "history",
+            },
+        )
+        store.upsert_message_bridge_binding(
+            workspace_id=ctx["workspace"]["id"],
+            account_id=ctx["account"]["id"],
+            local_session_id=empty_session["id"],
+            provider="openclaw",
+            channel="feishu",
+            external_session_key="agent:main:feishu:direct:old",
+            external_display_name="旧会话",
+            is_default=True,
+            status="active",
+        )
+
+        binding = service.bind_external_session_for_user("admin-1", "agent:main:feishu:direct:old")
+        session = store.get_session(ctx["workspace"]["id"], ctx["account"]["id"], binding["local_session_id"])
+        messages = store.list_messages(ctx["workspace"]["id"], ctx["account"]["id"], binding["local_session_id"])
+
+        assert binding["local_session_id"] == reused_session["id"]
+        assert session["openclaw_session_key"] == "agent:main:feishu:direct:old"
+        assert [message["content"] for message in messages] == ["historical local message"]
     finally:
         store.close()
 
@@ -328,6 +632,46 @@ def test_bridge_admin_can_list_feishu_sessions_and_switch_default_binding():
         client.__exit__(None, None, None)
 
 
+def test_bridge_switch_keeps_binding_when_subscription_refresh_fails():
+    async def run_case():
+        store = _store()
+        try:
+            provider = FakeBridgeProvider()
+            service = MessageBridgeService(store=store, provider=provider)
+            store.update_message_bridge_state("openclaw", "feishu", websocket_status="connected")
+
+            async def fail_subscribe(session_key: str) -> None:
+                provider.subscribed.append(session_key)
+                raise RuntimeError("subscribe failed")
+
+            close_calls = []
+
+            async def close_provider() -> None:
+                close_calls.append("closed")
+
+            provider.subscribe = fail_subscribe
+            provider.close = close_provider
+
+            binding = await service.bind_external_session_for_user_async("admin-1", "agent:main:feishu:direct:old")
+            state = store.get_message_bridge_state("openclaw", "feishu")
+            events = store.query_events(trace_id=None, requester_user_id="admin-1", is_admin=False)
+
+            assert binding["external_session_key"] == "agent:main:feishu:direct:old"
+            assert state["websocket_status"] == "reconnecting"
+            assert state["last_error"] == "subscribe failed"
+            assert close_calls == ["closed"]
+            assert any(
+                event["stage"] == "message_bridge.openclaw.subscribe"
+                and event["status"] == "error"
+                and event["error_code"] == "RuntimeError"
+                for event in events
+            )
+        finally:
+            store.close()
+
+    asyncio.run(run_case())
+
+
 def test_bridge_consumer_stops_when_bridge_is_disabled():
     async def run_case():
         store = _store()
@@ -378,6 +722,48 @@ def test_bridge_consumer_uses_latest_binding_after_switch():
             new_messages = store.list_messages(ctx["workspace"]["id"], ctx["account"]["id"], new_binding["local_session_id"])
             assert all(message["content"] != "switched" for message in old_messages)
             assert any(message["content"] == "switched" for message in new_messages)
+        finally:
+            store.close()
+
+    asyncio.run(run_case())
+
+
+def test_bridge_consumer_backfills_history_when_realtime_subscription_misses_event():
+    async def run_case():
+        store = _store()
+        try:
+            provider = FakeBridgeProvider()
+            service = MessageBridgeService(store=store, provider=provider)
+            service.history_backfill_interval_seconds = 0.01
+            binding = await service.ensure_default_binding_for_user("admin-1")
+            provider.history["agent:main:feishu:direct:new"].append(
+                ExternalMessage(
+                    id="dashboard-late-message",
+                    role="user",
+                    content="dashboard late message",
+                    timestamp=250,
+                    raw={"role": "user"},
+                )
+            )
+
+            async def wait_for_backfill():
+                while True:
+                    messages = store.list_messages(
+                        binding["workspace_id"],
+                        binding["account_id"],
+                        binding["local_session_id"],
+                    )
+                    if any(message["content"] == "dashboard late message" for message in messages):
+                        return
+                    await asyncio.sleep(0.01)
+
+            task = asyncio.create_task(service._consume_events(binding))
+            try:
+                await asyncio.wait_for(wait_for_backfill(), timeout=1)
+            finally:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         finally:
             store.close()
 

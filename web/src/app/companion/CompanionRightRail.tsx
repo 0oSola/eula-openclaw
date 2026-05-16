@@ -17,6 +17,7 @@ type CompanionRightRailProps = {
   activeSessionId: string;
   sessionBusy: boolean;
   messages: ChatMessage[];
+  chatAutoScrollRevision: number;
   loading: boolean;
   error: string;
   ttsEnabled: boolean;
@@ -122,6 +123,7 @@ export function CompanionRightRail({
   activeSessionId,
   sessionBusy,
   messages,
+  chatAutoScrollRevision,
   loading,
   error,
   ttsEnabled,
@@ -164,6 +166,7 @@ export function CompanionRightRail({
             activeSessionId={activeSessionId}
             sessionBusy={sessionBusy}
             messages={messages}
+            autoScrollRevision={chatAutoScrollRevision}
             loading={loading}
             error={error}
             ttsEnabled={ttsEnabled}

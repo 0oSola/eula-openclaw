@@ -125,35 +125,6 @@ async def run_message_tts_worker(app) -> None:
                         )
                     continue
 
-                if int(job["attempts"]) >= settings.tts_service_max_poll_attempts:
-                    store.finalize_message_tts(
-                        job["workspace_id"],
-                        job["message_tts_id"],
-                        status="failed",
-                        remote_audio_url=None,
-                        media_type=None,
-                        error="tts_job_max_attempts_exceeded",
-                    )
-                    store.fail_tts_job(job["id"], last_error="tts_job_max_attempts_exceeded")
-                    if trace_id and trace_user_id:
-                        store.insert_event(
-                            trace_id=trace_id,
-                            user_id=trace_user_id,
-                            session_id=trace_session_id,
-                            stage="message_service.tts.reference",
-                            status="error",
-                            latency_ms=None,
-                            error_code="tts_job_max_attempts_exceeded",
-                            payload={
-                                "job_id": job["id"],
-                                "message_id": job["message_id"],
-                                "tts_id": job["message_tts_id"],
-                                "task_id": tts["task_id"],
-                                "source": "worker",
-                            },
-                        )
-                    continue
-
                 next_attempt_at = (datetime.now(UTC) + timedelta(seconds=settings.tts_job_worker_interval_seconds)).isoformat()
                 store.reschedule_tts_job(job["id"], next_attempt_at=next_attempt_at, last_error=None)
             except VoiceWorkflowTtsError as error:

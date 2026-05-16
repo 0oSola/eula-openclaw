@@ -3,6 +3,26 @@ import { DEFAULT_VMD_PLAYBACK_RATE } from "../stage/builtInMotionPreferences.js"
 const IDLE_ANIMATIONS_PACK_PLAYBACK_RATE = 2.5;
 const ENTRY_STANDBY_HINTS = ["\u8fdb\u573a\u5f85\u673a", "\u6769\u6d98\u6e80\u5bf0\u546e\u6e80", "entry idle"];
 const ENTRY_GREETING_FILENAMES = ["\u6253\u62db\u547c1.vmd", "\u817c\u8146\u6253\u62db\u547c.vmd", "\u884c\u793c1.vmd"];
+export const VMD_MOTION_CATEGORIES = Object.freeze({
+  IDLE_LOOP: "00_idle_loop",
+  ENTRY_FALLBACK: "01_entry_fallback",
+  GREETING_SOCIAL: "02_greeting_social",
+  THINKING_WAITING: "03_thinking_waiting",
+  ANSWERING_EXPLAIN: "04_answering_explain",
+  SOFT_EMOTION: "05_soft_emotion",
+  STRONG_PERSONALITY: "06_strong_personality",
+});
+export const IDLE_LOOP_VMD_CATEGORIES = Object.freeze([VMD_MOTION_CATEGORIES.IDLE_LOOP]);
+export const CLICK_REACTION_VMD_CATEGORIES = Object.freeze([
+  VMD_MOTION_CATEGORIES.GREETING_SOCIAL,
+  VMD_MOTION_CATEGORIES.SOFT_EMOTION,
+  VMD_MOTION_CATEGORIES.STRONG_PERSONALITY,
+]);
+export const CLICK_FALLBACK_EXCLUDED_VMD_CATEGORIES = Object.freeze([
+  VMD_MOTION_CATEGORIES.IDLE_LOOP,
+  VMD_MOTION_CATEGORIES.ENTRY_FALLBACK,
+]);
+
 function describeVmdAsset(asset) {
   return [asset?.source_relative_path, asset?.filename, asset?.display_name, asset?.url]
     .filter(Boolean)
@@ -25,6 +45,38 @@ function pickRandomItem(items, randomValue = Math.random()) {
   return items[Math.floor(clamped * items.length)] || items[0] || null;
 }
 
+function describeVmdAssetPath(asset) {
+  return [asset?.favorite_relative_path, asset?.source_relative_path, asset?.relative_path]
+    .filter(Boolean)
+    .join("/")
+    .replace(/\\/g, "/")
+    .toLowerCase();
+}
+
+export function getVmdAssetCategory(asset) {
+  const text = describeVmdAssetPath(asset);
+  if (!text) return "";
+  return (
+    Object.values(VMD_MOTION_CATEGORIES).find(
+      (category) => text.includes(`/${category.toLowerCase()}/`) || text.includes(`${category.toLowerCase()}/`),
+    ) || ""
+  );
+}
+
+export function isVmdAssetInCategory(asset, categories = []) {
+  const category = getVmdAssetCategory(asset);
+  return Boolean(category && new Set(categories).has(category));
+}
+
+export function filterVmdAssetsByCategories(assets = [], categories = []) {
+  if (!Array.isArray(assets) || !categories?.length) return [];
+  const categorySet = new Set(categories);
+  return assets.filter((asset) => {
+    const category = getVmdAssetCategory(asset);
+    return category && categorySet.has(category);
+  });
+}
+
 export function isEntryStandbyAsset(asset) {
   const text = describeAssetName(asset);
   return ENTRY_STANDBY_HINTS.some((hint) => text.includes(hint));
@@ -42,6 +94,20 @@ export function isCompanionSafeVmdAsset(asset) {
 
 export function excludeCompanionUnsafeAssets(assets = []) {
   return Array.isArray(assets) ? assets.filter((asset) => isCompanionSafeVmdAsset(asset)) : [];
+}
+
+function getPlayableVmdAssets(assets = []) {
+  return excludeCompanionUnsafeAssets(Array.isArray(assets) ? assets : []).filter((asset) => asset?.url);
+}
+
+export function selectAutoplayIdleVmdAssets(assets = []) {
+  const categorizedIdleAssets = getPlayableVmdAssets(filterVmdAssetsByCategories(assets, IDLE_LOOP_VMD_CATEGORIES));
+  if (categorizedIdleAssets.length) return categorizedIdleAssets;
+  return getPlayableVmdAssets(excludeEntryStandbyAssets(assets));
+}
+
+export function selectIdleFallbackVmdAsset(assets = [], { randomValue = Math.random() } = {}) {
+  return pickRandomItem(selectAutoplayIdleVmdAssets(assets), randomValue);
 }
 
 export function getCompanionVmdPlaybackGuards(asset) {
@@ -85,10 +151,40 @@ export function createVmdPreviewInteraction(asset, multiplier = 1) {
   };
 }
 
-export function createDefaultFavoriteLoopInteraction(assets = [], { enabled = true, loopMode = "random" } = {}) {
+export function createIdleVmdFallbackInteraction(
+  assets = [],
+  { enabled = true, emotion = "neutral", action = "idle", randomValue = Math.random() } = {},
+) {
   if (!enabled) return null;
-  const playableAssets = excludeCompanionUnsafeAssets(excludeEntryStandbyAssets(assets)).filter((asset) => asset?.url);
-  const leadAsset = playableAssets[0];
+  const asset = selectIdleFallbackVmdAsset(assets, { randomValue });
+  if (!asset?.url) return null;
+  const resolvedEmotion = emotion || asset?.slot || "neutral";
+
+  return {
+    activeVmdAssetId: asset.asset_id || "",
+    interaction: {
+      emotion: resolvedEmotion,
+      action: action || "idle",
+      mode: "vmd",
+      vmdUrl: asset.url,
+      vmdLoopUrls: [],
+      vmdLoopEmotionByUrl: { [asset.url]: resolvedEmotion },
+      standbyVmdUrl: "",
+      loopGapMs: 0,
+      loopMode: "random",
+      playbackRate: resolveVmdPlaybackRate(asset),
+      sequence: [],
+    },
+  };
+}
+
+export function createDefaultFavoriteLoopInteraction(
+  assets = [],
+  { enabled = true, loopMode = "random", leadMode = "first", randomValue = Math.random() } = {},
+) {
+  if (!enabled) return null;
+  const playableAssets = selectAutoplayIdleVmdAssets(assets);
+  const leadAsset = leadMode === "random" ? pickRandomItem(playableAssets, randomValue) : playableAssets[0];
   if (!leadAsset) return null;
 
   return {
@@ -110,7 +206,7 @@ export function createDefaultFavoriteLoopInteraction(assets = [], { enabled = tr
 
 export function createEntryGreetingFolderLoopInteraction(
   assets = [],
-  { enabled = true, loopMode = "random", randomValue = Math.random() } = {},
+  { enabled = true, loopMode = "random", randomValue = Math.random(), leadMode = "entry" } = {},
 ) {
   if (!enabled) return null;
   const playableAssets = (Array.isArray(assets) ? assets : []).filter((asset) => asset?.url);
@@ -118,7 +214,13 @@ export function createEntryGreetingFolderLoopInteraction(
 
   const greetingAssets = playableAssets.filter((asset) => ENTRY_GREETING_FILENAMES.includes(normalizeAssetFilename(asset)));
   const fallbackLeadAssets = excludeEntryStandbyAssets(playableAssets);
-  const leadAsset = greetingAssets.length ? pickRandomItem(greetingAssets, randomValue) : fallbackLeadAssets[0] || playableAssets[0];
+  const randomLeadAssets = fallbackLeadAssets.length ? fallbackLeadAssets : playableAssets;
+  const leadAsset =
+    leadMode === "random"
+      ? pickRandomItem(randomLeadAssets, randomValue)
+      : greetingAssets.length
+        ? pickRandomItem(greetingAssets, randomValue)
+        : fallbackLeadAssets[0] || playableAssets[0];
   if (!leadAsset) return null;
 
   return {
@@ -138,11 +240,11 @@ export function createEntryGreetingFolderLoopInteraction(
 }
 
 export function buildAutoFavoriteInteraction(assets = [], options = {}) {
-  return createEntryGreetingFolderLoopInteraction(assets, options);
+  return createDefaultFavoriteLoopInteraction(assets, { ...options, leadMode: "random" });
 }
 
 export function buildAutoplayResumeInteraction(assets = [], options = {}) {
-  const autoInteraction = buildAutoFavoriteInteraction(assets, options);
+  const autoInteraction = createDefaultFavoriteLoopInteraction(assets, { ...options, leadMode: "random" });
   if (!autoInteraction) return null;
   if (!autoInteraction.standbyVmdUrl) return autoInteraction;
   return {

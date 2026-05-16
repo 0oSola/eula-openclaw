@@ -11,6 +11,19 @@ import {
   resolveVmdPlaybackRate,
 } from "../src/features/mapping/vmdPreview.js";
 import { collectImportableVmdFiles } from "../src/features/stage/vmdImportHelpers.js";
+import {
+  createStageClickRipple,
+  resolveStageCharacterClickInteraction,
+  shouldTriggerStageCharacterClick,
+} from "../src/features/stage/stageCharacterClick.js";
+import {
+  completeStageInteraction,
+  createDefaultStageInteraction,
+  resetStageInteraction,
+  startChatInteraction,
+  startStageClickInteraction,
+  startManualPreview,
+} from "../src/features/stage/stageInteractionMachine.js";
 import { resolveActionConfig, resolvePlaybackPlan } from "../src/features/mapping/resolveAction.js";
 import { buildTraceHeaders } from "../src/lib/trace.js";
 
@@ -43,6 +56,7 @@ function run() {
     );
     const backendProxySource = readFileSync(new URL("../src/app/api/backend/[...path]/route.ts", import.meta.url), "utf8");
     const backgroundSource = readFileSync(new URL("../src/app/companion/MioModeBackground.tsx", import.meta.url), "utf8");
+    const stageSource = readFileSync(new URL("../src/features/stage/MMDStage.tsx", import.meta.url), "utf8");
     const cssSource = readFileSync(new URL("../src/app/globals.css", import.meta.url), "utf8");
     const runtimeSource = readFileSync(new URL("../src/features/stage/mmdCompanionRuntime.js", import.meta.url), "utf8");
 
@@ -59,8 +73,10 @@ function run() {
     assert.match(chatboxSource, /onPlayTtsMessage: \(message: ChatMessage\) => void;/);
     assert.match(chatboxSource, /className="mio-message-voice-button"/);
     assert.match(chatboxSource, /className="mio-chatbox-list"/);
-    assert.match(chatboxSource, /useVirtualizer/);
-    assert.match(chatboxSource, /getVirtualItems\(\)/);
+    assert.match(chatboxSource, /className="mio-chatbox-message-flow"/);
+    assert.doesNotMatch(chatboxSource, /useVirtualizer/);
+    assert.doesNotMatch(chatboxSource, /getVirtualItems\(\)/);
+    assert.doesNotMatch(chatboxSource, /mio-chatbox-virtual-row/);
     assert.match(chatboxSource, /className="mio-chatbox-controls"/);
     assert.match(chatboxSource, /showTools \? "Hide" : "Tools"/);
     assert.match(chatboxSource, /onCreateSession: \(\) => void;/);
@@ -141,6 +157,16 @@ function run() {
     assert.match(companionPageSource, /catch\s*\(err\)\s*\{[\s\S]*?pushToast\(/);
     assert.doesNotMatch(companionPageSource, /发送失败，请检查 API 服务状态和配置/);
     assert.match(companionPageSource, /if \(ignoreNextStageCompletionResetRef\.current\) \{/);
+    const stageErrorBlock = companionPageSource.match(/function handleStageInteractionError\([\s\S]*?\n  \}/)?.[0] || "";
+    assert.match(stageErrorBlock, /resumeStageAfterInteractionComplete\(\)/);
+    assert.doesNotMatch(stageErrorBlock, /scheduleStageActionRecovery|markStageInteractionRecovering/);
+    assert.match(companionPageSource, /function handleStageCharacterClick\(/);
+    assert.match(companionPageSource, /resolveStageCharacterClickInteraction/);
+    assert.match(companionPageSource, /startStageClickInteraction/);
+    assert.match(companionPageSource, /clickRipples=\{stageClickRipples\}/);
+    assert.match(stageSource, /onCharacterClick\?:/);
+    assert.match(stageSource, /hitTestModelAtClientPoint/);
+    assert.match(stageSource, /mio-stage-click-ripples/);
     assert.match(backgroundSource, /type MioModeBackgroundProps = \{[\s\S]*speaking: boolean;[\s\S]*emotion: string;[\s\S]*action: string;[\s\S]*\}/);
     assert.match(backgroundSource, /data-speaking=\{speaking \? "true" : "false"\}/);
     assert.match(backgroundSource, /data-emotion=\{emotion\}/);
@@ -233,6 +259,9 @@ function run() {
     assert.match(cssSource, /\.mio-background-foreground-particles::before/);
     assert.match(cssSource, /\.mio-background-stage-trails/);
     assert.match(cssSource, /\.mio-background-stage-trail/);
+    assert.match(cssSource, /\.mio-stage-click-ripples/);
+    assert.match(cssSource, /\.mio-stage-click-ripple/);
+    assert.match(cssSource, /@keyframes mio-stage-click-ripple/);
     assert.match(cssSource, /\.mio-background\[data-time-tone="dawn"\]/);
     assert.match(cssSource, /\.mio-background\[data-time-tone="deep-night"\]/);
     assert.doesNotMatch(cssSource, /\.mio-hud \.mio-topbar::before/);
@@ -304,10 +333,98 @@ function run() {
     assert.doesNotMatch(runtimeSource, /disposePetalSystem/);
     assert.doesNotMatch(runtimeSource, /getPetalGuideTargets/);
     assert.doesNotMatch(runtimeSource, /petalGuide/);
+    assert.match(runtimeSource, /hitTestModelAtClientPoint\(clientX, clientY\)/);
     assert.match(
       runtimeSource,
       /"mio-reference":\s*\{[\s\S]*?camera:\s*\{[\s\S]*?fov:\s*32[\s\S]*?position:\s*\[-1\.346829,\s*2\.907039,\s*31\.361977\][\s\S]*?target:\s*\[-1\.346829,\s*0\.961375,\s*0\.436541\][\s\S]*?locked:\s*false/,
     );
+  }
+
+  {
+    const defaultInteraction = createDefaultStageInteraction();
+    const previewInteraction = {
+      ...defaultInteraction,
+      mode: "vmd",
+      vmdUrl: "/assets/vmd/file/preview",
+      vmdLoopEmotionByUrl: { "/assets/vmd/file/preview": "happy" },
+    };
+
+    assert.deepEqual(resetStageInteraction({ defaultInteraction }), {
+      mode: "default_idle",
+      source: "default",
+      interaction: defaultInteraction,
+      activeVmdAssetId: "",
+      pendingAutoResume: false,
+    });
+    assert.equal(
+      startManualPreview({
+        interaction: previewInteraction,
+        activeVmdAssetId: "preview-id",
+        canAutoResume: true,
+      }).mode,
+      "manual_preview",
+    );
+    assert.equal(startChatInteraction({ interaction: previewInteraction }).mode, "chat_vmd_action");
+    assert.equal(
+      startStageClickInteraction({
+        interaction: previewInteraction,
+        activeVmdAssetId: "preview-id",
+        canAutoResume: true,
+      }).mode,
+      "stage_click_vmd_action",
+    );
+    assert.equal(
+      completeStageInteraction({
+        autoplayResumeInteraction: previewInteraction,
+        defaultInteraction,
+        autoplayAssetId: "preview-id",
+      }).mode,
+      "autoplay_loop",
+    );
+  }
+
+  {
+    assert.deepEqual(
+      createStageClickRipple({
+        id: "basic",
+        clientX: 120,
+        clientY: 240,
+        rect: { left: 20, top: 40, width: 200, height: 400 },
+      }),
+      { id: "basic", x: 100, y: 200, xPercent: 50, yPercent: 50 },
+    );
+    assert.equal(
+      shouldTriggerStageCharacterClick({
+        downClientX: 100,
+        downClientY: 100,
+        upClientX: 103,
+        upClientY: 103,
+        downTimeMs: 10,
+        upTimeMs: 180,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldTriggerStageCharacterClick({
+        downClientX: 100,
+        downClientY: 100,
+        upClientX: 100,
+        upClientY: 100,
+        downTimeMs: 10,
+        upTimeMs: 700,
+      }),
+      false,
+    );
+    const clickAction = resolveStageCharacterClickInteraction({
+      assets: [
+        { asset_id: "a", slot: "happy", url: "/assets/vmd/file/a" },
+        { asset_id: "b", slot: "caring", url: "/assets/vmd/file/b" },
+      ],
+      randomValue: 0.99,
+    });
+    assert.equal(clickAction.activeVmdAssetId, "b");
+    assert.equal(clickAction.interaction.mode, "vmd");
+    assert.equal(clickAction.interaction.vmdUrl, "/assets/vmd/file/b");
   }
 
   {
@@ -398,7 +515,7 @@ function run() {
           display_name: "follow.vmd",
           url: "/assets/vmd/file/asset-1",
         },
-      ]),
+      ], { randomValue: 0 }),
       {
         emotion: "sad",
         action: "idle",
@@ -416,7 +533,8 @@ function run() {
       },
     );
     assert.deepEqual(
-      buildAutoFavoriteInteraction([
+      buildAutoFavoriteInteraction(
+        [
         {
           asset_id: "asset-standby",
           slot: "neutral",
@@ -438,19 +556,16 @@ function run() {
           display_name: "follow.vmd",
           url: "/assets/vmd/file/asset-1",
         },
-      ]),
+        ],
+        { randomValue: 0 },
+      ),
       {
         emotion: "sad",
         action: "idle",
         mode: "vmd",
         vmdUrl: "/assets/vmd/file/asset-2",
-        vmdLoopUrls: [
-          "/assets/vmd/file/asset-standby",
-          "/assets/vmd/file/asset-2",
-          "/assets/vmd/file/asset-1",
-        ],
+        vmdLoopUrls: ["/assets/vmd/file/asset-2", "/assets/vmd/file/asset-1"],
         vmdLoopEmotionByUrl: {
-          "/assets/vmd/file/asset-standby": "neutral",
           "/assets/vmd/file/asset-2": "sad",
           "/assets/vmd/file/asset-1": "happy",
         },
@@ -483,19 +598,14 @@ function run() {
           display_name: "follow.vmd",
           url: "/assets/vmd/file/asset-1",
         },
-      ]),
+      ], { randomValue: 0 }),
       {
         emotion: "sad",
         action: "idle",
         mode: "vmd",
         vmdUrl: "/assets/vmd/file/asset-2",
-        vmdLoopUrls: [
-          "/assets/vmd/file/asset-standby",
-          "/assets/vmd/file/asset-2",
-          "/assets/vmd/file/asset-1",
-        ],
+        vmdLoopUrls: ["/assets/vmd/file/asset-2", "/assets/vmd/file/asset-1"],
         vmdLoopEmotionByUrl: {
-          "/assets/vmd/file/asset-standby": "neutral",
           "/assets/vmd/file/asset-2": "sad",
           "/assets/vmd/file/asset-1": "happy",
         },

@@ -1,8 +1,9 @@
 "use client";
 
-import { ChangeEvent, forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { ChangeEvent, PointerEvent, forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 import { getModelDisplayLabel } from "@/features/stage/modelCatalog.js";
+import { shouldTriggerStageCharacterClick } from "@/features/stage/stageCharacterClick.js";
 import { applyStageRuntimeState, MMDCompanionRuntime } from "@/features/stage/mmdCompanionRuntime.js";
 import type { MmdCameraSnapshot, MmdModelAsset, RenderPipeline } from "@/lib/types";
 
@@ -33,6 +34,21 @@ type StageInteraction = {
   }>;
 };
 
+type StageClickRipple = {
+  id: string;
+  x: number;
+  y: number;
+  xPercent?: number;
+  yPercent?: number;
+};
+
+type StagePointerCandidate = {
+  pointerId: number;
+  clientX: number;
+  clientY: number;
+  timeStamp: number;
+};
+
 function toAbsolute(url: string): string {
   if (!url) return "";
   if (/^https?:\/\//i.test(url)) return url;
@@ -56,6 +72,9 @@ type MMDStageProps = {
   modelLabel: string;
   onModelChange: (nextPath: string) => void;
   onInteractionComplete?: () => void;
+  onInteractionError?: (error: { type: "vmd"; vmdUrl: string }) => void;
+  onCharacterClick?: (event: { clientX: number; clientY: number; stageRect: DOMRect }) => void;
+  clickRipples?: StageClickRipple[];
   renderPipeline?: RenderPipeline;
   cameraSnapshot?: MmdCameraSnapshot | null;
   chrome?: "panel" | "bare";
@@ -70,6 +89,9 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   modelLabel,
   onModelChange,
   onInteractionComplete,
+  onInteractionError,
+  onCharacterClick,
+  clickRipples = [],
   renderPipeline = "classic",
   cameraSnapshot = null,
   chrome = "panel",
@@ -80,10 +102,13 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   const currentInteractionRef = useRef(interaction);
   const currentSpeakingRef = useRef(speaking);
   const cameraSnapshotRef = useRef<MmdCameraSnapshot | null>(cameraSnapshot);
+  const onInteractionErrorRef = useRef(onInteractionError);
+  const stagePointerCandidateRef = useRef<StagePointerCandidate | null>(null);
 
   currentInteractionRef.current = interaction;
   currentSpeakingRef.current = speaking;
   cameraSnapshotRef.current = cameraSnapshot;
+  onInteractionErrorRef.current = onInteractionError;
 
   useImperativeHandle(
     ref,
@@ -160,8 +185,10 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
     const runtime = runtimeRef.current;
     if (!runtime) return;
     if (interaction.mode === "vmd" && interaction.vmdUrl) {
-      runtime.playVmd(
-        toAbsolute(interaction.vmdUrl),
+      let cancelled = false;
+      const requestedVmdUrl = toAbsolute(interaction.vmdUrl);
+      void Promise.resolve(runtime.playVmd(
+        requestedVmdUrl,
         interaction.playbackRate,
         interaction.vmdLoopUrls?.map((url) => toAbsolute(url)),
         {
@@ -176,8 +203,14 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
               )
             : undefined,
         },
-      );
-      return;
+      )).then((played) => {
+        if (!cancelled && played === false) {
+          onInteractionErrorRef.current?.({ type: "vmd", vmdUrl: requestedVmdUrl });
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
     }
     runtime.applyInteraction(interaction);
   }, [interaction]);
@@ -229,10 +262,73 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
     onModelChange(event.target.value);
   }
 
+  function handleStagePointerDown(event: PointerEvent<HTMLElement>) {
+    if (event.button !== 0) return;
+    stagePointerCandidateRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      timeStamp: event.timeStamp,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function handleStagePointerUp(event: PointerEvent<HTMLElement>) {
+    const candidate = stagePointerCandidateRef.current;
+    stagePointerCandidateRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    if (!candidate || candidate.pointerId !== event.pointerId) return;
+    if (
+      !shouldTriggerStageCharacterClick({
+        downClientX: candidate.clientX,
+        downClientY: candidate.clientY,
+        upClientX: event.clientX,
+        upClientY: event.clientY,
+        downTimeMs: candidate.timeStamp,
+        upTimeMs: event.timeStamp,
+      })
+    ) {
+      return;
+    }
+    const runtime = runtimeRef.current;
+    if (!runtime?.hitTestModelAtClientPoint?.(event.clientX, event.clientY)) return;
+    onCharacterClick?.({
+      clientX: event.clientX,
+      clientY: event.clientY,
+      stageRect: event.currentTarget.getBoundingClientRect(),
+    });
+  }
+
+  function handleStagePointerCancel() {
+    stagePointerCandidateRef.current = null;
+  }
+
+  function renderClickRipples() {
+    if (!clickRipples.length) return null;
+    return (
+      <div className="mio-stage-click-ripples" aria-hidden="true">
+        {clickRipples.map((ripple) => (
+          <span
+            key={ripple.id}
+            className="mio-stage-click-ripple"
+            style={{ left: `${ripple.x}px`, top: `${ripple.y}px` }}
+          />
+        ))}
+      </div>
+    );
+  }
+
   if (chrome === "bare") {
     return (
-      <section className="mio-stage" aria-label="MMD companion stage">
+      <section
+        className="mio-stage"
+        aria-label="MMD companion stage"
+        onPointerDown={handleStagePointerDown}
+        onPointerUp={handleStagePointerUp}
+        onPointerCancel={handleStagePointerCancel}
+      >
         <div ref={containerRef} className="mio-stage-canvas" />
+        {renderClickRipples()}
         <p ref={statusRef} className="mio-stage-status mio-stage-status--sr-only" aria-live="polite" hidden>
           Initializing stage...
         </p>
@@ -267,6 +363,9 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       </header>
       <div
         ref={containerRef}
+        onPointerDown={handleStagePointerDown}
+        onPointerUp={handleStagePointerUp}
+        onPointerCancel={handleStagePointerCancel}
         style={{
           margin: "0.45rem 0.95rem",
           minHeight: 0,

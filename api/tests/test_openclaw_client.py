@@ -402,6 +402,13 @@ def test_openclaw_empty_timeout_errors_are_described_for_diagnostics_and_invocat
     def handler(_: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("")
 
+    generate_calls = 0
+
+    def generate_handler(_: httpx.Request) -> httpx.Response:
+        nonlocal generate_calls
+        generate_calls += 1
+        raise httpx.ReadTimeout("")
+
     async def run_diagnose():
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(transport=transport) as http_client:
@@ -416,7 +423,7 @@ def test_openclaw_empty_timeout_errors_are_described_for_diagnostics_and_invocat
             return await client.diagnose()
 
     async def run_generate_reply():
-        transport = httpx.MockTransport(handler)
+        transport = httpx.MockTransport(generate_handler)
         async with httpx.AsyncClient(transport=transport) as http_client:
             client = OpenClawClient(
                 base_url="http://openclaw.local",
@@ -441,3 +448,4 @@ def test_openclaw_empty_timeout_errors_are_described_for_diagnostics_and_invocat
         asyncio.run(run_generate_reply())
 
     assert "ReadTimeout" in str(error.value)
+    assert generate_calls == 1

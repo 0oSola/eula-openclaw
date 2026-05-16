@@ -1,4 +1,4 @@
-// File: D:\workspace\eula-openclaw\web\src\app\companion\page.tsx
+// File: D:\workspace\MMD project\web\src\app\companion\page.tsx
 import * as entry from '../../../../src/app/companion/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

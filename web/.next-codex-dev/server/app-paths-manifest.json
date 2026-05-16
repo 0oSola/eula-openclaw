@@ -1,3 +1,5 @@
 {
-  "/companion/page": "app/companion/page.js"
+  "/api/backend/[...path]/route": "app/api/backend/[...path]/route.js",
+  "/companion/page": "app/companion/page.js",
+  "/traces/page": "app/traces/page.js"
 }

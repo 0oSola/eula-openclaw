@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.models.chat import OpenClawReply
+from app.services.openclaw_client import OpenClawInvocationError
 from app.services.voice_workflow_tts_client import VoiceWorkflowTtsReference
 
 
@@ -17,7 +18,13 @@ def _make_case_dir() -> Path:
 
 
 class FakeOpenClawClient:
-    def __init__(self, raw_text: str | None = None, error: Exception | None = None):
+    def __init__(
+        self,
+        raw_text: str | None = None,
+        error: Exception | None = None,
+        stream_error_after_chunks: bool = False,
+        on_stream_call=None,
+    ):
         self.raw_text = raw_text or (
             '{"text":"Hello from v2","emotion":"happy","action":"wave",'
             '"motion_plan":{"sequence":[{"template":"greet_wave","duration_ms":1200,"intensity":0.7}]},'
@@ -25,13 +32,28 @@ class FakeOpenClawClient:
             '"tts_emotion_label":"关心温柔","tts_pause_profile":"none"}'
         )
         self.error = error
+        self.stream_error_after_chunks = stream_error_after_chunks
+        self.on_stream_call = on_stream_call
         self.calls = []
+        self.stream_calls = []
 
     async def generate_reply(self, user_id, session_id, message, history):
         self.calls.append({"user_id": user_id, "session_id": session_id, "message": message, "history": history})
         if self.error:
             raise self.error
         return OpenClawReply(raw_text=self.raw_text, endpoint_used="/v1/responses", status_code=200)
+
+    async def stream_reply(self, user_id, session_id, message, history):
+        self.stream_calls.append({"user_id": user_id, "session_id": session_id, "message": message, "history": history})
+        if self.error:
+            raise self.error
+        if self.on_stream_call:
+            self.on_stream_call(self.stream_calls[-1])
+        midpoint = max(1, len(self.raw_text) // 2)
+        yield self.raw_text[:midpoint]
+        yield self.raw_text[midpoint:]
+        if self.stream_error_after_chunks:
+            raise OpenClawInvocationError("ReadTimeout")
 
 
 class FakeTtsClient:
@@ -172,11 +194,199 @@ def test_send_message_persists_user_and_assistant_messages_with_openclaw_metadat
     assert payload["assistant_message"]["tts"] is None
     assert payload["assistant_message"]["tts_emotion_label"] == "关心温柔"
     assert payload["assistant_message"]["tts_pause_profile"] == "none"
-    assert app.state.openclaw_client.calls[0]["session_id"] == payload["session"]["openclaw_session_key"]
+    assert app.state.openclaw_client.calls == []
+    assert app.state.openclaw_client.stream_calls[0]["session_id"] == payload["session"]["openclaw_session_key"]
 
     listed = client.get(f"/sessions/{session_id}/messages", headers={"x-user-id": "u1"})
     assert [item["role"] for item in listed.json()["items"]] == ["user", "assistant"]
     assert listed.json()["items"][1]["content"] == "Hello from v2"
+
+
+def test_send_message_prunes_bridge_echoes_for_same_openclaw_session():
+    client, app = _client(app_overrides={"openclaw_stream_mode": "http_sse"})
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+    ctx = app.state.trace_store.get_current_workspace_context("u1")
+    app.state.trace_store.update_session_openclaw_session_key(
+        ctx["workspace"]["id"],
+        ctx["account"]["id"],
+        session_id,
+        "agent:main:feishu:direct:test-user",
+    )
+
+    def insert_bridge_echoes(call):
+        app.state.trace_store.insert_message(
+            ctx["workspace"]["id"],
+            session_id,
+            ctx["account"]["id"],
+            role="user",
+            content=call["message"],
+            openclaw_message_id="bridge-user-echo",
+            metadata={
+                "source": "message_bridge",
+                "provider": "openclaw",
+                "channel": "feishu",
+                "external_session_key": call["session_id"],
+                "external_message_id": "bridge-user-echo",
+                "synced_from": "realtime",
+            },
+        )
+        app.state.trace_store.insert_message(
+            ctx["workspace"]["id"],
+            session_id,
+            ctx["account"]["id"],
+            role="assistant",
+            content="Hello from v2",
+            openclaw_message_id="bridge-assistant-echo",
+            metadata={
+                "source": "message_bridge",
+                "provider": "openclaw",
+                "channel": "feishu",
+                "external_session_key": call["session_id"],
+                "external_message_id": "bridge-assistant-echo",
+                "synced_from": "realtime",
+            },
+        )
+
+    app.state.openclaw_client = FakeOpenClawClient(on_stream_call=insert_bridge_echoes)
+
+    sent = client.post(
+        f"/sessions/{session_id}/messages",
+        json={"content": "hi", "tts_enabled": False},
+        headers={"x-user-id": "u1", "x-trace-id": "trace-local"},
+    )
+
+    assert sent.status_code == 200
+    listed = client.get(f"/sessions/{session_id}/messages", headers={"x-user-id": "u1"})
+    messages = listed.json()["items"]
+
+    assert [item["role"] for item in messages] == ["user", "assistant"]
+    assert [item["content"] for item in messages] == ["hi", "Hello from v2"]
+    assert [item["trace_id"] for item in messages] == ["trace-local", "trace-local"]
+    assert all(item["metadata"].get("source") != "message_bridge" for item in messages)
+
+
+def test_list_messages_suppresses_delayed_and_early_bridge_echoes():
+    client, app = _client()
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+    ctx = app.state.trace_store.get_current_workspace_context("u1")
+    external_session_key = "agent:main:feishu:direct:test-user"
+    app.state.trace_store.update_session_openclaw_session_key(
+        ctx["workspace"]["id"],
+        ctx["account"]["id"],
+        session_id,
+        external_session_key,
+    )
+
+    app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        session_id,
+        ctx["account"]["id"],
+        role="user",
+        content="查一下",
+        trace_id="trace-local-user",
+    )
+    app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        session_id,
+        ctx["account"]["id"],
+        role="user",
+        content="查一下",
+        openclaw_message_id="bridge-user-late",
+        metadata={
+            "source": "message_bridge",
+            "provider": "openclaw",
+            "channel": "feishu",
+            "external_session_key": external_session_key,
+            "external_message_id": "bridge-user-late",
+            "synced_from": "realtime",
+        },
+    )
+    app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        session_id,
+        ctx["account"]["id"],
+        role="assistant",
+        content="这是同一条回复",
+        openclaw_message_id="bridge-assistant-early",
+        metadata={
+            "source": "message_bridge",
+            "provider": "openclaw",
+            "channel": "feishu",
+            "external_session_key": external_session_key,
+            "external_message_id": "bridge-assistant-early",
+            "synced_from": "realtime",
+        },
+    )
+    app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        session_id,
+        ctx["account"]["id"],
+        role="assistant",
+        content="这是同一条回复",
+        trace_id="trace-local-assistant",
+    )
+    app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        session_id,
+        ctx["account"]["id"],
+        role="assistant",
+        content="这是一条不同的远端回复",
+        openclaw_message_id="bridge-assistant-remote-only",
+        metadata={
+            "source": "message_bridge",
+            "provider": "openclaw",
+            "channel": "feishu",
+            "external_session_key": external_session_key,
+            "external_message_id": "bridge-assistant-remote-only",
+            "synced_from": "realtime",
+        },
+    )
+
+    listed = client.get(f"/sessions/{session_id}/messages", headers={"x-user-id": "u1"})
+
+    assert listed.status_code == 200
+    messages = listed.json()["items"]
+    assert [(item["role"], item["content"], item["trace_id"]) for item in messages] == [
+        ("user", "查一下", "trace-local-user"),
+        ("assistant", "这是同一条回复", "trace-local-assistant"),
+        ("assistant", "这是一条不同的远端回复", None),
+    ]
+
+
+def test_send_message_uses_openclaw_stream_when_http_sse_mode_is_enabled():
+    client, app = _client(app_overrides={"openclaw_stream_mode": "http_sse"})
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+
+    sent = client.post(
+        f"/sessions/{session_id}/messages",
+        json={"content": "hello", "tts_enabled": False},
+        headers={"x-user-id": "u1"},
+    )
+
+    assert sent.status_code == 200
+    payload = sent.json()
+    assert payload["assistant_message"]["content"] == "Hello from v2"
+    assert payload["assistant_message"]["metadata"]["endpoint_used"] == "/v1/responses?stream=true"
+    assert app.state.openclaw_client.calls == []
+    assert app.state.openclaw_client.stream_calls[0]["session_id"] == payload["session"]["openclaw_session_key"]
+
+
+def test_send_message_returns_complete_stream_json_before_late_stream_timeout():
+    client, app = _client(app_overrides={"openclaw_stream_mode": "http_sse"})
+    app.state.openclaw_client = FakeOpenClawClient(stream_error_after_chunks=True)
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+
+    sent = client.post(
+        f"/sessions/{session_id}/messages",
+        json={"content": "hello", "tts_enabled": False},
+        headers={"x-user-id": "u1"},
+    )
+
+    assert sent.status_code == 200
+    payload = sent.json()
+    assert payload["assistant_message"]["content"] == "Hello from v2"
+    assert payload["assistant_message"]["metadata"]["endpoint_used"] == "/v1/responses?stream=true"
+    assert payload["assistant_message"]["metadata"]["degraded"] is False
 
 
 def test_send_message_with_tts_enabled_persists_remote_audio_reference_without_audio_file():
@@ -260,6 +470,37 @@ def test_send_message_with_tts_sync_timeout_returns_pending_then_worker_complete
     assert ("message_service.tts.reference", "ok") in stages
 
 
+def test_tts_worker_keeps_processing_task_pending_after_local_poll_attempt_cap():
+    tts_client = FakeTtsClient(complete_after_polls=999)
+    client, _ = _client(
+        app_overrides={
+            "tts_sync_wait_seconds": 0,
+            "tts_job_worker_interval_seconds": 0.01,
+            "tts_service_max_poll_attempts": 2,
+        },
+        tts_client=tts_client,
+    )
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+
+    sent = client.post(
+        f"/sessions/{session_id}/messages",
+        json={"content": "voice please", "tts_enabled": True},
+        headers={"x-user-id": "u1"},
+    )
+
+    assert sent.status_code == 200
+    message_id = sent.json()["assistant_message"]["id"]
+    assert sent.json()["assistant_message"]["tts"]["status"] == "pending"
+
+    time.sleep(0.12)
+    fetched = client.get(f"/messages/{message_id}", headers={"x-user-id": "u1"})
+
+    assert fetched.status_code == 200
+    assert fetched.json()["message"]["tts"]["status"] == "pending"
+    assert fetched.json()["message"]["tts"]["error"] is None
+    assert len(tts_client.status_calls) > 2
+
+
 def test_tts_regenerate_replaces_active_reference_with_next_version():
     client, app = _client()
     session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
@@ -310,6 +551,23 @@ def test_tts_proxy_streams_remote_audio_reference():
     tts_id = sent.json()["assistant_message"]["tts"]["id"]
 
     proxied = client.get(f"/tts/proxy/{tts_id}", headers={"x-user-id": "u1"})
+
+    assert proxied.status_code == 200
+    assert proxied.headers["content-type"] == "audio/wav"
+    assert proxied.content == b"remote-audio"
+
+
+def test_tts_proxy_accepts_query_user_id_for_audio_elements():
+    client, _ = _client()
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+    sent = client.post(
+        f"/sessions/{session_id}/messages",
+        json={"content": "voice please", "tts_enabled": True},
+        headers={"x-user-id": "u1"},
+    )
+    tts_id = sent.json()["assistant_message"]["tts"]["id"]
+
+    proxied = client.get(f"/tts/proxy/{tts_id}?user_id=u1")
 
     assert proxied.status_code == 200
     assert proxied.headers["content-type"] == "audio/wav"

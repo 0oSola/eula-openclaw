@@ -163,6 +163,18 @@ async def _process_next_job(websocket: WebSocket, *, user_id: str, session_id: s
                 "detail": str(error),
             }
         )
+    except WebSocketDisconnect:
+        raise
+    except Exception:
+        await websocket.send_json(
+            {
+                "type": "error",
+                "session_id": session_id,
+                "message_id": job.message_id,
+                "job_id": job.job_id,
+                "detail": "Realtime voice synthesis failed unexpectedly.",
+            }
+        )
     finally:
         queue.complete_current()
 
