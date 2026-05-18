@@ -16,6 +16,7 @@ from app.routes.config import router as config_router
 from app.routes.health import router as health_router
 from app.routes.message_bridge import router as message_bridge_router
 from app.routes.message_service import router as message_service_router
+from app.routes.podcasts import router as podcasts_router
 from app.routes.realtime_voice import router as realtime_voice_router
 from app.routes.trace import router as trace_router
 from app.routes.tts import router as tts_router
@@ -108,6 +109,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.include_router(chat_router)
     app.include_router(message_bridge_router)
     app.include_router(message_service_router)
+    app.include_router(podcasts_router)
     app.include_router(realtime_voice_router)
     app.include_router(trace_router)
     app.include_router(config_router)
