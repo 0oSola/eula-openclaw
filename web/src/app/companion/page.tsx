@@ -45,6 +45,7 @@ import {
   createChatSession,
   deleteChatSession,
   getLatestMotionContextExport,
+  getLatestDailyPodcast,
   getMessageBridgeStatus,
   getOpenClawConfig,
   getOpenClawHealth,
@@ -71,6 +72,7 @@ import { clearSession, loadSession, saveSession } from "@/lib/session";
 import { DEFAULT_TTS_MODE, playRemoteTtsAudio, playServerTtsAudio } from "@/lib/ttsPlayback.js";
 import type {
   ChatMessage,
+  DailyPodcast,
   MappingConfig,
   MessageServiceCleanupResult,
   MessageServiceMessage,
@@ -379,6 +381,7 @@ export default function CompanionPage() {
   const sessionRef = useRef<UserSession | null>(null);
   const chatSessionIdRef = useRef("");
   const [session, setSession] = useState<UserSession | null>(null);
+  const [dailyPodcast, setDailyPodcast] = useState<DailyPodcast | null>(null);
   const [chatSessions, setChatSessions] = useState<MessageServiceSession[]>([]);
   const [chatSessionId, setChatSessionId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -629,6 +632,20 @@ export default function CompanionPage() {
     void loadOpenClawConfig({ silent: true });
     void loadMessageBridgeStatus({ silent: true });
   }, [loadMessageBridgeStatus, loadOpenClawConfig, session]);
+
+  const refreshDailyPodcast = useCallback(async () => {
+    if (!session) return;
+    try {
+      setDailyPodcast(await getLatestDailyPodcast(session.userId));
+    } catch {
+      setDailyPodcast(null);
+    }
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+    void refreshDailyPodcast();
+  }, [refreshDailyPodcast, session]);
 
   useEffect(() => {
     if (!isOpenClawSettingsOpen || !session) return;
@@ -2680,6 +2697,8 @@ export default function CompanionPage() {
           nextSteps={nextSteps}
           memoryNotes={memoryNotes}
           traceRows={traceRows}
+          dailyPodcast={dailyPodcast}
+          onRefreshDailyPodcast={() => void refreshDailyPodcast()}
           onToggleCollapsed={() => setIsRightRailCollapsed((current) => !current)}
           onCreateSession={handleCreateSession}
           onSelectSession={(sessionId) => void handleSelectSession(sessionId)}

@@ -111,6 +111,11 @@ function run() {
     assert.match(cssSource, /\.podcast-page/);
     assert.match(cssSource, /\.podcast-waveform-card/);
     assert.match(cssSource, /\.podcast-history-row/);
+    assert.match(rightRailSource, /Daily Podcast/);
+    assert.match(rightRailSource, /href="\/podcasts"/);
+    assert.doesNotMatch(rightRailSource, /mio-trace-card/);
+    assert.match(companionPageSource, /getLatestDailyPodcast/);
+    assert.match(cssSource, /\.mio-podcast-card/);
     assert.match(apiSource, /function resolveRuntimeApiBaseUrl\(/);
     assert.match(apiSource, /runtimeHostname !== "localhost"/);
     assert.match(apiSource, /API request failed before reaching backend/);

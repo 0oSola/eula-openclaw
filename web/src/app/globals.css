@@ -2651,6 +2651,56 @@ a {
   font-size: clamp(10px, 0.68vw, 12px);
 }
 
+.mio-podcast-card {
+  border-radius: 8px;
+}
+
+.mio-podcast-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.mio-podcast-meta strong,
+.mio-podcast-meta small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mio-podcast-card audio {
+  width: 100%;
+  height: 32px;
+  margin-top: 8px;
+  color-scheme: dark;
+}
+
+.mio-podcast-actions {
+  width: 100%;
+  margin-top: var(--mio-card-button-gap);
+}
+
+.mio-podcast-actions a,
+.mio-podcast-actions button {
+  flex: 1 1 68px;
+  min-width: 0;
+  text-align: center;
+}
+
+@container (max-width: 235px) {
+  .mio-podcast-meta,
+  .mio-podcast-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .mio-podcast-actions a,
+  .mio-podcast-actions button {
+    flex-basis: 100%;
+  }
+}
+
 @media (max-height: 920px) {
   :root {
     --mio-right-rail-gap: 12px;
