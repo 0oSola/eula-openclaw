@@ -561,7 +561,48 @@ API 编排问题 -> api/app/routes + api/app/services
 模型/动作显示问题 -> MMD_ROOT_DIR + assets API + MMDStage
 ```
 
-## 13. 文档维护规则
+## 13. Daily Podcast Topology
+
+Updated: 2026-05-18
+
+Daily Podcast is owned by FastAPI. The browser and Next.js UI do not assemble
+Voice Workflow storage URLs directly. Next.js calls the FastAPI podcast API
+through the existing same-origin `/api/backend/*` proxy, and audio playback
+uses the same proxy path so browser `<audio>` and Canvas waveform fetches do
+not expose Voice Workflow internals.
+
+FastAPI podcast routes:
+
+```text
+GET /podcasts/daily/latest
+GET /podcasts/daily?days=30
+GET /podcasts/daily/{date}
+GET /podcasts/daily/{date}/audio?format=preferred
+```
+
+Voice Workflow interface 5 relationship:
+
+```text
+FastAPI -> Voice Workflow /api/v1/eula-storage-audio/podcast/latest.json
+FastAPI -> Voice Workflow /api/v1/eula-storage-audio/podcast/YYYY/MM/DD/podcast_YYYYMMDD.meta.json
+FastAPI -> Voice Workflow audio OGG/WAV with ranged GET
+```
+
+Frontend surfaces:
+
+```text
+/companion right rail Daily Podcast card
+/podcasts Daily Podcast history/playback page
+```
+
+Audio policy:
+
+```text
+Daily Podcast only: audio/ogg preferred, audio/wav fallback, ranged GET probe.
+Older TTS/realtime audio OGG migration remains deferred.
+```
+
+## 14. 文档维护规则
 
 后续只要更新功能、服务拓扑、外部服务集成、环境变量、数据落点、API 契约或运行时行为，都需要同步更新本文。
 
