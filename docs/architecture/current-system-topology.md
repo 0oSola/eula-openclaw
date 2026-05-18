@@ -588,6 +588,12 @@ FastAPI -> Voice Workflow /api/v1/eula-storage-audio/podcast/YYYY/MM/DD/podcast_
 FastAPI -> Voice Workflow audio OGG/WAV with ranged GET
 ```
 
+Voice Workflow may return Eula storage references either as relative
+`podcast/YYYY/...` paths or as absolute paths on the Voice host. FastAPI
+normalizes absolute paths by extracting the `podcast/...` suffix before calling
+the storage-audio endpoint, so host filesystem prefixes are not exposed to the
+browser and do not break proxy resolution.
+
 If Voice Workflow disconnects or times out during Daily Podcast metadata reads,
 FastAPI returns a normalized degraded podcast payload instead of surfacing a
 500 response: latest maps to `status="failed"` with `audio_error`, and recent
