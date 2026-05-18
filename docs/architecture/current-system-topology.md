@@ -588,6 +588,11 @@ FastAPI -> Voice Workflow /api/v1/eula-storage-audio/podcast/YYYY/MM/DD/podcast_
 FastAPI -> Voice Workflow audio OGG/WAV with ranged GET
 ```
 
+If Voice Workflow disconnects or times out during Daily Podcast metadata reads,
+FastAPI returns a normalized degraded podcast payload instead of surfacing a
+500 response: latest maps to `status="failed"` with `audio_error`, and recent
+history returns an empty list when the latest pointer cannot be read.
+
 Frontend surfaces:
 
 ```text

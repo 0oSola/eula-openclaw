@@ -124,6 +124,25 @@ def test_missing_meta_maps_missing():
     assert result.status == "missing"
 
 
+def test_latest_podcast_maps_voice_request_error_to_failed():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+    result = _run_with_transport(handler, lambda service: service.latest())
+
+    assert result.status == "failed"
+    assert result.audio_error == "Voice Workflow request failed: Server disconnected without sending a response."
+
+
+def test_recent_list_returns_empty_when_latest_pointer_unavailable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+    result = _run_with_transport(handler, lambda service: service.list_recent(days=3))
+
+    assert result == []
+
+
 def test_recent_list_scans_from_latest_date_and_omits_missing_dates():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/v1/eula-storage-audio/podcast/latest.json":
