@@ -34,6 +34,12 @@ class DailyPodcast:
     meta_path: str | None
 
 
+@dataclass(slots=True)
+class _StorageResponse:
+    response: httpx.Response | None
+    error: str | None
+
+
 def podcast_meta_storage_path(podcast_date: str) -> str:
     parsed = _parse_date(podcast_date)
     compact = parsed.strftime("%Y%m%d")
@@ -45,7 +51,10 @@ class DailyPodcastService:
         self.tts_client = tts_client
 
     async def latest(self) -> DailyPodcast:
-        latest = await self._fetch_json("podcast/latest.json")
+        latest, error = await self._fetch_json("podcast/latest.json")
+        if error:
+            podcast_date = Date.today().isoformat()
+            return _failed_podcast(podcast_date, podcast_meta_storage_path(podcast_date), error)
         podcast_date = _string_or_none(latest.get("date"))
         meta_path = _string_or_none(latest.get("metaPath"))
         if not podcast_date and meta_path:
@@ -58,12 +67,16 @@ class DailyPodcastService:
         return await self._load_by_meta_path(podcast_date, podcast_meta_storage_path(podcast_date))
 
     async def list_recent(self, *, days: int = 30) -> list[DailyPodcast]:
-        latest = await self._fetch_json("podcast/latest.json")
+        latest, error = await self._fetch_json("podcast/latest.json")
+        if error:
+            return []
         latest_date = _string_or_none(latest.get("date"))
+        meta_path = _string_or_none(latest.get("metaPath"))
+        if not latest_date and meta_path:
+            latest_date = _date_from_meta_path(meta_path)
         if not latest_date:
-            meta_path = _string_or_none(latest.get("metaPath"))
-            latest_date = _date_from_meta_path(meta_path) if meta_path else None
-        start_date = _parse_date(latest_date or Date.today().isoformat())
+            return []
+        start_date = _parse_date(latest_date)
         safe_days = max(1, days)
         items: list[DailyPodcast] = []
         for offset in range(safe_days):
@@ -74,7 +87,12 @@ class DailyPodcastService:
         return items
 
     async def _load_by_meta_path(self, podcast_date: str, meta_path: str) -> DailyPodcast:
-        response = await self._get(meta_path)
+        result = await self._get(meta_path)
+        if result.error:
+            return _failed_podcast(podcast_date, meta_path, result.error)
+        response = result.response
+        if response is None:
+            return _failed_podcast(podcast_date, meta_path, "Voice Workflow request failed")
         if response.status_code == 404:
             return _missing_podcast(podcast_date, meta_path)
         if not response.is_success:
@@ -153,21 +171,30 @@ class DailyPodcastService:
             source=source,
         )
 
-    async def _fetch_json(self, path: str) -> dict[str, Any]:
-        response = await self._get(path)
+    async def _fetch_json(self, path: str) -> tuple[dict[str, Any], str | None]:
+        result = await self._get(path)
+        if result.error:
+            return {}, result.error
+        response = result.response
+        if response is None:
+            return {}, "Voice Workflow request failed"
         if not response.is_success:
-            return {}
+            return {}, None
         try:
             data = response.json()
         except ValueError:
-            return {}
-        return data if isinstance(data, dict) else {}
+            return {}, None
+        return data if isinstance(data, dict) else {}, None
 
-    async def _get(self, path: str) -> httpx.Response:
-        return await self.tts_client.http_client.get(
-            self.tts_client.eula_storage_url(path),
-            timeout=self.tts_client.timeout_seconds,
-        )
+    async def _get(self, path: str) -> _StorageResponse:
+        try:
+            response = await self.tts_client.http_client.get(
+                self.tts_client.eula_storage_url(path),
+                timeout=self.tts_client.timeout_seconds,
+            )
+        except httpx.HTTPError as exc:
+            return _StorageResponse(response=None, error=_request_error(exc))
+        return _StorageResponse(response=response, error=None)
 
 
 def _missing_podcast(podcast_date: str, meta_path: str | None) -> DailyPodcast:
@@ -198,6 +225,11 @@ def _failed_podcast(podcast_date: str, meta_path: str | None, error: str) -> Dai
         audio_error=error,
         meta_path=meta_path,
     )
+
+
+def _request_error(exc: httpx.HTTPError) -> str:
+    detail = str(exc).strip()
+    return f"Voice Workflow request failed: {detail}" if detail else "Voice Workflow request failed"
 
 
 def _audio_total_bytes(headers: httpx.Headers) -> int | None:
