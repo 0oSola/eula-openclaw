@@ -65,6 +65,25 @@ export type RealtimeVoiceStatus =
 
 export type RealtimeVoiceFallbackMode = "auto_before_playback" | "manual_after_partial_playback";
 
+export type PodcastStatus = "ready" | "partial" | "processing" | "missing" | "failed";
+
+export type DailyPodcast = {
+  date: string;
+  status: PodcastStatus;
+  doc_url: string | null;
+  doc_links: Record<string, string>;
+  audio: {
+    url: string | null;
+    format: "audio/ogg" | "audio/wav" | null;
+    bytes: number | null;
+    source: "ogg" | "wav" | null;
+  };
+  counts: Record<string, number>;
+  script_chars: number | null;
+  updated_at: string | null;
+  audio_error: string | null;
+};
+
 export type ChatResponse = {
   trace_id: string;
   text: string;

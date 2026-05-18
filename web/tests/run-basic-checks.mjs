@@ -70,6 +70,7 @@ function run() {
     assert.match(typesSource, /export type RealtimeVoiceStatus/);
     assert.match(typesSource, /export type MessageServiceCleanupResult = \{/);
     assert.match(typesSource, /export type MessageBridgeStatus = \{/);
+    assert.match(typesSource, /export type DailyPodcast/);
     assert.match(chatboxSource, /onPlayTtsMessage: \(message: ChatMessage\) => void;/);
     assert.match(chatboxSource, /className="mio-message-voice-button"/);
     assert.match(chatboxSource, /className="mio-chatbox-list"/);
@@ -91,6 +92,9 @@ function run() {
     assert.match(apiSource, /export async function patchMessageBridgeSettings\(/);
     assert.match(apiSource, /export async function listMessageBridgeFeishuSessions\(/);
     assert.match(apiSource, /export async function setDefaultMessageBridgeBinding\(/);
+    assert.match(apiSource, /export async function getLatestDailyPodcast/);
+    assert.match(apiSource, /export async function listDailyPodcasts/);
+    assert.match(apiSource, /export async function getDailyPodcast/);
     assert.match(apiSource, /function resolveRuntimeApiBaseUrl\(/);
     assert.match(apiSource, /runtimeHostname !== "localhost"/);
     assert.match(apiSource, /API request failed before reaching backend/);

@@ -3,6 +3,7 @@ import { requestServerTtsAudio } from "@/lib/ttsClient.js";
 export { sessionVoiceWebSocketUrl } from "@/lib/realtimeVoiceQueue.js";
 import type {
   ChatResponse,
+  DailyPodcast,
   MappingConfig,
   MessageBridgeExternalSession,
   MessageBridgeStatus,
@@ -108,6 +109,31 @@ export async function getCurrentWorkspace(userId: string): Promise<WorkspaceCont
     method: "GET",
     userId,
   });
+}
+
+export async function getLatestDailyPodcast(userId: string): Promise<DailyPodcast> {
+  const payload = await requestJSON<{ podcast: DailyPodcast }>("/podcasts/daily/latest", {
+    method: "GET",
+    userId,
+  });
+  return payload.podcast;
+}
+
+export async function listDailyPodcasts(userId: string, days = 30): Promise<DailyPodcast[]> {
+  const params = new URLSearchParams({ days: String(days) });
+  const payload = await requestJSON<{ items: DailyPodcast[] }>(`/podcasts/daily?${params.toString()}`, {
+    method: "GET",
+    userId,
+  });
+  return payload.items || [];
+}
+
+export async function getDailyPodcast(userId: string, date: string): Promise<DailyPodcast> {
+  const payload = await requestJSON<{ podcast: DailyPodcast }>(`/podcasts/daily/${encodeURIComponent(date)}`, {
+    method: "GET",
+    userId,
+  });
+  return payload.podcast;
 }
 
 export async function listChatSessions(userId: string): Promise<MessageServiceSession[]> {
