@@ -51,6 +51,7 @@ function run() {
     const typesSource = readFileSync(new URL("../src/lib/types.ts", import.meta.url), "utf8");
     const apiSource = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
     const waveformSource = readFileSync(new URL("../src/app/podcasts/PodcastWaveform.tsx", import.meta.url), "utf8");
+    const podcastsPageSource = readFileSync(new URL("../src/app/podcasts/page.tsx", import.meta.url), "utf8");
     const realtimeVoiceQueueSource = readFileSync(
       new URL("../src/lib/realtimeVoiceQueue.js", import.meta.url),
       "utf8",
@@ -102,6 +103,14 @@ function run() {
     assert.match(waveformSource, /onPointerDown/);
     assert.match(waveformSource, /setPointerCapture/);
     assert.match(waveformSource, /seekTimeFromPointer/);
+    assert.match(podcastsPageSource, /getLatestDailyPodcast/);
+    assert.match(podcastsPageSource, /listDailyPodcasts\(session\.userId,\s*30\)/);
+    assert.match(podcastsPageSource, /<PodcastWaveform/);
+    assert.match(podcastsPageSource, /href="\/companion"/);
+    assert.match(podcastsPageSource, /Feishu Doc/);
+    assert.match(cssSource, /\.podcast-page/);
+    assert.match(cssSource, /\.podcast-waveform-card/);
+    assert.match(cssSource, /\.podcast-history-row/);
     assert.match(apiSource, /function resolveRuntimeApiBaseUrl\(/);
     assert.match(apiSource, /runtimeHostname !== "localhost"/);
     assert.match(apiSource, /API request failed before reaching backend/);
