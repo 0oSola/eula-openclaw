@@ -76,6 +76,42 @@ def test_latest_podcast_prefers_ogg_when_probe_succeeds():
     assert result.audio.url == "/podcasts/daily/2026-05-18/audio?format=preferred"
 
 
+def test_latest_podcast_accepts_absolute_voice_storage_paths():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/eula-storage-audio/podcast/latest.json":
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "date": "2026-05-18",
+                    "metaPath": "/Users/sola/voice-workflow/eula_emotion_revelation/podcast/2026/05/18/podcast_20260518.meta.json",
+                },
+            )
+        if request.url.path == "/api/v1/eula-storage-audio/podcast/2026/05/18/podcast_20260518.meta.json":
+            return httpx.Response(
+                status_code=200,
+                json={
+                    **_meta_payload(),
+                    "audio": {
+                        "oggPath": "/Users/sola/voice-workflow/eula_emotion_revelation/podcast/2026/05/18/podcast_20260518.ogg",
+                        "wavPath": "/Users/sola/voice-workflow/eula_emotion_revelation/podcast/2026/05/18/podcast_20260518.wav",
+                    },
+                },
+            )
+        if request.url.path == "/api/v1/eula-storage-audio/podcast/2026/05/18/podcast_20260518.ogg":
+            return httpx.Response(
+                status_code=206,
+                content=b"ogg-range",
+                headers={"content-type": "audio/ogg", "content-range": "bytes 0-1023/1388346"},
+            )
+        return httpx.Response(status_code=404)
+
+    result = _run_with_transport(handler, lambda service: service.latest())
+
+    assert result.status == "ready"
+    assert result.audio.source == "ogg"
+    assert result.audio.bytes == 1388346
+
+
 def test_latest_podcast_falls_back_to_wav_when_ogg_missing():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/v1/eula-storage-audio/podcast/latest.json":

@@ -149,7 +149,7 @@ class DailyPodcastService:
         return PodcastAudio(url=None, remote_url=None, format=None, bytes=None, source=None)
 
     async def _probe_audio(self, podcast_date: str, *, source: str, path: str) -> PodcastAudio | None:
-        url = self.tts_client.eula_storage_url(path)
+        url = self.tts_client.eula_storage_url(_normalize_storage_path(path))
         try:
             response = await self.tts_client.http_client.get(
                 url,
@@ -189,7 +189,7 @@ class DailyPodcastService:
     async def _get(self, path: str) -> _StorageResponse:
         try:
             response = await self.tts_client.http_client.get(
-                self.tts_client.eula_storage_url(path),
+                self.tts_client.eula_storage_url(_normalize_storage_path(path)),
                 timeout=self.tts_client.timeout_seconds,
             )
         except httpx.HTTPError as exc:
@@ -230,6 +230,19 @@ def _failed_podcast(podcast_date: str, meta_path: str | None, error: str) -> Dai
 def _request_error(exc: httpx.HTTPError) -> str:
     detail = str(exc).strip()
     return f"Voice Workflow request failed: {detail}" if detail else "Voice Workflow request failed"
+
+
+def _normalize_storage_path(path: str) -> str:
+    if path.startswith(("http://", "https://")):
+        return path
+    normalized = path.replace("\\", "/")
+    marker = "/podcast/"
+    marker_index = normalized.find(marker)
+    if marker_index >= 0:
+        return normalized[marker_index + 1 :]
+    if normalized.startswith("podcast/"):
+        return normalized
+    return normalized.lstrip("/")
 
 
 def _audio_total_bytes(headers: httpx.Headers) -> int | None:
