@@ -102,10 +102,11 @@ export function PodcastWaveform({ audioUrl, format, title }: PodcastWaveformProp
     setPeaks([]);
     setDecodeState(audioUrl ? "loading" : "idle");
     if (!resolvedAudioUrl) return;
+    const audioFetchUrl = resolvedAudioUrl;
 
     async function decodeWaveform() {
       try {
-        const response = await fetch(resolvedAudioUrl, { cache: "no-store" });
+        const response = await fetch(audioFetchUrl, { cache: "no-store" });
         const data = await response.arrayBuffer();
         const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
         const audioContext = new AudioContextCtor();
