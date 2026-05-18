@@ -169,6 +169,11 @@ class VoiceWorkflowTtsClient:
             audio_url = f"/{audio_url}"
         return f"{self.base_url}{audio_url}"
 
+    def eula_storage_url(self, path: str) -> str:
+        if path.startswith(("http://", "https://")):
+            return path
+        return f"{self.base_url}/api/v1/eula-storage-audio/{path.lstrip('/')}"
+
     async def synthesize_chunk(
         self,
         *,
