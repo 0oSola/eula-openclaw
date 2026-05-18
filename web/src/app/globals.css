@@ -3063,7 +3063,7 @@ a {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  align-items: end;
+  align-items: flex-end;
 }
 
 .mio-advanced-field {
@@ -4179,7 +4179,7 @@ a {
 
 .podcast-page-header {
   display: flex;
-  align-items: end;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
   max-width: 1180px;
@@ -4290,7 +4290,7 @@ a {
 
 .podcast-section-head {
   display: flex;
-  align-items: start;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
