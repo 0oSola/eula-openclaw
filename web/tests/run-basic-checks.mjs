@@ -50,6 +50,7 @@ function run() {
     const rightRailSource = readFileSync(new URL("../src/app/companion/CompanionRightRail.tsx", import.meta.url), "utf8");
     const typesSource = readFileSync(new URL("../src/lib/types.ts", import.meta.url), "utf8");
     const apiSource = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+    const waveformSource = readFileSync(new URL("../src/app/podcasts/PodcastWaveform.tsx", import.meta.url), "utf8");
     const realtimeVoiceQueueSource = readFileSync(
       new URL("../src/lib/realtimeVoiceQueue.js", import.meta.url),
       "utf8",
@@ -95,6 +96,12 @@ function run() {
     assert.match(apiSource, /export async function getLatestDailyPodcast/);
     assert.match(apiSource, /export async function listDailyPodcasts/);
     assert.match(apiSource, /export async function getDailyPodcast/);
+    assert.match(waveformSource, /<canvas/);
+    assert.match(waveformSource, /decodeAudioData/);
+    assert.match(waveformSource, /requestAnimationFrame/);
+    assert.match(waveformSource, /onPointerDown/);
+    assert.match(waveformSource, /setPointerCapture/);
+    assert.match(waveformSource, /seekTimeFromPointer/);
     assert.match(apiSource, /function resolveRuntimeApiBaseUrl\(/);
     assert.match(apiSource, /runtimeHostname !== "localhost"/);
     assert.match(apiSource, /API request failed before reaching backend/);
