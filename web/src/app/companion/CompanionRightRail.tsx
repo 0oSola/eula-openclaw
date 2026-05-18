@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 
-import type { ChatMessage, MessageServiceSession } from "@/lib/types";
+import { makeUrl } from "@/lib/api";
+import type { ChatMessage, DailyPodcast, MessageServiceSession } from "@/lib/types";
 
 import { CompanionChatbox } from "./CompanionChatbox";
 
@@ -25,6 +26,8 @@ type CompanionRightRailProps = {
   nextSteps: string[];
   memoryNotes: string[];
   traceRows: readonly TraceRow[];
+  dailyPodcast: DailyPodcast | null;
+  onRefreshDailyPodcast: () => void;
   onToggleCollapsed: () => void;
   onCreateSession: () => void;
   onSelectSession: (sessionId: string) => void;
@@ -61,8 +64,10 @@ function PlaceholderWorkspace({
 function OverviewWorkspace({
   nextSteps,
   memoryNotes,
-  traceRows,
-}: Pick<CompanionRightRailProps, "nextSteps" | "memoryNotes" | "traceRows">) {
+  dailyPodcast,
+  onRefreshDailyPodcast,
+}: Pick<CompanionRightRailProps, "nextSteps" | "memoryNotes" | "dailyPodcast" | "onRefreshDailyPodcast">) {
+  const audioSource = dailyPodcast?.audio.url ? makeUrl(dailyPodcast.audio.url) : "";
   return (
     <>
       <article className="mio-card">
@@ -93,24 +98,34 @@ function OverviewWorkspace({
         <button type="button">查看完整记忆</button>
       </article>
 
-      <article className="mio-card mio-trace-card">
+      <article className="mio-card mio-podcast-card">
         <h2>
           <img src="/images/sprite-sliced/asset-022.png" alt="" />
-          Trace / 请求状态 <small>TRACE</small>
+          Daily Podcast <small>PODCAST</small>
         </h2>
         <div className="mio-card-copy">
-          <div className="mio-trace-list">
-            {traceRows.map(([method, path, status, time]) => (
-              <div key={`${method}-${path}`}>
-                <span>{method}</span>
-                <span>{path}</span>
-                <strong>{status}</strong>
-                <span>{time}</span>
-              </div>
-            ))}
+          <div className="mio-podcast-meta">
+            <span>{dailyPodcast?.status || "missing"}</span>
+            <strong>{dailyPodcast?.date || "--"}</strong>
+            <small>{dailyPodcast?.audio.source ? dailyPodcast.audio.source.toUpperCase() : "NO AUDIO"}</small>
           </div>
+          {dailyPodcast?.status === "ready" && audioSource ? (
+            <audio controls src={audioSource} preload="metadata" />
+          ) : (
+            <p>Latest audio is not ready.</p>
+          )}
         </div>
-        <Link href="/traces">进入 Trace 页面</Link>
+        <div className="mio-podcast-actions">
+          {dailyPodcast?.doc_url ? (
+            <a href={dailyPodcast.doc_url} target="_blank" rel="noreferrer">
+              Feishu Doc
+            </a>
+          ) : null}
+          <Link href="/podcasts">List</Link>
+          <button type="button" onClick={onRefreshDailyPodcast}>
+            Refresh
+          </button>
+        </div>
       </article>
     </>
   );
@@ -131,6 +146,8 @@ export function CompanionRightRail({
   nextSteps,
   memoryNotes,
   traceRows,
+  dailyPodcast,
+  onRefreshDailyPodcast,
   onToggleCollapsed,
   onCreateSession,
   onSelectSession,
@@ -159,7 +176,12 @@ export function CompanionRightRail({
 
       {!collapsed ? (
         activeView === "overview" ? (
-          <OverviewWorkspace nextSteps={nextSteps} memoryNotes={memoryNotes} traceRows={traceRows} />
+          <OverviewWorkspace
+            nextSteps={nextSteps}
+            memoryNotes={memoryNotes}
+            dailyPodcast={dailyPodcast}
+            onRefreshDailyPodcast={onRefreshDailyPodcast}
+          />
         ) : activeView === "chat" ? (
           <CompanionChatbox
             sessions={sessions}
