@@ -12,7 +12,6 @@ import voiceIconHover2x from "../../../images/voice/voice_icon_hover_2x.png";
 import voiceIconHover3x from "../../../images/voice/voice_icon_hover_3x.png";
 import voiceIconHover4x from "../../../images/voice/voice_icon_hover_4x.png";
 
-type TtsMode = "browser" | "server";
 type SendVisualState = "default" | "hover" | "disabled" | "loading";
 type VisualAsset = typeof voiceIcon1x;
 type VisualAssetSet = readonly [VisualAsset, VisualAsset, VisualAsset, VisualAsset];
@@ -25,13 +24,11 @@ type CompanionCommandBarProps = {
   sendDisabled: boolean;
   error: string;
   ttsEnabled: boolean;
-  ttsMode: TtsMode;
   isAdvancedPanelOpen: boolean;
   advancedPanel?: ReactNode;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
   onInputChange: (value: string) => void;
   onTtsEnabledChange: (enabled: boolean) => void;
-  onTtsModeChange: (mode: TtsMode) => void;
   onAdvancedToggle: () => void;
 };
 
@@ -89,13 +86,11 @@ export function CompanionCommandBar({
   sendDisabled,
   error,
   ttsEnabled,
-  ttsMode,
   isAdvancedPanelOpen,
   advancedPanel,
   onSubmit,
   onInputChange,
   onTtsEnabledChange,
-  onTtsModeChange,
   onAdvancedToggle,
 }: CompanionCommandBarProps) {
   const buttonDisabled = sendDisabled || loading;
@@ -144,18 +139,20 @@ export function CompanionCommandBar({
         </div>
 
         <div className="mio-command-right">
-          <label className="mio-mode mio-voice-mode">
+          <button
+            className={`mio-mode mio-voice-mode ${ttsEnabled ? "is-active" : "is-muted"}`}
+            type="button"
+            aria-pressed={ttsEnabled}
+            onClick={() => onTtsEnabledChange(!ttsEnabled)}
+          >
             <span className="mio-eq-icon" aria-hidden="true">
               <svg viewBox="0 0 14 14" focusable="false" aria-hidden="true">
                 <path d="M2 4v6M7 2v10M12 5v4" />
               </svg>
             </span>
             <span>{"\u8bed\u97f3\u6a21\u5f0f"}</span>
-            <select value={ttsMode} onChange={(event) => onTtsModeChange(event.target.value as TtsMode)}>
-              <option value="browser">browser</option>
-              <option value="server">server</option>
-            </select>
-          </label>
+            <strong className="mio-voice-mode-state">{ttsEnabled ? "ON" : "OFF"}</strong>
+          </button>
 
           <button
             className={`mio-mode mio-advanced-mode ${isAdvancedPanelOpen ? "is-active" : ""}`}

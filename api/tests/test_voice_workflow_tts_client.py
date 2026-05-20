@@ -218,6 +218,22 @@ def test_voice_workflow_tts_cancel_realtime_posts_session_cancel():
     assert calls == [{"method": "POST", "path": "/api/v1/tts/realtime/session-1/cancel"}]
 
 
+def test_voice_workflow_builds_eula_storage_audio_url_for_interface_5():
+    client = VoiceWorkflowTtsClient(base_url="http://tts.local")
+
+    try:
+        url = client.eula_storage_url(
+            "/Users/sola/Desktop/kscc/Qwen3-TTS/eula_emotion_revelation/关心温柔/goodnight_20260517_2200.wav"
+        )
+    finally:
+        asyncio.run(client.close())
+
+    assert (
+        url
+        == "http://tts.local/api/v1/eula-storage-audio/%E5%85%B3%E5%BF%83%E6%B8%A9%E6%9F%94/goodnight_20260517_2200.wav"
+    )
+
+
 def test_voice_workflow_tts_omits_default_voice_as_emotion_label():
     bodies = []
 

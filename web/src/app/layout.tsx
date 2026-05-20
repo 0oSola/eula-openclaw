@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
-  title: "MMD Virtual Companion",
-  description: "Browser MMD companion powered by OpenClaw",
+  title: "MMD Virtual Assistant",
+  description: "Browser MMD assistant powered by OpenClaw",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

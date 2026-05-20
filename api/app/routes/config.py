@@ -109,6 +109,7 @@ def _build_settings_with_openclaw_config(current: Settings, saved: dict[str, Any
         openclaw_proxy_url=str(saved["proxy_url"]),
         openclaw_verify_ssl=bool(saved["verify_ssl"]),
         openclaw_timeout_seconds=int(saved["timeout_seconds"]),
+        openclaw_greeting_index_path=current.openclaw_greeting_index_path,
         admin_user_ids=list(current.admin_user_ids),
         retention_days=current.retention_days,
         ndjson_compress_after_days=current.ndjson_compress_after_days,

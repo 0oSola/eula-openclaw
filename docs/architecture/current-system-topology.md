@@ -1,6 +1,6 @@
 # 当前系统拓扑与架构蓝图
 
-更新时间：2026-05-16
+更新时间：2026-05-18
 
 本文用于两类场景：
 
@@ -28,9 +28,9 @@ Browser / Next.js UI
 
 | 服务 | 当前地址/位置 | 主要职责 | 当前状态 | 健康检查/验证 |
 | --- | --- | --- | --- | --- |
-| Next.js Web | `web/`, 默认 `http://localhost:3000` | UI、MMD 舞台、Chatbox、设置面板、trace 页面 | 本项目内 | 页面访问、`npm --prefix web run check:basic` |
+| Next.js Web | `web/`, 默认 `http://localhost:3000` | UI、MMD 舞台、Chatbox、设置面板、trace 页面、runtime health 页面 | 本项目内 | 页面访问、`npm --prefix web run check:basic` |
 | Next.js API Proxy | `/api/backend/*` | 浏览器同源转发到 FastAPI | 本项目内 | 前端请求是否 2xx |
-| FastAPI API | `api/`, 默认 `http://127.0.0.1:8000` | 会话、消息、OpenClaw/TTS 代理、realtime voice WebSocket、资源、trace、admin API | 本项目内 | `GET /healthz` |
+| FastAPI API | `api/`, 默认 `http://127.0.0.1:8000` | 会话、消息、OpenClaw/TTS 代理、realtime voice WebSocket、资源、trace、admin API | 本项目内 | `GET /healthz`、`GET /admin/runtime-health` |
 | OpenClaw Gateway HTTP | `http://10.11.252.164:18789` | `/v1/models`、`/v1/responses` 文本生成 | 外部服务 | `GET /healthz/openclaw` |
 | OpenClaw Gateway WebSocket RPC | `ws://10.11.252.164:18789` | Feishu session 列表、history、实时消息订阅、agent/chat delta 事件 | 外部服务 | Bridge admin 状态、`sessions.list` |
 | Voice Workflow TTS | `http://10.11.252.164:5555` | 提交 TTS、查询任务、返回音频 URL | 外部服务 | `POST /api/v1/tts` + `GET /api/v1/tasks/{task_id}` |
@@ -115,7 +115,7 @@ User sends message in Chatbox
 | OpenClaw `/v1/responses` 读超时 | 主消息链路默认走 `stream=true`；收到完整 JSON 后立即返回，不强等 `response.completed`；若 stream 超时但已有内容，会以 partial 结果继续解析，避免直接丢弃；非流式/关闭 streaming 时不做同请求立即重试 |
 | OpenClaw 空内容 | 视为失败，进入 fallback |
 | 回复 JSON 不完整 | `normalize_assistant_reply()` 做兼容，缺动作时 fallback idle |
-| 动作无法匹配 VMD | `motion_resolution.status=fallback_idle`；如果 OpenClaw 返回的是自定义 motion_key 但未命中收藏动作，前端会随机抽取当前模型 `00_idle_loop` 中的 VMD 作为最终兜底 |
+| 动作无法匹配 VMD | `motion_resolution.status=fallback_idle`；只要后端没有给出 `resolved_asset_url/resolved_asset_id`，前端会随机抽取当前模型 `00_idle_loop` 中的 VMD 作为兜底；没有 idle VMD 时才回退默认 procedural idle |
 
 ## 5. 音频服务调用链
 
@@ -202,7 +202,9 @@ POST /sessions/{session_id}/messages with tts_enabled=true
 当前前端策略：
 
 - 同一时间只播放一个 realtime chunk，按 job 首次入队顺序 + sequence 顺序播放。
-- 新用户消息不会默认取消正在排队或播放的 realtime voice。
+- Companion 页面采用前端音频互斥策略：任意新的消息 TTS、浏览器朗读、realtime voice 或右侧每日播客开始播放前，都会先停止旧的播放源，保证同一页面内只有一个语音/音频在播放。
+- 新的 realtime voice job 发送前会取消旧 realtime queue 并向 WebSocket 发送 `cancel(scope="all")`；取消后的旧 job id 会被前端记录，后续晚到的 `audio_ready/error/done` 事件会被忽略，避免旧片段在新语音之后重新响起。
+- 右侧每日播客 `<audio>` 会向 Companion 页面注册 stop 回调；播放播客前会先停止消息 TTS、浏览器朗读和 realtime voice，播放消息语音或 realtime voice 前也会停止播客。
 - 会话切换、新建会话、组件卸载会发送 `cancel(scope="all")` 并清空本地 AudioQueue。
 - chunk 播放前失败时自动回退到长任务 `message_tts`；已经播放过部分 chunk 后失败时标记 `partial_failed`，不自动重播完整语音。
 - realtime chunk 合成出现未预期异常时，WebSocket 返回 `error { message_id, job_id, detail }`，前端按“未播放 chunk”路径回退到长任务 `message_tts`。
@@ -239,6 +241,10 @@ Bridge 实时 consumer 不只依赖 `sessions.messages.subscribe` 推送。`_con
 
 当本项目在 Bridge 绑定会话里通过 HTTP `/v1/responses` 发送消息时，OpenClaw/Feishu 侧可能同时通过 Bridge WebSocket 回流同一条 user/assistant 消息。后端会把本项目主链路插入的带 `trace_id` 消息作为权威展示消息：Bridge ingest 若发现同 session 近期已有同 role/content 的本地 trace 消息，会跳过该回声；Message Service 完成本次 user/assistant 落库后，也会软删除本次请求期间已经写入的同 `openclaw_session_key` Bridge 回声；`GET /sessions/{session_id}/messages` 和 Message Service 组装 OpenClaw history 时还会做列表层兜底过滤，隐藏 5 分钟窗口内同 session、同 role、同内容、无 `trace_id` 且 `metadata.source=message_bridge` 的 echo。OpenClaw WebSocket 有时会为同一条 Feishu 实时消息给出两个不同 external id；Bridge ingest 对 `realtime`/`realtime_backfill` 的同 external session、同 role、同内容、3 秒窗口重复项做语义去重，Chat API 也会对已经落库的近邻重复项做展示兜底过滤。原始 Bridge 消息仍保留在 SQLite，方便排障，但 Chatbox 不再展示这些重复项。
 
+Bridge ingest 会保留 OpenClaw 原生隐藏字段 `openclawMetadata`，并在 `openclawMetadata.source == "greeting-cron"` 时写入本地 `messages.metadata.openclaw_metadata`、`messages.metadata.greeting_cron` 和 `messages.metadata.auto_tts=true`。如果历史消息没有原生 metadata，后端会读取 `OPENCLAW_GREETING_DASHBOARD_INDEX_PATH` 指向的 JSONL 旁路索引，默认路径为 `api/data/openclaw/greeting-dashboard-injections.jsonl`；按 `dashboardSessionKey` 加 `dashboardMessageId`/`feishuMessageId`、正文或 180 秒时间窗口 join 后，把问候来源补到本地 metadata。匹配到 `auto_tts=true` 且消息尚无 `message_tts` 时，Bridge 会调用同一套 `message_tts` 长任务链路提交 Voice Workflow TTS；同步等待超时则写入 pending 引用和 `tts_jobs`，由后台 worker 继续轮询。
+
+Bridge 不再落库 OpenClaw assistant 空消息占位。当外部 assistant 消息正文为空，且本地解析结果为 `parse_mode=empty` 时，后端只写 `message_bridge.openclaw.message.skipped` trace，reason 为 `empty_assistant_message`，不会把 `I am here. Let's keep going.` 这类本地 fallback 文案写入 `messages`。
+
 Admin API：
 
 | Endpoint | 作用 |
@@ -247,6 +253,11 @@ Admin API：
 | `PATCH /admin/message-bridge/settings` | 开关 Bridge 和实时驱动 |
 | `GET /admin/message-bridge/openclaw/feishu/sessions` | 列出 OpenClaw Feishu sessions |
 | `POST /admin/message-bridge/bindings/default` | 切换默认绑定 |
+| `GET /admin/runtime-health` | 只读本地运行状态快照：API 进程、OpenClaw 配置、Bridge 状态/绑定/最新消息、TTS 队列、SQLite 计数、recent error trace |
+
+`GET /messages/greetings/latest` 会从本地 SQLite 查当前用户最新一条 `metadata.greeting_cron` 或 `metadata.auto_tts=true` 的 assistant 消息，并返回同一个 message response 结构（含 `tts` 引用）。Companion 页面进场时会调用该接口，气泡优先显示这条问候文本；如果该消息的 `tts.status=ready` 且有 `remote_audio_url` 或 `proxy_audio_url`，前端会在本页会话内只自动播放一次对应语音。找不到问候消息时，气泡回退到当前 Chatbox 最新 assistant 消息或默认文案。
+
+`GET /admin/runtime-health` 不主动调用 `sessions.list`，因此 OpenClaw Gateway WebSocket 握手慢或 Feishu session list 不稳定时，健康后台仍能打开并显示本地已经收到的消息、最后连接时间、最新错误和 TTS/SQLite 状态。前端 `/status` 页面每 5 秒读取一次该接口；Companion 页面里的 Bridge 状态加载也已经把 `GET /admin/message-bridge/status` 和 `GET /admin/message-bridge/openclaw/feishu/sessions` 解耦，后者超时只会标记 session list 不可用，不会清空本地 Bridge status，也不会停止 2.5 秒一次的消息刷新轮询。`/admin/message-bridge/openclaw/feishu/sessions` 失败时返回 502，并写入 `message_bridge.openclaw.sessions.list` error trace，避免 ASGI 500 堆栈遮蔽根因。
 
 Bridge 依赖 OpenClaw WebSocket RPC 的 operator 权限和 scopes：
 
@@ -257,6 +268,8 @@ operator.write
 operator.approvals
 operator.pairing
 ```
+
+Cron 问候正文仍来自 OpenClaw/Feishu history 或 `OPENCLAW_GREETING_DASHBOARD_INDEX_PATH` 旁路索引，API 不会用 Voice Workflow 的 `.txt` 覆盖 `messages.content`。Cron 问候语音优先走远程 Voice Workflow 接口 5：`metadata.greeting_cron.audioFile` 或 `textFile` 存在时，后端只接受包含 `/eula_emotion_revelation/` 的 Voice 存储绝对路径、明确相对存储路径，或明确文件名兜底。`audioFile` 是 `.ogg`/`.wav` 时优先按 metadata 的真实音频路径探测，例如 `关心温柔/afternoon_20260518_1400.ogg`；如果该路径短时间内仍不可用，再尝试同名前缀 `.wav` 兜底。`textFile` 和 `.meta.json` 仍推导为同名前缀 `.wav`。后端会用 ranged GET 轻量探测 `{TTS_SERVICE_BASE_URL}/api/v1/eula-storage-audio/{path}`，每个候选路径最多短重试 3 次；重试等待按线性累加，基准值为 `min(TTS_SERVICE_POLL_INTERVAL_SECONDS, 1s)`，默认等待序列为 `1s -> 2s`。只有响应为 2xx/206 且 `content-type` 是 `audio/*` 时，才直接写成 ready 的 `message_tts.remote_audio_url`，不调用 `POST /api/v1/tts`。如果接口 5 返回 404、非音频 2xx 或探测失败，则回到原 `submit_task + wait_for_reference` 链路，用当前问候正文生成对应语音。
 
 ## 7. MMD/VMD 资源链路
 
@@ -298,6 +311,8 @@ MMD/usage/vmd/优菈_by_原神_339146e6e418d79e85a515b26414c0b0[动作]/
 
 `/assets/mmd/vmds` 和 `/assets/vmd` 都支持递归扫描这些子目录。`asset_registry.favorite_relative_path` 需要保存完整分类路径；如果移动收藏 VMD 文件，必须同步更新 SQLite 中对应的 `favorite_relative_path`，并在 `relative_path` 或 `source_relative_path` 指向 `MMD_ROOT_DIR` 文件时同步更新这些字段。
 
+VMD 收藏动作按 canonical 资产维护：同一用户、同一模型、同一分类、同一规范化动作名只保留一条 `asset_registry` 记录，磁盘上不保留 `name (2).vmd` 这类同名编号副本。新增或重新导入动作后，需要检查 `MMD_ROOT_DIR/usage/vmd/**` 和 `asset_registry`，避免编号副本重新进入前端待机池、点击动作池或 OpenClaw motion_key inventory。
+
 给 OpenClaw 或其他 agent 选择 VMD 动作用的 motion_key、分类策略和当前优菈动作 inventory 维护在 `docs/architecture/openclaw-vmd-motion-selection-guide.md`。
 
 前端舞台动作状态机：
@@ -314,7 +329,7 @@ CompanionPage stageInteractionState
 
 `stageInteractionMachine` 是页面业务状态层，负责把“`00_idle_loop` 待机循环、手动预览、聊天触发动作、人物点击触发动作、VMD 异常立即恢复、完成后回到待机”统一成显式状态。`MMDStage` 和 `MMDCompanionRuntime` 仍只负责加载模型、播放 VMD/程序动作、上报播放完成或错误，不持有业务队列或恢复策略。
 
-渲染模式仍由前端 `renderPipeline` 隔离选择。`classic`、`hero-shot`、`genshin`、`mio-reference` 保持既有 Three.js/MMD runtime；新增 `reze-npr` 是 reze-engine 启发的实验模式，只迁移可在现有 Three.js 管线中低风险复刻的显示能力：按 PMX 材质名推断 face/body/hair/eye/stockings/metal/cloth 预设、对丝袜和 cutout 材质启用 Three.js `alphaHash`/`alphaToCoverage`、启用独立轮廓、ACES tone mapping、轻量 bloom 和 reze 风格灯光。它不接管 reze-engine 的 WebGPU renderer、PMX loader、VMD/IK/物理或 picking，因此不会改变现有模式的模型加载、VMD 播放和交互语义。
+渲染模式仍由前端 `renderPipeline` 隔离选择。`classic`、`hero-shot`、`genshin`、`mio-reference` 保持既有 Three.js/MMD runtime；新增 `reze-npr` 是 reze-engine 启发的实验模式，只迁移可在现有 Three.js 管线中低风险复刻的显示能力：按 PMX 材质名推断 face/body/hair/eye/stockings/metal/cloth 预设、对丝袜和 cutout 材质启用 Three.js `alphaHash`/`alphaToCoverage`、启用独立轮廓、ACES tone mapping、轻量 bloom 和 reze 风格灯光。它不接管 reze-engine 的 WebGPU renderer、PMX loader、VMD/IK/物理或 picking，因此不会改变现有模式的模型加载、VMD 播放和交互语义。`mio-reference` 当前默认锁定镜头为 `fov=32`、`position=[-3.137891,12.522935,45.135659]`、`target=[-1.861732,-2.847643,1.048369]`、`locked=true`，OrbitControls 的 `maxDistance` 仍为 72；页面启动时会把本地会话里的 `mio-reference` 镜头迁移到这组锁定参数，避免旧 localStorage 覆盖默认构图。
 
 人物点击交互：
 
@@ -327,7 +342,9 @@ Pointer up on MMDStage
   -> only continue when raycast intersects the loaded MMD model
   -> CompanionPage creates a click ripple at the pointer position
   -> resolveStageCharacterClickInteraction()
+     -> de-duplicate motions by category + normalized VMD name
      -> random single-shot VMD from 02_greeting_social / 05_soft_emotion / 06_strong_personality
+     -> avoid immediately repeating the previous click motion when alternatives exist
      -> fallback safe favorite VMD excluding 00_idle_loop and 01_entry_fallback
      -> fallback procedural wave when no favorite VMD is available
   -> startStageClickInteraction()
@@ -420,7 +437,7 @@ FastAPI 保存 remote_audio_url，不把音频写入 SQLite。
 前端会在有用户 session 后静默加载 Bridge 状态，并在 Bridge 启用时跟随默认 binding 的本地会话。
 Chatbox 消息列表使用普通文档流渲染，不再使用绝对定位虚拟行；滚动容器直接依赖 DOM 内容高度，避免长回复、窄面板或 TTS/trace 状态变化时因行高测量失准造成 chat item 重叠。
 MMD 舞台业务状态由 stageInteractionMachine 维护，MMDStage/Runtime 只执行当前 interaction。
-点击人物时，MMDStage 只接受短按、小位移的普通点击；长按和拖动不会触发。通过 runtime raycast 确认真正命中模型后，前端显示一次点击波纹，并切到当前模型 favorite VMD 随机单次动作，没有可用 favorite 时回退 procedural wave。
+点击人物时，MMDStage 只接受短按、小位移的普通点击；长按和拖动不会触发。通过 runtime raycast 确认真正命中模型后，前端显示一次点击波纹，并切到当前模型 favorite VMD 随机单次动作。点击动作会优先使用 `02_greeting_social`、`05_soft_emotion`、`06_strong_personality` 中有 URL 的 VMD；这些单次点击动作即使 `motion_profile.companion_safe=false` 也允许进入候选池，播放时统一 `lockLowerBody=true`/`disableCrossfade=true`。候选会按 category + 规范化文件名去重，并在存在其它候选时避开上一次点击动作，避免连续触发同一动作；没有分类候选时才回退到安全 favorite 池，再没有则回退 procedural wave。
 MMD 模型 URL 来自 /assets/mmd/models。
 VMD 动作 URL 来自 /assets/vmd/file/{asset_id}。
 ```
@@ -432,7 +449,7 @@ VMD 动作 URL 来自 /assets/vmd/file/{asset_id}。
 | 消息状态展示 | assistant_message 可能 degraded/fallback |
 | TTS 状态展示 | `tts.status` 可能 ready/pending/failed/expired/partial_failed |
 | 动作 fallback | `motion_resolution.status` 可能 fallback_idle |
-| 人物点击 | 点击命中检测在 `MMDCompanionRuntime.hitTestModelAtClientPoint()`，视觉波纹在 `MMDStage` 层，动作选择在 `stageCharacterClick`；优先随机 `02_greeting_social`、`05_soft_emotion`、`06_strong_personality` |
+| 人物点击 | 点击命中检测在 `MMDCompanionRuntime.hitTestModelAtClientPoint()`，视觉波纹在 `MMDStage` 层，动作选择在 `stageCharacterClick`；优先随机 `02_greeting_social`、`05_soft_emotion`、`06_strong_personality`，候选会按动作名去重并避开上一次点击动作 |
 | 动作状态机 | `default_idle/autoplay_loop/manual_preview/chat_vmd_action/chat_procedural_action/stage_click_vmd_action/stage_click_procedural_action/recovering` 在 `stageInteractionMachine` 中显式维护，避免页面里多处 setter 各自拼状态 |
 | 动作完成/异常恢复 | 聊天或预览动作正常完成后会重新从当前模型的 `00_idle_loop` 随机生成本次待机 VMD loop interaction，不依赖 `pendingAutoResume` 标记，也不复用上一次固定 lead VMD；没有分类待机循环时回退旧安全收藏动作池，再没有则默认 procedural idle。VMD/动作播放失败会由 Stage 上报页面，页面立即走同一套收藏优先恢复逻辑 |
 | 资源加载错误 | PMX 贴图依赖原包相对路径 |
@@ -504,13 +521,14 @@ fallback 规则：
 | --- | --- |
 | 前端请求 502 | Next.js `/api/backend/*` 到 FastAPI 的转发 |
 | FastAPI 不可用 | `GET /healthz` |
+| 服务端全景状态 | 前端 `/status` 或 `GET /admin/runtime-health` |
 | OpenClaw 文本失败 | `GET /healthz/openclaw` |
 | OpenClaw 超时 | 检查 `OPENCLAW_MODEL`, OpenClaw 默认 agent/model, Gateway 状态 |
 | TTS 无声音 | 查 `message_tts.status`, `tts_jobs`, TTS 服务任务状态，浏览器 Network 里 `/api/backend/tts/proxy/{tts_id}?user_id=...` 是否 2xx |
 | TTS 引用 `tts_job_max_attempts_exceeded` | 旧 worker 会在 TTS 仍 processing 时提前失败；当前逻辑应保持 pending 并继续轮询，既有 failed 记录需要重新生成或恢复为 pending 后再轮询 |
 | 音频 URL 过期 | `POST /message-tts/{tts_id}/mark-expired` 或重新生成 |
-| Bridge 不同步 | `GET /admin/message-bridge/status` |
-| 找不到 Feishu session | `GET /admin/message-bridge/openclaw/feishu/sessions` |
+| Bridge 不同步 | 先看 `/status` 或 `GET /admin/runtime-health` 的 Bridge latest_message / recent_errors，再看 `GET /admin/message-bridge/status` |
+| 找不到 Feishu session | `GET /admin/message-bridge/openclaw/feishu/sessions`；该接口会实时连 OpenClaw WebSocket，失败时应看 502 detail 和 trace 中的 `message_bridge.openclaw.sessions.list` |
 | MMD 模型不显示 | `GET /assets/mmd/validate?model_path=...` |
 | 模型贴图丢失 | 检查模型包相对路径和 `GET /assets/mmd/{file_path}` |
 | 动作不匹配 | 检查 favorite VMD 是否绑定到当前 selected model |
@@ -531,7 +549,7 @@ fallback 规则：
 | Message TTS audio proxy | 前端通过 `/api/backend/tts/proxy/{tts_id}?user_id={user_id}` 播放，后端也兼容旧的 `x-user-id` header 访问 |
 | Realtime Voice WebSocket | Phase 1 已接入 `WS /ws/sessions/{session_id}/voice?user_id={user_id}`，后端按 session queue 生成 chunk，前端 AudioQueue 顺序播放 |
 | Realtime Voice audio proxy | Phase 1 已接入 `/tts/proxy/realtime/{session_id}/{job_id}/{sequence}?user_id={user_id}`，使用内存 chunk registry 代理远端 chunk URL |
-| 本地健康检查 | `/healthz/openclaw` 已用于 models/responses 探测 |
+| 本地健康检查 | `/healthz/openclaw` 已用于 models/responses 探测；`/admin/runtime-health` 和前端 `/status` 用于只读查看 API/OpenClaw/Bridge/TTS/SQLite 当前运行状态 |
 
 ## 12. 系统边界
 
@@ -606,6 +624,60 @@ Frontend surfaces:
 /podcasts Daily Podcast history/playback page
 ```
 
+The root `/` route is the AETHER V2 login entry. It uses the source bitmap
+assets in `web/public/images/loginV2`, keeps real HTML inputs and buttons over
+the visual shell, saves `mmd_companion_session_v1` in browser localStorage, and
+routes to `/companion`. The panel element itself is transparent and the
+`::before` overlay is disabled so no extra frosted-glass/tint rectangle sits
+behind the source bitmap. The visible floating window comes from the translucent
+source-bitmap `::after` frame, and the primary login CTA now uses the custom
+center-beacon button asset
+`login_button-v2-transparent.png`. Before the form appears, the root login
+route plays `/images/loginV2/login_video.mp4` as a full-screen intro overlay.
+The intro state machine is `active -> revealing -> complete`: video `ended` or
+a double-click on the intro overlay starts `revealing`, the intro layer is
+hidden immediately, and `/images/loginV2/idle_loginV3.mp4` takes over as the muted
+looping page background without a CSS video fade. The login UI then fades upward
+like surfacing from water, and the panel animation end moves the state to
+`complete`. The older static `login_background.png` image is hidden while this
+video-backed login scene is active. The login entry
+preserves `ttsEnabled` while
+normalizing `ttsMode` to the default
+server-backed mode; `/companion` applies the same migration on startup so older
+`browser` selections do not leak into the new UI. The visible voice mode
+control is an on/off playback toggle, not a browser/server selector; clicking
+it updates `ttsEnabled`, persists that value, and immediately stops any current
+audio when toggled off. On short desktop viewports (`min-width: 901px` and
+`max-height: 720px`), the login panel keeps its compressed spacing but lets the
+panel height follow its content so the footnote and actions stay inside the
+source-bitmap window instead of being clipped by the fixed aspect ratio. On
+middle-width compact viewports (`521px-900px`, `max-height: 700px`), the same
+login entry also caps the panel width from viewport height and tightens the
+brand/form spacing so the window, security strip, and copyright remain visible
+without oversized tablet-style scaling. Across desktop, tablet-width, and phone
+breakpoints, the floating login window keeps a protected left/right content
+inset for the title, fields, action buttons, and footnote; very short phone
+viewports compress vertical spacing instead of sacrificing that inline padding.
+The compact `598x622` layout uses the measured login CTA as the scale anchor:
+the CTA is reduced from about `363.6x46` to `327.2x41` and sibling controls,
+titles, and wordmark dimensions are derived from the same roughly 0.9 scale.
+
+The `/companion` bottom command bar is tied to the Penpot bottom-bar design
+file in `Design/*.pen`. Its desktop fidelity metrics are checked by
+`npm --prefix web run check:basic`: command bar height 83px, shell side padding
+6px, shell gap 10px, TTS toggle 110px, mic button 54px, send button 64px,
+voice-mode button 108px, and advanced-mode button 118px.
+
+The `/companion` right rail card keeps the hidden podcast `<audio>` element at
+the `CompanionRightRail` level instead of inside the overview card body. The
+overview card can unmount when the user switches to chat/tasks/tools panels,
+but the audio element and playback state stay mounted in the right rail so the
+play action is still available when the user returns to overview. The card shows
+one SVG-style play/pause button, a primary Feishu document action, and a
+secondary podcast list entry. Manual refresh calls `GET /podcasts/daily/latest`
+with a cache-busting `refresh={timestamp}` query through `/api/backend/*`, then
+updates the existing card state in place.
+
 Audio policy:
 
 ```text
@@ -613,7 +685,29 @@ Daily Podcast only: audio/ogg preferred, audio/wav fallback, ranged GET probe.
 Older TTS/realtime audio OGG migration remains deferred.
 ```
 
-## 14. 文档维护规则
+## 14. Development Code Search Tooling
+
+Semble CLI is integrated as a development-only semantic code search helper. It
+is not part of the runtime topology and is not called by FastAPI or Next.js.
+Use it when a task is intent-based and cross-module, while keeping `rg` as the
+first choice for exact identifiers, endpoint paths, filenames, and known
+strings.
+
+PowerShell wrappers:
+
+```text
+scripts/semble-search.ps1
+scripts/semble-savings.ps1
+```
+
+Operational rules:
+
+- Scope searches to `api/app`, `web/src`, or `docs` before searching the repo root.
+- Use the wrappers on Windows so `PYTHONIOENCODING=utf-8` is set for Unicode output.
+- Track notable token-saving observations in `docs/architecture/semble-code-search-observability.md`.
+- Current integration is CLI-only; Codex global MCP integration is intentionally deferred.
+
+## 15. 文档维护规则
 
 后续只要更新功能、服务拓扑、外部服务集成、环境变量、数据落点、API 契约或运行时行为，都需要同步更新本文。
 

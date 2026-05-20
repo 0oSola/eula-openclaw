@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 
-import { resolveMessageBridgeRefresh, resolveMessageBridgeSessionSync } from "../src/lib/messageBridgeSync.js";
+import {
+  resolveMessageBridgeRefresh,
+  resolveMessageBridgeSessionSync,
+  resolveMessageBridgeStatusLoad,
+} from "../src/lib/messageBridgeSync.js";
 
 const enabledStatus = {
   enabled: true,
@@ -57,6 +61,38 @@ assert.deepEqual(
   }),
   { action: "none", sessionId: "" },
   "Bridge sync waits until a binding exists",
+);
+
+const previousSessions = [{ external_session_key: "agent:main:feishu:direct:ou_previous" }];
+
+assert.deepEqual(
+  resolveMessageBridgeStatusLoad({
+    status: {
+      enabled: true,
+      binding: {
+        local_session_id: "bridge-session",
+        external_session_key: "agent:main:feishu:direct:ou_bound",
+      },
+    },
+    sessions: null,
+    previousStatus: null,
+    previousSessions,
+    currentSelectedSessionKey: "",
+    sessionsError: new Error("timed out during opening handshake"),
+  }),
+  {
+    status: {
+      enabled: true,
+      binding: {
+        local_session_id: "bridge-session",
+        external_session_key: "agent:main:feishu:direct:ou_bound",
+      },
+    },
+    sessions: previousSessions,
+    selectedSessionKey: "agent:main:feishu:direct:ou_bound",
+    sessionListUnavailable: true,
+  },
+  "Bridge status stays usable when the remote session list probe fails",
 );
 
 const currentMessages = [{ id: "known-message", content: "known" }];

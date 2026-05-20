@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
+
+
+_EULA_STORAGE_MARKER = "eula_emotion_revelation/"
 
 
 class VoiceWorkflowTtsError(RuntimeError):
@@ -169,10 +173,24 @@ class VoiceWorkflowTtsClient:
             audio_url = f"/{audio_url}"
         return f"{self.base_url}{audio_url}"
 
+    @staticmethod
+    def normalize_eula_storage_path(path: str) -> str:
+        normalized = str(path or "").strip().replace("\\", "/")
+        if not normalized:
+            raise VoiceWorkflowTtsError("Voice workflow Eula storage path is empty.")
+        marker_index = normalized.find(_EULA_STORAGE_MARKER)
+        if marker_index >= 0:
+            normalized = normalized[marker_index + len(_EULA_STORAGE_MARKER) :]
+        normalized = normalized.lstrip("/")
+        parts = [part for part in normalized.split("/") if part]
+        if not parts or any(part in {".", ".."} for part in parts):
+            raise VoiceWorkflowTtsError(f"Voice workflow Eula storage path is invalid: {path}")
+        return "/".join(parts)
+
     def eula_storage_url(self, path: str) -> str:
-        if path.startswith(("http://", "https://")):
-            return path
-        return f"{self.base_url}/api/v1/eula-storage-audio/{path.lstrip('/')}"
+        relative_path = self.normalize_eula_storage_path(path)
+        encoded_path = quote(relative_path, safe="/")
+        return f"{self.base_url}/api/v1/eula-storage-audio/{encoded_path}"
 
     async def synthesize_chunk(
         self,

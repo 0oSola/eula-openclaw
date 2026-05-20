@@ -1,5 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
 import time
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
@@ -8,7 +10,8 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.models.chat import OpenClawReply
 from app.services.openclaw_client import OpenClawInvocationError
-from app.services.voice_workflow_tts_client import VoiceWorkflowTtsReference
+from app.services import message_tts_reference
+from app.services.voice_workflow_tts_client import VoiceWorkflowTtsClient, VoiceWorkflowTtsReference
 
 
 def _make_case_dir() -> Path:
@@ -57,12 +60,22 @@ class FakeOpenClawClient:
 
 
 class FakeTtsClient:
-    def __init__(self, *, complete_after_polls: int = 0, fail_status: bool = False):
+    def __init__(
+        self,
+        *,
+        complete_after_polls: int = 0,
+        fail_status: bool = False,
+        eula_audio_status: int = 404,
+        eula_audio_media_type: str = "audio/wav",
+    ):
         self.calls = []
         self.submit_calls = []
         self.status_calls = []
+        self.storage_probe_calls = []
         self.complete_after_polls = complete_after_polls
         self.fail_status = fail_status
+        self.eula_audio_status = eula_audio_status
+        self.eula_audio_media_type = eula_audio_media_type
         self.tasks: dict[str, dict[str, int]] = {}
         self.http_client = httpx.AsyncClient(transport=httpx.MockTransport(self._handle_proxy))
 
@@ -114,9 +127,24 @@ class FakeTtsClient:
         )
 
     def _handle_proxy(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/api/v1/eula-storage-audio/"):
+            self.storage_probe_calls.append(
+                {"method": request.method, "path": request.url.path, "headers": dict(request.headers)}
+            )
+            if self.eula_audio_status < 400:
+                return httpx.Response(
+                    status_code=self.eula_audio_status,
+                    content=b"R",
+                    headers={"content-type": self.eula_audio_media_type},
+                )
+            return httpx.Response(status_code=self.eula_audio_status, json={"detail": "Audio file not found"})
         if request.url.path.startswith("/audio/tts-task-") or request.url.path.endswith("/audio/tts-task-1.wav"):
             return httpx.Response(status_code=200, content=b"remote-audio", headers={"content-type": "audio/wav"})
         return httpx.Response(status_code=404)
+
+    def eula_storage_url(self, path: str) -> str:
+        relative_path = VoiceWorkflowTtsClient.normalize_eula_storage_path(path)
+        return f"http://tts.local/api/v1/eula-storage-audio/{quote(relative_path, safe='/')}"
 
 
 def _client(*, app_overrides: dict | None = None, tts_client: FakeTtsClient | None = None) -> tuple[TestClient, object]:
@@ -350,6 +378,291 @@ def test_list_messages_suppresses_delayed_and_early_bridge_echoes():
         ("user", "查一下", "trace-local-user"),
         ("assistant", "这是同一条回复", "trace-local-assistant"),
         ("assistant", "这是一条不同的远端回复", None),
+    ]
+
+
+def test_latest_greeting_message_route_returns_newest_auto_tts_message():
+    client, app = _client()
+    old_session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+    new_session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+    ctx = app.state.trace_store.get_current_workspace_context("u1")
+
+    app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        old_session_id,
+        ctx["account"]["id"],
+        role="assistant",
+        content="ordinary assistant text",
+        metadata={"source": "message_bridge"},
+    )
+    old_greeting = app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        old_session_id,
+        ctx["account"]["id"],
+        role="assistant",
+        content="morning greeting",
+        metadata={
+            "source": "message_bridge",
+            "auto_tts": True,
+            "greeting_cron": {"greetingType": "morning"},
+        },
+    )
+    app.state.trace_store.create_message_tts(
+        ctx["workspace"]["id"],
+        old_greeting["id"],
+        status="ready",
+        task_id="old-task",
+        remote_audio_url="http://tts.local/old.wav",
+        media_type="audio/wav",
+    )
+    latest_greeting = app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        new_session_id,
+        ctx["account"]["id"],
+        role="assistant",
+        content="noon greeting",
+        metadata={
+            "source": "message_bridge",
+            "auto_tts": True,
+            "greeting_cron": {"greetingType": "noon"},
+        },
+    )
+    app.state.trace_store.create_message_tts(
+        ctx["workspace"]["id"],
+        latest_greeting["id"],
+        status="ready",
+        task_id="latest-task",
+        remote_audio_url="http://tts.local/latest.wav",
+        media_type="audio/wav",
+    )
+
+    response = client.get("/messages/greetings/latest", headers={"x-user-id": "u1"})
+
+    assert response.status_code == 200
+    message = response.json()["message"]
+    assert message["id"] == latest_greeting["id"]
+    assert message["content"] == "noon greeting"
+    assert message["metadata"]["greeting_cron"]["greetingType"] == "noon"
+    assert message["tts"]["remote_audio_url"] == "http://tts.local/latest.wav"
+
+
+def test_greeting_tts_uses_voice_storage_audio_without_regenerating_text():
+    tts_client = FakeTtsClient(eula_audio_status=206, eula_audio_media_type="audio/ogg")
+    client, app = _client(tts_client=tts_client)
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+    ctx = app.state.trace_store.get_current_workspace_context("u1")
+    greeting = app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        session_id,
+        ctx["account"]["id"],
+        role="assistant",
+        content="dashboard greeting text",
+        metadata={
+            "source": "message_bridge",
+            "auto_tts": True,
+            "greeting_cron": {
+                "greetingType": "goodnight",
+                "audioFile": "/Users/sola/Desktop/kscc/Qwen3-TTS/eula_emotion_revelation/关心温柔/goodnight_20260517_2200.ogg",
+            },
+        },
+    )
+
+    response = client.post(f"/messages/{greeting['id']}/tts/regenerate", json={}, headers={"x-user-id": "u1"})
+
+    assert response.status_code == 200
+    message = response.json()["message"]
+    assert message["content"] == "dashboard greeting text"
+    assert message["tts"]["status"] == "ready"
+    assert message["tts"]["task_id"] == "eula-storage:关心温柔/goodnight_20260517_2200.ogg"
+    assert (
+        message["tts"]["remote_audio_url"]
+        == "http://tts.local/api/v1/eula-storage-audio/%E5%85%B3%E5%BF%83%E6%B8%A9%E6%9F%94/goodnight_20260517_2200.ogg"
+    )
+    assert message["tts"]["media_type"] == "audio/ogg"
+    assert tts_client.submit_calls == []
+    assert tts_client.storage_probe_calls
+    persisted = app.state.trace_store.get_message(ctx["workspace"]["id"], ctx["account"]["id"], greeting["id"])
+    assert persisted["content"] == "dashboard greeting text"
+
+
+def test_greeting_tts_waits_for_delayed_voice_storage_audio_before_regenerating():
+    class DelayedStorageTtsClient(FakeTtsClient):
+        def _handle_proxy(self, request: httpx.Request) -> httpx.Response:
+            if request.url.path.startswith("/api/v1/eula-storage-audio/"):
+                self.storage_probe_calls.append(
+                    {"method": request.method, "path": request.url.path, "headers": dict(request.headers)}
+                )
+                if len(self.storage_probe_calls) == 1:
+                    return httpx.Response(status_code=404, json={"detail": "Audio file not found"})
+                return httpx.Response(status_code=206, content=b"O", headers={"content-type": "audio/ogg"})
+            return super()._handle_proxy(request)
+
+    tts_client = DelayedStorageTtsClient()
+    client, app = _client(
+        app_overrides={"tts_service_poll_interval_seconds": 0.01},
+        tts_client=tts_client,
+    )
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+    ctx = app.state.trace_store.get_current_workspace_context("u1")
+    greeting = app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        session_id,
+        ctx["account"]["id"],
+        role="assistant",
+        content="dashboard greeting delayed audio",
+        metadata={
+            "source": "message_bridge",
+            "auto_tts": True,
+            "greeting_cron": {
+                "greetingType": "afternoon",
+                "audioFile": "/Users/sola/Desktop/kscc/Qwen3-TTS/voice-workflow-service/eula_emotion_revelation/关心温柔/afternoon_20260518_1400.ogg",
+            },
+        },
+    )
+
+    response = client.post(f"/messages/{greeting['id']}/tts/regenerate", json={}, headers={"x-user-id": "u1"})
+
+    assert response.status_code == 200
+    message = response.json()["message"]
+    assert message["tts"]["status"] == "ready"
+    assert message["tts"]["task_id"] == "eula-storage:关心温柔/afternoon_20260518_1400.ogg"
+    assert (
+        message["tts"]["remote_audio_url"]
+        == "http://tts.local/api/v1/eula-storage-audio/%E5%85%B3%E5%BF%83%E6%B8%A9%E6%9F%94/afternoon_20260518_1400.ogg"
+    )
+    assert message["tts"]["media_type"] == "audio/ogg"
+    assert tts_client.submit_calls == []
+    assert [call["path"] for call in tts_client.storage_probe_calls] == [
+        "/api/v1/eula-storage-audio/关心温柔/afternoon_20260518_1400.ogg",
+        "/api/v1/eula-storage-audio/关心温柔/afternoon_20260518_1400.ogg",
+    ]
+
+
+def test_voice_storage_probe_retry_delay_increases_linearly(monkeypatch):
+    attempts: list[str] = []
+    sleep_calls: list[float] = []
+
+    async def fake_media_type(app, remote_audio_url):
+        attempts.append(remote_audio_url)
+        return "audio/ogg" if len(attempts) == 3 else None
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(message_tts_reference, "_referenceable_voice_storage_media_type", fake_media_type)
+    monkeypatch.setattr(message_tts_reference.asyncio, "sleep", fake_sleep)
+    app = SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(tts_service_poll_interval_seconds=0.01)))
+
+    media_type = message_tts_reference.asyncio.run(
+        message_tts_reference._probe_voice_storage_audio(app, "http://tts.local/audio.ogg")
+    )
+
+    assert media_type == "audio/ogg"
+    assert len(attempts) == 3
+    assert sleep_calls == [0.01, 0.02]
+
+
+def test_greeting_tts_falls_back_to_generation_when_voice_storage_audio_missing():
+    tts_client = FakeTtsClient(eula_audio_status=404)
+    client, app = _client(tts_client=tts_client)
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+    ctx = app.state.trace_store.get_current_workspace_context("u1")
+    greeting = app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        session_id,
+        ctx["account"]["id"],
+        role="assistant",
+        content="dashboard fallback greeting",
+        tts_emotion_label="关心温柔",
+        tts_pause_profile="none",
+        metadata={
+            "source": "message_bridge",
+            "auto_tts": True,
+            "greeting_cron": {
+                "greetingType": "goodnight",
+                "audioFile": "/Users/sola/Desktop/kscc/Qwen3-TTS/eula_emotion_revelation/关心温柔/missing_goodnight.ogg",
+            },
+        },
+    )
+
+    response = client.post(f"/messages/{greeting['id']}/tts/regenerate", json={}, headers={"x-user-id": "u1"})
+
+    assert response.status_code == 200
+    message = response.json()["message"]
+    assert message["content"] == "dashboard fallback greeting"
+    assert message["tts"]["status"] == "ready"
+    assert message["tts"]["task_id"] == "tts-task-1"
+    assert message["tts"]["remote_audio_url"] == "http://tts.example/audio/tts-task-1.wav"
+    assert tts_client.submit_calls == [
+        {"text": "dashboard fallback greeting", "emotion_label": "关心温柔", "pause_profile": "none"}
+    ]
+    assert tts_client.storage_probe_calls
+
+
+def test_greeting_tts_rejects_successful_non_audio_voice_storage_response():
+    tts_client = FakeTtsClient(eula_audio_status=200, eula_audio_media_type="application/json")
+    client, app = _client(tts_client=tts_client)
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+    ctx = app.state.trace_store.get_current_workspace_context("u1")
+    greeting = app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        session_id,
+        ctx["account"]["id"],
+        role="assistant",
+        content="dashboard fallback after bad storage response",
+        metadata={
+            "source": "message_bridge",
+            "auto_tts": True,
+            "greeting_cron": {
+                "greetingType": "goodnight",
+                "audioFile": "/Users/sola/Desktop/kscc/Qwen3-TTS/eula_emotion_revelation/关心温柔/bad_content_type.ogg",
+            },
+        },
+    )
+
+    response = client.post(f"/messages/{greeting['id']}/tts/regenerate", json={}, headers={"x-user-id": "u1"})
+
+    assert response.status_code == 200
+    message = response.json()["message"]
+    assert message["tts"]["status"] == "ready"
+    assert message["tts"]["task_id"] == "tts-task-1"
+    assert message["tts"]["remote_audio_url"] == "http://tts.example/audio/tts-task-1.wav"
+    assert tts_client.submit_calls == [
+        {"text": "dashboard fallback after bad storage response", "emotion_label": None, "pause_profile": "podcast"}
+    ]
+
+
+def test_greeting_tts_does_not_guess_voice_storage_path_from_unknown_absolute_file():
+    tts_client = FakeTtsClient(eula_audio_status=206)
+    client, app = _client(tts_client=tts_client)
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+    ctx = app.state.trace_store.get_current_workspace_context("u1")
+    greeting = app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        session_id,
+        ctx["account"]["id"],
+        role="assistant",
+        content="dashboard fallback for unknown path",
+        metadata={
+            "source": "message_bridge",
+            "auto_tts": True,
+            "greeting_cron": {
+                "greetingType": "goodnight",
+                "audioFile": "/tmp/other-voice-store/unknown_emotion/goodnight_20260517_2200.ogg",
+            },
+        },
+    )
+
+    response = client.post(f"/messages/{greeting['id']}/tts/regenerate", json={}, headers={"x-user-id": "u1"})
+
+    assert response.status_code == 200
+    message = response.json()["message"]
+    assert message["tts"]["status"] == "ready"
+    assert message["tts"]["task_id"] == "tts-task-1"
+    assert message["tts"]["remote_audio_url"] == "http://tts.example/audio/tts-task-1.wav"
+    assert tts_client.storage_probe_calls == []
+    assert tts_client.submit_calls == [
+        {"text": "dashboard fallback for unknown path", "emotion_label": None, "pause_profile": "podcast"}
     ]
 
 

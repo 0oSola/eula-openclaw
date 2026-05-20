@@ -2,6 +2,7 @@ import {
   CLICK_FALLBACK_EXCLUDED_VMD_CATEGORIES,
   CLICK_REACTION_VMD_CATEGORIES,
   filterVmdAssetsByCategories,
+  getVmdAssetCategory,
   isVmdAssetInCategory,
   resolveVmdPlaybackRate,
 } from "../mapping/vmdPreview.js";
@@ -25,6 +26,55 @@ function pickRandomItem(items, randomValue = Math.random()) {
 /** @param {any} asset */
 function isPlayableClickAsset(asset) {
   return Boolean(asset?.url) && asset?.motion_profile?.companion_safe !== false;
+}
+
+/** @param {any} asset */
+function hasPlayableClickVmdUrl(asset) {
+  return Boolean(asset?.url);
+}
+
+/** @param {any} asset */
+function normalizeClickMotionName(asset) {
+  const rawName = `${asset?.display_name || asset?.filename || asset?.asset_id || asset?.url || ""}`;
+  return rawName
+    .trim()
+    .toLowerCase()
+    .replace(/\.[^.]+$/, "")
+    .replace(/\s*\(\d+\)$/, "")
+    .trim();
+}
+
+/** @param {any} asset */
+function getClickMotionKey(asset) {
+  const category = getVmdAssetCategory(asset) || "uncategorized";
+  const name = normalizeClickMotionName(asset);
+  return name ? `${category}:${name}` : `${category}:${asset?.asset_id || asset?.url || ""}`;
+}
+
+/** @param {any[]} assets */
+function dedupeClickAssetsByMotion(assets) {
+  const seen = new Set();
+  const result = [];
+  for (const asset of assets) {
+    const key = getClickMotionKey(asset);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(asset);
+  }
+  return result;
+}
+
+/** @param {any[]} assets @param {any[]} sourceAssets @param {string} previousActiveVmdAssetId */
+function excludePreviousClickMotion(assets, sourceAssets, previousActiveVmdAssetId = "") {
+  if (!previousActiveVmdAssetId || assets.length <= 1) return assets;
+  const previousAsset = sourceAssets.find((asset) => asset?.asset_id === previousActiveVmdAssetId);
+  const previousMotionKey = previousAsset ? getClickMotionKey(previousAsset) : "";
+  if (previousMotionKey) {
+    const filtered = assets.filter((asset) => getClickMotionKey(asset) !== previousMotionKey);
+    if (filtered.length) return filtered;
+  }
+  const filtered = assets.filter((asset) => asset?.asset_id !== previousActiveVmdAssetId);
+  return filtered.length ? filtered : assets;
 }
 
 /**
@@ -82,18 +132,29 @@ export function shouldTriggerStageCharacterClick({
 }
 
 /**
- * @param {{ assets?: any[], randomValue?: number }} [options]
+ * @param {{ assets?: any[], randomValue?: number, previousActiveVmdAssetId?: string }} [options]
  * @returns {{ activeVmdAssetId: string, interaction: any }}
  */
-export function resolveStageCharacterClickInteraction({ assets = [], randomValue = Math.random() } = {}) {
+export function resolveStageCharacterClickInteraction({
+  assets = [],
+  randomValue = Math.random(),
+  previousActiveVmdAssetId = "",
+} = {}) {
   const sourceAssets = Array.isArray(assets) ? assets : [];
-  const preferredAssets = filterVmdAssetsByCategories(sourceAssets, CLICK_REACTION_VMD_CATEGORIES).filter(
-    isPlayableClickAsset,
+  const preferredAssets = dedupeClickAssetsByMotion(
+    filterVmdAssetsByCategories(sourceAssets, CLICK_REACTION_VMD_CATEGORIES).filter(hasPlayableClickVmdUrl),
   );
-  const fallbackAssets = sourceAssets.filter(
-    (asset) => isPlayableClickAsset(asset) && !isVmdAssetInCategory(asset, CLICK_FALLBACK_EXCLUDED_VMD_CATEGORIES),
+  const fallbackAssets = dedupeClickAssetsByMotion(
+    sourceAssets.filter(
+      (asset) => isPlayableClickAsset(asset) && !isVmdAssetInCategory(asset, CLICK_FALLBACK_EXCLUDED_VMD_CATEGORIES),
+    ),
   );
-  const asset = pickRandomItem(preferredAssets.length ? preferredAssets : fallbackAssets, randomValue);
+  const clickPool = excludePreviousClickMotion(
+    preferredAssets.length ? preferredAssets : fallbackAssets,
+    sourceAssets,
+    previousActiveVmdAssetId,
+  );
+  const asset = pickRandomItem(clickPool, randomValue);
   if (asset) {
     const emotion = asset.slot || "happy";
     return {

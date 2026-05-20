@@ -118,7 +118,7 @@ test("chat stays usable when TTS request fails after a successful text send", as
   if (!(await checkbox.isChecked())) {
     await checkbox.check();
   }
-  await page.locator(".mio-voice-mode select").selectOption("server");
+  await expect(page.locator(".mio-voice-mode")).toHaveAttribute("aria-pressed", "true");
   await page.locator(".mio-command-input").fill("测试开启 TTS 时发送文本");
   await page.locator(".mio-send").click();
 

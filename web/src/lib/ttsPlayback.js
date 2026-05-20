@@ -6,6 +6,8 @@ function normalizeAudioPlaybackError(error, fallbackMessage = "Audio playback fa
   return new Error(fallbackMessage);
 }
 
+function noopAudioCreated(_event) {}
+
 export function authenticatedBackendAudioUrl(audioUrl, userId, { backendPrefix = "/api/backend" } = {}) {
   const separator = audioUrl.includes("?") ? "&" : "?";
   const authenticatedPath = `${audioUrl}${separator}${new URLSearchParams({ user_id: userId }).toString()}`;
@@ -21,6 +23,7 @@ export async function playServerTtsAudio(
     revokeObjectURL = globalThis.URL?.revokeObjectURL?.bind(globalThis.URL),
     setSpeaking = () => {},
     onCleanup = () => {},
+    onAudioCreated = noopAudioCreated,
   } = {},
 ) {
   if (!AudioCtor || !createObjectURL) {
@@ -45,6 +48,7 @@ export async function playServerTtsAudio(
   audio.onplay = () => setSpeaking(true);
   audio.onended = cleanup;
   audio.onerror = cleanup;
+  onAudioCreated({ audio, objectUrl, cleanup });
 
   try {
     await audio.play();
@@ -65,6 +69,7 @@ export async function playServerTtsAudio(
  *   backendPrefix?: string;
  *   setSpeaking?: (value: boolean) => void;
  *   onCleanup?: (event?: { audio?: HTMLAudioElement }) => void;
+ *   onAudioCreated?: (event: { audio: HTMLAudioElement, cleanup: () => void }) => void;
  *   onFinalError?: (error: Error) => void | Promise<void>;
  * }} [options]
  */
@@ -76,6 +81,7 @@ export async function playRemoteTtsAudio({
   backendPrefix = "/api/backend",
   setSpeaking = () => {},
   onCleanup = () => {},
+  onAudioCreated = noopAudioCreated,
   onFinalError = () => {},
 } = {}) {
   if (!AudioCtor) {
@@ -139,6 +145,7 @@ export async function playRemoteTtsAudio({
       await onFinalError(finalError);
     })();
   };
+  onAudioCreated({ audio, cleanup });
 
   if (!(await playCurrentSource())) {
     if (!(await playNextSource())) {
