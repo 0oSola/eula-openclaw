@@ -17,6 +17,7 @@ import type {
   OpenClawConfig,
   OpenClawConfigSaveResult,
   OpenClawHealthStatus,
+  RuntimeHealthStatus,
   TraceEvent,
   TraceMirror,
   VmdAsset,
@@ -111,8 +112,9 @@ export async function getCurrentWorkspace(userId: string): Promise<WorkspaceCont
   });
 }
 
-export async function getLatestDailyPodcast(userId: string): Promise<DailyPodcast> {
-  const payload = await requestJSON<{ podcast: DailyPodcast }>("/podcasts/daily/latest", {
+export async function getLatestDailyPodcast(userId: string, options: { cacheBust?: boolean } = {}): Promise<DailyPodcast> {
+  const path = options.cacheBust ? `/podcasts/daily/latest?refresh=${Date.now()}` : "/podcasts/daily/latest";
+  const payload = await requestJSON<{ podcast: DailyPodcast }>(path, {
     method: "GET",
     userId,
   });
@@ -198,6 +200,14 @@ export async function listSessionMessages(userId: string, sessionId: string): Pr
 
 export async function getMessageById(userId: string, messageId: string): Promise<MessageServiceMessage> {
   const payload = await requestJSON<{ message: MessageServiceMessage }>(`/messages/${encodeURIComponent(messageId)}`, {
+    method: "GET",
+    userId,
+  });
+  return payload.message;
+}
+
+export async function getLatestGreetingMessage(userId: string): Promise<MessageServiceMessage> {
+  const payload = await requestJSON<{ message: MessageServiceMessage }>("/messages/greetings/latest", {
     method: "GET",
     userId,
   });
@@ -317,6 +327,13 @@ export async function putOpenClawConfig(
 
 export async function getOpenClawHealth(userId: string): Promise<OpenClawHealthStatus> {
   return requestJSON<OpenClawHealthStatus>("/healthz/openclaw", {
+    method: "GET",
+    userId,
+  });
+}
+
+export async function getRuntimeHealth(userId: string): Promise<RuntimeHealthStatus> {
+  return requestJSON<RuntimeHealthStatus>("/admin/runtime-health", {
     method: "GET",
     userId,
   });

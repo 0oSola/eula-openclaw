@@ -395,12 +395,12 @@ const STAGE_PRESENTATION_PRESETS = {
     fog: null,
     camera: {
       fov: 32,
-      position: [-1.346829, 2.907039, 31.361977],
-      target: [-1.346829, 0.961375, 0.436541],
+      position: [-3.137891, 12.522935, 45.135659],
+      target: [-1.861732, -2.847643, 1.048369],
       minDistance: 8,
-      maxDistance: 40,
+      maxDistance: 72,
       maxPolarAngle: Math.PI * 0.48,
-      locked: false,
+      locked: true,
     },
     character: {
       targetHeight: 19.5,

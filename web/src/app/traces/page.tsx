@@ -30,7 +30,7 @@ export default function TracePage() {
 
   return (
     <main className="page-shell" style={{ display: "grid", gap: "1rem" }}>
-      <section className="panel" style={{ padding: "0.9rem", display: "flex", justifyContent: "space-between" }}>
+      <section className="panel" style={{ padding: "0.9rem", display: "flex", justifyContent: "space-between", gap: "0.75rem" }}>
         <div>
           <h2 style={{ margin: 0, fontFamily: "Space Grotesk, sans-serif" }}>
             {"\u5168\u94fe\u8def\u8ffd\u8e2a"}
@@ -40,9 +40,14 @@ export default function TracePage() {
             {session.userId}
           </p>
         </div>
-        <Link className="btn secondary" href="/companion">
-          {"\u8fd4\u56de\u804a\u5929\u9875"}
-        </Link>
+        <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <Link className="btn secondary" href="/status">
+            {"\u8fd0\u884c\u72b6\u6001"}
+          </Link>
+          <Link className="btn secondary" href="/companion">
+            {"\u8fd4\u56de\u804a\u5929\u9875"}
+          </Link>
+        </div>
       </section>
       <TraceViewer userId={session.userId} />
     </main>

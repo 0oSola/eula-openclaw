@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { BUILT_IN_VMD_PLAYBACK_RATE, DEFAULT_VMD_PLAYBACK_RATE } from "../src/features/stage/builtInMotionPreferences.js";
@@ -27,6 +27,51 @@ import {
 import { resolveActionConfig, resolvePlaybackPlan } from "../src/features/mapping/resolveAction.js";
 import { buildTraceHeaders } from "../src/lib/trace.js";
 
+function objectBlock(source, propertyName) {
+  const match = source.match(new RegExp(`\\b${propertyName}: \\{[\\s\\S]*?\\n  \\},`));
+  assert.ok(match, `Expected ${propertyName} block`);
+  return match[0];
+}
+
+function cssBlock(source, selector) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = source.match(new RegExp(`${escapedSelector}\\s*\\{[\\s\\S]*?\\n\\}`));
+  assert.ok(match, `Expected ${selector} block`);
+  return match[0];
+}
+
+function cssBlockWithDeclaration(source, selector, property) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const blocks = source.match(new RegExp(`${escapedSelector}\\s*\\{[\\s\\S]*?\\n\\}`, "g")) || [];
+  const block = blocks.find((candidate) => new RegExp(`${escapedProperty}:`).test(candidate));
+  assert.ok(block, `Expected ${selector} block with ${property}`);
+  return block;
+}
+
+function findDesignNode(root, name) {
+  if (!root || typeof root !== "object") return null;
+  if (root.name === name) return root;
+  for (const child of root.children || []) {
+    const match = findDesignNode(child, name);
+    if (match) return match;
+  }
+  return null;
+}
+
+function readBottomBarDesign() {
+  const designDir = new URL("../../Design/", import.meta.url);
+  const designFile = readdirSync(designDir).find((name) => name.endsWith(".pen"));
+  assert.ok(designFile, "Expected a Penpot bottom bar design file in Design/");
+  return JSON.parse(readFileSync(new URL(designFile, designDir), "utf8"));
+}
+
+function assertCssDeclaration(block, property, value) {
+  const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedValue = String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(block, new RegExp(`${escapedProperty}:\\s*${escapedValue};`));
+}
+
 function run() {
   {
     const webRoot = fileURLToPath(new URL("../", import.meta.url));
@@ -44,10 +89,17 @@ function run() {
   }
 
   {
+    const layoutSource = readFileSync(new URL("../src/app/layout.tsx", import.meta.url), "utf8");
+    const loginPageSource = readFileSync(new URL("../src/app/page.tsx", import.meta.url), "utf8").replace(
+      "智能虚拟助手平台",
+      "",
+    );
     const commandBarSource = readFileSync(new URL("../src/app/companion/CompanionCommandBar.tsx", import.meta.url), "utf8");
     const companionPageSource = readFileSync(new URL("../src/app/companion/page.tsx", import.meta.url), "utf8");
     const chatboxSource = readFileSync(new URL("../src/app/companion/CompanionChatbox.tsx", import.meta.url), "utf8");
     const rightRailSource = readFileSync(new URL("../src/app/companion/CompanionRightRail.tsx", import.meta.url), "utf8");
+    const statusPageSource = readFileSync(new URL("../src/app/status/page.tsx", import.meta.url), "utf8");
+    const tracePageSource = readFileSync(new URL("../src/app/traces/page.tsx", import.meta.url), "utf8");
     const typesSource = readFileSync(new URL("../src/lib/types.ts", import.meta.url), "utf8");
     const apiSource = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
     const waveformSource = readFileSync(new URL("../src/app/podcasts/PodcastWaveform.tsx", import.meta.url), "utf8");
@@ -62,17 +114,60 @@ function run() {
     const cssSource = readFileSync(new URL("../src/app/globals.css", import.meta.url), "utf8");
     const runtimeSource = readFileSync(new URL("../src/features/stage/mmdCompanionRuntime.js", import.meta.url), "utf8");
 
+    assert.match(loginPageSource, /from "lucide-react"/);
+    assert.match(loginPageSource, /UserRound/);
+    assert.match(loginPageSource, /LockKeyhole/);
+    assert.match(loginPageSource, /Eye/);
+    assert.match(loginPageSource, /ShieldCheck/);
+    assert.match(loginPageSource, /className="login-v2-shell"/);
+    assert.match(loginPageSource, /data-login-version="aether-login-v2-source-bitmap-v1"/);
+    assert.match(loginPageSource, /--login-v2-background/);
+    assert.match(loginPageSource, /--login-v2-window/);
+    assert.match(loginPageSource, /--login-v2-button/);
+    assert.match(loginPageSource, /--login-v2-connect/);
+    assert.match(loginPageSource, /--login-v2-brand-mark/);
+    assert.match(loginPageSource, /--login-v2-brand-wordmark/);
+    assert.match(loginPageSource, /login_button-crop-transparent\.png/);
+    assert.match(loginPageSource, /src="\/images\/loginV2\/idle_loginV3\.mp4"/);
+    assert.equal(existsSync(new URL("../public/images/loginV2/idle_loginV3.mp4", import.meta.url)), true);
+    assert.match(loginPageSource, /data-testid="login-v2-brand"/);
+    assert.match(loginPageSource, /data-logo-layout="aether-v2-mark-left-wordmark-right"/);
+    assert.match(loginPageSource, /data-testid="login-v2-user-icon"/);
+    assert.match(loginPageSource, /data-testid="login-v2-lock-icon"/);
+    assert.match(loginPageSource, /data-testid="login-v2-eye-icon"/);
+    assert.match(loginPageSource, /loadSession/);
+    assert.match(loginPageSource, /const previousSession = loadSession\(\);/);
+    assert.match(loginPageSource, /ttsEnabled: previousSession\?\.ttsEnabled \?\? true/);
+    assert.match(loginPageSource, /ttsMode: "server"/);
+    assert.doesNotMatch(loginPageSource, /loginVisualSlots/);
+    assert.doesNotMatch(loginPageSource, /本地开发登录|用户 ID|会话将保存在本机浏览器/);
+    assert.doesNotMatch(loginPageSource, /login-legacy|LoginLegacyPage/);
+    assert.equal(existsSync(new URL("../src/app/LoginLegacyPage.tsx", import.meta.url)), false);
+    assert.equal(existsSync(new URL("../src/app/login-legacy/page.tsx", import.meta.url)), false);
+    assert.equal(existsSync(new URL("../src/app/loginVisualSlots.ts", import.meta.url)), false);
+    assert.doesNotMatch(loginPageSource, /<h1 id="login-title">MIO<\/h1>|虚拟助手|User ID|OAuth|MMD 铏|虚拟伴侣|进入伴侣页面|进入助手页面|进入助手界面/);
+    assert.match(layoutSource, /MMD Virtual Assistant/);
+    assert.match(layoutSource, /Browser MMD assistant powered by OpenClaw/);
+    assert.doesNotMatch(layoutSource, /Virtual Companion|MMD companion/);
     assert.match(commandBarSource, /export function CompanionCommandBar/);
     assert.doesNotMatch(commandBarSource, /ttsNotice: string/);
     assert.doesNotMatch(commandBarSource, /className="mio-notice"/);
     assert.match(commandBarSource, /mio-command-shell/);
     assert.match(companionPageSource, /<CompanionCommandBar/);
+    assert.match(companionPageSource, /data-testid="companion-brand-logo"/);
+    assert.match(companionPageSource, /data-logo-layout="aether-cropped-lockup"/);
+    assert.match(companionPageSource, /src="\/images\/aether-companion-mark-crop\.png"/);
+    assert.match(companionPageSource, /src="\/images\/aether-companion-wordmark-crop\.png"/);
+    assert.doesNotMatch(companionPageSource, /<h1>AETHER<\/h1>|<h1>MIO<\/h1>|mio-brand-tagline/);
     assert.match(typesSource, /tts\?:\s*\{/);
     assert.match(typesSource, /status:\s*"loading"\s*\|\s*"pending"\s*\|\s*"ready"\s*\|\s*"failed"\s*\|\s*"expired"\s*\|\s*"partial_failed"/);
     assert.match(typesSource, /export type RealtimeVoiceStatus/);
     assert.match(typesSource, /export type MessageServiceCleanupResult = \{/);
     assert.match(typesSource, /export type MessageBridgeStatus = \{/);
     assert.match(typesSource, /export type DailyPodcast/);
+    assert.match(typesSource, /ttsEnabled\?: boolean;/);
+    assert.match(typesSource, /ttsMode\?: "browser" \| "server";/);
+    assert.match(typesSource, /export type RuntimeHealthStatus = \{/);
     assert.match(chatboxSource, /onPlayTtsMessage: \(message: ChatMessage\) => void;/);
     assert.match(chatboxSource, /className="mio-message-voice-button"/);
     assert.match(chatboxSource, /className="mio-chatbox-list"/);
@@ -90,6 +185,7 @@ function run() {
     assert.match(apiSource, /export async function updateChatSession\(/);
     assert.match(apiSource, /export async function deleteChatSession\(/);
     assert.match(apiSource, /export async function cleanupMessageServiceAdmin\(/);
+    assert.match(apiSource, /export async function getRuntimeHealth\(/);
     assert.match(apiSource, /export async function getMessageBridgeStatus\(/);
     assert.match(apiSource, /export async function patchMessageBridgeSettings\(/);
     assert.match(apiSource, /export async function listMessageBridgeFeishuSessions\(/);
@@ -111,12 +207,89 @@ function run() {
     assert.match(cssSource, /\.podcast-page/);
     assert.match(cssSource, /\.podcast-waveform-card/);
     assert.match(cssSource, /\.podcast-history-row/);
-    assert.match(rightRailSource, /Daily Podcast/);
+    assert.match(cssSource, /\.login-shell/);
+    assert.match(cssSource, /\.login-panel/);
+    assert.match(cssSource, /var\(--login-background-image\)/);
+    assert.match(cssSource, /var\(--login-brand-mark-image\)/);
+    assert.match(cssSource, /\.login-brand-lockup \{[\s\S]*?display: grid;[\s\S]*?grid-template-rows: auto auto;[\s\S]*?justify-items: center;/);
+    assert.match(cssSource, /\.login-brand-mark \{[\s\S]*?width: min\(74%, 270px\);[\s\S]*?object-fit: contain;[\s\S]*?opacity: 0\.94;/);
+    assert.match(cssSource, /\.login-brand-wordmark \{[\s\S]*?width: min\(92%, 340px\);[\s\S]*?object-fit: contain;[\s\S]*?opacity: 0\.92;/);
+    assert.match(cssSource, /\.login-panel \{[\s\S]*?aspect-ratio: 1066 \/ 1194;[\s\S]*?var\(--login-panel-shell-texture\) center \/ contain no-repeat[,;]/);
+    assert.match(cssSource, /var\(--login-panel-shell-texture\)/);
+    assert.match(cssSource, /var\(--login-input-shell-texture\)/);
+    assert.match(cssSource, /var\(--login-user-icon-texture\)/);
+    assert.match(cssSource, /var\(--login-submit-texture\)/);
+    assert.match(cssSource, /var\(--login-status-security-texture\)/);
+    assert.match(cssSource, /var\(--login-status-health-texture\)/);
+    assert.match(cssSource, /var\(--login-status-network-texture\)/);
+    assert.doesNotMatch(cssSource, /var\(--login-user-id-icon\)/);
+    assert.match(cssSource, /\.login-form \{[\s\S]*?margin-top: clamp\(8px, 1\.1vw, 16px\);[\s\S]*?gap: clamp\(18px, 1\.6vw, 26px\);/);
+    assert.match(cssSource, /\.login-field \{[\s\S]*?display: block;/);
+    assert.match(cssSource, /\.login-input-shell \{[\s\S]*?aspect-ratio: 2487 \/ 381;[\s\S]*?var\(--login-input-shell-texture\) center \/ contain no-repeat[,;]/);
+    assert.match(cssSource, /\.login-input-icon \{[\s\S]*?left: 9\.2%;[\s\S]*?height: 58%;[\s\S]*?width: auto;[\s\S]*?background: var\(--login-user-icon-texture\) center \/ contain no-repeat;[\s\S]*?pointer-events: none;[\s\S]*?transform: translate\(-50%, -50%\);/);
+    assert.match(cssSource, /\.login-submit \{[\s\S]*?aspect-ratio: 1945 \/ 393;[\s\S]*?var\(--login-submit-texture\) center \/ contain no-repeat[,;]/);
+    assert.match(cssSource, /\.login-status-stack/);
+    assert.match(cssSource, /\.login-status-card \{[\s\S]*?aspect-ratio: 984 \/ 230;[\s\S]*?background: var\(--login-status-card-texture\) center \/ contain no-repeat;/);
+    assert.match(cssSource, /\.login-status-card-security/);
+    assert.match(cssSource, /\.login-status-card-health/);
+    assert.match(cssSource, /\.login-status-card-network/);
+    assert.doesNotMatch(cssBlock(cssSource, ".login-input-shell"), /linear-gradient/);
+    assert.doesNotMatch(cssBlock(cssSource, ".login-submit"), /linear-gradient/);
+    assert.doesNotMatch(cssBlock(cssSource, ".login-status-card"), /linear-gradient/);
+    assert.doesNotMatch(cssSource, /\.login-status-row/);
+    assert.match(cssSource, /\.login-submit \{[\s\S]*?border: 0;/);
+    assert.match(cssSource, /\.login-submit \{[\s\S]*?padding: 0 22px;/);
+    assert.match(cssSource, /\.login-submit \{[\s\S]*?text-align: center;/);
+    assert.doesNotMatch(cssBlock(cssSource, ".login-submit"), /border-radius: 999px/);
+    assert.doesNotMatch(cssSource, /\.login-submit::after/);
+    assert.match(cssSource, /\.mio-voice-mode-state/);
+    assert.doesNotMatch(cssSource, /\.mio-mode select \{/);
+    assert.match(rightRailSource, /每日播客/);
     assert.match(rightRailSource, /href="\/podcasts"/);
+    assert.match(rightRailSource, /className="mio-podcast-title-slot"/);
+    assert.match(rightRailSource, /className="mio-podcast-refresh-slot"/);
+    assert.match(rightRailSource, /className="mio-podcast-play-slot"/);
+    assert.match(rightRailSource, /className="mio-podcast-play-icon-slot"/);
+    assert.match(rightRailSource, /className="mio-podcast-doc-slot"/);
+    assert.match(rightRailSource, /className="mio-podcast-list-slot"/);
+    assert.match(rightRailSource, /className="mio-podcast-audio-slot"/);
+    assert.match(rightRailSource, /data-imagegen-slot="daily-podcast-play-icon"/);
+    assert.match(rightRailSource, /onRefreshDailyPodcast: \(\) => Promise<void> \| void;/);
+    assert.match(rightRailSource, /const podcastAudioRef = useRef<HTMLAudioElement \| null>\(null\);/);
+    assert.match(rightRailSource, /async function handleRefreshDailyPodcast\(\)/);
+    assert.match(rightRailSource, /await onRefreshDailyPodcast\(\);/);
+    assert.match(rightRailSource, /<PodcastAudioElement/);
+    assert.match(rightRailSource, /onToggleDailyPodcastPlayback=/);
+    assert.match(rightRailSource, /onBeforeAudioPlayback: \(\) => void;/);
+    assert.match(rightRailSource, /onPodcastAudioStopReady: \(stop: \(\(\) => void\) \| null\) => void;/);
+    assert.match(rightRailSource, /onBeforeAudioPlayback\(\);[\s\S]*?await audio\.play\(\);/);
+    assert.match(rightRailSource, /onPodcastAudioStopReady\(stopPodcastAudio\);/);
+    assert.match(rightRailSource, /className="mio-rail-podcast-actions"/);
+    assert.doesNotMatch(rightRailSource, /className="mio-podcast-actions"/);
+    assert.doesNotMatch(rightRailSource, /<audio controls/);
+    assert.doesNotMatch(rightRailSource, /waveform|<canvas/i);
+    assert.doesNotMatch(rightRailSource, /Runtime Health/);
+    assert.doesNotMatch(rightRailSource, /href="\/status"/);
+    assert.match(tracePageSource, /href="\/status"/);
     assert.doesNotMatch(rightRailSource, /mio-trace-card/);
     assert.match(companionPageSource, /getLatestDailyPodcast/);
+    assert.match(companionPageSource, /refreshDailyPodcast = useCallback\(async \(\{ force = false \}: \{ force\?: boolean \} = \{\}\) => \{/);
+    assert.match(companionPageSource, /getLatestDailyPodcast\(session\.userId, \{ cacheBust: force \}\)/);
+    assert.match(companionPageSource, /onRefreshDailyPodcast=\{\(\) => refreshDailyPodcast\(\{ force: true \}\)\}/);
     assert.match(cssSource, /\.mio-podcast-card/);
+    assert.match(cssSource, /\.mio-podcast-title-slot/);
+    assert.match(cssSource, /\.mio-podcast-play-slot/);
+    assert.match(cssSource, /\.mio-podcast-play-icon-slot/);
+    assert.match(cssSource, /\.mio-podcast-doc-slot/);
+    assert.match(cssSource, /\.mio-rail-podcast-actions/);
+    assert.match(
+      cssSource,
+      /@container \(max-width: 235px\) \{\s*\.mio-podcast-card \.mio-rail-podcast-actions \{/,
+    );
+    assert.doesNotMatch(cssSource, /podcast-page-header nav,\s*[\s\S]*?\.mio-podcast-actions\s*\{/);
     assert.match(apiSource, /function resolveRuntimeApiBaseUrl\(/);
+    assert.match(apiSource, /export async function getLatestDailyPodcast\(userId: string, options: \{ cacheBust\?: boolean \} = \{\}\)/);
+    assert.match(apiSource, /options\.cacheBust \? `\/podcasts\/daily\/latest\?refresh=\$\{Date\.now\(\)\}` : "\/podcasts\/daily\/latest"/);
     assert.match(apiSource, /runtimeHostname !== "localhost"/);
     assert.match(apiSource, /API request failed before reaching backend/);
     assert.match(apiSource, /\/api\/backend/);
@@ -144,6 +317,11 @@ function run() {
     assert.match(companionPageSource, /Bridge Session/);
     assert.match(companionPageSource, /function formatMessageBridgeSessionLabel\(/);
     assert.match(companionPageSource, /agent:main:feishu:direct:ou_229011826b88e09badbbb6f43ad38ba3/);
+    assert.match(companionPageSource, /resolveMessageBridgeStatusLoad/);
+    assert.match(tracePageSource, /href="\/status"/);
+    assert.match(statusPageSource, /Runtime Health/);
+    assert.match(statusPageSource, /getRuntimeHealth/);
+    assert.match(statusPageSource, /setInterval/);
     assert.match(companionPageSource, /external_session_key\.split\(":"\)\.slice\(-2\)\.join\(":"\)/);
     assert.match(companionPageSource, /const loadLatestMotionContextExport = useCallback\(async \(\) => \{/);
     assert.match(companionPageSource, /void loadLatestMotionContextExport\(\)\.catch\(\(\) => \{/);
@@ -165,10 +343,36 @@ function run() {
     const onSubmitBlock = companionPageSource.match(/async function onSubmit[\s\S]*?\n  function handleCharacterSwitch/)?.[0] || "";
     assert.doesNotMatch(onSubmitBlock, /cancelRealtimeVoicePlayback\(/);
     assert.match(companionPageSource, /async function playMessageAudio\(message: ChatMessage\)/);
+    assert.match(companionPageSource, /ttsEnabled: saved\.ttsEnabled \?\? true/);
+    assert.match(companionPageSource, /const DEFAULT_COMPANION_TTS_MODE = DEFAULT_TTS_MODE as "browser" \| "server";/);
+    assert.match(companionPageSource, /ttsMode: DEFAULT_COMPANION_TTS_MODE/);
+    assert.match(companionPageSource, /setTtsEnabled\(normalizedSession\?\.ttsEnabled \?\? true\);/);
+    assert.match(companionPageSource, /setTtsMode\(DEFAULT_COMPANION_TTS_MODE\);/);
+    assert.match(companionPageSource, /function handleTtsEnabledChange\(enabled: boolean\)/);
+    assert.match(companionPageSource, /const nextSession: UserSession = \{ \.\.\.current, ttsEnabled: enabled \};/);
+    assert.match(companionPageSource, /saveSession\(nextSession\);/);
+    assert.match(companionPageSource, /if \(!enabled\) \{\s*stopSpeechPlayback\(\);\s*\}/);
+    assert.match(companionPageSource, /onTtsEnabledChange=\{handleTtsEnabledChange\}/);
+    assert.doesNotMatch(companionPageSource, /onTtsModeChange=\{handleTtsModeChange\}/);
+    assert.match(commandBarSource, /aria-pressed=\{ttsEnabled\}/);
+    assert.match(commandBarSource, /onClick=\{\(\) => onTtsEnabledChange\(!ttsEnabled\)\}/);
+    assert.match(commandBarSource, /ttsEnabled \? "ON" : "OFF"/);
+    assert.doesNotMatch(commandBarSource, /onTtsModeChange/);
+    assert.doesNotMatch(commandBarSource, /<select/);
+    assert.match(companionPageSource, /const podcastAudioStopRef = useRef<\(\(\) => void\) \| null>\(null\);/);
+    assert.match(companionPageSource, /const cancelledRealtimeVoiceJobsRef = useRef<Set<string>>\(new Set\(\)\);/);
+    assert.match(companionPageSource, /function stopSpeechPlayback\([\s\S]*?cancelRealtimeVoicePlayback\(\{ closeSocket: false \}\);[\s\S]*?podcastAudioStopRef\.current\?\.\(\);/);
+    assert.match(companionPageSource, /if \(event\.job_id && cancelledRealtimeVoiceJobsRef\.current\.has\(event\.job_id\)\) return;/);
+    assert.match(companionPageSource, /onBeforeAudioPlayback=\{\(\) => stopSpeechPlayback\(\{ includePodcast: false \}\)\}/);
+    assert.match(companionPageSource, /onPodcastAudioStopReady=\{\(stop\) => \{\s*podcastAudioStopRef\.current = stop;\s*\}\}/);
+    assert.match(companionPageSource, /onAudioCreated: \(\{ audio, cleanup \}: \{ audio: HTMLAudioElement; cleanup: \(\) => void \}\) => \{/);
     assert.match(companionPageSource, /const latestAssistantMessage = \[\.\.\.messages\]\.reverse\(\)\.find\(\(item\) => item\.role === "assistant"\)/);
+    assert.match(companionPageSource, /getLatestGreetingMessage/);
+    assert.match(companionPageSource, /resolveEntryGreetingMessage/);
+    assert.match(companionPageSource, /shouldAutoPlayEntryGreeting/);
     assert.match(companionPageSource, /className="mio-dialogue-voice-button"/);
     assert.match(companionPageSource, /className="mio-dialogue-copy"/);
-    assert.match(companionPageSource, /onClick=\{\(\) => playMessageAudio\(latestAssistantMessage\)\}/);
+    assert.match(companionPageSource, /onClick=\{\(\) => playMessageAudio\(displayAssistantMessage\)\}/);
     assert.match(companionPageSource, /const \[toast, setToast\] = useState/);
     assert.match(companionPageSource, /ignoreNextStageCompletionResetRef = useRef\(false\)/);
     assert.match(companionPageSource, /function handleTtsFailure\(message: string\)/);
@@ -238,6 +442,51 @@ function run() {
     assert.match(companionPageSource, /<MioModeBackground[\s\S]*active=\{renderPipeline === "mio-reference"\}[\s\S]*speaking=\{speaking\}[\s\S]*emotion=\{interaction\.emotion\}[\s\S]*action=\{interaction\.action\}[\s\S]*activityPulse=\{backgroundActivityPulse\}/);
     assert.match(cssSource, /\.mio-command-shell/);
     assert.match(cssSource, /\.mio-command-surface/);
+    {
+      const bottomBarDesign = readBottomBarDesign();
+      const designNode = (name) => {
+        const node = findDesignNode(bottomBarDesign, name);
+        assert.ok(node, `Expected bottom bar design node: ${name}`);
+        return node;
+      };
+      const px = (value) => `${Math.round(Number(value))}px`;
+
+      const row = designNode("Row");
+      const ttsToggle = designNode("TTS Toggle");
+      const micButton = designNode("Mic Button");
+      const centerCluster = designNode("Center Cluster");
+      const sendButton = designNode("Embedded Send Button");
+      const voiceMode = designNode("Voice Mode");
+      const advancedMode = designNode("Advanced Mode");
+      const sendButtonHeight = Number.isFinite(Number(sendButton.height)) ? sendButton.height : centerCluster.height;
+
+      const commandShellBlock = cssBlock(cssSource, ".mio-command-shell");
+      assertCssDeclaration(commandShellBlock, "gap", px(row.gap));
+      assertCssDeclaration(commandShellBlock, "padding", `0 ${px(row.x)}`);
+      assertCssDeclaration(cssBlock(cssSource, ".mio-command-center"), "height", px(centerCluster.height));
+
+      const ttsBlock = cssBlock(cssSource, ".mio-tts");
+      assertCssDeclaration(ttsBlock, "gap", px(ttsToggle.gap));
+      assertCssDeclaration(ttsBlock, "padding", `0 ${px(ttsToggle.padding[1])}`);
+      assertCssDeclaration(ttsBlock, "width", px(ttsToggle.width));
+
+      const micBlock = cssBlock(cssSource, ".mio-voice-button");
+      assertCssDeclaration(micBlock, "width", px(micButton.width));
+      assertCssDeclaration(micBlock, "height", px(micButton.height));
+      assertCssDeclaration(micBlock, "flex", `0 0 ${px(micButton.width)}`);
+
+      const sendBlock = cssBlock(cssSource, ".mio-send");
+      assertCssDeclaration(sendBlock, "width", px(sendButton.width));
+      assertCssDeclaration(sendBlock, "height", px(sendButtonHeight));
+      assertCssDeclaration(cssBlock(cssSource, ".mio-send-cut"), "width", px(sendButton.width));
+
+      assertCssDeclaration(cssBlockWithDeclaration(cssSource, ".mio-voice-mode", "width"), "width", px(voiceMode.width));
+      assertCssDeclaration(
+        cssBlockWithDeclaration(cssSource, ".mio-advanced-mode", "width"),
+        "width",
+        px(advancedMode.width),
+      );
+    }
     assert.match(cssSource, /\.mio-toast-layer/);
     assert.match(cssSource, /\.mio-toast/);
     assert.match(cssSource, /\.mio-background\[data-speaking="true"\]/);
@@ -343,7 +592,12 @@ function run() {
     assert.match(cssSource, /margin-bottom: var\(--mio-side-panels-bottom-gap\);/);
     assert.match(cssSource, /\.mio-topbar\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto;[\s\S]*?gap: clamp\(8px, 2vw, 20px\);/);
     assert.match(cssSource, /\.mio-system-state\s*\{[\s\S]*?display: none;[\s\S]*?\}/);
-    assert.match(cssSource, /\.mio-brand::before\s*\{[\s\S]*?width: 34px;[\s\S]*?height: 34px;[\s\S]*?flex: 0 0 34px;/);
+    assert.match(cssSource, /\.mio-brand\s*\{[\s\S]*?grid-template-columns: clamp\(54px, 4vw, 64px\) clamp\(156px, 12vw, 208px\);/);
+    assert.match(cssSource, /\.mio-brand-mark\s*\{[\s\S]*?width: 100%;[\s\S]*?object-fit: contain;/);
+    assert.match(cssSource, /\.mio-brand-wordmark\s*\{[\s\S]*?width: 100%;[\s\S]*?object-fit: contain;/);
+    assert.doesNotMatch(cssSource.match(/\.mio-brand-mark\s*\{[\s\S]*?\}/)?.[0] || "", /drop-shadow|filter:/);
+    assert.doesNotMatch(cssSource.match(/\.mio-brand-wordmark\s*\{[\s\S]*?\}/)?.[0] || "", /drop-shadow|filter:/);
+    assert.doesNotMatch(cssSource, /\.mio-brand::before\s*\{/);
     assert.match(cssSource, /@media \(max-width: 860px\)\s*\{[\s\S]*?\.mio-topbar\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto;[\s\S]*?gap: 8px;[\s\S]*?\}/);
     assert.doesNotMatch(cssSource.match(/\.mio-system-state\s*\{[^}]*?\}/)?.[0] || "", /grid-column: 1 \/ -1;/);
     assert.doesNotMatch(runtimeSource, /mio-petals-atlas/);
@@ -361,8 +615,10 @@ function run() {
     assert.match(runtimeSource, /hitTestModelAtClientPoint\(clientX, clientY\)/);
     assert.match(
       runtimeSource,
-      /"mio-reference":\s*\{[\s\S]*?camera:\s*\{[\s\S]*?fov:\s*32[\s\S]*?position:\s*\[-1\.346829,\s*2\.907039,\s*31\.361977\][\s\S]*?target:\s*\[-1\.346829,\s*0\.961375,\s*0\.436541\][\s\S]*?locked:\s*false/,
+      /"mio-reference":\s*\{[\s\S]*?camera:\s*\{[\s\S]*?fov:\s*32[\s\S]*?position:\s*\[-3\.137891,\s*12\.522935,\s*45\.135659\][\s\S]*?target:\s*\[-1\.861732,\s*-2\.847643,\s*1\.048369\][\s\S]*?maxDistance:\s*72[\s\S]*?locked:\s*true/,
     );
+    assert.match(companionPageSource, /const LOCKED_MIO_REFERENCE_CAMERA: MmdCameraSnapshot = \{/);
+    assert.match(companionPageSource, /mmdCamera:\s*\{\s*\.\.\.\(saved\?\.mmdCamera \|\| \{\}\),\s*"mio-reference": LOCKED_MIO_REFERENCE_CAMERA,/);
   }
 
   {

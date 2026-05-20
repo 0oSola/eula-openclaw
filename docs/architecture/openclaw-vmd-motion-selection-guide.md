@@ -1,6 +1,6 @@
 # OpenClaw VMD Motion Selection Guide
 
-更新时间：2026-05-16
+更新时间：2026-05-17
 
 本文用于给 OpenClaw 这类外部 agent 选择 MMD/VMD 动作。目标不是描述文件目录，而是让 agent 能稳定输出可被本项目后端命中的 `motion_key`。
 
@@ -33,7 +33,7 @@ OpenClaw 返回 assistant JSON 时，VMD 动作通过 `action` 命中：
 - `motion_key` 是最稳定命中方式；中文动作名只是 alias，适合给人看，不建议作为主键。
 - 当前后端是精确匹配，不做语义模糊匹配。可命中的 token 包括：`asset_id`、`display_name` 去后缀、`display_name`、`filename`。
 - 不要把自定义 VMD 动作写进 `motion_plan.sequence.template`。当前 parser 只稳定支持固定 procedural template：`agree_nod`、`celebrate_big`、`comfort_lean`、`disagree_headshake`、`greet_wave`、`listen_lean`、`shy_look_away`、`thinking_tilt`。
-- 不确定动作时返回 `action: "idle"`。后端会进入 `fallback_idle`，前端会回到待机流程。如果返回的是自定义 motion_key 但没有命中收藏动作，前端会从 `00_idle_loop` 随机抽取一个 VMD 作为最终兜底。
+- 不确定动作时返回 `action: "idle"`。后端会进入 `fallback_idle`；只要没有 resolved VMD，前端会从当前模型 `00_idle_loop` 随机抽取一个 VMD 作为兜底。当前模型没有 idle VMD 时才回退默认 procedural idle。
 
 ## 2. 后端命中机制
 
@@ -173,6 +173,7 @@ MMD/usage/vmd/{model_folder}[动作]/
 
 - VMD 文件放到正确分类目录。
 - SQLite `asset_registry.favorite_relative_path` 使用完整分类路径。
+- 同一用户、同一模型、同一分类、同一规范化动作名只保留一个 canonical `asset_id`；不要保留 `name (2).vmd` 这类编号副本，也不要把编号副本写进 Motion Inventory。
 - 如果 `relative_path` 或 `source_relative_path` 也指向 `MMD_ROOT_DIR` 下的同一个文件，移动文件后要同步更新。
 - 新增、删除、重命名或重新分类 VMD 后，同步更新本文的 Motion Inventory。
 - 如果要把语义传给 OpenClaw，优先把本文作为 system/developer context 的 motion guide，而不是只传文件名列表。
@@ -180,6 +181,7 @@ MMD/usage/vmd/{model_folder}[动作]/
 ## 7. 当前运行规则和限制
 
 - 前端待机 autoplay 池优先只使用 `favorite_relative_path` 中的 `00_idle_loop/`；如果当前模型没有该分类，才回退到旧安全收藏动作池，再没有则 procedural idle。
-- 人物点击动作优先从 `02_greeting_social`、`05_soft_emotion`、`06_strong_personality` 中随机选择；没有这些分类动作时，回退到排除 `00_idle_loop` 和 `01_entry_fallback` 的安全收藏动作池。
+- 聊天/Bridge 消息的 `motion_resolution.status=fallback_idle` 也会优先走当前模型 `00_idle_loop` 随机 VMD 兜底，不再因为 `source_action` 是 `idle`、`think`、`comfort` 等 procedural action 就直接打回默认 procedural idle。
+- 人物点击动作优先从 `02_greeting_social`、`05_soft_emotion`、`06_strong_personality` 中随机选择；这些分类动作只要求有可播放 URL，允许 `motion_profile.companion_safe=false` 的完整动作进入候选池，播放时统一锁下半身并关闭 crossfade。候选会按分类和规范化 VMD 名去重，并在有其它候选时避开上一次点击动作；没有这些分类动作时，才回退到排除 `00_idle_loop` 和 `01_entry_fallback` 的安全收藏动作池。
 - VMD 播放失败会立即回到待机恢复流程，不再等待 3 秒。
 - 后端 motion resolution 是精确 token 匹配，不读取本文中的 `intent`、`use_when`、`avoid_when`。这些字段是给 OpenClaw/agent 选择动作时使用的上下文。

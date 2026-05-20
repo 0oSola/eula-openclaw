@@ -35,8 +35,9 @@ test("core routes render without document 5xx, page errors, or console errors @c
   });
 
   await page.goto("/");
-  await expect(page.locator("form")).toBeVisible();
-  await expect(page.locator("input")).toHaveCount(1);
+  await expect(page.getByTestId("login-v2-panel")).toBeVisible();
+  await expect(page.locator("#login-v2-account")).toBeVisible();
+  await expect(page.locator("#login-v2-password")).toBeVisible();
 
   await page.goto("/traces");
   await expect(page.locator('a[href="/"]').first()).toBeVisible();
@@ -59,13 +60,63 @@ test("core routes render without document 5xx, page errors, or console errors @c
   expect(consoleErrors, `Console errors:\n${consoleErrors.join("\n")}`).toHaveLength(0);
 });
 
+test("legacy login route returns not found @critical", async ({ page }) => {
+  const response = await page.goto("/login-legacy");
+
+  expect(response?.status()).toBe(404);
+  await expect(page.getByTestId("login-panel")).toHaveCount(0);
+});
+
+test("companion topbar uses the AETHER brand logo @critical", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await seedSession(page);
+  await page.goto("/companion");
+
+  const companionLogo = page.getByTestId("companion-brand-logo");
+  const brandWordmark = companionLogo.getByRole("img", { name: "AETHER PERSONAL AI" });
+  await expect(companionLogo).toBeVisible();
+  await expect(companionLogo).toHaveAttribute("data-logo-layout", "aether-cropped-lockup");
+  await expect(companionLogo.locator(".mio-brand-mark")).toHaveAttribute("src", /aether-companion-mark-crop\.png/);
+  await expect(brandWordmark).toHaveAttribute("src", /aether-companion-wordmark-crop\.png/);
+  await expect(companionLogo.getByRole("heading", { name: "MIO" })).toHaveCount(0);
+  await expect(companionLogo.getByRole("heading", { name: "AETHER" })).toHaveCount(0);
+
+  const logoWeight = await companionLogo.evaluate((node) => {
+    const mark = node.querySelector(".mio-brand-mark") as HTMLElement | null;
+    const wordmark = node.querySelector(".mio-brand-wordmark") as HTMLElement | null;
+    const markBox = mark?.getBoundingClientRect();
+    const wordmarkBox = wordmark?.getBoundingClientRect();
+    return {
+      markWidth: mark?.getBoundingClientRect().width ?? 0,
+      markFilter: mark ? getComputedStyle(mark).filter : "",
+      wordmarkWidth: wordmarkBox?.width ?? 0,
+      wordmarkFilter: wordmark ? getComputedStyle(wordmark).filter : "",
+      wordmarkStartsAfterMark: Boolean(markBox && wordmarkBox && wordmarkBox.left >= markBox.right + 8),
+    };
+  });
+
+  expect(logoWeight.markWidth).toBeGreaterThanOrEqual(54);
+  expect(logoWeight.markWidth).toBeLessThanOrEqual(66);
+  expect(logoWeight.markFilter).toBe("none");
+  expect(logoWeight.wordmarkWidth).toBeGreaterThanOrEqual(156);
+  expect(logoWeight.wordmarkWidth).toBeLessThanOrEqual(208);
+  expect(logoWeight.wordmarkFilter).toBe("none");
+  expect(logoWeight.wordmarkStartsAfterMark).toBe(true);
+});
+
 test("companion route renders the MIO hud replica with authenticated session @critical", async ({ page }) => {
   await seedSession(page);
   await page.goto("/companion");
 
+  const companionLogo = page.getByTestId("companion-brand-logo");
   await expect(page.getByTestId("mio-hud")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "MIO" })).toBeVisible();
-  await expect(page.getByText("PERSONAL AI")).toBeVisible();
+  await expect(companionLogo).toBeVisible();
+  await expect(companionLogo).toHaveAttribute("data-logo-layout", "aether-cropped-lockup");
+  await expect(companionLogo.getByRole("img", { name: "AETHER PERSONAL AI" })).toHaveAttribute(
+    "src",
+    /aether-companion-wordmark-crop\.png/,
+  );
+  await expect(companionLogo.getByRole("heading", { name: "MIO" })).toHaveCount(0);
   await expect(page.getByText("下一步建议")).toBeVisible();
   await expect(page.getByText("记忆摘要")).toBeVisible();
   await expect(page.getByText("Trace / 请求状态")).toBeVisible();
@@ -348,6 +399,199 @@ test("companion route keeps stage and right rail separated on tablet width @crit
   expect(stageBox).not.toBeNull();
   expect(railBox).not.toBeNull();
   expect(stageBox!.x + stageBox!.width).toBeLessThanOrEqual(railBox!.x);
+});
+
+test("companion daily podcast card stays localized and inside its card @critical", async ({ page }) => {
+  await page.setViewportSize({ width: 1190, height: 760 });
+  await seedSession(page);
+  await page.route("**/podcasts/daily/latest", async (route) => {
+    await route.fulfill({
+      json: {
+        podcast: {
+          date: "2026-05-18",
+          status: "ready",
+          doc_url: "https://feishu.cn/docx/test",
+          doc_links: {},
+          audio: {
+            url: "/podcasts/daily/2026-05-18/audio?format=preferred",
+            format: "audio/ogg",
+            bytes: 1388346,
+            source: "ogg",
+          },
+          counts: {},
+          script_chars: 2556,
+          updated_at: null,
+          audio_error: null,
+        },
+      },
+    });
+  });
+
+  await page.goto("/companion");
+  if ((await page.locator(".mio-podcast-card").count()) === 0) {
+    await page.getByRole("button", { name: "展开右侧面板" }).click();
+  }
+
+  const card = page.locator(".mio-podcast-card");
+  await expect(card).toBeVisible();
+  await expect(card.getByText("每日播客")).toBeVisible();
+  await expect(card.getByText("已就绪")).toBeVisible();
+  await expect(card.getByRole("link", { name: "飞书文档" })).toBeVisible();
+  await expect(card.getByRole("link", { name: "播客列表" })).toBeVisible();
+  await expect(card.getByRole("button", { name: "刷新" })).toBeVisible();
+  await expect(card.getByText("Daily Podcast")).toHaveCount(0);
+  await expect(card.getByText("Runtime Health")).toHaveCount(0);
+  await expect(card.getByText("Trace", { exact: true })).toHaveCount(0);
+
+  const overflow = await card.evaluate((node) => {
+    const cardBox = node.getBoundingClientRect();
+    const items = Array.from(node.querySelectorAll(".mio-podcast-actions > *"));
+    return {
+      vertical: node.scrollHeight - node.clientHeight,
+      horizontal: node.scrollWidth - node.clientWidth,
+      escaped: items.some((item) => {
+        const box = item.getBoundingClientRect();
+        return box.left < cardBox.left - 1 || box.right > cardBox.right + 1 || box.bottom > cardBox.bottom + 1;
+      }),
+    };
+  });
+
+  expect(overflow.vertical).toBeLessThanOrEqual(1);
+  expect(overflow.horizontal).toBeLessThanOrEqual(1);
+  expect(overflow.escaped).toBe(false);
+});
+
+test("companion voice mode chip toggles speech playback on and off @critical", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "mmd_companion_session_v1",
+      JSON.stringify({ userId: "8X29-AF3E", renderPipeline: "mio-reference", ttsMode: "browser", ttsEnabled: true }),
+    );
+    window.__speechCancelCount = 0;
+    window.speechSynthesis.cancel = () => {
+      window.__speechCancelCount += 1;
+    };
+  });
+  await page.route("**/api/backend/config/mapping/resolved/**", async (route) => {
+    await route.fulfill({ json: { mappings: {} } });
+  });
+  await page.route("**/api/backend/assets/vmd?**", async (route) => {
+    await route.fulfill({ json: { items: [] } });
+  });
+  await page.route("**/api/backend/assets/mmd/models", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            name: "Eula.pmx",
+            label: "Eula",
+            relative_path: "Eula_by_Genshin/Eula.pmx",
+            size_bytes: 1024,
+            url: "/assets/mmd/Eula_by_Genshin/Eula.pmx",
+          },
+        ],
+      },
+    });
+  });
+  await page.route("**/api/backend/sessions", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            id: "session-1",
+            workspace_id: "default",
+            account_id: "8X29-AF3E",
+            openclaw_session_key: "agent:main:main",
+            title: "Test",
+            title_source: "default",
+            selected_model_path: null,
+            created_at: "2026-05-18T00:00:00Z",
+            updated_at: "2026-05-18T00:00:00Z",
+          },
+        ],
+      },
+    });
+  });
+  await page.route("**/api/backend/sessions/session-1/messages", async (route) => {
+    await route.fulfill({ json: { items: [] } });
+  });
+  await page.route("**/api/backend/config/openclaw", async (route) => {
+    await route.fulfill({
+      json: {
+        base_url: "http://127.0.0.1:18789",
+        token_configured: false,
+        agent_id: "main",
+        model: "",
+        message_channel: "feishu",
+        proxy_url: "",
+        verify_ssl: true,
+        timeout_seconds: 15,
+      },
+    });
+  });
+  await page.route("**/api/backend/admin/message-bridge/status", async (route) => {
+    await route.fulfill({ json: { enabled: false, realtime_drive_character: false, binding: null } });
+  });
+  await page.route("**/api/backend/admin/message-bridge/openclaw/feishu/sessions", async (route) => {
+    await route.fulfill({ json: { items: [] } });
+  });
+  await page.route("**/api/backend/podcasts/daily/latest**", async (route) => {
+    await route.fulfill({
+      json: {
+        podcast: {
+          date: "2026-05-18",
+          status: "missing",
+          doc_url: null,
+          doc_links: {},
+          audio: { url: null, format: null, bytes: null, source: null },
+          counts: {},
+          script_chars: null,
+          updated_at: null,
+          audio_error: null,
+        },
+      },
+    });
+  });
+  await page.route("**/api/backend/messages/greetings/latest", async (route) => {
+    await route.fulfill({ status: 404, json: { detail: "not found" } });
+  });
+
+  await page.goto("/companion");
+  await expect(page.getByTestId("mio-command-bar")).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(window.localStorage.getItem("mmd_companion_session_v1") || "{}").ttsMode),
+    )
+    .toBe("server");
+
+  const voiceMode = page.locator(".mio-voice-mode");
+  await expect(voiceMode).toHaveAttribute("aria-pressed", "true");
+
+  await voiceMode.click();
+
+  await expect.poll(() => page.evaluate(() => window.__speechCancelCount)).toBeGreaterThan(0);
+  await expect(voiceMode).toHaveAttribute("aria-pressed", "false");
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(window.localStorage.getItem("mmd_companion_session_v1") || "{}").ttsEnabled),
+    )
+    .toBe(false);
+
+  await voiceMode.click();
+
+  await expect(voiceMode).toHaveAttribute("aria-pressed", "true");
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(window.localStorage.getItem("mmd_companion_session_v1") || "{}").ttsEnabled),
+    )
+    .toBe(true);
+});
+
+test("trace page owns the runtime health entry point @critical", async ({ page }) => {
+  await seedSession(page);
+  await page.goto("/traces");
+
+  await expect(page.getByRole("link", { name: "运行状态" })).toHaveAttribute("href", "/status");
 });
 
 test("companion render pipeline selection persists across reloads @smoke", async ({ page }) => {

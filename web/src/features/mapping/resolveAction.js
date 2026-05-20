@@ -19,11 +19,7 @@ export function isKnownProceduralAction(action) {
 export function shouldUseIdleVmdFallbackForUnmatchedMotion({ motionResolution, action } = {}) {
   if (!motionResolution || motionResolution.status !== "fallback_idle") return false;
   if (motionResolution.resolved_asset_url || motionResolution.resolved_asset_id) return false;
-  if (motionResolution.fallback_reason && motionResolution.fallback_reason !== "no_candidate_matched") return false;
-
-  const candidate = `${motionResolution.source_action || action || ""}`.trim();
-  if (!candidate) return false;
-  return !isKnownProceduralAction(candidate);
+  return true;
 }
 
 export function resolveActionConfig({ slot, userMappings, defaultMappings }) {

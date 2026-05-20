@@ -49,6 +49,7 @@ class Settings:
     openclaw_proxy_url: str
     openclaw_verify_ssl: bool
     openclaw_timeout_seconds: int
+    openclaw_greeting_index_path: Path | None
     admin_user_ids: list[str]
     retention_days: int
     ndjson_compress_after_days: int
@@ -95,6 +96,15 @@ class Settings:
             base_dir=project_root,
         )
 
+        raw_greeting_index_path = str(
+            resolve_value("openclaw_greeting_index_path", "OPENCLAW_GREETING_DASHBOARD_INDEX_PATH", "")
+        ).strip()
+        greeting_index_path = (
+            _resolve_setting_path(raw_greeting_index_path, base_dir=project_root)
+            if raw_greeting_index_path
+            else root / "openclaw" / "greeting-dashboard-injections.jsonl"
+        )
+
         ids = overrides.get("admin_user_ids")
         if ids is None:
             ids = _parse_admin_ids(str(resolve_value("admin_user_ids", "ADMIN_USER_IDS", "")))
@@ -112,6 +122,7 @@ class Settings:
                 default=True,
             ),
             openclaw_timeout_seconds=int(resolve_value("openclaw_timeout_seconds", "OPENCLAW_TIMEOUT_SECONDS", 120)),
+            openclaw_greeting_index_path=greeting_index_path,
             admin_user_ids=list(ids),
             retention_days=int(resolve_value("retention_days", "RETENTION_DAYS", 30)),
             ndjson_compress_after_days=int(

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import Response
 
 from app.models.chat import OpenClawReply
+from app.services.message_tts_reference import create_or_enqueue_message_tts_reference
 from app.services.openclaw_client import OpenClawInvocationError
 from app.services.response_parser import normalize_assistant_reply
 from app.services.voice_workflow_tts_client import VoiceWorkflowTtsError
@@ -343,98 +344,12 @@ async def _create_or_enqueue_tts_reference(
     trace_user_id: str,
     trace_session_id: str,
 ) -> dict:
-    trace_store = _store(request)
-    trace_store.insert_event(
-        trace_id=message["trace_id"],
-        user_id=trace_user_id,
-        session_id=trace_session_id,
-        stage="message_service.tts.submit",
-        status="start",
-        latency_ms=None,
-        payload={
-            "message_id": message["id"],
-            "text_length": len(message["content"]),
-            "emotion_label": message.get("tts_emotion_label"),
-            "pause_profile": message.get("tts_pause_profile") or "podcast",
-        },
+    return await create_or_enqueue_message_tts_reference(
+        request.app,
+        message,
+        trace_user_id=trace_user_id,
+        trace_session_id=trace_session_id,
     )
-    task_id = await request.app.state.tts_client.submit_task(
-        text=message["content"],
-        emotion_label=message.get("tts_emotion_label"),
-        pause_profile=message.get("tts_pause_profile") or "podcast",
-    )
-    trace_store.insert_event(
-        trace_id=message["trace_id"],
-        user_id=trace_user_id,
-        session_id=trace_session_id,
-        stage="message_service.tts.submit",
-        status="ok",
-        latency_ms=None,
-        payload={"message_id": message["id"], "task_id": task_id},
-    )
-    speech = await request.app.state.tts_client.wait_for_reference(
-        task_id,
-        max_wait_seconds=request.app.state.settings.tts_sync_wait_seconds,
-    )
-    store = _store(request)
-    if speech is not None:
-        tts = store.create_message_tts(
-            message["workspace_id"],
-            message["id"],
-            status="ready",
-            task_id=speech.task_id,
-            remote_audio_url=speech.audio_url,
-            media_type=speech.media_type,
-            duration_seconds=speech.duration_seconds,
-            chunks_count=speech.chunks_count,
-        )
-        trace_store.insert_event(
-            trace_id=message["trace_id"],
-            user_id=trace_user_id,
-            session_id=trace_session_id,
-            stage="message_service.tts.reference",
-            status="ok",
-            latency_ms=None,
-            payload={
-                "message_id": message["id"],
-                "tts_id": tts["id"],
-                "task_id": speech.task_id,
-                "remote_audio_url": speech.audio_url,
-                "media_type": speech.media_type,
-                "duration_seconds": speech.duration_seconds,
-                "chunks_count": speech.chunks_count,
-                "source": "sync_wait",
-            },
-        )
-        return tts
-
-    tts = store.create_message_tts(
-        message["workspace_id"],
-        message["id"],
-        status="pending",
-        task_id=task_id,
-        remote_audio_url=None,
-        media_type=None,
-    )
-    store.cancel_tts_jobs_for_message(message["workspace_id"], message["id"])
-    job = store.create_tts_job(message["workspace_id"], message["id"], tts["id"])
-    trace_store.insert_event(
-        trace_id=message["trace_id"],
-        user_id=trace_user_id,
-        session_id=trace_session_id,
-        stage="message_service.tts.reference",
-        status="pending",
-        latency_ms=None,
-        payload={
-            "message_id": message["id"],
-            "tts_id": tts["id"],
-            "task_id": task_id,
-            "job_id": job["id"],
-            "source": "worker_queue",
-        },
-        error_code="tts_sync_wait_timeout",
-    )
-    return tts
 
 
 @router.get("/workspaces/current")
@@ -513,6 +428,15 @@ async def list_messages(session_id: str, request: Request, x_user_id: str | None
         raise HTTPException(status_code=404, detail="Session not found")
     messages = store.list_messages_for_chat(ctx["workspace"]["id"], ctx["account"]["id"], session_id)
     return {"items": [_message_response(message) for message in messages]}
+
+
+@router.get("/messages/greetings/latest")
+async def get_latest_greeting_message(request: Request, x_user_id: str | None = Header(default=None)):
+    ctx = _context(request, x_user_id)
+    message = _store(request).get_latest_greeting_message(ctx["workspace"]["id"], ctx["account"]["id"])
+    if not message:
+        raise HTTPException(status_code=404, detail="Greeting message not found")
+    return {"message": _message_response(message)}
 
 
 @router.get("/messages/{message_id}")

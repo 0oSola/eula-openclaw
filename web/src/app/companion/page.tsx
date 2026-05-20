@@ -46,6 +46,7 @@ import {
   deleteChatSession,
   getLatestMotionContextExport,
   getLatestDailyPodcast,
+  getLatestGreetingMessage,
   getMessageBridgeStatus,
   getOpenClawConfig,
   getOpenClawHealth,
@@ -67,7 +68,12 @@ import {
   uploadVmdAsset,
 } from "@/lib/api";
 import { AudioQueue } from "@/lib/realtimeVoiceQueue.js";
-import { resolveMessageBridgeRefresh, resolveMessageBridgeSessionSync } from "@/lib/messageBridgeSync.js";
+import {
+  resolveMessageBridgeRefresh,
+  resolveMessageBridgeSessionSync,
+  resolveMessageBridgeStatusLoad,
+} from "@/lib/messageBridgeSync.js";
+import { resolveEntryGreetingMessage, shouldAutoPlayEntryGreeting } from "@/lib/entryGreeting.js";
 import { clearSession, loadSession, saveSession } from "@/lib/session";
 import { DEFAULT_TTS_MODE, playRemoteTtsAudio, playServerTtsAudio } from "@/lib/ttsPlayback.js";
 import type {
@@ -189,6 +195,7 @@ type RealtimeAudioQueueCtor = new (options?: {
 const SPRITE = "/images/sprite-sliced";
 const MESSAGE_BRIDGE_POLL_INTERVAL_MS = 2500;
 const DEFAULT_MODEL_RELATIVE_PATH = "优菈.pmx";
+const DEFAULT_COMPANION_TTS_MODE = DEFAULT_TTS_MODE as "browser" | "server";
 const DEFAULT_ASSISTANT_COPY =
   "\u6211\u7406\u89e3\u4f60\u7684\u9700\u6c42\u4e86\uff5e\n\u6b63\u5728\u5e2e\u4f60\u62c6\u89e3\u4efb\u52a1\u5e76\u89c4\u5212\u6b65\u9aa4\uff01";
 const INPUT_LABEL =
@@ -294,6 +301,13 @@ const renderPipelineOptions: { value: RenderPipeline; label: string; description
   { value: "reze-npr", label: "Reze NPR", description: "reze-engine \u5b9e\u9a8c\u98ce\u683c" },
 ];
 
+const LOCKED_MIO_REFERENCE_CAMERA: MmdCameraSnapshot = {
+  fov: 32,
+  position: [-3.137891, 12.522935, 45.135659],
+  target: [-1.861732, -2.847643, 1.048369],
+  locked: true,
+};
+
 const EMOTION_SLOTS = ["neutral", "happy", "sad", "thinking", "excited", "caring"] as const;
 
 function createDefaultInteractionState(): InteractionState {
@@ -372,19 +386,26 @@ export default function CompanionPage() {
   const previousInteractionRef = useRef<InteractionState | null>(null);
   const serverAudioRef = useRef<HTMLAudioElement | null>(null);
   const serverAudioCleanupRef = useRef<(() => void) | null>(null);
+  const podcastAudioStopRef = useRef<(() => void) | null>(null);
   const ignoreNextStageCompletionResetRef = useRef(false);
   const pendingTtsPollersRef = useRef<Set<string>>(new Set());
+  const playedEntryGreetingIdsRef = useRef<Set<string>>(new Set());
   const voiceSocketRef = useRef<WebSocket | null>(null);
   const audioQueueRef = useRef<RealtimeAudioQueue | null>(null);
   const realtimeVoiceJobMessageRef = useRef<Map<string, string>>(new Map());
+  const cancelledRealtimeVoiceJobsRef = useRef<Set<string>>(new Set());
   const messagesRef = useRef<ChatMessage[]>([]);
   const sessionRef = useRef<UserSession | null>(null);
   const chatSessionIdRef = useRef("");
+  const messageBridgeStatusRef = useRef<MessageBridgeStatus | null>(null);
+  const messageBridgeSessionsRef = useRef<MessageBridgeExternalSession[]>([]);
+  const messageBridgeSelectedSessionKeyRef = useRef("");
   const [session, setSession] = useState<UserSession | null>(null);
   const [dailyPodcast, setDailyPodcast] = useState<DailyPodcast | null>(null);
   const [chatSessions, setChatSessions] = useState<MessageServiceSession[]>([]);
   const [chatSessionId, setChatSessionId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [entryGreetingMessage, setEntryGreetingMessage] = useState<ChatMessage | null>(null);
   const [chatAutoScrollRevision, setChatAutoScrollRevision] = useState(0);
   const [input, setInput] = useState("");
   const [chatBootstrapping, setChatBootstrapping] = useState(false);
@@ -399,12 +420,13 @@ export default function CompanionPage() {
       }) as StageInteractionViewState,
   );
   const [stageClickRipples, setStageClickRipples] = useState<StageClickRipple[]>([]);
+  const lastStageClickVmdAssetIdRef = useRef("");
   const [mappings, setMappings] = useState<Record<string, MappingConfig>>({});
   const [assets, setAssets] = useState<VmdAsset[]>([]);
   const [models, setModels] = useState<MmdModelAsset[]>([]);
   const [selectedModelPath, setSelectedModelPath] = useState("");
   const [ttsEnabled, setTtsEnabled] = useState(true);
-  const [ttsMode, setTtsMode] = useState<"browser" | "server">(DEFAULT_TTS_MODE as "browser" | "server");
+  const [ttsMode, setTtsMode] = useState<"browser" | "server">(DEFAULT_COMPANION_TTS_MODE);
   const [speaking, setSpeaking] = useState(false);
   const [activeTtsMessageId, setActiveTtsMessageId] = useState("");
   const [realtimeVoiceStatus, setRealtimeVoiceStatus] = useState<RealtimeVoiceStatus>("idle");
@@ -440,6 +462,7 @@ export default function CompanionPage() {
   const [messageBridgeStatus, setMessageBridgeStatus] = useState<MessageBridgeStatus | null>(null);
   const [messageBridgeSessions, setMessageBridgeSessions] = useState<MessageBridgeExternalSession[]>([]);
   const [messageBridgeSelectedSessionKey, setMessageBridgeSelectedSessionKey] = useState("");
+  const [messageBridgeSessionListError, setMessageBridgeSessionListError] = useState("");
   const [messageBridgeLoading, setMessageBridgeLoading] = useState(false);
   const [messageBridgeSaving, setMessageBridgeSaving] = useState(false);
   const [cleanupBusy, setCleanupBusy] = useState(false);
@@ -460,6 +483,18 @@ export default function CompanionPage() {
   }, [chatSessionId]);
 
   useEffect(() => {
+    messageBridgeStatusRef.current = messageBridgeStatus;
+  }, [messageBridgeStatus]);
+
+  useEffect(() => {
+    messageBridgeSessionsRef.current = messageBridgeSessions;
+  }, [messageBridgeSessions]);
+
+  useEffect(() => {
+    messageBridgeSelectedSessionKeyRef.current = messageBridgeSelectedSessionKey;
+  }, [messageBridgeSelectedSessionKey]);
+
+  useEffect(() => {
     if (previousInteractionRef.current === interaction) return;
     previousInteractionRef.current = interaction;
     clearStageActionRecoveryTimer();
@@ -474,13 +509,23 @@ export default function CompanionPage() {
   useEffect(() => {
     const saved = loadSession();
     const normalizedPipeline: RenderPipeline = "mio-reference";
-    const normalizedSession =
-      saved && saved.renderPipeline !== normalizedPipeline
-        ? { ...saved, renderPipeline: normalizedPipeline }
-        : saved;
+    const normalizedSession = saved
+      ? {
+          ...saved,
+          renderPipeline: normalizedPipeline,
+          ttsEnabled: saved.ttsEnabled ?? true,
+          ttsMode: DEFAULT_COMPANION_TTS_MODE,
+          mmdCamera: {
+            ...(saved?.mmdCamera || {}),
+            "mio-reference": LOCKED_MIO_REFERENCE_CAMERA,
+          },
+        }
+      : null;
     setSession(normalizedSession ?? null);
     setRenderPipeline(normalizedPipeline);
-    if (normalizedSession && normalizedSession !== saved) {
+    setTtsEnabled(normalizedSession?.ttsEnabled ?? true);
+    setTtsMode(DEFAULT_COMPANION_TTS_MODE);
+    if (normalizedSession) {
       saveSession(normalizedSession);
     }
   }, []);
@@ -587,18 +632,38 @@ export default function CompanionPage() {
         setMessageBridgeLoading(true);
       }
       try {
-        const [status, sessions] = await Promise.all([
-          getMessageBridgeStatus(session.userId),
-          listMessageBridgeFeishuSessions(session.userId),
-        ]);
-        setMessageBridgeStatus(status);
-        setMessageBridgeSessions(sessions);
-        setMessageBridgeSelectedSessionKey(status.binding?.external_session_key || sessions[0]?.external_session_key || "");
-      } catch (err) {
-        setMessageBridgeStatus(null);
-        setMessageBridgeSessions([]);
-        if (!silent) {
-          setOpenClawError(err instanceof Error ? err.message : "消息桥状态读取失败。");
+        let status: MessageBridgeStatus | null = null;
+        let sessions: MessageBridgeExternalSession[] | null = null;
+        let sessionsError: unknown = null;
+        try {
+          status = await getMessageBridgeStatus(session.userId);
+        } catch (err) {
+          if (!silent) {
+            setOpenClawError(err instanceof Error ? err.message : "消息桥状态读取失败。");
+          }
+          return;
+        }
+        try {
+          sessions = await listMessageBridgeFeishuSessions(session.userId);
+        } catch (err) {
+          sessionsError = err;
+        }
+        const loaded = resolveMessageBridgeStatusLoad({
+          status,
+          sessions,
+          previousStatus: messageBridgeStatusRef.current,
+          previousSessions: messageBridgeSessionsRef.current,
+          currentSelectedSessionKey: messageBridgeSelectedSessionKeyRef.current,
+          sessionsError,
+        });
+        setMessageBridgeStatus(loaded.status);
+        setMessageBridgeSessions(loaded.sessions);
+        setMessageBridgeSelectedSessionKey(loaded.selectedSessionKey);
+        const nextSessionListError =
+          sessionsError instanceof Error ? sessionsError.message : sessionsError ? String(sessionsError) : "";
+        setMessageBridgeSessionListError(nextSessionListError);
+        if (!silent && nextSessionListError) {
+          setOpenClawError(`Bridge session list unavailable: ${nextSessionListError}`);
         }
       } finally {
         if (!silent) {
@@ -633,10 +698,10 @@ export default function CompanionPage() {
     void loadMessageBridgeStatus({ silent: true });
   }, [loadMessageBridgeStatus, loadOpenClawConfig, session]);
 
-  const refreshDailyPodcast = useCallback(async () => {
+  const refreshDailyPodcast = useCallback(async ({ force = false }: { force?: boolean } = {}) => {
     if (!session) return;
     try {
-      setDailyPodcast(await getLatestDailyPodcast(session.userId));
+      setDailyPodcast(await getLatestDailyPodcast(session.userId, { cacheBust: force }));
     } catch {
       setDailyPodcast(null);
     }
@@ -646,6 +711,30 @@ export default function CompanionPage() {
     if (!session) return;
     void refreshDailyPodcast();
   }, [refreshDailyPodcast, session]);
+
+  useEffect(() => {
+    if (!session?.userId) {
+      setEntryGreetingMessage(null);
+      return;
+    }
+    let cancelled = false;
+    setEntryGreetingMessage(null);
+    void (async () => {
+      try {
+        const greeting = await getLatestGreetingMessage(session.userId);
+        if (!cancelled) {
+          setEntryGreetingMessage(mapServerMessageToChatMessage(greeting));
+        }
+      } catch {
+        if (!cancelled) {
+          setEntryGreetingMessage(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.userId]);
 
   useEffect(() => {
     if (!isOpenClawSettingsOpen || !session) return;
@@ -766,6 +855,24 @@ export default function CompanionPage() {
     }
   }, [messages, session]);
 
+  useEffect(() => {
+    if (!session || !ttsEnabled) return;
+    if (
+      !shouldAutoPlayEntryGreeting({
+        message: entryGreetingMessage,
+        playedGreetingIds: playedEntryGreetingIdsRef.current,
+      })
+    ) {
+      return;
+    }
+    const messageId = entryGreetingMessage?.id || "";
+    if (!messageId) return;
+    playedEntryGreetingIdsRef.current.add(messageId);
+    void prepareAndPlayMessageTts(entryGreetingMessage as ChatMessage).catch((err) => {
+      handleTtsFailure(err instanceof Error ? `问候语音播放失败：${err.message}` : "问候语音播放失败。");
+    });
+  }, [entryGreetingMessage, session, ttsEnabled]);
+
   const assetIndex = useMemo(() => {
     const next: Record<string, VmdAsset> = {};
     for (const item of assets) {
@@ -792,6 +899,10 @@ export default function CompanionPage() {
       pickInitialModelSelection(models, DEFAULT_MODEL_RELATIVE_PATH)
     );
   }, [models, selectedModelPath]);
+
+  useEffect(() => {
+    lastStageClickVmdAssetIdRef.current = "";
+  }, [selectedModel?.relative_path]);
 
   const currentModelFavoriteAssets = useMemo(() => {
     if (!selectedModel?.relative_path) return [];
@@ -835,7 +946,11 @@ export default function CompanionPage() {
     [chatSessionId, chatSessions],
   );
   const latestAssistantMessage = [...messages].reverse().find((item) => item.role === "assistant");
-  const latestAssistantMessageText = latestAssistantMessage?.content || DEFAULT_ASSISTANT_COPY;
+  const displayAssistantMessage = resolveEntryGreetingMessage({
+    latestGreetingMessage: entryGreetingMessage,
+    latestAssistantMessage,
+  }) as ChatMessage | null;
+  const latestAssistantMessageText = displayAssistantMessage?.content || DEFAULT_ASSISTANT_COPY;
   const activeCameraSnapshot =
     (activeFavoriteVmdCameraKey ? session?.mmdCameraByFavoriteVmd?.[activeFavoriteVmdCameraKey] : null) ??
     session?.mmdCamera?.[renderPipeline] ??
@@ -1354,11 +1469,33 @@ export default function CompanionPage() {
     }
   }
 
-  function stopSpeechPlayback() {
+  function stopSpeechPlayback({
+    includeRealtime = true,
+    includePodcast = true,
+  }: { includeRealtime?: boolean; includePodcast?: boolean } = {}) {
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
     stopServerAudio();
+    if (includeRealtime) {
+      cancelRealtimeVoicePlayback({ closeSocket: false });
+    }
+    if (includePodcast) {
+      podcastAudioStopRef.current?.();
+    }
+  }
+
+  function handleTtsEnabledChange(enabled: boolean) {
+    setTtsEnabled(enabled);
+    setSession((current) => {
+      if (!current) return current;
+      const nextSession: UserSession = { ...current, ttsEnabled: enabled };
+      saveSession(nextSession);
+      return nextSession;
+    });
+    if (!enabled) {
+      stopSpeechPlayback();
+    }
   }
 
   function pushToast(message: string) {
@@ -1493,6 +1630,7 @@ export default function CompanionPage() {
   }
 
   function handleRealtimeVoiceEvent(event: RealtimeVoiceServerEvent) {
+    if (event.job_id && cancelledRealtimeVoiceJobsRef.current.has(event.job_id)) return;
     const messageId = event.message_id || realtimeVoiceJobMessageRef.current.get(event.job_id || "") || "";
     if (event.type === "queued") {
       setRealtimeVoiceStatus("queued");
@@ -1591,7 +1729,9 @@ export default function CompanionPage() {
     try {
       const socket = await ensureRealtimeVoiceSocket();
       if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+      stopSpeechPlayback();
       const jobId = createMessageId("voice-job");
+      cancelledRealtimeVoiceJobsRef.current.delete(jobId);
       realtimeVoiceJobMessageRef.current.set(jobId, message.id);
       patchMessageTts(message.id, { status: "loading", mode: "server" });
       setRealtimeVoiceStatus("queued");
@@ -1611,7 +1751,11 @@ export default function CompanionPage() {
   }
 
   function cancelRealtimeVoicePlayback({ closeSocket = false }: { closeSocket?: boolean } = {}) {
+    for (const jobId of realtimeVoiceJobMessageRef.current.keys()) {
+      cancelledRealtimeVoiceJobsRef.current.add(jobId);
+    }
     audioQueueRef.current?.clear();
+    realtimeVoiceJobMessageRef.current.clear();
     setSpeaking(false);
     setActiveTtsMessageId("");
     setRealtimeVoiceStatus("idle");
@@ -1662,7 +1806,11 @@ export default function CompanionPage() {
 
     const clickAction = resolveStageCharacterClickInteraction({
       assets: currentModelFavoriteAssets,
+      previousActiveVmdAssetId: lastStageClickVmdAssetIdRef.current,
     }) as { interaction: InteractionState; activeVmdAssetId: string };
+    if (clickAction.activeVmdAssetId) {
+      lastStageClickVmdAssetIdRef.current = clickAction.activeVmdAssetId;
+    }
     clearStageActionRecoveryTimer();
     setStageInteractionState(
       startStageClickInteraction({
@@ -1762,6 +1910,9 @@ export default function CompanionPage() {
     }
     if (refresh.shouldRequestLatest) {
       setChatAutoScrollRevision((current) => current + 1);
+    }
+    if (refresh.newServerMessages.some((message: MessageServiceMessage) => message.role === "assistant")) {
+      setEntryGreetingMessage(null);
     }
     if (driveBridgeMessages) {
       for (const message of refresh.newServerMessages as MessageServiceMessage[]) {
@@ -1869,6 +2020,10 @@ export default function CompanionPage() {
     setActiveTtsMessageId(messageId);
     const controller = await playServerTtsAudio(audioBlob, {
       setSpeaking: (value?: boolean) => setSpeaking(Boolean(value)),
+      onAudioCreated: ({ audio, cleanup }: { audio: HTMLAudioElement; cleanup: () => void }) => {
+        serverAudioRef.current = audio;
+        serverAudioCleanupRef.current = cleanup;
+      },
       onCleanup: ({ audio }: { audio?: HTMLAudioElement } = {}) => {
         if (audio && serverAudioRef.current === audio) {
           serverAudioRef.current = null;
@@ -1877,8 +2032,9 @@ export default function CompanionPage() {
         setActiveTtsMessageId((current) => (current === messageId ? "" : current));
       },
     });
-    serverAudioRef.current = controller.audio as HTMLAudioElement;
-    serverAudioCleanupRef.current = controller.cleanup;
+    if (serverAudioRef.current === controller.audio) {
+      serverAudioCleanupRef.current = controller.cleanup;
+    }
   }
 
   async function playRemoteServerAudio(message: ChatMessage) {
@@ -1896,6 +2052,10 @@ export default function CompanionPage() {
       proxyAudioUrl,
       userId: session.userId,
       setSpeaking: (value?: boolean) => setSpeaking(Boolean(value)),
+      onAudioCreated: ({ audio, cleanup }: { audio: HTMLAudioElement; cleanup: () => void }) => {
+        serverAudioRef.current = audio;
+        serverAudioCleanupRef.current = cleanup;
+      },
       onCleanup: ({ audio }: { audio?: HTMLAudioElement } = {}) => {
         if (audio && serverAudioRef.current === audio) {
           serverAudioRef.current = null;
@@ -1910,17 +2070,17 @@ export default function CompanionPage() {
         handleTtsFailure("远端语音播放失败。");
       },
     });
-    serverAudioRef.current = controller.audio as HTMLAudioElement;
-    serverAudioCleanupRef.current = controller.cleanup;
+    if (serverAudioRef.current === controller.audio) {
+      serverAudioCleanupRef.current = controller.cleanup;
+    }
   }
 
   function browserSpeak(text: string, messageId = "") {
-    stopServerAudio();
+    stopSpeechPlayback();
     if (!("speechSynthesis" in window)) {
       handleTtsFailure("当前环境不支持浏览器语音播放。");
       return;
     }
-    window.speechSynthesis.cancel();
     setActiveTtsMessageId(messageId);
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = "zh-CN";
@@ -2030,6 +2190,7 @@ export default function CompanionPage() {
       createdAt: new Date().toISOString(),
     };
     ignoreNextStageCompletionResetRef.current = false;
+    setEntryGreetingMessage(null);
     setInput("");
     setError("");
     setBackgroundActivityPulse((current) => current + 1);
@@ -2227,10 +2388,14 @@ export default function CompanionPage() {
         activityPulse={backgroundActivityPulse}
       />
       <header className="mio-topbar" data-testid="mio-topbar">
-        <div className="mio-brand">
-          <img src={`${SPRITE}/asset-082.png`} alt="" />
-          <h1>MIO</h1>
-          <span>// PERSONAL AI</span>
+        <div
+          className="mio-brand"
+          data-testid="companion-brand-logo"
+          data-logo-layout="aether-cropped-lockup"
+          aria-label="AETHER PERSONAL AI"
+        >
+          <img className="mio-brand-mark" src="/images/aether-companion-mark-crop.png" alt="" aria-hidden="true" />
+          <img className="mio-brand-wordmark" src="/images/aether-companion-wordmark-crop.png" alt="AETHER PERSONAL AI" />
         </div>
 
         <div className="mio-system-state">
@@ -2401,6 +2566,7 @@ export default function CompanionPage() {
                   <span>Last connected: {messageBridgeStatus?.last_connected_at || "--"}</span>
                   <span>Binding: {messageBridgeStatus?.binding?.external_display_name || messageBridgeStatus?.binding?.external_session_key || "--"}</span>
                   {messageBridgeStatus?.last_error ? <span>Error: {messageBridgeStatus.last_error}</span> : null}
+                  {messageBridgeSessionListError ? <span>Session list: {messageBridgeSessionListError}</span> : null}
                 </div>
                 <div className="mio-settings-grid">
                   <label className="mio-advanced-field mio-advanced-field-wide">
@@ -2618,32 +2784,32 @@ export default function CompanionPage() {
                   <path d="M2 8h11m5 0h4m5 0h2l2-3 2 6 3-10 3 13 3-8h2l2 3h4m5 0h4l2-4 2 8 3-12 3 10 2-5h4m7 0h28" />
                 </svg>
               </span>
-              {latestAssistantMessage?.tts ? (
+              {displayAssistantMessage?.tts ? (
                 <button
                   type="button"
                   className="mio-dialogue-voice-button"
                   aria-label={
-                    latestAssistantMessage.tts.status === "loading" || latestAssistantMessage.tts.status === "pending"
+                    displayAssistantMessage.tts.status === "loading" || displayAssistantMessage.tts.status === "pending"
                       ? "Voice pending"
-                      : latestAssistantMessage.tts.status === "failed" || latestAssistantMessage.tts.status === "partial_failed"
+                      : displayAssistantMessage.tts.status === "failed" || displayAssistantMessage.tts.status === "partial_failed"
                         ? "Voice unavailable"
-                        : latestAssistantMessage.tts.status === "expired"
+                        : displayAssistantMessage.tts.status === "expired"
                           ? "Voice expired"
                         : "Play voice"
                   }
                   title={
-                    latestAssistantMessage.tts.status === "loading" || latestAssistantMessage.tts.status === "pending"
+                    displayAssistantMessage.tts.status === "loading" || displayAssistantMessage.tts.status === "pending"
                       ? "Voice pending"
-                      : latestAssistantMessage.tts.status === "failed" || latestAssistantMessage.tts.status === "partial_failed"
+                      : displayAssistantMessage.tts.status === "failed" || displayAssistantMessage.tts.status === "partial_failed"
                         ? "Voice unavailable"
-                        : latestAssistantMessage.tts.status === "expired"
+                        : displayAssistantMessage.tts.status === "expired"
                           ? "Voice expired"
                         : "Play voice"
                   }
-                  disabled={latestAssistantMessage.tts.status !== "ready"}
-                  data-status={latestAssistantMessage.tts.status}
-                  data-active={latestAssistantMessage.id && latestAssistantMessage.id === activeTtsMessageId ? "true" : "false"}
-                  onClick={() => playMessageAudio(latestAssistantMessage)}
+                  disabled={displayAssistantMessage.tts.status !== "ready"}
+                  data-status={displayAssistantMessage.tts.status}
+                  data-active={displayAssistantMessage.id && displayAssistantMessage.id === activeTtsMessageId ? "true" : "false"}
+                  onClick={() => playMessageAudio(displayAssistantMessage)}
                 >
                   <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
                     <path d="M4.2 8.2h2.5l3.4-3v9.6l-3.4-3H4.2z" />
@@ -2698,7 +2864,11 @@ export default function CompanionPage() {
           memoryNotes={memoryNotes}
           traceRows={traceRows}
           dailyPodcast={dailyPodcast}
-          onRefreshDailyPodcast={() => void refreshDailyPodcast()}
+          onRefreshDailyPodcast={() => refreshDailyPodcast({ force: true })}
+          onBeforeAudioPlayback={() => stopSpeechPlayback({ includePodcast: false })}
+          onPodcastAudioStopReady={(stop) => {
+            podcastAudioStopRef.current = stop;
+          }}
           onToggleCollapsed={() => setIsRightRailCollapsed((current) => !current)}
           onCreateSession={handleCreateSession}
           onSelectSession={(sessionId) => void handleSelectSession(sessionId)}
@@ -2714,7 +2884,6 @@ export default function CompanionPage() {
         sendDisabled={!session || !chatSessionId || !input.trim() || chatBootstrapping}
         error={error}
         ttsEnabled={ttsEnabled}
-        ttsMode={ttsMode}
         isAdvancedPanelOpen={isAdvancedPanelOpen}
         advancedPanel={
           isAdvancedPanelOpen ? (
@@ -3072,8 +3241,7 @@ export default function CompanionPage() {
         }
         onSubmit={onSubmit}
         onInputChange={setInput}
-        onTtsEnabledChange={setTtsEnabled}
-        onTtsModeChange={setTtsMode}
+        onTtsEnabledChange={handleTtsEnabledChange}
         onAdvancedToggle={() => {
           setIsAdvancedPanelOpen((open) => !open);
           setAdvancedError("");

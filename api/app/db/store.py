@@ -882,6 +882,53 @@ class TraceStore:
                     return session
         return None
 
+    def list_message_bridge_messages(
+        self,
+        workspace_id: str,
+        account_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT *
+            FROM messages
+            WHERE workspace_id = ? AND account_id = ? AND deleted_at IS NULL
+              AND metadata_json IS NOT NULL
+            ORDER BY created_at ASC
+            """,
+            (workspace_id, account_id),
+        ).fetchall()
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            metadata = self._json_loads(row["metadata_json"], {})
+            if not isinstance(metadata, dict):
+                continue
+            if metadata.get("source") != "message_bridge":
+                continue
+            if not metadata.get("external_session_key"):
+                continue
+            output.append(self._hydrate_message(row))
+        return output
+
+    def get_latest_greeting_message(self, workspace_id: str, account_id: str) -> dict[str, Any] | None:
+        rows = self._conn.execute(
+            """
+            SELECT *
+            FROM messages
+            WHERE workspace_id = ? AND account_id = ? AND deleted_at IS NULL
+              AND role = 'assistant' AND metadata_json IS NOT NULL
+            ORDER BY created_at DESC
+            """,
+            (workspace_id, account_id),
+        ).fetchall()
+        for row in rows:
+            metadata = self._json_loads(row["metadata_json"], {})
+            if not isinstance(metadata, dict):
+                continue
+            greeting_cron = metadata.get("greeting_cron")
+            if metadata.get("auto_tts") is True or isinstance(greeting_cron, dict):
+                return self._hydrate_message(row)
+        return None
+
     def get_message(self, workspace_id: str, account_id: str, message_id: str) -> dict[str, Any] | None:
         row = self._conn.execute(
             """
@@ -891,6 +938,24 @@ class TraceStore:
             (message_id, workspace_id, account_id),
         ).fetchone()
         return self._hydrate_message(row) if row else None
+
+    def update_message_metadata(
+        self,
+        workspace_id: str,
+        account_id: str,
+        message_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        self._conn.execute(
+            """
+            UPDATE messages
+            SET metadata_json = ?
+            WHERE id = ? AND workspace_id = ? AND account_id = ? AND deleted_at IS NULL
+            """,
+            (json.dumps(metadata, ensure_ascii=False), message_id, workspace_id, account_id),
+        )
+        self._conn.commit()
+        return self.get_message(workspace_id, account_id, message_id)
 
     def get_workspace_message(self, workspace_id: str, message_id: str) -> dict[str, Any] | None:
         row = self._conn.execute(

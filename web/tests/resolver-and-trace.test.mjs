@@ -93,7 +93,7 @@ test("resolvePlaybackPlan can route a motion template to mapped VMD asset", () =
   assert.equal(resolved.assetId, "celebrate-vmd");
 });
 
-test("shouldUseIdleVmdFallbackForUnmatchedMotion detects missed custom motion keys but not procedural actions", () => {
+test("shouldUseIdleVmdFallbackForUnmatchedMotion uses idle VMD for unmatched motion resolution", () => {
   assert.equal(
     shouldUseIdleVmdFallbackForUnmatchedMotion({
       motionResolution: {
@@ -110,12 +110,24 @@ test("shouldUseIdleVmdFallbackForUnmatchedMotion detects missed custom motion ke
     shouldUseIdleVmdFallbackForUnmatchedMotion({
       motionResolution: {
         status: "fallback_idle",
+        source_action: "idle",
+        fallback_reason: "bridge_default_idle",
+      },
+      action: "idle",
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldUseIdleVmdFallbackForUnmatchedMotion({
+      motionResolution: {
+        status: "fallback_idle",
         source_action: "comfort",
         fallback_reason: "no_candidate_matched",
       },
       action: "comfort",
     }),
-    false,
+    true,
   );
 });
 

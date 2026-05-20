@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import type { RefObject } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { makeUrl } from "@/lib/api";
 import type { ChatMessage, DailyPodcast, MessageServiceSession } from "@/lib/types";
@@ -27,13 +29,25 @@ type CompanionRightRailProps = {
   memoryNotes: string[];
   traceRows: readonly TraceRow[];
   dailyPodcast: DailyPodcast | null;
-  onRefreshDailyPodcast: () => void;
+  onRefreshDailyPodcast: () => Promise<void> | void;
+  onBeforeAudioPlayback: () => void;
+  onPodcastAudioStopReady: (stop: (() => void) | null) => void;
   onToggleCollapsed: () => void;
   onCreateSession: () => void;
   onSelectSession: (sessionId: string) => void;
   onRenameSession: (session: MessageServiceSession) => void;
   onDeleteSession: (session: MessageServiceSession) => void;
   onPlayTtsMessage: (message: ChatMessage) => void;
+};
+
+type OverviewWorkspaceProps = Pick<CompanionRightRailProps, "nextSteps" | "memoryNotes" | "dailyPodcast"> & {
+  isPodcastPlaying: boolean;
+  isPodcastRefreshing: boolean;
+  podcastAudioLabel: string;
+  podcastReady: boolean;
+  podcastStatusLabel: string;
+  onRefreshDailyPodcast: () => Promise<void> | void;
+  onToggleDailyPodcastPlayback: () => Promise<void> | void;
 };
 
 function PlaceholderWorkspace({
@@ -65,9 +79,14 @@ function OverviewWorkspace({
   nextSteps,
   memoryNotes,
   dailyPodcast,
+  isPodcastPlaying,
+  isPodcastRefreshing,
+  podcastAudioLabel,
+  podcastReady,
+  podcastStatusLabel,
   onRefreshDailyPodcast,
-}: Pick<CompanionRightRailProps, "nextSteps" | "memoryNotes" | "dailyPodcast" | "onRefreshDailyPodcast">) {
-  const audioSource = dailyPodcast?.audio.url ? makeUrl(dailyPodcast.audio.url) : "";
+  onToggleDailyPodcastPlayback,
+}: OverviewWorkspaceProps) {
   return (
     <>
       <article className="mio-card">
@@ -99,35 +118,101 @@ function OverviewWorkspace({
       </article>
 
       <article className="mio-card mio-podcast-card">
-        <h2>
-          <img src="/images/sprite-sliced/asset-022.png" alt="" />
-          Daily Podcast <small>PODCAST</small>
-        </h2>
-        <div className="mio-card-copy">
-          <div className="mio-podcast-meta">
-            <span>{dailyPodcast?.status || "missing"}</span>
-            <strong>{dailyPodcast?.date || "--"}</strong>
-            <small>{dailyPodcast?.audio.source ? dailyPodcast.audio.source.toUpperCase() : "NO AUDIO"}</small>
-          </div>
-          {dailyPodcast?.status === "ready" && audioSource ? (
-            <audio controls src={audioSource} preload="metadata" />
-          ) : (
-            <p>Latest audio is not ready.</p>
-          )}
-        </div>
-        <div className="mio-podcast-actions">
-          {dailyPodcast?.doc_url ? (
-            <a href={dailyPodcast.doc_url} target="_blank" rel="noreferrer">
-              Feishu Doc
-            </a>
-          ) : null}
-          <Link href="/podcasts">List</Link>
-          <button type="button" onClick={onRefreshDailyPodcast}>
-            Refresh
+        <div className="mio-podcast-title-slot">
+          <h2>
+            <img src="/images/sprite-sliced/asset-022.png" alt="" />
+            每日播客 <small>PODCAST</small>
+          </h2>
+          <button
+            className="mio-podcast-refresh-slot"
+            type="button"
+            aria-label={isPodcastRefreshing ? "正在刷新每日播客" : "刷新每日播客"}
+            aria-busy={isPodcastRefreshing}
+            disabled={isPodcastRefreshing}
+            onClick={() => void onRefreshDailyPodcast()}
+            data-imagegen-slot="daily-podcast-refresh-icon"
+            data-refreshing={isPodcastRefreshing ? "true" : "false"}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 7v5h-5" />
+              <path d="M4 17v-5h5" />
+              <path d="M6.1 9a7 7 0 0 1 11.5-2.3L20 9" />
+              <path d="M17.9 15a7 7 0 0 1-11.5 2.3L4 15" />
+            </svg>
           </button>
+        </div>
+        <div className="mio-card-copy mio-podcast-content-slot">
+          <div className="mio-podcast-meta mio-podcast-meta-slot">
+            <span>{podcastStatusLabel}</span>
+            <strong>{dailyPodcast?.date || "--"}</strong>
+            <small>{podcastAudioLabel}</small>
+          </div>
+          <div className="mio-podcast-play-slot">
+            <button
+              className="mio-podcast-play-icon-slot"
+              type="button"
+              aria-label={isPodcastPlaying ? "暂停今日播客" : "播放今日播客"}
+              aria-pressed={isPodcastPlaying}
+              disabled={!podcastReady}
+              onClick={() => void onToggleDailyPodcastPlayback()}
+              data-imagegen-slot="daily-podcast-play-icon"
+            >
+              {isPodcastPlaying ? (
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 7v10" />
+                  <path d="M15 7v10" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 5v14l11-7Z" />
+                </svg>
+              )}
+            </button>
+            <div className="mio-podcast-play-copy-slot">
+              <strong>{podcastReady ? "今日播客" : "音频未就绪"}</strong>
+              <span>{podcastReady ? "点击图标快速收听" : "生成完成后可播放"}</span>
+            </div>
+          </div>
+        </div>
+        <div className="mio-rail-podcast-actions">
+          {dailyPodcast?.doc_url ? (
+            <a className="mio-podcast-doc-slot" href={dailyPodcast.doc_url} target="_blank" rel="noreferrer">
+              查看飞书文档
+            </a>
+          ) : (
+            <span className="mio-podcast-doc-slot is-disabled">暂无飞书文档</span>
+          )}
+          <Link className="mio-podcast-list-slot" href="/podcasts">
+            播客列表
+          </Link>
         </div>
       </article>
     </>
+  );
+}
+
+function PodcastAudioElement({
+  audioRef,
+  audioSource,
+  podcastReady,
+  onPlayingChange,
+}: {
+  audioRef: RefObject<HTMLAudioElement | null>;
+  audioSource: string;
+  podcastReady: boolean;
+  onPlayingChange: (playing: boolean) => void;
+}) {
+  if (!podcastReady) return null;
+  return (
+    <audio
+      ref={audioRef}
+      className="mio-podcast-audio-slot"
+      src={audioSource}
+      preload="metadata"
+      onPlay={() => onPlayingChange(true)}
+      onPause={() => onPlayingChange(false)}
+      onEnded={() => onPlayingChange(false)}
+    />
   );
 }
 
@@ -148,6 +233,8 @@ export function CompanionRightRail({
   traceRows,
   dailyPodcast,
   onRefreshDailyPodcast,
+  onBeforeAudioPlayback,
+  onPodcastAudioStopReady,
   onToggleCollapsed,
   onCreateSession,
   onSelectSession,
@@ -155,8 +242,69 @@ export function CompanionRightRail({
   onDeleteSession,
   onPlayTtsMessage,
 }: CompanionRightRailProps) {
+  const podcastAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [isPodcastPlaying, setIsPodcastPlaying] = useState(false);
+  const [isPodcastRefreshing, setIsPodcastRefreshing] = useState(false);
   const workspaceClassName =
     activeView === "overview" ? "mio-right-rail-overview" : activeView === "chat" ? "mio-right-rail-chat" : "mio-right-rail-workspace";
+  const podcastAudioSource = dailyPodcast?.audio.url ? makeUrl(dailyPodcast.audio.url) : "";
+  const podcastReady = dailyPodcast?.status === "ready" && Boolean(podcastAudioSource);
+  const podcastStatusLabel =
+    dailyPodcast?.status === "ready"
+      ? "已就绪"
+      : dailyPodcast?.status === "partial"
+        ? "部分就绪"
+        : dailyPodcast?.status === "failed"
+          ? "生成失败"
+          : dailyPodcast?.status === "missing"
+            ? "暂无内容"
+            : "检查中";
+  const podcastAudioLabel = dailyPodcast?.audio.source ? `音频 ${dailyPodcast.audio.source.toUpperCase()}` : "暂无音频";
+
+  const stopPodcastAudio = useCallback(() => {
+    setIsPodcastPlaying(false);
+    const audio = podcastAudioRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.currentTime = 0;
+  }, []);
+
+  useEffect(() => {
+    onPodcastAudioStopReady(stopPodcastAudio);
+    return () => onPodcastAudioStopReady(null);
+  }, [onPodcastAudioStopReady, stopPodcastAudio]);
+
+  useEffect(() => {
+    stopPodcastAudio();
+  }, [podcastAudioSource, stopPodcastAudio]);
+
+  async function handleToggleDailyPodcastPlayback() {
+    const audio = podcastAudioRef.current;
+    if (!podcastReady || !audio) return;
+
+    if (audio.paused) {
+      onBeforeAudioPlayback();
+      if (audio.ended) audio.currentTime = 0;
+      try {
+        await audio.play();
+      } catch {
+        setIsPodcastPlaying(false);
+      }
+      return;
+    }
+
+    audio.pause();
+  }
+
+  async function handleRefreshDailyPodcast() {
+    if (isPodcastRefreshing) return;
+    setIsPodcastRefreshing(true);
+    try {
+      await onRefreshDailyPodcast();
+    } finally {
+      setIsPodcastRefreshing(false);
+    }
+  }
 
   return (
     <section
@@ -164,6 +312,12 @@ export function CompanionRightRail({
       data-testid="mio-right-rail"
       aria-label="状态面板"
     >
+      <PodcastAudioElement
+        audioRef={podcastAudioRef}
+        audioSource={podcastAudioSource}
+        podcastReady={podcastReady}
+        onPlayingChange={setIsPodcastPlaying}
+      />
       <button
         className="mio-panel-toggle mio-panel-toggle-right"
         type="button"
@@ -180,7 +334,13 @@ export function CompanionRightRail({
             nextSteps={nextSteps}
             memoryNotes={memoryNotes}
             dailyPodcast={dailyPodcast}
-            onRefreshDailyPodcast={onRefreshDailyPodcast}
+            isPodcastPlaying={isPodcastPlaying}
+            isPodcastRefreshing={isPodcastRefreshing}
+            podcastAudioLabel={podcastAudioLabel}
+            podcastReady={podcastReady}
+            podcastStatusLabel={podcastStatusLabel}
+            onRefreshDailyPodcast={handleRefreshDailyPodcast}
+            onToggleDailyPodcastPlayback={handleToggleDailyPodcastPlayback}
           />
         ) : activeView === "chat" ? (
           <CompanionChatbox

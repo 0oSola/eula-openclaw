@@ -20,6 +20,7 @@ from app.routes.podcasts import router as podcasts_router
 from app.routes.realtime_voice import router as realtime_voice_router
 from app.routes.trace import router as trace_router
 from app.routes.tts import router as tts_router
+from app.services.message_tts_reference import create_or_enqueue_message_tts_reference
 from app.services.message_tts_worker import run_message_tts_worker
 from app.services.message_bridge import MessageBridgeService, OpenClawGatewayProvider
 from app.services.openclaw_client import OpenClawClient
@@ -89,6 +90,49 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         app.state.trace_store.close()
 
     app = FastAPI(title="MMD Companion API", version="0.1.0", lifespan=lifespan)
+
+    async def enqueue_bridge_auto_tts(message: dict, binding: dict, source: str) -> None:
+        if not settings.tts_service_enabled:
+            return
+        trace_user_id = trace_store.get_account_external_user_id(binding["account_id"]) or binding["account_id"]
+        trace_id = f"message-bridge-auto-tts-{message['id']}"
+        try:
+            await create_or_enqueue_message_tts_reference(
+                app,
+                message,
+                trace_user_id=trace_user_id,
+                trace_session_id=binding["local_session_id"],
+                trace_id=trace_id,
+            )
+        except Exception as error:
+            trace_store.create_message_tts(
+                message["workspace_id"],
+                message["id"],
+                status="failed",
+                task_id=None,
+                remote_audio_url=None,
+                media_type=None,
+                error=str(error),
+            )
+            trace_store.insert_event(
+                trace_id=trace_id,
+                user_id=trace_user_id,
+                session_id=binding["local_session_id"],
+                stage="message_bridge.tts.auto",
+                status="error",
+                latency_ms=None,
+                error_code=type(error).__name__,
+                payload={
+                    "message_id": message["id"],
+                    "external_session_key": binding["external_session_key"],
+                    "source": source,
+                    "error": str(error),
+                },
+            )
+
+    message_bridge_service.greeting_index_path = settings.openclaw_greeting_index_path
+    message_bridge_service.auto_tts_handler = enqueue_bridge_auto_tts
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

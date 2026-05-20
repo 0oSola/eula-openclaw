@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 import json
+from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
@@ -280,6 +283,54 @@ def _external_message_id(provider: str, session_key: str, message: ExternalMessa
     return sha256(fingerprint.encode("utf-8")).hexdigest()
 
 
+def _compact_message_text(value: object) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _parse_side_index_time(value: object) -> datetime | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _message_timestamp_to_datetime(value: int | None) -> datetime | None:
+    if value is None:
+        return None
+    seconds = float(value)
+    if seconds > 10_000_000_000:
+        seconds /= 1000
+    try:
+        return datetime.fromtimestamp(seconds, UTC)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _iso_to_epoch_millis(value: object) -> int | None:
+    parsed = _parse_side_index_time(value)
+    if parsed is None:
+        return None
+    return int(parsed.timestamp() * 1000)
+
+
+def _extract_openclaw_metadata(raw: dict[str, Any]) -> dict[str, Any] | None:
+    for key in ("openclawMetadata", "openclaw_metadata"):
+        value = raw.get(key)
+        if isinstance(value, dict):
+            return dict(value)
+    return None
+
+
 def _chat_role(role: str) -> str | None:
     normalized = role.strip().lower()
     if normalized in {"user", "assistant", "system"}:
@@ -322,11 +373,21 @@ def _normalize_bridge_message(message: ExternalMessage) -> dict[str, Any]:
 
 
 class MessageBridgeService:
-    def __init__(self, *, store, provider: MessageBridgeProvider, history_limit: int = 100):
+    def __init__(
+        self,
+        *,
+        store,
+        provider: MessageBridgeProvider,
+        history_limit: int = 100,
+        greeting_index_path: str | Path | None = None,
+        auto_tts_handler: Callable[[dict[str, Any], dict[str, Any], str], Awaitable[None]] | None = None,
+    ):
         self.store = store
         self.provider = provider
         self.history_limit = history_limit
         self.history_backfill_interval_seconds = 15.0
+        self.greeting_index_path = Path(greeting_index_path) if greeting_index_path else None
+        self.auto_tts_handler = auto_tts_handler
 
     def sync_default_binding_for_user(self, user_id: str) -> dict[str, Any]:
         return _run_async(self.ensure_default_binding_for_user(user_id))
@@ -635,11 +696,13 @@ class MessageBridgeService:
             messages = await self.fetch_history_isolated_async(binding["external_session_key"], limit)
         else:
             messages = await self.provider.fetch_history(binding["external_session_key"], limit)
-        inserted = [
-            message
-            for external in messages
-            if (message := self.ingest_external_message(binding, external, source=source)) is not None
-        ]
+        inserted = []
+        for external in messages:
+            message = self.ingest_external_message(binding, external, source=source)
+            if message is None:
+                continue
+            inserted.append(message)
+            await self._maybe_enqueue_auto_tts(message, binding, source)
         self.store.update_message_bridge_binding_sync(binding["id"], last_history_sync_at=_utc_from_store())
         self._insert_event(
             user_id=self._binding_user_id(binding),
@@ -655,6 +718,64 @@ class MessageBridgeService:
         )
         return inserted
 
+    async def backfill_greeting_metadata_for_user(self, user_id: str) -> dict[str, Any]:
+        ctx = self.store.get_current_workspace_context(user_id)
+        messages = self.store.list_message_bridge_messages(ctx["workspace"]["id"], ctx["account"]["id"])
+        updated_count = 0
+        scanned_count = 0
+        for message in messages:
+            if message.get("role") != "assistant":
+                continue
+            metadata = message.get("metadata") or {}
+            if not isinstance(metadata, dict):
+                continue
+            external_session_key = str(metadata.get("external_session_key") or "")
+            if not external_session_key:
+                continue
+            scanned_count += 1
+            binding = {
+                "workspace_id": message["workspace_id"],
+                "account_id": message["account_id"],
+                "local_session_id": message["session_id"],
+                "external_session_key": external_session_key,
+            }
+            external_id = str(metadata.get("external_message_id") or message.get("openclaw_message_id") or message["id"])
+            external_message = ExternalMessage(
+                id=external_id,
+                role=str(message["role"]),
+                content=str(message.get("content") or ""),
+                timestamp=_iso_to_epoch_millis(message.get("created_at")),
+                raw={},
+            )
+            matched = self._match_greeting_side_index_record(
+                binding,
+                external_message,
+                external_id=external_id,
+                normalized_content=str(message.get("content") or ""),
+            )
+            if matched is None:
+                continue
+            incoming = {
+                "greeting_cron": {
+                    **matched,
+                    "source": "side_index",
+                    "cronSource": matched.get("source") or "greeting-cron",
+                },
+                "auto_tts": True,
+            }
+            merged_metadata = self._merge_existing_message_metadata(metadata, incoming)
+            updated = message
+            if merged_metadata != metadata:
+                updated = self.store.update_message_metadata(
+                    message["workspace_id"],
+                    message["account_id"],
+                    message["id"],
+                    merged_metadata,
+                ) or message
+                updated_count += 1
+            await self._maybe_enqueue_auto_tts(updated, binding, "side_index_backfill")
+        return {"scanned_count": scanned_count, "updated_count": updated_count}
+
     def ingest_external_message(
         self,
         binding: dict[str, Any],
@@ -666,6 +787,21 @@ class MessageBridgeService:
         if not role:
             return None
         normalized = _normalize_bridge_message(external_message)
+        if role == "assistant" and normalized.get("parse_mode") == "empty":
+            self._insert_event(
+                user_id=self._binding_user_id(binding),
+                session_id=binding["local_session_id"],
+                stage="message_bridge.openclaw.message.skipped",
+                status="ok",
+                payload={
+                    "external_session_key": binding["external_session_key"],
+                    "external_message_id": _external_message_id(self.provider.provider, binding["external_session_key"], external_message),
+                    "role": role,
+                    "source": source,
+                    "reason": "empty_assistant_message",
+                },
+            )
+            return None
         if self.store.find_recent_traced_message_by_role_content(
             binding["workspace_id"],
             binding["account_id"],
@@ -687,6 +823,13 @@ class MessageBridgeService:
             )
             return None
         external_id = _external_message_id(self.provider.provider, binding["external_session_key"], external_message)
+        metadata = self._metadata_for_external_message(
+            binding,
+            external_message,
+            external_id=external_id,
+            normalized_content=normalized["content"],
+            source=source,
+        )
         if source in {"realtime", "realtime_backfill"} and self.store.find_recent_message_bridge_duplicate(
             binding["workspace_id"],
             binding["account_id"],
@@ -722,16 +865,16 @@ class MessageBridgeService:
             tts_pause_profile=normalized.get("tts_pause_profile"),
             motion_plan=normalized["motion_plan"],
             memory_ops=normalized["memory_ops"],
-            metadata={
-                "source": "message_bridge",
-                "provider": self.provider.provider,
-                "channel": self.provider.channel,
-                "external_session_key": binding["external_session_key"],
-                "external_message_id": external_id,
-                "synced_from": source,
-                "parse_mode": normalized.get("parse_mode"),
-            },
+            metadata=metadata,
         )
+        merged_metadata = self._merge_existing_message_metadata(message.get("metadata") or {}, metadata)
+        if merged_metadata != (message.get("metadata") or {}):
+            message = self.store.update_message_metadata(
+                binding["workspace_id"],
+                binding["account_id"],
+                message["id"],
+                merged_metadata,
+            ) or message
         if role == "assistant" and not message.get("motion_resolution"):
             message["motion_resolution"] = self.store.create_message_motion_resolution(
                 binding["workspace_id"],
@@ -858,7 +1001,9 @@ class MessageBridgeService:
             payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
             external = self._external_message_from_event_payload(payload)
             if external is not None:
-                self.ingest_external_message(active_binding, external, source="realtime")
+                message = self.ingest_external_message(active_binding, external, source="realtime")
+                if message is not None:
+                    await self._maybe_enqueue_auto_tts(message, active_binding, "realtime")
 
     @staticmethod
     def _external_message_from_event_payload(payload: dict[str, Any]) -> ExternalMessage | None:
@@ -868,6 +1013,134 @@ class MessageBridgeService:
         provider = OpenClawGatewayProvider(base_url="http://localhost", token="")
         parsed = provider.parse_messages({"messages": [message]})
         return parsed[0] if parsed else None
+
+    def _metadata_for_external_message(
+        self,
+        binding: dict[str, Any],
+        external_message: ExternalMessage,
+        *,
+        external_id: str,
+        normalized_content: str,
+        source: str,
+    ) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "source": "message_bridge",
+            "provider": self.provider.provider,
+            "channel": self.provider.channel,
+            "external_session_key": binding["external_session_key"],
+            "external_message_id": external_id,
+            "synced_from": source,
+            "parse_mode": _normalize_bridge_message(external_message).get("parse_mode"),
+        }
+        openclaw_metadata = _extract_openclaw_metadata(external_message.raw or {})
+        if openclaw_metadata:
+            metadata["openclaw_metadata"] = openclaw_metadata
+            if openclaw_metadata.get("source") == "greeting-cron":
+                metadata["greeting_cron"] = {
+                    **openclaw_metadata,
+                    "source": "openclaw_metadata",
+                    "cronSource": "greeting-cron",
+                }
+                metadata["auto_tts"] = True
+        if "greeting_cron" not in metadata:
+            side_index_match = self._match_greeting_side_index_record(
+                binding,
+                external_message,
+                external_id=external_id,
+                normalized_content=normalized_content,
+            )
+            if side_index_match is not None:
+                metadata["greeting_cron"] = {
+                    **side_index_match,
+                    "source": "side_index",
+                    "cronSource": side_index_match.get("source") or "greeting-cron",
+                }
+                metadata["auto_tts"] = True
+        return metadata
+
+    @staticmethod
+    def _merge_existing_message_metadata(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(existing or {})
+        for key, value in incoming.items():
+            if key in {"openclaw_metadata", "greeting_cron", "auto_tts"}:
+                merged[key] = value
+            elif key not in merged:
+                merged[key] = value
+        return merged
+
+    def _match_greeting_side_index_record(
+        self,
+        binding: dict[str, Any],
+        external_message: ExternalMessage,
+        *,
+        external_id: str,
+        normalized_content: str,
+    ) -> dict[str, Any] | None:
+        if _chat_role(external_message.role) != "assistant":
+            return None
+        records = self._load_greeting_side_index_records()
+        if not records:
+            return None
+        session_key = binding["external_session_key"]
+        message_time = _message_timestamp_to_datetime(external_message.timestamp)
+        message_text = _compact_message_text(normalized_content)
+        fallback_by_time: dict[str, Any] | None = None
+        fallback_delta: float | None = None
+        for record in records:
+            if record.get("source") != "greeting-cron":
+                continue
+            if record.get("dashboardSessionKey") != session_key:
+                continue
+            record_ids = {
+                str(record.get("dashboardMessageId") or ""),
+                str(record.get("dashboard_message_id") or ""),
+                str(record.get("feishuMessageId") or ""),
+            }
+            if external_id and external_id in record_ids:
+                return dict(record)
+            record_text = _compact_message_text(record.get("dashboardText") or record.get("text") or "")
+            if record_text and record_text == message_text:
+                return dict(record)
+            record_time = _parse_side_index_time(record.get("ts"))
+            if record_time is None or message_time is None:
+                continue
+            delta_seconds = abs((message_time - record_time).total_seconds())
+            if delta_seconds <= 180 and (fallback_delta is None or delta_seconds < fallback_delta):
+                fallback_by_time = dict(record)
+                fallback_delta = delta_seconds
+        return fallback_by_time
+
+    def _load_greeting_side_index_records(self) -> list[dict[str, Any]]:
+        path = self.greeting_index_path
+        if path is None or not path.exists():
+            return []
+        records: list[dict[str, Any]] = []
+        try:
+            lines = path.read_text(encoding="utf-8-sig").splitlines()
+        except OSError:
+            return []
+        for line in lines:
+            item = line.strip()
+            if not item:
+                continue
+            try:
+                record = json.loads(item)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                records.append(record)
+        return records
+
+    async def _maybe_enqueue_auto_tts(self, message: dict[str, Any], binding: dict[str, Any], source: str) -> None:
+        if self.auto_tts_handler is None or message.get("role") != "assistant":
+            return
+        current = self.store.get_message(binding["workspace_id"], binding["account_id"], message["id"]) or message
+        metadata = current.get("metadata") or {}
+        if not isinstance(metadata, dict) or metadata.get("auto_tts") is not True:
+            return
+        if current.get("tts"):
+            return
+        await self.auto_tts_handler(current, binding, source)
 
     def _binding_user_id(self, binding: dict[str, Any]) -> str:
         return self.store.get_account_external_user_id(binding["account_id"]) or binding["account_id"]

@@ -168,3 +168,52 @@ test("playRemoteTtsAudio prefers backend proxy and falls back to remote URL when
   assert.deepEqual(speakingStates, [true]);
   assert.equal(controller.audio.src, "http://tts.local/audio.wav");
 });
+
+test("playRemoteTtsAudio exposes the audio element before playback starts", async () => {
+  const calls = [];
+  let exposedAudio = null;
+  let exposedCleanup = null;
+
+  class FakeAudio {
+    constructor(src) {
+      this.src = src;
+      calls.push(["new Audio", src]);
+    }
+
+    set onplay(handler) {
+      this.playHandler = handler;
+    }
+
+    set onended(handler) {
+      this.endHandler = handler;
+    }
+
+    set onerror(handler) {
+      this.errorHandler = handler;
+    }
+
+    play() {
+      calls.push(["play", this.src, exposedAudio === this]);
+      this.playHandler?.();
+      return Promise.resolve();
+    }
+  }
+
+  const controller = await playRemoteTtsAudio({
+    remoteAudioUrl: "http://tts.local/audio.ogg",
+    AudioCtor: FakeAudio,
+    onAudioCreated: ({ audio, cleanup }) => {
+      calls.push(["audio created", audio.src]);
+      exposedAudio = audio;
+      exposedCleanup = cleanup;
+    },
+  });
+
+  assert.deepEqual(calls, [
+    ["new Audio", "http://tts.local/audio.ogg"],
+    ["audio created", "http://tts.local/audio.ogg"],
+    ["play", "http://tts.local/audio.ogg", true],
+  ]);
+  assert.equal(controller.audio, exposedAudio);
+  assert.equal(typeof exposedCleanup, "function");
+});

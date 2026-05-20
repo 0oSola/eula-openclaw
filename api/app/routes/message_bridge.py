@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -106,9 +107,25 @@ async def patch_bridge_settings(
 
 @router.get("/openclaw/feishu/sessions")
 async def list_openclaw_feishu_sessions(request: Request, x_user_id: str | None = Header(default=None)):
-    _require_admin(request, x_user_id)
+    user_id = _require_admin(request, x_user_id)
     service = _service(request)
-    sessions = await service.list_external_sessions_isolated_async()
+    try:
+        sessions = await service.list_external_sessions_isolated_async()
+    except Exception as error:
+        request.app.state.trace_store.insert_event(
+            trace_id=str(uuid4()),
+            user_id=user_id,
+            session_id=None,
+            stage="message_bridge.openclaw.sessions.list",
+            status="error",
+            latency_ms=None,
+            error_code=type(error).__name__,
+            payload={"detail": str(error), "source": "admin_session_list"},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenClaw Gateway session list failed: {type(error).__name__}: {error}",
+        ) from error
     return {
         "items": [
             {

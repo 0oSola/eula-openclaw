@@ -286,6 +286,8 @@ export type UserSession = {
   userId: string;
   activeChatSessionId?: string;
   renderPipeline?: RenderPipeline;
+  ttsEnabled?: boolean;
+  ttsMode?: "browser" | "server";
   mmdCamera?: Partial<Record<RenderPipeline, MmdCameraSnapshot>>;
   mmdCameraByFavoriteVmd?: Record<string, MmdCameraSnapshot>;
 };
@@ -357,4 +359,79 @@ export type MessageBridgeExternalSession = {
   external_session_key: string;
   external_display_name?: string | null;
   updated_at?: string | null;
+};
+
+export type RuntimeHealthStatus = {
+  ok: boolean;
+  generated_at: string;
+  api: {
+    pid: number;
+    data_dir: string;
+    sqlite_path: string;
+    ndjson_dir: string;
+  };
+  openclaw: {
+    base_url: string;
+    agent_id: string;
+    model: string;
+    message_channel: string;
+    stream_mode: string;
+    token_configured: boolean;
+    proxy_configured: boolean;
+    verify_ssl: boolean;
+    timeout_seconds: number;
+  };
+  message_bridge: {
+    provider: string;
+    channel: string;
+    status: {
+      provider: string;
+      channel: string;
+      enabled: boolean;
+      realtime_drive_character: boolean;
+      websocket_status: string;
+      reconnect_attempts: number;
+      last_connected_at?: string | null;
+      last_error?: string | null;
+      updated_at?: string | null;
+    };
+    binding?: MessageBridgeBinding | null;
+    local_session?: {
+      id: string;
+      title: string;
+      title_source: string;
+      openclaw_session_key: string;
+      selected_model_path?: string | null;
+      updated_at: string;
+    } | null;
+    latest_message?: {
+      id: string;
+      role: string;
+      content_preview: string;
+      openclaw_message_id?: string | null;
+      source?: string | null;
+      synced_from?: string | null;
+      external_session_key?: string | null;
+      created_at: string;
+    } | null;
+    warnings: string[];
+  };
+  tts: {
+    enabled: boolean;
+    base_url: string;
+    timeout_seconds: number;
+    poll_interval_seconds: number;
+    max_poll_attempts: number;
+    message_tts_by_status: Record<string, number>;
+    jobs_by_status: Record<string, number>;
+  };
+  database: {
+    account_count: number;
+    workspace_count: number;
+    session_count: number;
+    message_count: number;
+    bridge_message_count: number;
+    trace_event_count: number;
+  };
+  recent_errors: TraceEvent[];
 };

@@ -141,6 +141,46 @@ test("resolveStageCharacterClickInteraction chooses only social soft or strong p
   assert.equal(result.interaction.vmdUrl, greet.url);
 });
 
+test("resolveStageCharacterClickInteraction avoids immediately repeating the previous click motion", () => {
+  const greet = favoriteAsset("greet", "happy", "02_greeting_social");
+  const greetDuplicate = {
+    ...favoriteAsset("greet-copy", "happy", "02_greeting_social"),
+    filename: "greet (2).vmd",
+    display_name: "greet (2).vmd",
+  };
+  const soft = favoriteAsset("soft", "caring", "05_soft_emotion");
+
+  const result = resolveStageCharacterClickInteraction({
+    assets: [greet, greetDuplicate, soft],
+    previousActiveVmdAssetId: "greet",
+    randomValue: 0,
+  });
+
+  assert.equal(result.activeVmdAssetId, "soft");
+  assert.equal(result.interaction.vmdUrl, soft.url);
+});
+
+test("resolveStageCharacterClickInteraction keeps categorized click VMDs even when lower body motion is present", () => {
+  const greet = {
+    ...favoriteAsset("greet", "happy", "02_greeting_social"),
+    motion_profile: { companion_safe: false },
+  };
+  const strong = {
+    ...favoriteAsset("strong", "happy", "06_strong_personality"),
+    motion_profile: { companion_safe: false },
+  };
+
+  const result = resolveStageCharacterClickInteraction({
+    assets: [greet, strong],
+    previousActiveVmdAssetId: "greet",
+    randomValue: 0,
+  });
+
+  assert.equal(result.activeVmdAssetId, "strong");
+  assert.equal(result.interaction.vmdUrl, strong.url);
+  assert.equal(result.interaction.lockLowerBody, true);
+});
+
 test("resolveStageCharacterClickInteraction falls back to a procedural wave when no VMD is available", () => {
   const result = resolveStageCharacterClickInteraction({ assets: [] });
 

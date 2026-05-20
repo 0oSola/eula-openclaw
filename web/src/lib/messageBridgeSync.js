@@ -9,6 +9,47 @@ export function resolveMessageBridgeSessionSync({ status, currentSessionId, busy
   return { action: "refresh", sessionId: boundSessionId };
 }
 
+/**
+ * @param {{
+ *   status: any;
+ *   sessions: any[] | null;
+ *   previousStatus?: any;
+ *   previousSessions?: any[];
+ *   currentSelectedSessionKey?: string;
+ *   sessionsError?: unknown;
+ * }} input
+ * @returns {{
+ *   status: any;
+ *   sessions: any[];
+ *   selectedSessionKey: string;
+ *   sessionListUnavailable: boolean;
+ * }}
+ */
+export function resolveMessageBridgeStatusLoad({
+  status,
+  sessions,
+  previousStatus = null,
+  previousSessions = [],
+  currentSelectedSessionKey = "",
+  sessionsError = null,
+}) {
+  const nextStatus = status || previousStatus || null;
+  const nextSessions = Array.isArray(sessions) ? sessions : previousSessions || [];
+  const boundSessionKey = nextStatus?.binding?.external_session_key || "";
+  const selectedSessionKey =
+    boundSessionKey ||
+    currentSelectedSessionKey ||
+    nextSessions.find((item) => item?.external_session_key)?.external_session_key ||
+    "";
+
+  return {
+    status: nextStatus,
+    sessions: nextSessions,
+    selectedSessionKey,
+    sessionListUnavailable: Boolean(sessionsError),
+  };
+}
+
 function messageId(message) {
   return typeof message?.id === "string" && message.id ? message.id : "";
 }

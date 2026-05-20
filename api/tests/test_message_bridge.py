@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -388,6 +389,235 @@ def test_bridge_realtime_message_uses_idle_defaults_when_no_motion_fields():
         store.close()
 
 
+def test_bridge_skips_empty_assistant_fallback_messages():
+    store = _store()
+    try:
+        provider = FakeBridgeProvider()
+        service = MessageBridgeService(store=store, provider=provider)
+        binding = service.sync_default_binding_for_user("admin-1")
+
+        message = service.ingest_external_message(
+            binding,
+            ExternalMessage(
+                id="assistant-empty",
+                role="assistant",
+                content="",
+                timestamp=300,
+                raw={"role": "assistant"},
+            ),
+            source="realtime",
+        )
+        messages = store.list_messages(binding["workspace_id"], binding["account_id"], binding["local_session_id"])
+
+        assert message is None
+        assert all(item.get("openclaw_message_id") != "assistant-empty" for item in messages)
+        assert all(item["content"] != "I am here. Let's keep going." for item in messages)
+    finally:
+        store.close()
+
+
+def test_bridge_preserves_openclaw_greeting_metadata_and_marks_auto_tts():
+    store = _store()
+    try:
+        provider = FakeBridgeProvider()
+        service = MessageBridgeService(store=store, provider=provider)
+        binding = service.sync_default_binding_for_user("admin-1")
+
+        message = service.ingest_external_message(
+            binding,
+            ExternalMessage(
+                id="openclaw-greeting-1",
+                role="assistant",
+                content="中午好，sola。",
+                timestamp=int(datetime(2026, 5, 17, 4, 1, 52, tzinfo=UTC).timestamp() * 1000),
+                raw={
+                    "role": "assistant",
+                    "openclawMetadata": {
+                        "source": "greeting-cron",
+                        "greetingType": "noon",
+                        "audioFile": "/Users/sola/noon_20260517_1200.ogg",
+                    },
+                },
+            ),
+            source="realtime",
+        )
+
+        assert message["metadata"]["openclaw_metadata"]["source"] == "greeting-cron"
+        assert message["metadata"]["greeting_cron"]["source"] == "openclaw_metadata"
+        assert message["metadata"]["greeting_cron"]["greetingType"] == "noon"
+        assert message["metadata"]["auto_tts"] is True
+    finally:
+        store.close()
+
+
+def test_bridge_joins_greeting_side_index_by_session_text_and_time():
+    case_dir = _make_case_dir()
+    index_path = case_dir / "greeting-dashboard-injections.jsonl"
+    index_path.write_text(
+        json.dumps(
+            {
+                "ts": "2026-05-17T04:01:52.936Z",
+                "source": "greeting-cron",
+                "greetingType": "noon",
+                "dashboardSessionKey": "agent:main:feishu:direct:new",
+                "dashboardText": "中午好，sola。",
+                "audioFile": "/Users/sola/noon_20260517_1200.ogg",
+                "feishuMessageId": "om_noon",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    store = TraceStore(db_path=case_dir / "sqlite" / "trace.db", ndjson_dir=case_dir / "logs")
+    try:
+        provider = FakeBridgeProvider()
+        service = MessageBridgeService(store=store, provider=provider, greeting_index_path=index_path)
+        binding = service.sync_default_binding_for_user("admin-1")
+
+        message = service.ingest_external_message(
+            binding,
+            ExternalMessage(
+                id="dashboard-greeting-1",
+                role="assistant",
+                content="中午好，sola。",
+                timestamp=int(datetime(2026, 5, 17, 4, 1, 40, tzinfo=UTC).timestamp() * 1000),
+                raw={"role": "assistant"},
+            ),
+            source="realtime",
+        )
+
+        assert message["metadata"]["greeting_cron"]["source"] == "side_index"
+        assert message["metadata"]["greeting_cron"]["greetingType"] == "noon"
+        assert message["metadata"]["greeting_cron"]["feishuMessageId"] == "om_noon"
+        assert message["metadata"]["auto_tts"] is True
+    finally:
+        store.close()
+
+
+def test_bridge_auto_tts_handler_runs_for_joined_greeting_without_existing_tts():
+    async def run_case():
+        case_dir = _make_case_dir()
+        index_path = case_dir / "greeting-dashboard-injections.jsonl"
+        index_path.write_text(
+            json.dumps(
+                {
+                    "ts": "2026-05-17T04:01:52.936Z",
+                    "source": "greeting-cron",
+                    "greetingType": "noon",
+                    "dashboardSessionKey": "agent:main:feishu:direct:new",
+                    "dashboardText": "中午好，sola。",
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        store = TraceStore(db_path=case_dir / "sqlite" / "trace.db", ndjson_dir=case_dir / "logs")
+        try:
+            calls = []
+
+            async def auto_tts_handler(message, binding, source):
+                calls.append((message["id"], binding["external_session_key"], source))
+
+            provider = FakeBridgeProvider()
+            provider.history["agent:main:feishu:direct:new"].append(
+                ExternalMessage(
+                    id="dashboard-greeting-history",
+                    role="assistant",
+                    content="中午好，sola。",
+                    timestamp=int(datetime(2026, 5, 17, 4, 1, 40, tzinfo=UTC).timestamp() * 1000),
+                    raw={"role": "assistant"},
+                )
+            )
+            service = MessageBridgeService(
+                store=store,
+                provider=provider,
+                greeting_index_path=index_path,
+                auto_tts_handler=auto_tts_handler,
+            )
+
+            await service.ensure_default_binding_for_user("admin-1")
+
+            assert len(calls) == 1
+            assert calls[0][1] == "agent:main:feishu:direct:new"
+            assert calls[0][2] == "history"
+        finally:
+            store.close()
+
+    asyncio.run(run_case())
+
+
+def test_bridge_backfills_existing_greeting_messages_from_side_index_and_queues_tts():
+    async def run_case():
+        case_dir = _make_case_dir()
+        index_path = case_dir / "greeting-dashboard-injections.jsonl"
+        index_path.write_text(
+            json.dumps(
+                {
+                    "ts": "2026-05-17T04:01:52.936Z",
+                    "source": "greeting-cron",
+                    "greetingType": "noon",
+                    "dashboardSessionKey": "agent:main:feishu:direct:ou_test",
+                    "dashboardText": "中午好，sola。",
+                    "feishuMessageId": "om_noon",
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        store = TraceStore(db_path=case_dir / "sqlite" / "trace.db", ndjson_dir=case_dir / "logs")
+        try:
+            ctx = store.get_current_workspace_context("admin-1")
+            session = store.create_session(
+                ctx["workspace"]["id"],
+                ctx["account"]["id"],
+                title="Feishu",
+                openclaw_session_key="agent:main:feishu:direct:ou_test",
+            )
+            message = store.insert_message(
+                ctx["workspace"]["id"],
+                session["id"],
+                ctx["account"]["id"],
+                role="assistant",
+                content="中午好，sola。",
+                openclaw_message_id="local-greeting",
+                metadata={
+                    "source": "message_bridge",
+                    "provider": "openclaw",
+                    "channel": "feishu",
+                    "external_session_key": "agent:main:feishu:direct:ou_test",
+                    "external_message_id": "local-greeting",
+                    "synced_from": "realtime",
+                },
+            )
+            calls = []
+
+            async def auto_tts_handler(message, binding, source):
+                calls.append((message["id"], binding["external_session_key"], source))
+
+            service = MessageBridgeService(
+                store=store,
+                provider=FakeBridgeProvider(),
+                greeting_index_path=index_path,
+                auto_tts_handler=auto_tts_handler,
+            )
+
+            result = await service.backfill_greeting_metadata_for_user("admin-1")
+            updated = store.get_message(ctx["workspace"]["id"], ctx["account"]["id"], message["id"])
+
+            assert result["updated_count"] == 1
+            assert updated["metadata"]["greeting_cron"]["source"] == "side_index"
+            assert updated["metadata"]["greeting_cron"]["feishuMessageId"] == "om_noon"
+            assert updated["metadata"]["auto_tts"] is True
+            assert calls == [(message["id"], "agent:main:feishu:direct:ou_test", "side_index_backfill")]
+        finally:
+            store.close()
+
+    asyncio.run(run_case())
+
+
 def test_bridge_skips_realtime_echo_when_local_traced_message_exists():
     store = _store()
     try:
@@ -630,6 +860,22 @@ def test_bridge_admin_can_list_feishu_sessions_and_switch_default_binding():
         assert provider.unsubscribed == ["agent:main:feishu:direct:new"]
     finally:
         client.__exit__(None, None, None)
+
+
+def test_bridge_session_list_returns_bad_gateway_when_openclaw_gateway_times_out():
+    provider = FakeBridgeProvider()
+    app = create_app({"data_dir": str(_make_case_dir()), "admin_user_ids": ["admin-1"]})
+    app.state.message_bridge_service = MessageBridgeService(store=app.state.trace_store, provider=provider)
+
+    async def fail_list_external_sessions():
+        raise TimeoutError("timed out during opening handshake")
+
+    provider.list_external_sessions = fail_list_external_sessions
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/admin/message-bridge/openclaw/feishu/sessions", headers={"x-user-id": "admin-1"})
+
+    assert response.status_code == 502
+    assert "timed out during opening handshake" in response.json()["detail"]
 
 
 def test_bridge_switch_keeps_binding_when_subscription_refresh_fails():
