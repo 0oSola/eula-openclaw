@@ -5,6 +5,7 @@ import shutil
 import re
 import struct
 from pathlib import Path
+from threading import RLock
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -17,6 +18,7 @@ from app.security import resolve_requester
 
 router = APIRouter(prefix="/assets", tags=["assets"])
 logger = logging.getLogger(__name__)
+_USAGE_VMD_SYNC_LOCK = RLock()
 
 ALLOWED_SLOTS = {"neutral", "happy", "sad", "thinking", "excited", "caring"}
 MMD_MODEL_EXTENSIONS = {".pmx", ".pmd"}
@@ -294,45 +296,46 @@ def _sync_favorite_copy(settings, item: dict, display_name: str, model_relative_
 
 
 def _sync_usage_vmd_assets_to_db(settings, store, user_id: str) -> None:
-    root = settings.mmd_root_dir.resolve()
-    for motion_path in _iter_usage_vmds(root):
-        favorite_relative_path = motion_path.relative_to(root).as_posix()
-        model_relative_path = _infer_model_relative_path_from_favorite_path(root, favorite_relative_path)
-        if not model_relative_path:
-            continue
+    with _USAGE_VMD_SYNC_LOCK:
+        root = settings.mmd_root_dir.resolve()
+        for motion_path in _iter_usage_vmds(root):
+            favorite_relative_path = motion_path.relative_to(root).as_posix()
+            model_relative_path = _infer_model_relative_path_from_favorite_path(root, favorite_relative_path)
+            if not model_relative_path:
+                continue
 
-        existing = store.get_asset_by_favorite_relative_path(user_id, favorite_relative_path)
-        display_name = _normalize_vmd_filename(motion_path.name)
-        if existing:
-            if (
-                not existing.get("is_favorite")
-                or existing.get("favorite_model_relative_path") != model_relative_path
-                or not existing.get("display_name")
-            ):
-                store.update_asset(
-                    existing["asset_id"],
-                    display_name=existing.get("display_name") or display_name,
-                    is_favorite=True,
-                    favorite_relative_path=favorite_relative_path,
-                    favorite_model_relative_path=model_relative_path,
-                )
-            continue
+            existing = store.get_asset_by_favorite_relative_path(user_id, favorite_relative_path)
+            display_name = _normalize_vmd_filename(motion_path.name)
+            if existing:
+                if (
+                    not existing.get("is_favorite")
+                    or existing.get("favorite_model_relative_path") != model_relative_path
+                    or not existing.get("display_name")
+                ):
+                    store.update_asset(
+                        existing["asset_id"],
+                        display_name=existing.get("display_name") or display_name,
+                        is_favorite=True,
+                        favorite_relative_path=favorite_relative_path,
+                        favorite_model_relative_path=model_relative_path,
+                    )
+                continue
 
-        created = store.add_asset(
-            user_id=user_id,
-            slot="neutral",
-            filename=motion_path.name,
-            source_relative_path=favorite_relative_path,
-            relative_path=favorite_relative_path,
-            size_bytes=motion_path.stat().st_size,
-        )
-        store.update_asset(
-            created["asset_id"],
-            display_name=display_name,
-            is_favorite=True,
-            favorite_relative_path=favorite_relative_path,
-            favorite_model_relative_path=model_relative_path,
-        )
+            created = store.add_asset(
+                user_id=user_id,
+                slot="neutral",
+                filename=motion_path.name,
+                source_relative_path=favorite_relative_path,
+                relative_path=favorite_relative_path,
+                size_bytes=motion_path.stat().st_size,
+            )
+            store.update_asset(
+                created["asset_id"],
+                display_name=display_name,
+                is_favorite=True,
+                favorite_relative_path=favorite_relative_path,
+                favorite_model_relative_path=model_relative_path,
+            )
 
 
 def _resolve_vmd_asset_file_path(settings, item: dict) -> Path:

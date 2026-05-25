@@ -50,12 +50,18 @@ class VoiceWorkflowTtsClient:
         timeout_seconds: int = 30,
         poll_interval_seconds: float = 3,
         max_poll_attempts: int = 40,
+        daily_podcast_refresh_path: str = "/api/v1/podcast/daily/refresh",
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.max_poll_attempts = max_poll_attempts
+        self.daily_podcast_refresh_path = (
+            daily_podcast_refresh_path
+            if daily_podcast_refresh_path.startswith("/")
+            else f"/{daily_podcast_refresh_path}"
+        )
         self._external_client = http_client is not None
         self.http_client = http_client or httpx.AsyncClient(timeout=timeout_seconds)
 
@@ -251,6 +257,19 @@ class VoiceWorkflowTtsClient:
             raise VoiceWorkflowTtsError(self._format_response_error("Voice workflow TTS realtime cancel", response))
         data = response.json()
         return bool(data.get("cancelled"))
+
+    async def refresh_daily_podcast(self) -> dict[str, Any]:
+        response = await self.http_client.post(
+            f"{self.base_url}{self.daily_podcast_refresh_path}",
+            timeout=self.timeout_seconds,
+        )
+        if response.status_code not in {200, 202}:
+            raise VoiceWorkflowTtsError(self._format_response_error("Voice workflow daily podcast refresh", response))
+        try:
+            data = response.json()
+        except ValueError:
+            return {}
+        return data if isinstance(data, dict) else {}
 
     async def synthesize_reference(
         self,

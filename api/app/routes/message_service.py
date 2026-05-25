@@ -66,6 +66,7 @@ def _message_response(message: dict) -> dict:
         "session_id": message["session_id"],
         "role": message["role"],
         "content": message["content"],
+        "visibility": message.get("visibility", "chat"),
         "trace_id": message.get("trace_id"),
         "emotion": message.get("emotion"),
         "action": message.get("action"),

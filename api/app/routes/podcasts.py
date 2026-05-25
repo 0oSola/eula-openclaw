@@ -5,7 +5,8 @@ from dataclasses import asdict
 from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.responses import Response
 
-from app.services.daily_podcast import DailyPodcast, DailyPodcastService
+from app.services.daily_podcast import DailyPodcast, DailyPodcastRefreshCooldown, DailyPodcastService
+from app.services.voice_workflow_tts_client import VoiceWorkflowTtsError
 
 
 router = APIRouter(prefix="/podcasts", tags=["podcasts"])
@@ -15,6 +16,28 @@ router = APIRouter(prefix="/podcasts", tags=["podcasts"])
 async def get_latest_daily_podcast(request: Request):
     podcast = await _service(request).latest()
     return {"podcast": _serialize_podcast(podcast)}
+
+
+@router.post("/daily/refresh")
+async def refresh_daily_podcast(request: Request):
+    service = _service(request)
+    refresh = await _refresh_cooldown(request).reserve()
+    refresh_error = None
+    if refresh.triggered:
+        try:
+            await service.refresh_latest()
+        except VoiceWorkflowTtsError as exc:
+            refresh_error = str(exc)
+    podcast = await service.latest()
+    return {
+        "podcast": _serialize_podcast(podcast),
+        "refresh": {
+            "triggered": refresh.triggered,
+            "cooldown_seconds": refresh.cooldown_seconds,
+            "retry_after_seconds": refresh.retry_after_seconds,
+            "error": refresh_error,
+        },
+    }
 
 
 @router.get("/daily")
@@ -67,6 +90,15 @@ async def get_daily_podcast_audio(date: str, request: Request, format: str = "pr
 
 def _service(request: Request) -> DailyPodcastService:
     return DailyPodcastService(tts_client=request.app.state.tts_client)
+
+
+def _refresh_cooldown(request: Request) -> DailyPodcastRefreshCooldown:
+    existing = getattr(request.app.state, "daily_podcast_refresh_cooldown", None)
+    if isinstance(existing, DailyPodcastRefreshCooldown):
+        return existing
+    cooldown = DailyPodcastRefreshCooldown(cooldown_seconds=10)
+    request.app.state.daily_podcast_refresh_cooldown = cooldown
+    return cooldown
 
 
 def _serialize_podcast(podcast: DailyPodcast) -> dict:

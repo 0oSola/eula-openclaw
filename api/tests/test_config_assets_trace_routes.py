@@ -1,4 +1,5 @@
 ﻿from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 import struct
 from urllib.parse import quote
@@ -494,6 +495,43 @@ def test_usage_vmd_files_are_synced_into_asset_registry_by_parent_folder():
     fetched = client.get(item["url"])
     assert fetched.status_code == 200
     assert fetched.content == b"Vocaloid Motion Data 0002"
+
+
+def test_usage_vmd_sync_handles_parallel_panel_loads():
+    case_dir = _make_case_dir()
+    mmd_root = case_dir / "mmd"
+    model_rel = Path("Role/NemesisDefault.pmx")
+    model_abs = mmd_root / model_rel
+    model_abs.parent.mkdir(parents=True, exist_ok=True)
+    model_abs.write_bytes(b"pmx")
+
+    favorite_dir = mmd_root / "usage" / "vmd" / "Role[动作]"
+    favorite_dir.mkdir(parents=True, exist_ok=True)
+    for index in range(12):
+        (favorite_dir / f"Motion {index}.vmd").write_bytes(b"Vocaloid Motion Data 0002")
+
+    app = create_app(
+        {
+            "data_dir": str(case_dir / "data"),
+            "admin_user_ids": [],
+            "mmd_root_dir": str(mmd_root),
+        }
+    )
+    client = TestClient(app)
+
+    def list_assets():
+        return client.get("/assets/vmd?user_id=u1", headers={"x-user-id": "u1"})
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        responses = list(executor.map(lambda _: list_assets(), range(4)))
+
+    assert [response.status_code for response in responses] == [200, 200, 200, 200]
+    items = responses[-1].json()["items"]
+    assert len(items) == 12
+    assert {item["favorite_relative_path"] for item in items} == {
+        (Path("usage/vmd/Role[动作]") / f"Motion {index}.vmd").as_posix()
+        for index in range(12)
+    }
 
 
 def test_vmd_assets_report_companion_motion_safety():

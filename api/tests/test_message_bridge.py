@@ -416,6 +416,58 @@ def test_bridge_skips_empty_assistant_fallback_messages():
         store.close()
 
 
+def test_bridge_control_messages_land_as_internal_and_stay_out_of_chat_list():
+    store = _store()
+    try:
+        provider = FakeBridgeProvider()
+        service = MessageBridgeService(store=store, provider=provider)
+        binding = service.sync_default_binding_for_user("admin-1")
+
+        system_message = service.ingest_external_message(
+            binding,
+            ExternalMessage(
+                id="system-compaction",
+                role="system",
+                content="Compaction",
+                timestamp=301,
+                raw={"role": "system"},
+            ),
+            source="realtime",
+        )
+        failed_turn = service.ingest_external_message(
+            binding,
+            ExternalMessage(
+                id="assistant-failed-turn",
+                role="assistant",
+                content="[assistant turn failed before producing content]",
+                timestamp=302,
+                raw={"role": "assistant"},
+            ),
+            source="realtime",
+        )
+
+        raw_messages = store.list_messages(binding["workspace_id"], binding["account_id"], binding["local_session_id"])
+        chat_messages = store.list_messages_for_chat(
+            binding["workspace_id"],
+            binding["account_id"],
+            binding["local_session_id"],
+        )
+
+        assert system_message is not None
+        assert failed_turn is not None
+        control_contents = {"Compaction", "[assistant turn failed before producing content]"}
+        raw_control_messages = [message for message in raw_messages if message["content"] in control_contents]
+        chat_control_messages = [message for message in chat_messages if message["content"] in control_contents]
+
+        assert [(message["role"], message["content"], message.get("visibility")) for message in raw_control_messages] == [
+            ("system", "Compaction", "internal"),
+            ("assistant", "[assistant turn failed before producing content]", "internal"),
+        ]
+        assert chat_control_messages == []
+    finally:
+        store.close()
+
+
 def test_bridge_preserves_openclaw_greeting_metadata_and_marks_auto_tts():
     store = _store()
     try:

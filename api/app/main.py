@@ -24,6 +24,7 @@ from app.services.message_tts_reference import create_or_enqueue_message_tts_ref
 from app.services.message_tts_worker import run_message_tts_worker
 from app.services.message_bridge import MessageBridgeService, OpenClawGatewayProvider
 from app.services.openclaw_client import OpenClawClient
+from app.services.daily_podcast import DailyPodcastRefreshCooldown
 from app.services.realtime_voice import RealtimeVoiceChunkRegistry
 from app.services.voice_workflow_tts_client import VoiceWorkflowTtsClient
 
@@ -145,6 +146,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.state.openclaw_client = openclaw_client
     app.state.tts_client = tts_client
     app.state.message_bridge_service = message_bridge_service
+    app.state.daily_podcast_refresh_cooldown = DailyPodcastRefreshCooldown(cooldown_seconds=10)
     app.state.realtime_voice_registry = RealtimeVoiceChunkRegistry()
     app.state.realtime_voice_queues = {}
     app.state.last_cleanup_check = datetime.now(UTC)

@@ -1,3 +1,10 @@
+import {
+  createAudioEnvelopeLevelSync,
+  decodeAudioEnvelopeFromBlob,
+  fetchAudioEnvelope,
+} from "./audioWaveform.js";
+import { createSpeechVisemeSync } from "./speechViseme.js";
+
 export const DEFAULT_TTS_MODE = "server";
 
 function normalizeAudioPlaybackError(error, fallbackMessage = "Audio playback failed") {
@@ -15,6 +22,25 @@ export function authenticatedBackendAudioUrl(audioUrl, userId, { backendPrefix =
   return `${backendPrefix}${authenticatedPath.startsWith("/") ? authenticatedPath : `/${authenticatedPath}`}`;
 }
 
+/**
+ * @param {Blob} audioBlob
+ * @param {{
+ *   AudioCtor?: typeof Audio;
+ *   createObjectURL?: (blob: Blob) => string;
+ *   revokeObjectURL?: (url: string) => void;
+ *   setSpeaking?: (value: boolean) => void;
+ *   setSpeechLevel?: (value: number) => void;
+ *   setSpeechViseme?: (frame: { viseme: string, weight?: number } | null) => void;
+ *   speechText?: string;
+ *   speechDurationSeconds?: number;
+ *   speechVisemeTimeline?: Array<{ time: number, viseme: string, weight?: number }>;
+ *   loadSpeechEnvelope?: (event: { audioBlob: Blob, objectUrl: string, source: string, audio: HTMLAudioElement }) => Promise<{ peaks: number[], duration: number }> | { peaks: number[], duration: number };
+ *   requestAnimationFrame?: (callback: FrameRequestCallback) => number;
+ *   cancelAnimationFrame?: (handle: number) => void;
+ *   onCleanup?: (event: { audio?: HTMLAudioElement, objectUrl?: string }) => void;
+ *   onAudioCreated?: (event: { audio: HTMLAudioElement, objectUrl: string, cleanup: () => void }) => void;
+ * }} [options]
+ */
 export async function playServerTtsAudio(
   audioBlob,
   {
@@ -22,6 +48,14 @@ export async function playServerTtsAudio(
     createObjectURL = globalThis.URL?.createObjectURL?.bind(globalThis.URL),
     revokeObjectURL = globalThis.URL?.revokeObjectURL?.bind(globalThis.URL),
     setSpeaking = () => {},
+    setSpeechLevel = undefined,
+    setSpeechViseme = undefined,
+    speechText = "",
+    speechDurationSeconds = 0,
+    speechVisemeTimeline = null,
+    loadSpeechEnvelope = ({ audioBlob: sourceBlob }) => decodeAudioEnvelopeFromBlob(sourceBlob),
+    requestAnimationFrame = globalThis.requestAnimationFrame?.bind(globalThis),
+    cancelAnimationFrame = globalThis.cancelAnimationFrame?.bind(globalThis),
     onCleanup = () => {},
     onAudioCreated = noopAudioCreated,
   } = {},
@@ -32,11 +66,31 @@ export async function playServerTtsAudio(
 
   const objectUrl = createObjectURL(audioBlob);
   const audio = new AudioCtor(objectUrl);
+  const speechLevelSync = createAudioEnvelopeLevelSync({
+    audio,
+    setLevel: setSpeechLevel,
+    requestAnimationFrame,
+    cancelAnimationFrame,
+  });
+  const speechVisemeSync = createSpeechVisemeSync({
+    audio,
+    text: speechText,
+    durationSeconds: speechDurationSeconds,
+    timeline: speechVisemeTimeline,
+    setViseme: setSpeechViseme,
+    requestAnimationFrame,
+    cancelAnimationFrame,
+  });
+  if (typeof setSpeechLevel === "function") {
+    speechLevelSync.setEnvelopePromise(loadSpeechEnvelope({ audioBlob, objectUrl, source: objectUrl, audio }));
+  }
   let cleaned = false;
 
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
+    speechLevelSync.stop();
+    speechVisemeSync.stop();
     audio.onplay = null;
     audio.onended = null;
     audio.onerror = null;
@@ -45,7 +99,11 @@ export async function playServerTtsAudio(
     onCleanup({ audio, objectUrl });
   };
 
-  audio.onplay = () => setSpeaking(true);
+  audio.onplay = () => {
+    setSpeaking(true);
+    speechLevelSync.start();
+    speechVisemeSync.start();
+  };
   audio.onended = cleanup;
   audio.onerror = cleanup;
   onAudioCreated({ audio, objectUrl, cleanup });
@@ -68,6 +126,11 @@ export async function playServerTtsAudio(
  *   AudioCtor?: typeof Audio;
  *   backendPrefix?: string;
  *   setSpeaking?: (value: boolean) => void;
+ *   setSpeechLevel?: (value: number) => void;
+ *   setSpeechViseme?: (frame: { viseme: string, weight?: number } | null) => void;
+ *   speechText?: string;
+ *   speechDurationSeconds?: number;
+ *   speechVisemeTimeline?: Array<{ time: number, viseme: string, weight?: number }>;
  *   onCleanup?: (event?: { audio?: HTMLAudioElement }) => void;
  *   onAudioCreated?: (event: { audio: HTMLAudioElement, cleanup: () => void }) => void;
  *   onFinalError?: (error: Error) => void | Promise<void>;
@@ -80,6 +143,14 @@ export async function playRemoteTtsAudio({
   AudioCtor = globalThis.Audio,
   backendPrefix = "/api/backend",
   setSpeaking = () => {},
+  setSpeechLevel = undefined,
+  setSpeechViseme = undefined,
+  speechText = "",
+  speechDurationSeconds = 0,
+  speechVisemeTimeline = null,
+  loadSpeechEnvelope = ({ source }) => fetchAudioEnvelope(source),
+  requestAnimationFrame = globalThis.requestAnimationFrame?.bind(globalThis),
+  cancelAnimationFrame = globalThis.cancelAnimationFrame?.bind(globalThis),
   onCleanup = () => {},
   onAudioCreated = noopAudioCreated,
   onFinalError = () => {},
@@ -101,6 +172,21 @@ export async function playRemoteTtsAudio({
   }
 
   const audio = new AudioCtor(uniqueSources[0]);
+  const speechLevelSync = createAudioEnvelopeLevelSync({
+    audio,
+    setLevel: setSpeechLevel,
+    requestAnimationFrame,
+    cancelAnimationFrame,
+  });
+  const speechVisemeSync = createSpeechVisemeSync({
+    audio,
+    text: speechText,
+    durationSeconds: speechDurationSeconds,
+    timeline: speechVisemeTimeline,
+    setViseme: setSpeechViseme,
+    requestAnimationFrame,
+    cancelAnimationFrame,
+  });
   let cleaned = false;
   let sourceIndex = 0;
   let lastError = null;
@@ -108,6 +194,8 @@ export async function playRemoteTtsAudio({
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
+    speechLevelSync.stop();
+    speechVisemeSync.stop();
     audio.onplay = null;
     audio.onended = null;
     audio.onerror = null;
@@ -117,6 +205,9 @@ export async function playRemoteTtsAudio({
 
   const playCurrentSource = async () => {
     try {
+      if (typeof setSpeechLevel === "function") {
+        speechLevelSync.setEnvelopePromise(loadSpeechEnvelope({ source: uniqueSources[sourceIndex], audio }));
+      }
       await audio.play();
       return true;
     } catch (error) {
@@ -134,7 +225,11 @@ export async function playRemoteTtsAudio({
     return false;
   };
 
-  audio.onplay = () => setSpeaking(true);
+  audio.onplay = () => {
+    setSpeaking(true);
+    speechLevelSync.start();
+    speechVisemeSync.start();
+  };
   audio.onended = cleanup;
   audio.onerror = () => {
     void (async () => {

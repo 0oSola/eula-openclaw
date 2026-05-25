@@ -6,6 +6,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.services.voice_workflow_tts_client import VoiceWorkflowTtsError
 
 
 def _make_case_dir() -> Path:
@@ -19,9 +20,17 @@ class FakePodcastTtsClient:
     http_client: httpx.AsyncClient
     timeout_seconds: int = 5
     base_url: str = "http://voice.local"
+    refresh_calls: int = 0
+    refresh_error: str | None = None
 
     def eula_storage_url(self, path: str) -> str:
         return f"{self.base_url}/api/v1/eula-storage-audio/{path.lstrip('/')}"
+
+    async def refresh_daily_podcast(self) -> dict:
+        self.refresh_calls += 1
+        if self.refresh_error:
+            raise VoiceWorkflowTtsError(self.refresh_error)
+        return {"status": "accepted"}
 
     async def close(self) -> None:
         await self.http_client.aclose()
@@ -121,3 +130,47 @@ def test_podcast_audio_proxy_returns_404_when_no_audio():
     response = client.get("/podcasts/daily/2026-05-17/audio?format=preferred", headers={"x-user-id": "u1"})
 
     assert response.status_code == 404
+
+
+def test_refresh_daily_podcast_triggers_voice_and_returns_latest_payload():
+    client = _client(_handler)
+
+    response = client.post("/podcasts/daily/refresh", headers={"x-user-id": "u1"})
+
+    assert response.status_code == 200
+    assert response.json()["podcast"]["date"] == "2026-05-18"
+    assert response.json()["refresh"] == {
+        "triggered": True,
+        "cooldown_seconds": 10,
+        "retry_after_seconds": 10,
+        "error": None,
+    }
+    assert client.app.state.tts_client.refresh_calls == 1
+
+
+def test_refresh_daily_podcast_cools_down_voice_requests_for_10_seconds():
+    client = _client(_handler)
+
+    first = client.post("/podcasts/daily/refresh", headers={"x-user-id": "u1"})
+    second = client.post("/podcasts/daily/refresh", headers={"x-user-id": "u1"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["podcast"]["date"] == "2026-05-18"
+    assert second.json()["refresh"]["triggered"] is False
+    assert second.json()["refresh"]["cooldown_seconds"] == 10
+    assert 1 <= second.json()["refresh"]["retry_after_seconds"] <= 10
+    assert client.app.state.tts_client.refresh_calls == 1
+
+
+def test_refresh_daily_podcast_returns_latest_payload_when_voice_refresh_fails():
+    client = _client(_handler)
+
+    client.app.state.tts_client.refresh_error = "daily generator unavailable"
+
+    response = client.post("/podcasts/daily/refresh", headers={"x-user-id": "u1"})
+
+    assert response.status_code == 200
+    assert response.json()["podcast"]["date"] == "2026-05-18"
+    assert response.json()["refresh"]["triggered"] is True
+    assert response.json()["refresh"]["error"] == "daily generator unavailable"

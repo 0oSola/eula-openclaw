@@ -1,3 +1,6 @@
+import { createAudioEnvelopeLevelSync, fetchAudioEnvelope } from "./audioWaveform.js";
+import { createSpeechVisemeSync } from "./speechViseme.js";
+
 const DEFAULT_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
 
 function resolveApiUrl(baseUrl, locationLike) {
@@ -43,11 +46,21 @@ export class AudioQueue {
     onError = noop,
     onChunkStart = noop,
     onChunkEnd = noop,
+    setSpeechLevel = undefined,
+    setSpeechViseme = undefined,
+    loadSpeechEnvelope = ({ url }) => fetchAudioEnvelope(url),
+    requestAnimationFrame = globalThis.requestAnimationFrame?.bind(globalThis),
+    cancelAnimationFrame = globalThis.cancelAnimationFrame?.bind(globalThis),
   } = {}) {
     this.AudioCtor = AudioCtor;
     this.onError = onError;
     this.onChunkStart = onChunkStart;
     this.onChunkEnd = onChunkEnd;
+    this.setSpeechLevel = setSpeechLevel;
+    this.setSpeechViseme = setSpeechViseme;
+    this.loadSpeechEnvelope = loadSpeechEnvelope;
+    this.requestAnimationFrame = requestAnimationFrame;
+    this.cancelAnimationFrame = cancelAnimationFrame;
     this.entries = [];
     this.jobOrder = new Map();
     this.playedJobs = new Set();
@@ -166,12 +179,31 @@ export class AudioQueue {
 
     const audio = new this.AudioCtor(entry.url);
     this.currentAudio = audio;
+    const speechLevelSync = createAudioEnvelopeLevelSync({
+      audio,
+      setLevel: this.setSpeechLevel,
+      requestAnimationFrame: this.requestAnimationFrame,
+      cancelAnimationFrame: this.cancelAnimationFrame,
+    });
+    const speechVisemeSync = createSpeechVisemeSync({
+      audio,
+      text: entry.text || "",
+      durationSeconds: Number(entry.duration) || 0,
+      setViseme: this.setSpeechViseme,
+      requestAnimationFrame: this.requestAnimationFrame,
+      cancelAnimationFrame: this.cancelAnimationFrame,
+    });
+    if (typeof this.setSpeechLevel === "function") {
+      speechLevelSync.setEnvelopePromise(this.loadSpeechEnvelope(entry));
+    }
 
     await new Promise((resolve) => {
       let settled = false;
       const finish = () => {
         if (settled) return;
         settled = true;
+        speechLevelSync.stop();
+        speechVisemeSync.stop();
         this.detachAudioHandlers(audio);
         this.completeCurrent = null;
         resolve();
@@ -184,6 +216,8 @@ export class AudioQueue {
       this.completeCurrent = finish;
       audio.onplay = () => {
         this.playedJobs.add(entry.jobId);
+        speechLevelSync.start();
+        speechVisemeSync.start();
         this.onChunkStart(entry);
       };
       audio.onended = () => {

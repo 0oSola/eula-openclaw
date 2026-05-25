@@ -372,6 +372,69 @@ test("renderFrame drives mouth morphs while keeping eye-related morphs neutral",
   assert.ok(runtime.model.morphTargetInfluences[5] > 0);
 });
 
+test("speaking mouth morph uses a moderated cadence instead of rapid 150ms flaps", () => {
+  const runtime = makeRuntime({
+    model: { morphTargetInfluences: [0, 0, 0, 0, 0, 0] },
+    morphSlots: { smile: 0, sad: 1, blink: 2, mouthA: 3, mouthI: 4, mouthU: 5 },
+    isSpeaking: true,
+    speakingStartedAtMs: 0,
+  });
+
+  runtime.updateMorph(1, 0);
+  const startOpen = runtime.model.morphTargetInfluences[3];
+  runtime.updateMorph(1, 75);
+  const earlyOpen = runtime.model.morphTargetInfluences[3];
+  runtime.updateMorph(1, 150);
+  const laterOpen = runtime.model.morphTargetInfluences[3];
+
+  assert.ok(earlyOpen - startOpen < 0.35);
+  assert.ok(laterOpen >= earlyOpen);
+});
+
+test("speaking mouth morph prefers waveform speech level when available", () => {
+  const runtime = makeRuntime({
+    model: { morphTargetInfluences: [0, 0, 0, 0, 0, 0] },
+    morphSlots: { smile: 0, sad: 1, blink: 2, mouthA: 3, mouthI: 4, mouthU: 5 },
+  });
+
+  runtime.setSpeaking(true);
+  runtime.setSpeechLevel(0.8);
+  runtime.updateMorph(1, 0);
+  const loudOpen = runtime.model.morphTargetInfluences[3];
+  runtime.setSpeechLevel(0.05);
+  runtime.updateMorph(1, 120);
+  const quietOpen = runtime.model.morphTargetInfluences[3];
+  runtime.setSpeaking(false);
+
+  assert.ok(loudOpen > 0.5);
+  assert.ok(quietOpen < loudOpen);
+  assert.equal(runtime.speechLevel, 0);
+});
+
+test("speech visemes drive exact MMD mouth shapes ahead of waveform levels", () => {
+  const runtime = makeRuntime({
+    model: { morphTargetInfluences: [0, 0, 0, 0, 0, 0, 0, 0] },
+    morphSlots: { smile: 0, sad: 1, blink: 2, mouthA: 3, mouthI: 4, mouthU: 5, mouthE: 6, mouthO: 7 },
+  });
+
+  runtime.setSpeaking(true);
+  runtime.setSpeechLevel(0.9);
+  runtime.setSpeechViseme({ viseme: "O", weight: 0.72 });
+  runtime.updateMorph(1, 0);
+
+  assert.ok(runtime.model.morphTargetInfluences[7] > runtime.model.morphTargetInfluences[3]);
+  assert.ok(runtime.model.morphTargetInfluences[7] > runtime.model.morphTargetInfluences[5]);
+
+  runtime.setSpeechViseme({ viseme: "M", weight: 1 });
+  runtime.updateMorph(1, 120);
+
+  assert.ok(runtime.model.morphTargetInfluences[3] < 0.05);
+  assert.ok(runtime.model.morphTargetInfluences[4] < 0.05);
+  assert.ok(runtime.model.morphTargetInfluences[5] < 0.05);
+  assert.ok(runtime.model.morphTargetInfluences[6] < 0.05);
+  assert.ok(runtime.model.morphTargetInfluences[7] < 0.05);
+});
+
 test("renderFrame ignores missing morph slot maps", () => {
   const runtime = makeRuntime({
     renderPipeline: "genshin",
@@ -602,19 +665,51 @@ test("stage presentation config supports hero-shot while preserving classic fall
   assert.deepEqual(getStagePresentationConfig("unknown"), classic);
 });
 
-test("stage presentation config exposes mio-reference as the screenshot-inspired layered stage", () => {
+test("stage presentation config exposes mio-reference unlocked by default", () => {
   const reference = getStagePresentationConfig("mio-reference");
 
   assert.equal(reference.background, null);
+  assert.equal(reference.renderer.toneMapping, "none");
+  assert.equal(reference.renderer.exposure, 1.57);
   assert.equal(reference.camera.fov, 32);
-  assert.deepEqual(reference.camera.position, [-3.137891, 12.522935, 45.135659]);
+  assert.deepEqual(reference.camera.position, [-9.39, 12.522935, 43.63]);
   assert.deepEqual(reference.camera.target, [-1.861732, -2.847643, 1.048369]);
+  assert.equal(reference.camera.minDistance, 21);
   assert.equal(reference.camera.maxDistance, 72);
-  assert.equal(reference.camera.locked, true);
+  assert.equal(reference.camera.maxPolarAngle, 1.5079644737231006);
+  assert.equal(reference.camera.locked, false);
+  assert.equal(reference.lights.ambient.intensity, 0.2);
+  assert.equal(reference.lights.hemisphere.sky, "#ff6929");
+  assert.equal(reference.lights.hemisphere.intensity, 0.48);
+  assert.deepEqual(reference.lights.key.position, [-18.5, -25.6, 64.3]);
+  assert.equal(reference.lights.key.intensity, 1.43);
+  assert.equal(reference.lights.fill.intensity, 0.61);
+  assert.deepEqual(reference.lights.rim.position, [0, 16.2, 3.5]);
+  assert.equal(reference.lights.rim.intensity, 0);
   assert.equal(reference.backdrop.enabled, false);
-  assert.equal(reference.floor.opacity, 0.04);
+  assert.equal(reference.floor.opacity, 0.22);
   assert.equal(reference.floor.contactShadow.enabled, true);
+  assert.equal(reference.materialAdjustments.hair.tintColor, "#02c2f2");
+  assert.equal(reference.materialAdjustments.hair.tintStrength, 0.61);
   assert.equal(reference.postfx.enabled, false);
+  assert.equal(reference.postfx.bloomStrength, 0.88);
+});
+
+test("mio-reference keeps the chin line face detail disabled by default", () => {
+  const reference = getStagePresentationConfig("mio-reference");
+
+  assert.deepEqual(reference.faceDetails.chinLine.points, [
+    [-0.34, -0.34, 0.56],
+    [-0.18, -0.43, 0.62],
+    [0, -0.46, 0.64],
+    [0.18, -0.43, 0.62],
+    [0.34, -0.34, 0.56],
+  ]);
+  assert.equal(reference.faceDetails.chinLine.enabled, false);
+  assert.equal(reference.faceDetails.chinLine.anchor, "head");
+  assert.equal(reference.faceDetails.chinLine.color, "#2f2632");
+  assert.equal(reference.faceDetails.chinLine.opacity, 0.38);
+  assert.equal(reference.faceDetails.chinLine.radius, 0.012);
 });
 
 test("stage presentation config exposes reze-npr as an isolated experimental renderer preset", () => {
@@ -1019,6 +1114,26 @@ test("mio-reference character rendering reuses genshin material tuning", () => {
   assert.equal(reference.envMapIntensity, genshin.envMapIntensity);
 });
 
+test("mio-reference applies exported material tint settings after genshin cleanup", async () => {
+  const hairMaterial = makeMaterial({ name: "Hair Main", shininess: 80, specular: 1 });
+  const runtime = makeRuntime({
+    renderPipeline: "mio-reference",
+    toonRampTexture: { id: "mio-ramp" },
+    presentation: getStagePresentationConfig("mio-reference"),
+  });
+  runtime.loader = {
+    load(_url, onLoad) {
+      onLoad(makeMesh({ materials: [hairMaterial] }));
+    },
+  };
+
+  await runtime.loadModel("/fake-model.pmx");
+
+  const expectedHairTint = new THREE.Color(1, 1, 1).lerp(new THREE.Color("#02c2f2"), 0.61);
+  assertVectorLikeClose(hairMaterial.color.toArray(), expectedHairTint.toArray());
+  assert.equal(hairMaterial.userData.mioMaterialAdjustmentSlot, "hair");
+});
+
 test("hero-shot material tuning differs from classic while preserving alpha safety", () => {
   const classic = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
   const hero = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
@@ -1241,6 +1356,58 @@ test("non-genshin outlines keep hidden source material slots on the existing sha
   assert.equal(runtime.outlineObjects.length, 1);
   assert.equal(parent.added.length, 1);
   assert.equal(Array.isArray(runtime.outlineObjects[0].material), false);
+});
+
+test("attachFaceDetails skips the disabled mio-reference chin line by default", () => {
+  const runtime = makeRuntime({
+    renderPipeline: "mio-reference",
+    faceDetailObjects: [],
+    faceDetailMaterials: [],
+  });
+  const mesh = new THREE.Group();
+  const head = new THREE.Bone();
+  head.name = "head";
+  mesh.add(head);
+  runtime.captureBones(mesh);
+
+  runtime.attachFaceDetails(mesh, getStagePresentationConfig("mio-reference"));
+
+  assert.equal(runtime.faceDetailObjects.length, 0);
+  assert.equal(runtime.faceDetailMaterials.length, 0);
+  assert.equal(head.children.length, 0);
+});
+
+test("attachFaceDetails can still add a disposable chin line when explicitly enabled", () => {
+  const runtime = makeRuntime({
+    renderPipeline: "mio-reference",
+    faceDetailObjects: [],
+    faceDetailMaterials: [],
+  });
+  const mesh = new THREE.Group();
+  const neck = new THREE.Bone();
+  neck.name = "neck";
+  const head = new THREE.Bone();
+  head.name = "head";
+  mesh.add(neck);
+  neck.add(head);
+  runtime.captureBones(mesh);
+
+  const presentation = getStagePresentationConfig("mio-reference");
+  presentation.faceDetails.chinLine.enabled = true;
+  runtime.attachFaceDetails(mesh, presentation);
+
+  assert.equal(runtime.faceDetailObjects.length, 1);
+  assert.equal(runtime.faceDetailObjects[0].name, "mio-reference__chin-line");
+  assert.equal(runtime.faceDetailObjects[0].parent, head);
+  assert.equal(runtime.faceDetailMaterials.length, 1);
+  assert.equal(runtime.faceDetailMaterials[0].transparent, true);
+  assert.equal(runtime.faceDetailMaterials[0].opacity, 0.38);
+
+  runtime.disposeFaceDetails();
+
+  assert.equal(runtime.faceDetailObjects.length, 0);
+  assert.equal(runtime.faceDetailMaterials.length, 0);
+  assert.equal(head.children.length, 0);
 });
 
 test("setupBackdrop stays disabled for classic and genshin once genshin follows project2 staging", () => {

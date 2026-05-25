@@ -34,7 +34,7 @@ test("root V2 login hands off from intro video to the looping idle background @c
   await expect(intro).toBeVisible();
   await expect(introVideo).toHaveAttribute("src", /\/images\/loginV2\/login_video\.mp4$/);
   await expect(panel).toBeHidden();
-  await expect(backgroundVideo).toHaveAttribute("src", /\/images\/loginV2\/idle_login\.mp4$/);
+  await expect(backgroundVideo).toHaveAttribute("src", /\/images\/loginV2\/idle_loginV4\.mp4$/);
   await expect(backgroundVideo).toHaveAttribute("data-video-slot", "idle-character-breathing-loop");
   await expect(backgroundVideo).toHaveAttribute("data-idle-state", "waiting");
   const backgroundVideoState = await backgroundVideo.evaluate((node) => {
@@ -53,7 +53,7 @@ test("root V2 login hands off from intro video to the looping idle background @c
     muted: true,
     playsInline: true,
     preload: "auto",
-    src: "/images/loginV2/idle_login.mp4",
+    src: "/images/loginV2/idle_loginV4.mp4",
     opacity: "0",
   });
 
@@ -320,6 +320,7 @@ test("root V2 login form submits to the companion route @critical", async ({ pag
 test("root V2 login keeps equal action buttons and adapts the floating panel @critical", async ({ page }) => {
   for (const viewport of [
     { width: 1672, height: 941 },
+    { width: 1243, height: 858 },
     { width: 900, height: 700 },
     { width: 768, height: 600 },
     { width: 598, height: 622 },

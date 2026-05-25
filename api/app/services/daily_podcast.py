@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import math
 import re
+import time
 from dataclasses import dataclass
 from datetime import date as Date
 from datetime import datetime, timedelta
@@ -8,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from app.services.voice_workflow_tts_client import VoiceWorkflowTtsClient
+from app.services.voice_workflow_tts_client import VoiceWorkflowTtsClient, VoiceWorkflowTtsError
 
 
 @dataclass(slots=True)
@@ -35,6 +38,39 @@ class DailyPodcast:
 
 
 @dataclass(slots=True)
+class DailyPodcastRefreshDecision:
+    triggered: bool
+    cooldown_seconds: int
+    retry_after_seconds: int
+
+
+class DailyPodcastRefreshCooldown:
+    def __init__(self, *, cooldown_seconds: int = 10, now_factory=time.monotonic) -> None:
+        self.cooldown_seconds = max(1, int(cooldown_seconds))
+        self._now_factory = now_factory
+        self._lock = asyncio.Lock()
+        self._last_refresh_at: float | None = None
+
+    async def reserve(self) -> DailyPodcastRefreshDecision:
+        async with self._lock:
+            now = self._now_factory()
+            if self._last_refresh_at is not None:
+                elapsed = now - self._last_refresh_at
+                if elapsed < self.cooldown_seconds:
+                    return DailyPodcastRefreshDecision(
+                        triggered=False,
+                        cooldown_seconds=self.cooldown_seconds,
+                        retry_after_seconds=max(1, math.ceil(self.cooldown_seconds - elapsed)),
+                    )
+            self._last_refresh_at = now
+            return DailyPodcastRefreshDecision(
+                triggered=True,
+                cooldown_seconds=self.cooldown_seconds,
+                retry_after_seconds=self.cooldown_seconds,
+            )
+
+
+@dataclass(slots=True)
 class _StorageResponse:
     response: httpx.Response | None
     error: str | None
@@ -49,6 +85,13 @@ def podcast_meta_storage_path(podcast_date: str) -> str:
 class DailyPodcastService:
     def __init__(self, *, tts_client: VoiceWorkflowTtsClient) -> None:
         self.tts_client = tts_client
+
+    async def refresh_latest(self) -> dict[str, Any]:
+        refresh = getattr(self.tts_client, "refresh_daily_podcast", None)
+        if not callable(refresh):
+            raise VoiceWorkflowTtsError("Voice Workflow client does not support daily podcast refresh.")
+        result = await refresh()
+        return result if isinstance(result, dict) else {}
 
     async def latest(self) -> DailyPodcast:
         latest, error = await self._fetch_json("podcast/latest.json")
@@ -106,11 +149,12 @@ class DailyPodcastService:
         return await self._from_meta(podcast_date, meta_path, meta)
 
     async def _from_meta(self, podcast_date: str, meta_path: str, meta: dict[str, Any]) -> DailyPodcast:
-        audio_meta = meta.get("audio") if isinstance(meta.get("audio"), dict) else {}
+        artifacts = meta.get("artifacts") if isinstance(meta.get("artifacts"), dict) else {}
+        audio_meta = _dict_or_empty(meta.get("audio")) or _dict_or_empty(artifacts.get("audio"))
         ogg_path = _string_or_none(audio_meta.get("oggPath"))
         wav_path = _string_or_none(audio_meta.get("wavPath"))
         audio = await self._select_audio(podcast_date, ogg_path=ogg_path, wav_path=wav_path)
-        doc_url = _string_or_none(meta.get("docUrl"))
+        doc_url = _string_or_none(meta.get("docUrl")) or _string_or_none(artifacts.get("docUrl"))
         ok = bool(meta.get("ok", False))
 
         if audio.url:
@@ -271,6 +315,10 @@ def _date_from_meta_path(path: str) -> str | None:
 
 def _string_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _int_or_none(value: Any) -> int | None:

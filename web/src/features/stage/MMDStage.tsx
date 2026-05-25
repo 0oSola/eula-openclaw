@@ -61,6 +61,8 @@ export type MMDStageHandle = {
   lockCamera: () => MmdCameraSnapshot | null;
   captureCamera: () => MmdCameraSnapshot | null;
   resetCamera: () => MmdCameraSnapshot | null;
+  setSpeechLevel: (level: number) => void;
+  setSpeechViseme: (frame: { viseme: string; weight?: number } | null) => void;
 };
 
 type MMDStageProps = {
@@ -124,6 +126,12 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       },
       resetCamera() {
         return runtimeRef.current?.resetCameraToDefault?.() ?? null;
+      },
+      setSpeechLevel(level: number) {
+        runtimeRef.current?.setSpeechLevel?.(level);
+      },
+      setSpeechViseme(frame: { viseme: string; weight?: number } | null) {
+        runtimeRef.current?.setSpeechViseme?.(frame);
       },
     }),
     [],
@@ -218,11 +226,8 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
-    if (cameraSnapshot) {
-      runtime.applyCameraSnapshot(cameraSnapshot);
-      return;
-    }
-    runtime.resetCameraToDefault();
+    if (!cameraSnapshot) return;
+    runtime.applyCameraSnapshot(cameraSnapshot);
   }, [cameraSnapshot]);
 
   useEffect(() => {

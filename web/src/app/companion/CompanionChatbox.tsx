@@ -82,6 +82,7 @@ export function CompanionChatbox({
     const query = chatSearch.trim().toLowerCase();
 
     return messages.filter((message) => {
+      if (message.visibility === "internal") return false;
       if (!message.content.trim()) return false;
       if (chatRoleFilter !== "all" && message.role !== chatRoleFilter) return false;
       if (query && !message.content.toLowerCase().includes(query)) return false;

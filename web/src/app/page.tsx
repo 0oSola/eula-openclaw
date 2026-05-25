@@ -73,7 +73,7 @@ export default function LoginPage() {
         data-testid="login-v2-background-video"
         data-video-slot="idle-character-breathing-loop"
         data-idle-state={introState === "active" ? "waiting" : "playing"}
-        src="/images/loginV2/idle_loginV3.mp4"
+        src="/images/loginV2/idle_loginV4.mp4"
         aria-hidden="true"
         muted
         loop
