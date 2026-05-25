@@ -124,6 +124,8 @@ const FIXED_MORPH_HINTS = {
   mouthA: ["a", "mouth_a", "\u3042"],
   mouthI: ["i", "mouth_i", "\u3044"],
   mouthU: ["u", "mouth_u", "\u3046"],
+  mouthE: ["e", "mouth_e", "\u3048"],
+  mouthO: ["o", "mouth_o", "\u304a"],
 };
 
 const FIXED_EXPRESSION_MORPH_NAMES = {
@@ -194,8 +196,64 @@ const ACTION_DURATION = {
 const VMD_TRANSITION_FADE_SECONDS = 0.5;
 const STAGE_CANVAS_ASPECT_RATIO = 3 / 4;
 const BREATHING_CYCLE_SECONDS = 4.2;
+const SPEAKING_LIP_CYCLE_MS = 520;
+const SPEAKING_LIP_MIN_OPEN = 0.18;
+const SPEAKING_LIP_OPEN_RANGE = 0.42;
+const SPEECH_LEVEL_SILENCE_THRESHOLD = 0.04;
+const SPEECH_LEVEL_MIN_OPEN = 0.12;
+const SPEECH_LEVEL_OPEN_RANGE = 0.58;
+const CLOSED_SPEECH_VISEMES = new Set(["M", "B", "P", "SIL", "SILENCE", ""]);
+const SPEECH_VISEME_MOUTH_SHAPES = {
+  A: { mouthA: 1, mouthI: 0.05, mouthU: 0, mouthE: 0.15, mouthO: 0.08 },
+  I: { mouthA: 0.05, mouthI: 1, mouthU: 0.08, mouthE: 0.18, mouthO: 0 },
+  U: { mouthA: 0.06, mouthI: 0, mouthU: 1, mouthE: 0, mouthO: 0.2 },
+  E: { mouthA: 0.18, mouthI: 0.35, mouthU: 0, mouthE: 1, mouthO: 0 },
+  O: { mouthA: 0.16, mouthI: 0, mouthU: 0.35, mouthE: 0, mouthO: 1 },
+};
 
 const smooth = (current, target, lambda, dt) => THREE.MathUtils.damp(current, target, lambda, dt);
+
+function clampUnit(value, fallback = 0) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return fallback;
+  return Math.min(1, Math.max(0, next));
+}
+
+function nowMs() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+
+function getSpeakingLipBase(elapsedMs) {
+  const elapsed = Math.max(0, Number(elapsedMs) || 0);
+  const phase = (elapsed / SPEAKING_LIP_CYCLE_MS) * Math.PI * 2 - Math.PI / 2;
+  const wave = (Math.sin(phase) + 1) * 0.5;
+  return SPEAKING_LIP_MIN_OPEN + wave * SPEAKING_LIP_OPEN_RANGE;
+}
+
+function getSpeechLevelLipBase(level) {
+  const normalized = clampUnit(level, 0);
+  if (normalized <= SPEECH_LEVEL_SILENCE_THRESHOLD) return 0;
+  return SPEECH_LEVEL_MIN_OPEN + Math.pow(normalized, 0.72) * SPEECH_LEVEL_OPEN_RANGE;
+}
+
+function normalizeSpeechVisemeName(value) {
+  const next = String(value || "").trim();
+  if (!next) return "";
+  return next.toLowerCase() === "sil" ? "SIL" : next.toUpperCase();
+}
+
+function getSpeechVisemeMouthTargets(frame, { speechLevel = 0, speechLevelActive = false } = {}) {
+  const viseme = normalizeSpeechVisemeName(frame?.viseme);
+  if (CLOSED_SPEECH_VISEMES.has(viseme)) {
+    return { mouthA: 0, mouthI: 0, mouthU: 0, mouthE: 0, mouthO: 0 };
+  }
+  const shape = SPEECH_VISEME_MOUTH_SHAPES[viseme];
+  if (!shape) return null;
+  const frameWeight = clampUnit(frame?.weight, 0.75);
+  const levelOpen = speechLevelActive ? getSpeechLevelLipBase(speechLevel) : 0.72;
+  const amount = Math.min(1, Math.max(0.1, levelOpen) * (0.45 + frameWeight * 0.75));
+  return Object.fromEntries(Object.entries(shape).map(([slot, value]) => [slot, value * amount]));
+}
 
 function isKnownMmdParserConsoleError(args) {
   const text = args
@@ -393,31 +451,32 @@ const STAGE_PRESENTATION_PRESETS = {
   "mio-reference": {
     background: null,
     fog: null,
+    renderer: { toneMapping: "none", exposure: 1.57 },
     camera: {
       fov: 32,
-      position: [-3.137891, 12.522935, 45.135659],
+      position: [-9.39, 12.522935, 43.63],
       target: [-1.861732, -2.847643, 1.048369],
-      minDistance: 8,
+      minDistance: 21,
       maxDistance: 72,
-      maxPolarAngle: Math.PI * 0.48,
-      locked: true,
+      maxPolarAngle: 1.5079644737231006,
+      locked: false,
     },
     character: {
       targetHeight: 19.5,
     },
     lights: {
-      ambient: { color: 0xffffff, intensity: 0.8 },
-      hemisphere: { sky: "#ffffff", ground: "#333333", intensity: 0.6 },
-      key: { color: "#ffffff", intensity: 1.2, position: [-15, 20, 30] },
-      fill: { color: "#ffffff", intensity: 0.5, position: [15, 10, -20] },
-      rim: { color: "#ffffff", intensity: 0, position: [0, 0, 0] },
+      ambient: { color: "#ffffff", intensity: 0.2 },
+      hemisphere: { sky: "#ff6929", ground: "#333333", intensity: 0.48 },
+      key: { color: "#ffffff", intensity: 1.43, position: [-18.5, -25.6, 64.3] },
+      fill: { color: "#ffffff", intensity: 0.61, position: [15, 10, -20] },
+      rim: { color: "#e12d2d", intensity: 0, position: [0, 16.2, 3.5] },
     },
     shadowMapType: THREE.PCFSoftShadowMap,
     floor: {
       kind: "shadowCatcher",
       size: 44,
       y: -9.75,
-      opacity: 0.04,
+      opacity: 0.22,
       contactShadow: {
         enabled: true,
         size: [10.4, 6.8],
@@ -426,8 +485,51 @@ const STAGE_PRESENTATION_PRESETS = {
       },
     },
     outline: { enabled: false, color: "#27496d", opacity: 0.9, scale: 1.03 },
+    faceDetails: {
+      chinLine: {
+        enabled: false,
+        anchor: "head",
+        color: "#2f2632",
+        opacity: 0.38,
+        radius: 0.012,
+        tubularSegments: 18,
+        radialSegments: 5,
+        points: [
+          [-0.34, -0.34, 0.56],
+          [-0.18, -0.43, 0.62],
+          [0, -0.46, 0.64],
+          [0.18, -0.43, 0.62],
+          [0.34, -0.34, 0.56],
+        ],
+      },
+    },
     backdrop: { enabled: false },
-    postfx: { enabled: false },
+    postfx: {
+      enabled: false,
+      bloomStrength: 0.88,
+      bloomRadius: 0.2,
+      bloomThreshold: 0.66,
+      grade: {
+        exposure: 1,
+        contrast: 1,
+        saturation: 1,
+        warmth: 0,
+        shadowLift: 0,
+      },
+    },
+    materialAdjustments: {
+      opacityMultiplier: 1,
+      alphaTest: 0,
+      shininessMultiplier: 1,
+      specularMultiplier: 1,
+      emissiveIntensityMultiplier: 1,
+      envMapIntensityMultiplier: 1,
+      face: { tintColor: "#f71d1d", tintStrength: 0.13 },
+      skin: { tintColor: "#ffffff", tintStrength: 0.28 },
+      hair: { tintColor: "#02c2f2", tintStrength: 0.61 },
+      eye: { tintColor: "#ffffff", tintStrength: 0.04 },
+      cloth: { tintColor: "#ffffff", tintStrength: 0.25 },
+    },
   },
   "reze-npr": {
     background: null,
@@ -1099,7 +1201,7 @@ export function tuneHeroShotMMDMaterial(material, rampTexture) {
   finalizeMMDMaterial(material, rampTexture);
 }
 
-export function tuneGenshinMMDMaterial(material, rampTexture) {
+export function tuneGenshinMMDMaterial(material, rampTexture, presentation = null) {
   if (!material) return;
   const { profile } = primeMMDMaterial(material);
   const materialName = `${material.name || ""}`;
@@ -1134,7 +1236,58 @@ export function tuneGenshinMMDMaterial(material, rampTexture) {
     material.opacity = 0;
   }
 
+  applyPresentationMaterialAdjustments(material, profile, presentation);
   finalizeMMDMaterial(material, rampTexture);
+}
+
+function clamp01(value, fallback = 0) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return fallback;
+  return Math.min(1, Math.max(0, next));
+}
+
+function inferMaterialAdjustmentSlot(material, profile) {
+  const text = describeMaterial(material);
+  if (hasMaterialHint(text, REZE_EYE_MATERIAL_HINTS)) return "eye";
+  if (profile === "face") return "face";
+  if (profile === "skin") return "skin";
+  if (profile === "hair") return "hair";
+  if (profile === "cloth") return "cloth";
+  return "default";
+}
+
+function multiplyNumberProperty(target, property, multiplier) {
+  const nextMultiplier = Number(multiplier);
+  if (!Number.isFinite(nextMultiplier) || !(property in target) || typeof target[property] !== "number") return;
+  target[property] *= nextMultiplier;
+}
+
+function applyPresentationMaterialAdjustments(material, profile, presentation) {
+  const adjustments = presentation?.materialAdjustments;
+  if (!material || !adjustments) return;
+  const slot = inferMaterialAdjustmentSlot(material, profile);
+  const slotAdjustments = adjustments[slot] || adjustments.default || {};
+  material.userData = {
+    ...(material.userData || {}),
+    mioMaterialAdjustmentSlot: slot,
+  };
+
+  multiplyNumberProperty(material, "opacity", adjustments.opacityMultiplier);
+  multiplyNumberProperty(material, "shininess", adjustments.shininessMultiplier);
+  multiplyNumberProperty(material, "emissiveIntensity", adjustments.emissiveIntensityMultiplier);
+  multiplyNumberProperty(material, "envMapIntensity", adjustments.envMapIntensityMultiplier);
+  if ("specular" in material && material.specular?.isColor && Number.isFinite(Number(adjustments.specularMultiplier))) {
+    material.specular.multiplyScalar(Number(adjustments.specularMultiplier));
+  }
+  const alphaTest = Number(adjustments.alphaTest);
+  if (Number.isFinite(alphaTest) && alphaTest > 0) {
+    material.alphaTest = Math.max(material.alphaTest || 0, alphaTest);
+  }
+  const tintStrength = clamp01(slotAdjustments.tintStrength, 0);
+  if (tintStrength > 0 && material.color?.isColor && slotAdjustments.tintColor) {
+    material.color.lerp(new THREE.Color(slotAdjustments.tintColor), tintStrength);
+  }
+  material.needsUpdate = true;
 }
 
 export function tuneRezeNprMMDMaterial(material, rampTexture) {
@@ -1224,10 +1377,10 @@ export function tuneRezeNprMMDMaterial(material, rampTexture) {
   finalizeMMDMaterial(material, rampTexture);
 }
 
-function tuneMaterialByPipeline(material, toonRampTexture, pipeline) {
+function tuneMaterialByPipeline(material, toonRampTexture, pipeline, presentation = null) {
   if (pipeline === "reze-npr") return tuneRezeNprMMDMaterial(material, toonRampTexture);
   if (pipeline === "hero-shot") return tuneHeroShotMMDMaterial(material, toonRampTexture);
-  if (pipeline === "genshin" || pipeline === "mio-reference") return tuneGenshinMMDMaterial(material, toonRampTexture);
+  if (pipeline === "genshin" || pipeline === "mio-reference") return tuneGenshinMMDMaterial(material, toonRampTexture, presentation);
   return tuneClassicMMDMaterial(material, toonRampTexture);
 }
 
@@ -1276,6 +1429,18 @@ function createSlotPreservingOutlineMaterials(sourceMaterials, presentation) {
   return { outlineMaterial: outlineMaterials, outlineStyle, outlineMaterials };
 }
 
+function readFaceDetailPoints(points) {
+  if (!Array.isArray(points) || points.length < 2) return [];
+  return points
+    .map((point) => {
+      if (!Array.isArray(point) || point.length !== 3) return null;
+      const vector = point.map((value) => Number(value));
+      if (vector.some((value) => !Number.isFinite(value))) return null;
+      return new THREE.Vector3(...vector);
+    })
+    .filter(Boolean);
+}
+
 export class MMDCompanionRuntime {
   constructor({ container, statusElement, renderPipeline = "classic", cameraSnapshot = null }) {
     this.container = container;
@@ -1317,6 +1482,9 @@ export class MMDCompanionRuntime {
     this.activeEmotion = "neutral";
     this.activeAction = "idle";
     this.isSpeaking = false;
+    this.speakingStartedAtMs = 0;
+    this.speechLevel = 0;
+    this.speechLevelActive = false;
     this.destroyed = false;
     this.presentation = null;
 
@@ -1332,6 +1500,8 @@ export class MMDCompanionRuntime {
     this.toonRampTexture = null;
     this.outlineObjects = [];
     this.outlineMaterials = [];
+    this.faceDetailObjects = [];
+    this.faceDetailMaterials = [];
     this.backdropGroup = null;
     this.backdropTextures = [];
     this.floorGroup = null;
@@ -1869,6 +2039,7 @@ export class MMDCompanionRuntime {
 
   clearModel() {
     this.disposeCharacterOutline();
+    this.disposeFaceDetails();
     if (!this.model) return;
     try {
       this.helper.remove(this.model);
@@ -1925,7 +2096,7 @@ export class MMDCompanionRuntime {
       child.receiveShadow = true;
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       for (const material of materials) {
-        tuneMaterialByPipeline(material, this.toonRampTexture, this.renderPipeline);
+        tuneMaterialByPipeline(material, this.toonRampTexture, this.renderPipeline, this.presentation);
       }
     });
     fitModelToPresentation(mesh, this.presentation);
@@ -1933,10 +2104,47 @@ export class MMDCompanionRuntime {
     this.model = mesh;
     this.helper.add(mesh, { physics: this.hasPhysicsSupport });
     this.captureBones(mesh);
+    this.attachFaceDetails(mesh, this.presentation);
     if (this.presentation?.outline?.enabled) {
       this.attachCharacterOutline(mesh, this.presentation);
     }
     this.setStatus("Model ready.");
+  }
+
+  attachFaceDetails(_mesh, presentation = this.presentation) {
+    this.disposeFaceDetails();
+    const chinLine = presentation?.faceDetails?.chinLine;
+    if (!chinLine?.enabled) return;
+
+    const anchor = chinLine.anchor === "neck"
+      ? this.bones?.neck || this.bones?.head
+      : this.bones?.head || this.bones?.neck;
+    if (!anchor?.add) return;
+
+    const points = readFaceDetailPoints(chinLine.points);
+    if (points.length < 2) return;
+
+    const curve = new THREE.CatmullRomCurve3(points);
+    const geometry = new THREE.TubeGeometry(
+      curve,
+      Math.max(2, Math.round(Number(chinLine.tubularSegments) || 18)),
+      Math.max(0.001, Number(chinLine.radius) || 0.012),
+      Math.max(3, Math.round(Number(chinLine.radialSegments) || 5)),
+      false,
+    );
+    const material = new THREE.MeshBasicMaterial({
+      color: chinLine.color || "#2f2632",
+      transparent: true,
+      opacity: Math.min(1, Math.max(0, Number(chinLine.opacity) || 0.38)),
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const line = new THREE.Mesh(geometry, material);
+    line.name = `${this.renderPipeline}__chin-line`;
+    line.renderOrder = 8;
+    anchor.add(line);
+    this.faceDetailObjects.push(line);
+    this.faceDetailMaterials.push(material);
   }
 
   attachCharacterOutline(mesh, presentation = this.presentation) {
@@ -1985,6 +2193,18 @@ export class MMDCompanionRuntime {
     this.outlineObjects = [];
     for (const material of this.outlineMaterials) material.dispose?.();
     this.outlineMaterials = [];
+  }
+
+  disposeFaceDetails() {
+    if (!Array.isArray(this.faceDetailObjects)) this.faceDetailObjects = [];
+    if (!Array.isArray(this.faceDetailMaterials)) this.faceDetailMaterials = [];
+    for (const detail of this.faceDetailObjects) {
+      detail.parent?.remove(detail);
+      detail.geometry?.dispose?.();
+    }
+    this.faceDetailObjects = [];
+    for (const material of this.faceDetailMaterials) material.dispose?.();
+    this.faceDetailMaterials = [];
   }
 
   disposeBackdrop() {
@@ -2319,7 +2539,43 @@ export class MMDCompanionRuntime {
   }
 
   setSpeaking(flag) {
-    this.isSpeaking = !!flag;
+    const nextSpeaking = !!flag;
+    if (nextSpeaking && !this.isSpeaking) {
+      this.speakingStartedAtMs = nowMs();
+      if (this.speechViseme) this.speechVisemeActive = true;
+    } else if (!nextSpeaking) {
+      this.speakingStartedAtMs = 0;
+      this.speechLevel = 0;
+      this.speechLevelActive = false;
+      this.speechViseme = null;
+      this.speechVisemeActive = false;
+    }
+    this.isSpeaking = nextSpeaking;
+  }
+
+  setSpeechLevel(level) {
+    const next = Number(level);
+    if (!Number.isFinite(next)) {
+      this.speechLevel = 0;
+      this.speechLevelActive = false;
+      return;
+    }
+    this.speechLevel = clampUnit(next, 0);
+    this.speechLevelActive = this.isSpeaking;
+  }
+
+  setSpeechViseme(frame) {
+    const viseme = normalizeSpeechVisemeName(frame?.viseme);
+    if (!viseme) {
+      this.speechViseme = null;
+      this.speechVisemeActive = false;
+      return;
+    }
+    this.speechViseme = {
+      viseme,
+      weight: clampUnit(frame?.weight, viseme === "SIL" ? 0 : 0.75),
+    };
+    this.speechVisemeActive = this.isSpeaking;
   }
 
   applyInteraction({ emotion = "neutral", action = "idle", sequence = [] }) {
@@ -2600,10 +2856,33 @@ export class MMDCompanionRuntime {
       }
     }
 
-    const lipBase = this.isSpeaking ? 0.22 + Math.abs(Math.sin(nowMs * 0.021)) * 0.55 : 0;
+    const visemeTargets =
+      this.isSpeaking && this.speechVisemeActive
+        ? getSpeechVisemeMouthTargets(this.speechViseme, {
+            speechLevel: this.speechLevel,
+            speechLevelActive: this.speechLevelActive,
+          })
+        : null;
+    if (visemeTargets) {
+      setMorph(morphSlots.mouthA, visemeTargets.mouthA);
+      setMorph(morphSlots.mouthI, visemeTargets.mouthI);
+      setMorph(morphSlots.mouthU, visemeTargets.mouthU);
+      setMorph(morphSlots.mouthE, visemeTargets.mouthE);
+      setMorph(morphSlots.mouthO, visemeTargets.mouthO);
+      return;
+    }
+
+    const speakingStartedAtMs = Number.isFinite(Number(this.speakingStartedAtMs)) ? Number(this.speakingStartedAtMs) : nowMs;
+    const lipBase = this.isSpeaking
+      ? this.speechLevelActive
+        ? getSpeechLevelLipBase(this.speechLevel)
+        : getSpeakingLipBase(nowMs - speakingStartedAtMs)
+      : 0;
     setMorph(morphSlots.mouthA, lipBase);
     setMorph(morphSlots.mouthI, this.isSpeaking ? lipBase * 0.5 : 0);
     setMorph(morphSlots.mouthU, this.isSpeaking ? lipBase * 0.34 : 0);
+    setMorph(morphSlots.mouthE, 0);
+    setMorph(morphSlots.mouthO, 0);
   }
 
   renderFrame() {

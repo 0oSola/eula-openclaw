@@ -112,10 +112,18 @@ export async function getCurrentWorkspace(userId: string): Promise<WorkspaceCont
   });
 }
 
-export async function getLatestDailyPodcast(userId: string, options: { cacheBust?: boolean } = {}): Promise<DailyPodcast> {
-  const path = options.cacheBust ? `/podcasts/daily/latest?refresh=${Date.now()}` : "/podcasts/daily/latest";
-  const payload = await requestJSON<{ podcast: DailyPodcast }>(path, {
+export async function getLatestDailyPodcast(userId: string): Promise<DailyPodcast> {
+  const payload = await requestJSON<{ podcast: DailyPodcast }>("/podcasts/daily/latest", {
     method: "GET",
+    userId,
+  });
+  return payload.podcast;
+}
+
+export async function refreshDailyPodcast(userId: string): Promise<DailyPodcast> {
+  const payload = await requestJSON<{ podcast: DailyPodcast }>("/podcasts/daily/refresh", {
+    method: "POST",
+    body: JSON.stringify({}),
     userId,
   });
   return payload.podcast;

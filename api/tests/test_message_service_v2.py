@@ -381,6 +381,41 @@ def test_list_messages_suppresses_delayed_and_early_bridge_echoes():
     ]
 
 
+def test_list_messages_filters_internal_visibility_while_preserving_raw_store():
+    client, app = _client()
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+    ctx = app.state.trace_store.get_current_workspace_context("u1")
+
+    app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        session_id,
+        ctx["account"]["id"],
+        role="user",
+        content="visible message",
+    )
+    app.state.trace_store.insert_message(
+        ctx["workspace"]["id"],
+        session_id,
+        ctx["account"]["id"],
+        role="system",
+        content="Compaction",
+        visibility="internal",
+        metadata={"source": "message_bridge", "message_kind": "control"},
+    )
+
+    raw_messages = app.state.trace_store.list_messages(ctx["workspace"]["id"], ctx["account"]["id"], session_id)
+    listed = client.get(f"/sessions/{session_id}/messages", headers={"x-user-id": "u1"})
+
+    assert [(item["role"], item["content"], item["visibility"]) for item in raw_messages] == [
+        ("user", "visible message", "chat"),
+        ("system", "Compaction", "internal"),
+    ]
+    assert listed.status_code == 200
+    assert [(item["role"], item["content"], item["visibility"]) for item in listed.json()["items"]] == [
+        ("user", "visible message", "chat"),
+    ]
+
+
 def test_latest_greeting_message_route_returns_newest_auto_tts_message():
     client, app = _client()
     old_session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]

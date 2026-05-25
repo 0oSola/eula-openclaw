@@ -112,6 +112,44 @@ def test_latest_podcast_accepts_absolute_voice_storage_paths():
     assert result.audio.bytes == 1388346
 
 
+def test_latest_podcast_accepts_artifacts_nested_voice_meta():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/eula-storage-audio/podcast/latest.json":
+            return httpx.Response(status_code=200, json=_latest_payload("2026-05-21"))
+        if request.url.path == "/api/v1/eula-storage-audio/podcast/2026/05/21/podcast_20260521.meta.json":
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "ok": True,
+                    "date": "2026-05-21",
+                    "artifacts": {
+                        "docUrl": "https://docs.local/today",
+                        "audio": {
+                            "oggPath": "/Users/sola/voice-workflow/eula_emotion_revelation/podcast/2026/05/21/podcast_20260521.ogg",
+                            "wavPath": "/Users/sola/voice-workflow/eula_emotion_revelation/podcast/2026/05/21/podcast_20260521.wav",
+                        },
+                    },
+                    "counts": {"daily_news": 27},
+                    "updatedAt": "2026-05-21T08:20:18Z",
+                },
+            )
+        if request.url.path == "/api/v1/eula-storage-audio/podcast/2026/05/21/podcast_20260521.ogg":
+            return httpx.Response(
+                status_code=206,
+                content=b"ogg-range",
+                headers={"content-type": "audio/ogg", "content-range": "bytes 0-1023/929039"},
+            )
+        return httpx.Response(status_code=404)
+
+    result = _run_with_transport(handler, lambda service: service.latest())
+
+    assert result.status == "ready"
+    assert result.date == "2026-05-21"
+    assert result.doc_url == "https://docs.local/today"
+    assert result.audio.source == "ogg"
+    assert result.audio.url == "/podcasts/daily/2026-05-21/audio?format=preferred"
+
+
 def test_latest_podcast_falls_back_to_wav_when_ogg_missing():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/v1/eula-storage-audio/podcast/latest.json":

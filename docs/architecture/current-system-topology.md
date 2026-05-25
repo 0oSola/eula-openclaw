@@ -1,6 +1,6 @@
 # 当前系统拓扑与架构蓝图
 
-更新时间：2026-05-18
+更新时间：2026-05-25
 
 本文用于两类场景：
 
@@ -96,6 +96,8 @@ User sends message in Chatbox
 ```
 
 如果当前 Chatbox 会话来自 OpenClaw Bridge 绑定，`sessions.openclaw_session_key` 必须等于 Bridge 的 `external_session_key`，也就是 Feishu session key。这样用户从本项目继续发送文本时，HTTP `/v1/responses` 会通过 `x-openclaw-session-key` 回到同一个 Feishu channel 会话，而不是创建本地 `openclaw:{uuid}` 分支。
+
+Companion 顶栏只常驻显示 `USER` 和短 `SESSION`，不再把长会话 title/Feishu 标识直接铺在 header 上。完整当前会话标识由右侧 `#` 浮窗在 hover/focus 时展示，优先取 `sessions.openclaw_session_key`，否则回退到本地 session id 和会话 title。`#` 按钮和浮窗之间保留透明 hover 桥接区域，且浮窗本身允许 pointer events，因此鼠标可以从按钮移动到浮窗内容上继续查看。
 
 核心文件：
 
@@ -243,6 +245,8 @@ Bridge 实时 consumer 不只依赖 `sessions.messages.subscribe` 推送。`_con
 
 Bridge ingest 会保留 OpenClaw 原生隐藏字段 `openclawMetadata`，并在 `openclawMetadata.source == "greeting-cron"` 时写入本地 `messages.metadata.openclaw_metadata`、`messages.metadata.greeting_cron` 和 `messages.metadata.auto_tts=true`。如果历史消息没有原生 metadata，后端会读取 `OPENCLAW_GREETING_DASHBOARD_INDEX_PATH` 指向的 JSONL 旁路索引，默认路径为 `api/data/openclaw/greeting-dashboard-injections.jsonl`；按 `dashboardSessionKey` 加 `dashboardMessageId`/`feishuMessageId`、正文或 180 秒时间窗口 join 后，把问候来源补到本地 metadata。匹配到 `auto_tts=true` 且消息尚无 `message_tts` 时，Bridge 会调用同一套 `message_tts` 长任务链路提交 Voice Workflow TTS；同步等待超时则写入 pending 引用和 `tts_jobs`，由后台 worker 继续轮询。
 
+`messages.visibility` 是 Chat API 的展示边界，默认值为 `chat`。Bridge 同步到的内部控制事件仍落库，但会写为 `visibility=internal` 并在 metadata 中标记 `message_kind=control`、`control_reason`；当前包括 `system: Compaction` 和 assistant 失败占位 `[assistant turn failed before producing content]`。`GET /sessions/{session_id}/messages` 通过 SQLite 索引 `(workspace_id, account_id, session_id, deleted_at, visibility, created_at)` 只查询 `visibility=chat` 的消息，因此 Chatbox 默认不展示内部控制消息；`list_messages()`、Bridge/debug/health 相关读取仍可查看原始落库消息。
+
 Bridge 不再落库 OpenClaw assistant 空消息占位。当外部 assistant 消息正文为空，且本地解析结果为 `parse_mode=empty` 时，后端只写 `message_bridge.openclaw.message.skipped` trace，reason 为 `empty_assistant_message`，不会把 `I am here. Let's keep going.` 这类本地 fallback 文案写入 `messages`。
 
 Admin API：
@@ -294,6 +298,7 @@ Upload VMD
        model_relative_path=<selected model>
   -> Message Service resolves assistant action/motion_plan
        against favorite VMD list for selected model
+       usage VMD auto-sync is serialized before SQLite asset_registry writes
 ```
 
 当前优菈模型的收藏 VMD 已按动作意图存放在模型动作目录的子目录中：
@@ -329,7 +334,17 @@ CompanionPage stageInteractionState
 
 `stageInteractionMachine` 是页面业务状态层，负责把“`00_idle_loop` 待机循环、手动预览、聊天触发动作、人物点击触发动作、VMD 异常立即恢复、完成后回到待机”统一成显式状态。`MMDStage` 和 `MMDCompanionRuntime` 仍只负责加载模型、播放 VMD/程序动作、上报播放完成或错误，不持有业务队列或恢复策略。
 
-渲染模式仍由前端 `renderPipeline` 隔离选择。`classic`、`hero-shot`、`genshin`、`mio-reference` 保持既有 Three.js/MMD runtime；新增 `reze-npr` 是 reze-engine 启发的实验模式，只迁移可在现有 Three.js 管线中低风险复刻的显示能力：按 PMX 材质名推断 face/body/hair/eye/stockings/metal/cloth 预设、对丝袜和 cutout 材质启用 Three.js `alphaHash`/`alphaToCoverage`、启用独立轮廓、ACES tone mapping、轻量 bloom 和 reze 风格灯光。它不接管 reze-engine 的 WebGPU renderer、PMX loader、VMD/IK/物理或 picking，因此不会改变现有模式的模型加载、VMD 播放和交互语义。`mio-reference` 当前默认锁定镜头为 `fov=32`、`position=[-3.137891,12.522935,45.135659]`、`target=[-1.861732,-2.847643,1.048369]`、`locked=true`，OrbitControls 的 `maxDistance` 仍为 72；页面启动时会把本地会话里的 `mio-reference` 镜头迁移到这组锁定参数，避免旧 localStorage 覆盖默认构图。
+语音播放向 `MMDStage` 传递 `speaking` 状态，同时 server/remote TTS 和 realtime voice chunk 会复用播客波形逻辑生成音频 envelope：前端用 `AudioContext.decodeAudioData()` 解码音频，再用 `computePeaks()` 得到幅度序列。播放时按 `audio.currentTime` 采样当前 level，并通过 `MMDStage.setSpeechLevel()` 传给 `MMDCompanionRuntime.updateMorph()` 驱动口型开合；停顿或低幅度会收嘴，音量越大开口越大。
+
+中文口型同步在前端先走轻量 viseme 层：`speechViseme.js` 根据 TTS 文本把常见汉字映射到拼音，再按韵母生成 `A/I/U/E/O/M/sil` 时间轴；`b/p/m` 等双唇音会先给一个闭嘴 `M`，`ao/iao/uo` 等复合韵母会拆成连续嘴型。server/remote TTS 和 realtime voice chunk 在播放时通过 `createSpeechVisemeSync()` 按 `audio.currentTime` 调用 `MMDStage.setSpeechViseme()`，Runtime 优先按 viseme 驱动 `mouthA/mouthI/mouthU/mouthE/mouthO`，并继续用 envelope level 控制开口强度。若没有可用文本、文本无法识别、音频无法解码、跨域获取失败，或使用浏览器 `speechSynthesis`，Runtime 会回退到相对语音开始时间的慢周期嘴型，默认 520ms 一个开合周期、开口范围约 `0.18-0.60`，避免旧的绝对时间 `abs(sin)` 在约 150ms 内完成一次快速 flap。后续 Voice Workflow 若返回真实 viseme 时间戳，可直接替换前端文本推断出的时间轴。
+
+渲染模式仍由前端 `renderPipeline` 隔离选择。`classic`、`hero-shot`、`genshin`、`mio-reference` 保持既有 Three.js/MMD runtime；新增 `reze-npr` 是 reze-engine 启发的实验模式，只迁移可在现有 Three.js 管线中低风险复刻的显示能力：按 PMX 材质名推断 face/body/hair/eye/stockings/metal/cloth 预设、对丝袜和 cutout 材质启用 Three.js `alphaHash`/`alphaToCoverage`、启用独立轮廓、ACES tone mapping、轻量 bloom 和 reze 风格灯光。它不接管 reze-engine 的 WebGPU renderer、PMX loader、VMD/IK/物理或 picking，因此不会改变现有模式的模型加载、VMD 播放和交互语义。`mio-reference` 当前默认开放镜头来自 2026-05-21 导出的 `Render Config`：`fov=32`、`position=[-9.39,12.522935,43.63]`、`target=[-1.861732,-2.847643,1.048369]`、`locked=false`，OrbitControls 的 `maxDistance` 仍为 72；页面启动时会把本地会话里的 `mio-reference` 镜头迁移到这组默认参数，避免旧 localStorage 覆盖默认构图。
+
+`mio-reference` 的默认渲染也同步到该导出配置：renderer 使用 `toneMapping=none`、`exposure=1.57`，低环境光 `ambientIntensity=0.2`，暖色 hemisphere sky `#ff6929`，主光位于 `[-18.5,-25.6,64.3]` 且强度 1.43，地面阴影透明度 0.22。Bloom 和全身 outline 默认关闭但保留导出参数；材质调节在 Project2/Genshin 清理后应用，默认发色 tint 为 `#02c2f2`、强度 0.61，其它 face/skin/eye/cloth tint 也随 preset 保存。
+
+MMD 相机状态只按渲染管线保存到 `session.mmdCamera[renderPipeline]`。VMD 预览、聊天动作、人物点击动作和待机 VMD 只改变 `stageInteractionMachine` 的动作播放状态，不再选择、应用或清空相机快照。`MMDStage` 收到明确的 camera snapshot 时才调用 runtime 应用相机；snapshot 为 null 时保留当前 runtime 视角，只有切换模型/渲染管线重建 runtime 或用户点击 Reset Camera 才回到当前 pipeline 默认相机。
+
+`mio-reference` 保留一个可回滚的面部细节层 `faceDetails.chinLine`，但默认 `enabled=false`，因此当前不会画下巴描边。若后续需要继续试验，可重新设为 `true`；Runtime 会在模型加载、骨骼捕获之后把细 `TubeGeometry` 曲线挂到 head 骨骼，并在清理模型时随 `disposeFaceDetails()` 一起移除，不影响 VMD、材质调优、相机或全身 outline。
 
 人物点击交互：
 
@@ -581,7 +596,7 @@ API 编排问题 -> api/app/routes + api/app/services
 
 ## 13. Daily Podcast Topology
 
-Updated: 2026-05-18
+Updated: 2026-05-21
 
 Daily Podcast is owned by FastAPI. The browser and Next.js UI do not assemble
 Voice Workflow storage URLs directly. Next.js calls the FastAPI podcast API
@@ -593,6 +608,7 @@ FastAPI podcast routes:
 
 ```text
 GET /podcasts/daily/latest
+POST /podcasts/daily/refresh
 GET /podcasts/daily?days=30
 GET /podcasts/daily/{date}
 GET /podcasts/daily/{date}/audio?format=preferred
@@ -601,16 +617,29 @@ GET /podcasts/daily/{date}/audio?format=preferred
 Voice Workflow interface 5 relationship:
 
 ```text
+FastAPI -> Voice Workflow optional POST /api/v1/podcast/daily/refresh
 FastAPI -> Voice Workflow /api/v1/eula-storage-audio/podcast/latest.json
 FastAPI -> Voice Workflow /api/v1/eula-storage-audio/podcast/YYYY/MM/DD/podcast_YYYYMMDD.meta.json
 FastAPI -> Voice Workflow audio OGG/WAV with ranged GET
 ```
 
+`POST /podcasts/daily/refresh` is the only browser-facing manual generation
+entrypoint. It applies a FastAPI in-memory 10 second cooldown before calling
+Voice Workflow, so repeated clicks return the latest readable podcast payload
+without repeatedly hitting the Voice service. The current Voice Workflow
+OpenAPI exposes storage and TTS endpoints but may not expose an HTTP podcast
+refresh route; if the optional refresh call returns `404` or otherwise fails,
+the route still reads and returns the latest podcast metadata/audio state and
+adds the refresh error to the response metadata instead of clearing the card.
+
 Voice Workflow may return Eula storage references either as relative
 `podcast/YYYY/...` paths or as absolute paths on the Voice host. FastAPI
 normalizes absolute paths by extracting the `podcast/...` suffix before calling
 the storage-audio endpoint, so host filesystem prefixes are not exposed to the
-browser and do not break proxy resolution.
+browser and do not break proxy resolution. Podcast `meta.json` is accepted in
+both the older flat shape (`docUrl`, `audio.oggPath`, `audio.wavPath`) and the
+current published shape (`artifacts.docUrl`,
+`artifacts.audio.oggPath`, `artifacts.audio.wavPath`).
 
 If Voice Workflow disconnects or times out during Daily Podcast metadata reads,
 FastAPI returns a normalized degraded podcast payload instead of surfacing a
@@ -636,11 +665,13 @@ center-beacon button asset
 route plays `/images/loginV2/login_video.mp4` as a full-screen intro overlay.
 The intro state machine is `active -> revealing -> complete`: video `ended` or
 a double-click on the intro overlay starts `revealing`, the intro layer is
-hidden immediately, and `/images/loginV2/idle_loginV3.mp4` takes over as the muted
+hidden immediately, and `/images/loginV2/idle_loginV4.mp4` takes over as the muted
 looping page background without a CSS video fade. The login UI then fades upward
 like surfacing from water, and the panel animation end moves the state to
 `complete`. The older static `login_background.png` image is hidden while this
-video-backed login scene is active. The login entry
+video-backed login scene is active. The desktop login panel keeps the source
+bitmap frame ratio but enforces a content-height floor so the register button
+and footnote remain inside the glass frame on mid-width desktop viewports. The login entry
 preserves `ttsEnabled` while
 normalizing `ttsMode` to the default
 server-backed mode; `/companion` applies the same migration on startup so older
@@ -674,9 +705,10 @@ overview card can unmount when the user switches to chat/tasks/tools panels,
 but the audio element and playback state stay mounted in the right rail so the
 play action is still available when the user returns to overview. The card shows
 one SVG-style play/pause button, a primary Feishu document action, and a
-secondary podcast list entry. Manual refresh calls `GET /podcasts/daily/latest`
-with a cache-busting `refresh={timestamp}` query through `/api/backend/*`, then
-updates the existing card state in place.
+secondary podcast list entry. Manual refresh calls `POST /podcasts/daily/refresh`
+through `/api/backend/*`; the backend enforces the 10 second Voice cooldown,
+then returns the current latest podcast payload so the existing card state can
+update in place.
 
 Audio policy:
 

@@ -36,6 +36,7 @@ export type ChatMessage = {
   id?: string;
   role: "user" | "assistant" | "system";
   content: string;
+  visibility?: "chat" | "internal";
   createdAt?: string;
   traceId?: string;
   tts?: {
@@ -48,6 +49,7 @@ export type ChatMessage = {
     mediaType?: string;
     remoteAudioUrl?: string;
     proxyAudioUrl?: string;
+    durationSeconds?: number;
     taskId?: string;
     error?: string;
   };
@@ -148,6 +150,7 @@ export type MessageServiceMessage = {
   session_id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  visibility?: "chat" | "internal";
   trace_id?: string | null;
   emotion?: string | null;
   action?: string | null;

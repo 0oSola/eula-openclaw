@@ -67,6 +67,112 @@ test("playServerTtsAudio plays the OpenClaw audio blob", async () => {
   assert.equal(controller.objectUrl, "blob:openclaw-audio");
 });
 
+test("playServerTtsAudio drives speech levels from a decoded waveform envelope", async () => {
+  const levels = [];
+  let rafCallback = null;
+  class FakeAudio {
+    constructor(src) {
+      this.src = src;
+      this.currentTime = 0;
+      this.paused = false;
+      this.ended = false;
+    }
+
+    set onplay(handler) {
+      this.playHandler = handler;
+    }
+
+    set onended(handler) {
+      this.endHandler = handler;
+    }
+
+    set onerror(handler) {
+      this.errorHandler = handler;
+    }
+
+    play() {
+      this.playHandler?.();
+      return Promise.resolve();
+    }
+  }
+
+  const controller = await playServerTtsAudio(new Blob(["wav"], { type: "audio/wav" }), {
+    AudioCtor: FakeAudio,
+    createObjectURL: () => "blob:voice",
+    revokeObjectURL: () => {},
+    setSpeechLevel: (level) => levels.push(Number(level.toFixed(2))),
+    loadSpeechEnvelope: async () => ({ peaks: [0.15, 0.85], duration: 2 }),
+    requestAnimationFrame: (callback) => {
+      rafCallback = callback;
+      return 1;
+    },
+    cancelAnimationFrame: () => {},
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(levels, [0.15]);
+
+  controller.audio.currentTime = 1.6;
+  rafCallback?.();
+  assert.deepEqual(levels, [0.15, 0.85]);
+
+  controller.audio.endHandler?.();
+  assert.deepEqual(levels.at(-1), 0);
+});
+
+test("playServerTtsAudio drives Mandarin speech visemes from text", async () => {
+  const visemes = [];
+  let rafCallback = null;
+  class FakeAudio {
+    constructor(src) {
+      this.src = src;
+      this.currentTime = 0;
+      this.duration = 1;
+      this.paused = false;
+      this.ended = false;
+    }
+
+    set onplay(handler) {
+      this.playHandler = handler;
+    }
+
+    set onended(handler) {
+      this.endHandler = handler;
+    }
+
+    set onerror(handler) {
+      this.errorHandler = handler;
+    }
+
+    play() {
+      this.playHandler?.();
+      return Promise.resolve();
+    }
+  }
+
+  const controller = await playServerTtsAudio(new Blob(["wav"], { type: "audio/wav" }), {
+    AudioCtor: FakeAudio,
+    createObjectURL: () => "blob:voice",
+    revokeObjectURL: () => {},
+    speechText: "妈妈",
+    setSpeechViseme: (frame) => visemes.push(frame?.viseme || "none"),
+    requestAnimationFrame: (callback) => {
+      rafCallback = callback;
+      return 1;
+    },
+    cancelAnimationFrame: () => {},
+  });
+
+  assert.equal(visemes.at(-1), "M");
+
+  controller.audio.currentTime = 0.3;
+  rafCallback?.();
+  assert.equal(visemes.at(-1), "A");
+
+  controller.audio.endHandler?.();
+  assert.equal(visemes.at(-1), "none");
+});
+
 test("playServerTtsAudio cleans up and rethrows when browser audio playback is rejected", async () => {
   const events = {};
   const calls = [];
@@ -216,4 +322,58 @@ test("playRemoteTtsAudio exposes the audio element before playback starts", asyn
   ]);
   assert.equal(controller.audio, exposedAudio);
   assert.equal(typeof exposedCleanup, "function");
+});
+
+test("playRemoteTtsAudio drives speech levels from the selected audio source envelope", async () => {
+  const levels = [];
+  let rafCallback = null;
+
+  class FakeAudio {
+    constructor(src) {
+      this.src = src;
+      this.currentTime = 0;
+      this.paused = false;
+      this.ended = false;
+    }
+
+    set onplay(handler) {
+      this.playHandler = handler;
+    }
+
+    set onended(handler) {
+      this.endHandler = handler;
+    }
+
+    set onerror(handler) {
+      this.errorHandler = handler;
+    }
+
+    play() {
+      this.playHandler?.();
+      return Promise.resolve();
+    }
+  }
+
+  const controller = await playRemoteTtsAudio({
+    proxyAudioUrl: "/tts/proxy/tts-1",
+    userId: "admin-1",
+    AudioCtor: FakeAudio,
+    setSpeechLevel: (level) => levels.push(Number(level.toFixed(2))),
+    loadSpeechEnvelope: async ({ source }) => {
+      assert.equal(source, "/api/backend/tts/proxy/tts-1?user_id=admin-1");
+      return { peaks: [0.25, 0.9], duration: 2 };
+    },
+    requestAnimationFrame: (callback) => {
+      rafCallback = callback;
+      return 1;
+    },
+    cancelAnimationFrame: () => {},
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(levels, [0.25]);
+
+  controller.audio.currentTime = 1.5;
+  rafCallback?.();
+  assert.deepEqual(levels, [0.25, 0.9]);
 });

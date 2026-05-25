@@ -338,6 +338,19 @@ def _chat_role(role: str) -> str | None:
     return None
 
 
+def _bridge_control_reason(role: str, content: str) -> str | None:
+    compact = _compact_message_text(content).lower()
+    if role == "system" and compact == "compaction":
+        return "compaction"
+    if role == "assistant" and compact == "[assistant turn failed before producing content]":
+        return "assistant_turn_failed"
+    return None
+
+
+def _bridge_message_visibility(role: str, content: str) -> str:
+    return "internal" if _bridge_control_reason(role, content) else "chat"
+
+
 def _is_feishu_direct_session_key(session_key: str) -> bool:
     parts = session_key.strip().split(":")
     return len(parts) >= 5 and parts[0] == "agent" and parts[2] == "feishu" and parts[3] == "direct" and bool(parts[4])
@@ -823,12 +836,15 @@ class MessageBridgeService:
             )
             return None
         external_id = _external_message_id(self.provider.provider, binding["external_session_key"], external_message)
+        visibility = _bridge_message_visibility(role, normalized["content"])
         metadata = self._metadata_for_external_message(
             binding,
             external_message,
             external_id=external_id,
             normalized_content=normalized["content"],
             source=source,
+            role=role,
+            visibility=visibility,
         )
         if source in {"realtime", "realtime_backfill"} and self.store.find_recent_message_bridge_duplicate(
             binding["workspace_id"],
@@ -866,6 +882,7 @@ class MessageBridgeService:
             motion_plan=normalized["motion_plan"],
             memory_ops=normalized["memory_ops"],
             metadata=metadata,
+            visibility=visibility,
         )
         merged_metadata = self._merge_existing_message_metadata(message.get("metadata") or {}, metadata)
         if merged_metadata != (message.get("metadata") or {}):
@@ -1022,6 +1039,8 @@ class MessageBridgeService:
         external_id: str,
         normalized_content: str,
         source: str,
+        role: str,
+        visibility: str,
     ) -> dict[str, Any]:
         metadata: dict[str, Any] = {
             "source": "message_bridge",
@@ -1032,6 +1051,12 @@ class MessageBridgeService:
             "synced_from": source,
             "parse_mode": _normalize_bridge_message(external_message).get("parse_mode"),
         }
+        if visibility == "internal":
+            metadata["visibility"] = "internal"
+            control_reason = _bridge_control_reason(role, normalized_content)
+            if control_reason:
+                metadata["message_kind"] = "control"
+                metadata["control_reason"] = control_reason
         openclaw_metadata = _extract_openclaw_metadata(external_message.raw or {})
         if openclaw_metadata:
             metadata["openclaw_metadata"] = openclaw_metadata

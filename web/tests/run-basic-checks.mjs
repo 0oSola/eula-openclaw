@@ -102,6 +102,9 @@ function run() {
     const tracePageSource = readFileSync(new URL("../src/app/traces/page.tsx", import.meta.url), "utf8");
     const typesSource = readFileSync(new URL("../src/lib/types.ts", import.meta.url), "utf8");
     const apiSource = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+    const audioWaveformSource = readFileSync(new URL("../src/lib/audioWaveform.js", import.meta.url), "utf8");
+    const speechVisemeSource = readFileSync(new URL("../src/lib/speechViseme.js", import.meta.url), "utf8");
+    const ttsPlaybackSource = readFileSync(new URL("../src/lib/ttsPlayback.js", import.meta.url), "utf8");
     const waveformSource = readFileSync(new URL("../src/app/podcasts/PodcastWaveform.tsx", import.meta.url), "utf8");
     const podcastsPageSource = readFileSync(new URL("../src/app/podcasts/page.tsx", import.meta.url), "utf8");
     const realtimeVoiceQueueSource = readFileSync(
@@ -128,8 +131,8 @@ function run() {
     assert.match(loginPageSource, /--login-v2-brand-mark/);
     assert.match(loginPageSource, /--login-v2-brand-wordmark/);
     assert.match(loginPageSource, /login_button-crop-transparent\.png/);
-    assert.match(loginPageSource, /src="\/images\/loginV2\/idle_loginV3\.mp4"/);
-    assert.equal(existsSync(new URL("../public/images/loginV2/idle_loginV3.mp4", import.meta.url)), true);
+    assert.match(loginPageSource, /src="\/images\/loginV2\/idle_loginV4\.mp4"/);
+    assert.equal(existsSync(new URL("../public/images/loginV2/idle_loginV4.mp4", import.meta.url)), true);
     assert.match(loginPageSource, /data-testid="login-v2-brand"/);
     assert.match(loginPageSource, /data-logo-layout="aether-v2-mark-left-wordmark-right"/);
     assert.match(loginPageSource, /data-testid="login-v2-user-icon"/);
@@ -158,6 +161,10 @@ function run() {
     assert.match(companionPageSource, /data-logo-layout="aether-cropped-lockup"/);
     assert.match(companionPageSource, /src="\/images\/aether-companion-mark-crop\.png"/);
     assert.match(companionPageSource, /src="\/images\/aether-companion-wordmark-crop\.png"/);
+    assert.doesNotMatch(companionPageSource, /<span>TITLE:/);
+    assert.match(companionPageSource, /currentSessionIdentifier/);
+    assert.match(companionPageSource, /data-testid="mio-session-id-trigger"/);
+    assert.match(companionPageSource, /data-testid="mio-session-id-popover"/);
     assert.doesNotMatch(companionPageSource, /<h1>AETHER<\/h1>|<h1>MIO<\/h1>|mio-brand-tagline/);
     assert.match(typesSource, /tts\?:\s*\{/);
     assert.match(typesSource, /status:\s*"loading"\s*\|\s*"pending"\s*\|\s*"ready"\s*\|\s*"failed"\s*\|\s*"expired"\s*\|\s*"partial_failed"/);
@@ -191,6 +198,7 @@ function run() {
     assert.match(apiSource, /export async function listMessageBridgeFeishuSessions\(/);
     assert.match(apiSource, /export async function setDefaultMessageBridgeBinding\(/);
     assert.match(apiSource, /export async function getLatestDailyPodcast/);
+    assert.match(apiSource, /export async function refreshDailyPodcast/);
     assert.match(apiSource, /export async function listDailyPodcasts/);
     assert.match(apiSource, /export async function getDailyPodcast/);
     assert.match(waveformSource, /<canvas/);
@@ -273,9 +281,9 @@ function run() {
     assert.match(tracePageSource, /href="\/status"/);
     assert.doesNotMatch(rightRailSource, /mio-trace-card/);
     assert.match(companionPageSource, /getLatestDailyPodcast/);
-    assert.match(companionPageSource, /refreshDailyPodcast = useCallback\(async \(\{ force = false \}: \{ force\?: boolean \} = \{\}\) => \{/);
-    assert.match(companionPageSource, /getLatestDailyPodcast\(session\.userId, \{ cacheBust: force \}\)/);
-    assert.match(companionPageSource, /onRefreshDailyPodcast=\{\(\) => refreshDailyPodcast\(\{ force: true \}\)\}/);
+    assert.match(companionPageSource, /refreshDailyPodcast = useCallback\(async \(\{ triggerVoice = false \}: \{ triggerVoice\?: boolean \} = \{\}\) => \{/);
+    assert.match(companionPageSource, /triggerVoice\s*\?\s*requestDailyPodcastRefresh\(session\.userId\)\s*:\s*getLatestDailyPodcast\(session\.userId\)/);
+    assert.match(companionPageSource, /onRefreshDailyPodcast=\{\(\) => refreshDailyPodcast\(\{ triggerVoice: true \}\)\}/);
     assert.match(cssSource, /\.mio-podcast-card/);
     assert.match(cssSource, /\.mio-podcast-title-slot/);
     assert.match(cssSource, /\.mio-podcast-play-slot/);
@@ -288,8 +296,8 @@ function run() {
     );
     assert.doesNotMatch(cssSource, /podcast-page-header nav,\s*[\s\S]*?\.mio-podcast-actions\s*\{/);
     assert.match(apiSource, /function resolveRuntimeApiBaseUrl\(/);
-    assert.match(apiSource, /export async function getLatestDailyPodcast\(userId: string, options: \{ cacheBust\?: boolean \} = \{\}\)/);
-    assert.match(apiSource, /options\.cacheBust \? `\/podcasts\/daily\/latest\?refresh=\$\{Date\.now\(\)\}` : "\/podcasts\/daily\/latest"/);
+    assert.match(apiSource, /export async function getLatestDailyPodcast\(userId: string\): Promise<DailyPodcast>/);
+    assert.match(apiSource, /requestJSON<\{ podcast: DailyPodcast \}>\("\/podcasts\/daily\/refresh"/);
     assert.match(apiSource, /runtimeHostname !== "localhost"/);
     assert.match(apiSource, /API request failed before reaching backend/);
     assert.match(apiSource, /\/api\/backend/);
@@ -442,6 +450,30 @@ function run() {
     assert.match(companionPageSource, /<MioModeBackground[\s\S]*active=\{renderPipeline === "mio-reference"\}[\s\S]*speaking=\{speaking\}[\s\S]*emotion=\{interaction\.emotion\}[\s\S]*action=\{interaction\.action\}[\s\S]*activityPulse=\{backgroundActivityPulse\}/);
     assert.match(cssSource, /\.mio-command-shell/);
     assert.match(cssSource, /\.mio-command-surface/);
+    assert.match(runtimeSource, /const SPEAKING_LIP_CYCLE_MS = 520;/);
+    assert.match(runtimeSource, /this\.speakingStartedAtMs = nowMs\(\);/);
+    assert.match(audioWaveformSource, /export function sampleEnvelopeLevel/);
+    assert.match(audioWaveformSource, /export async function decodeAudioEnvelopeFromArrayBuffer/);
+    assert.match(audioWaveformSource, /export function createAudioEnvelopeLevelSync/);
+    assert.match(speechVisemeSource, /export function buildSpeechVisemeTimeline/);
+    assert.match(speechVisemeSource, /export function createSpeechVisemeSync/);
+    assert.match(speechVisemeSource, /COMMON_MANDARIN_PINYIN/);
+    assert.match(ttsPlaybackSource, /setSpeechLevel = undefined/);
+    assert.match(ttsPlaybackSource, /setSpeechViseme = undefined/);
+    assert.match(ttsPlaybackSource, /createSpeechVisemeSync/);
+    assert.match(ttsPlaybackSource, /decodeAudioEnvelopeFromBlob/);
+    assert.match(realtimeVoiceQueueSource, /setSpeechLevel = undefined/);
+    assert.match(realtimeVoiceQueueSource, /setSpeechViseme = undefined/);
+    assert.match(realtimeVoiceQueueSource, /fetchAudioEnvelope/);
+    assert.match(stageSource, /setSpeechLevel: \(level: number\) => void;/);
+    assert.match(stageSource, /setSpeechViseme: \(frame: \{ viseme: string; weight\?: number \} \| null\) => void;/);
+    assert.match(companionPageSource, /function setMmdSpeechLevel\(level: number\)/);
+    assert.match(companionPageSource, /function setMmdSpeechViseme\(frame: SpeechVisemeFrame\)/);
+    assert.match(runtimeSource, /getSpeakingLipBase\(nowMs - speakingStartedAtMs\)/);
+    assert.match(runtimeSource, /getSpeechLevelLipBase\(this\.speechLevel\)/);
+    assert.match(runtimeSource, /setSpeechViseme\(frame\)/);
+    assert.match(runtimeSource, /SPEECH_VISEME_MOUTH_SHAPES/);
+    assert.doesNotMatch(runtimeSource, /Math\.abs\(Math\.sin\(nowMs \* 0\.021\)\)/);
     {
       const bottomBarDesign = readBottomBarDesign();
       const designNode = (name) => {
@@ -591,6 +623,16 @@ function run() {
     assert.match(cssSource, /padding: var\(--mio-layout-padding-top\) var\(--mio-layout-padding-x\) 0;/);
     assert.match(cssSource, /margin-bottom: var\(--mio-side-panels-bottom-gap\);/);
     assert.match(cssSource, /\.mio-topbar\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto;[\s\S]*?gap: clamp\(8px, 2vw, 20px\);/);
+    assert.match(cssSource, /\.mio-session-id-popover/);
+    assert.match(cssSource, /\.mio-session-id-popover:is\(:hover, :focus-within\) \.mio-session-id-floating/);
+    const sessionIdFloatingBlock = cssBlock(cssSource, ".mio-session-id-floating");
+    assert.doesNotMatch(sessionIdFloatingBlock, /visibility 160ms ease/);
+    assert.match(sessionIdFloatingBlock, /pointer-events:\s*auto;/);
+    const sessionIdHoverBridgeBlock = cssBlock(cssSource, ".mio-session-id-popover::after");
+    assert.match(sessionIdHoverBridgeBlock, /content:\s*"";/);
+    assert.match(sessionIdHoverBridgeBlock, /position:\s*absolute;/);
+    assert.match(sessionIdHoverBridgeBlock, /top:\s*100%;/);
+    assert.match(sessionIdHoverBridgeBlock, /height:\s*12px;/);
     assert.match(cssSource, /\.mio-system-state\s*\{[\s\S]*?display: none;[\s\S]*?\}/);
     assert.match(cssSource, /\.mio-brand\s*\{[\s\S]*?grid-template-columns: clamp\(54px, 4vw, 64px\) clamp\(156px, 12vw, 208px\);/);
     assert.match(cssSource, /\.mio-brand-mark\s*\{[\s\S]*?width: 100%;[\s\S]*?object-fit: contain;/);
@@ -615,10 +657,26 @@ function run() {
     assert.match(runtimeSource, /hitTestModelAtClientPoint\(clientX, clientY\)/);
     assert.match(
       runtimeSource,
-      /"mio-reference":\s*\{[\s\S]*?camera:\s*\{[\s\S]*?fov:\s*32[\s\S]*?position:\s*\[-3\.137891,\s*12\.522935,\s*45\.135659\][\s\S]*?target:\s*\[-1\.861732,\s*-2\.847643,\s*1\.048369\][\s\S]*?maxDistance:\s*72[\s\S]*?locked:\s*true/,
+      /"mio-reference":\s*\{[\s\S]*?renderer:\s*\{\s*toneMapping:\s*"none",\s*exposure:\s*1\.57\s*\}[\s\S]*?camera:\s*\{[\s\S]*?fov:\s*32[\s\S]*?position:\s*\[-9\.39,\s*12\.522935,\s*43\.63\][\s\S]*?target:\s*\[-1\.861732,\s*-2\.847643,\s*1\.048369\][\s\S]*?maxDistance:\s*72[\s\S]*?locked:\s*false/,
     );
-    assert.match(companionPageSource, /const LOCKED_MIO_REFERENCE_CAMERA: MmdCameraSnapshot = \{/);
-    assert.match(companionPageSource, /mmdCamera:\s*\{\s*\.\.\.\(saved\?\.mmdCamera \|\| \{\}\),\s*"mio-reference": LOCKED_MIO_REFERENCE_CAMERA,/);
+    assert.match(runtimeSource, /"mio-reference":\s*\{[\s\S]*?ambient:\s*\{\s*color:\s*"#ffffff",\s*intensity:\s*0\.2\s*\}[\s\S]*?hemisphere:\s*\{\s*sky:\s*"#ff6929",\s*ground:\s*"#333333",\s*intensity:\s*0\.48\s*\}/);
+    assert.match(runtimeSource, /"mio-reference":\s*\{[\s\S]*?floor:\s*\{[\s\S]*?opacity:\s*0\.22/);
+    assert.match(runtimeSource, /"mio-reference":\s*\{[\s\S]*?postfx:\s*\{[\s\S]*?enabled:\s*false[\s\S]*?bloomStrength:\s*0\.88/);
+    assert.match(runtimeSource, /"mio-reference":\s*\{[\s\S]*?materialAdjustments:\s*\{[\s\S]*?hair:\s*\{\s*tintColor:\s*"#02c2f2",\s*tintStrength:\s*0\.61\s*\}/);
+    assert.match(runtimeSource, /tuneMaterialByPipeline\(material,\s*this\.toonRampTexture,\s*this\.renderPipeline,\s*this\.presentation\)/);
+    assert.match(companionPageSource, /const MIO_REFERENCE_CAMERA_DEFAULT: MmdCameraSnapshot = \{/);
+    assert.match(companionPageSource, /position:\s*\[-9\.39,\s*12\.522935,\s*43\.63\]/);
+    assert.match(companionPageSource, /target:\s*\[-1\.861732,\s*-2\.847643,\s*1\.048369\]/);
+    assert.match(companionPageSource, /mmdCamera:\s*\{\s*\.\.\.\(saved\?\.mmdCamera \|\| \{\}\),\s*"mio-reference": MIO_REFERENCE_CAMERA_DEFAULT,/);
+    assert.match(companionPageSource, /const stageCameraSnapshot\s*=\s*session\?\.mmdCamera\?\.\[renderPipeline\]\s*\?\?\s*null;/);
+    assert.match(companionPageSource, /cameraSnapshot=\{stageCameraSnapshot\}/);
+    assert.doesNotMatch(companionPageSource, /activeCameraSnapshot/);
+    assert.doesNotMatch(companionPageSource, /mmdCameraByFavoriteVmd/);
+    assert.doesNotMatch(companionPageSource, /buildFavoriteVmdCameraKey/);
+    assert.match(stageSource, /if \(!cameraSnapshot\) return;\s*runtime\.applyCameraSnapshot\(cameraSnapshot\);/);
+    assert.match(runtimeSource, /faceDetails:\s*\{[\s\S]*?chinLine:\s*\{[\s\S]*?enabled:\s*false[\s\S]*?anchor:\s*"head"[\s\S]*?radius:\s*0\.012/);
+    assert.match(runtimeSource, /attachFaceDetails\(mesh, this\.presentation\);/);
+    assert.match(runtimeSource, /disposeFaceDetails\(\)/);
   }
 
   {

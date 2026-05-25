@@ -62,6 +62,105 @@ test("AudioQueue plays by first-seen job order then sequence without overlap", a
   assert.equal(queue.hasPlayedChunk("missing"), false);
 });
 
+test("AudioQueue drives speech levels from each realtime audio chunk envelope", async () => {
+  const levels = [];
+  const instances = [];
+  let rafCallback = null;
+
+  class FakeAudio {
+    constructor(src) {
+      this.src = src;
+      this.currentTime = 0;
+      this.paused = false;
+      this.ended = false;
+      instances.push(this);
+    }
+
+    play() {
+      this.onplay?.();
+      return Promise.resolve();
+    }
+
+    finish() {
+      this.ended = true;
+      this.onended?.();
+    }
+  }
+
+  const queue = new AudioQueue({
+    AudioCtor: FakeAudio,
+    setSpeechLevel: (level) => levels.push(Number(level.toFixed(2))),
+    loadSpeechEnvelope: async () => ({ peaks: [0.2, 0.7], duration: 2 }),
+    requestAnimationFrame: (callback) => {
+      rafCallback = callback;
+      return 1;
+    },
+    cancelAnimationFrame: () => {},
+  });
+
+  queue.enqueue({ jobId: "job-1", sequence: 1, url: "/chunk-1.wav" });
+  await tick();
+  await Promise.resolve();
+  assert.deepEqual(levels, [0.2]);
+
+  instances[0].currentTime = 1.4;
+  rafCallback?.();
+  assert.deepEqual(levels, [0.2, 0.7]);
+
+  instances[0].finish();
+  await queue.whenIdle();
+  assert.equal(levels.at(-1), 0);
+});
+
+test("AudioQueue drives Mandarin speech visemes from each realtime chunk text", async () => {
+  const visemes = [];
+  const instances = [];
+  let rafCallback = null;
+
+  class FakeAudio {
+    constructor(src) {
+      this.src = src;
+      this.currentTime = 0;
+      this.duration = 1;
+      this.paused = false;
+      this.ended = false;
+      instances.push(this);
+    }
+
+    play() {
+      this.onplay?.();
+      return Promise.resolve();
+    }
+
+    finish() {
+      this.ended = true;
+      this.onended?.();
+    }
+  }
+
+  const queue = new AudioQueue({
+    AudioCtor: FakeAudio,
+    setSpeechViseme: (frame) => visemes.push(frame?.viseme || "none"),
+    requestAnimationFrame: (callback) => {
+      rafCallback = callback;
+      return 1;
+    },
+    cancelAnimationFrame: () => {},
+  });
+
+  queue.enqueue({ jobId: "job-1", sequence: 1, url: "/chunk-1.wav", text: "妈妈", duration: 1 });
+  await tick();
+  assert.equal(visemes.at(-1), "M");
+
+  instances[0].currentTime = 0.3;
+  rafCallback?.();
+  assert.equal(visemes.at(-1), "A");
+
+  instances[0].finish();
+  await queue.whenIdle();
+  assert.equal(visemes.at(-1), "none");
+});
+
 test("AudioQueue classifies playback errors before and after partial playback", async () => {
   const errors = [];
   const instances = [];

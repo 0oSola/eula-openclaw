@@ -218,6 +218,31 @@ def test_voice_workflow_tts_cancel_realtime_posts_session_cancel():
     assert calls == [{"method": "POST", "path": "/api/v1/tts/realtime/session-1/cancel"}]
 
 
+def test_voice_workflow_refresh_daily_podcast_posts_refresh_endpoint():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "body": request.content,
+            }
+        )
+        if request.method == "POST" and request.url.path == "/api/v1/podcast/daily/refresh":
+            return httpx.Response(status_code=202, json={"status": "accepted", "date": "2026-05-21"})
+        return httpx.Response(status_code=404)
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = VoiceWorkflowTtsClient(base_url="http://tts.local", http_client=http_client)
+            return await client.refresh_daily_podcast()
+
+    assert asyncio.run(run_case()) == {"status": "accepted", "date": "2026-05-21"}
+    assert calls == [{"method": "POST", "path": "/api/v1/podcast/daily/refresh", "body": b""}]
+
+
 def test_voice_workflow_builds_eula_storage_audio_url_for_interface_5():
     client = VoiceWorkflowTtsClient(base_url="http://tts.local")
 

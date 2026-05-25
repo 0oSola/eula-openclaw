@@ -277,7 +277,9 @@ test("advanced features button opens a non-modal VMD quick import panel with pre
   await expect(page.getByTestId("mio-stage-wrap")).toBeVisible();
 });
 
-test("advanced panel can unlock and save the active favorite VMD camera @smoke", async ({ page }) => {
+test("advanced panel saves the stage camera by render pipeline without linking it to VMD playback @smoke", async ({
+  page,
+}) => {
   await page.route("**/config/mapping/resolved/**", async (route) => {
     await route.fulfill({ json: { mappings: {} } });
   });
@@ -332,7 +334,8 @@ test("advanced panel can unlock and save the active favorite VMD camera @smoke",
 
   const cameraControls = page.getByTestId("mio-camera-controls");
   await expect(cameraControls).toBeVisible();
-  await expect(cameraControls).toContainText("eula-favorite.vmd");
+  await expect(cameraControls).toContainText("Saved for mio-reference");
+  await expect(cameraControls).not.toContainText("eula-favorite.vmd");
   await expect(cameraControls.getByTestId("mio-camera-mode")).toContainText("Free");
   await cameraControls.getByTestId("mio-camera-unlock").click();
   await expect(cameraControls.getByTestId("mio-camera-mode")).toContainText("Editing");
@@ -348,18 +351,23 @@ test("advanced panel can unlock and save the active favorite VMD camera @smoke",
     .poll(() =>
       page.evaluate(() => {
         const session = JSON.parse(window.localStorage.getItem("mmd_companion_session_v1") || "{}");
-        return Object.entries(session.mmdCameraByFavoriteVmd || {})[0] || null;
+        return {
+          pipeline: session.renderPipeline,
+          camera: session.mmdCamera?.["mio-reference"] || null,
+          favoriteCameraCount: Object.keys(session.mmdCameraByFavoriteVmd || {}).length,
+        };
       }),
     )
-    .toEqual([
-      "genshin::Eula_by_Genshin%2FEula.pmx::asset-1",
-      {
-        fov: 33,
-        position: [0, 9.2, 21.6],
-        target: [0, 7.9, 0],
+    .toEqual({
+      pipeline: "mio-reference",
+      camera: {
+        fov: 32,
+        position: [-9.39, 12.522935, 43.63],
+        target: [-1.861732, -2.847643, 1.048369],
         locked: false,
       },
-    ]);
+      favoriteCameraCount: 0,
+    });
 });
 
 test("companion stage keeps runtime chrome hidden inside the restored HUD @critical", async ({ page }) => {

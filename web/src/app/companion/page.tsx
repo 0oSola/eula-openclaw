@@ -46,6 +46,7 @@ import {
   deleteChatSession,
   getLatestMotionContextExport,
   getLatestDailyPodcast,
+  refreshDailyPodcast as requestDailyPodcastRefresh,
   getLatestGreetingMessage,
   getMessageBridgeStatus,
   getOpenClawConfig,
@@ -146,6 +147,7 @@ type StageInteractionViewState = {
 };
 type ToastState = { id: number; message: string } | null;
 type ChatMessageTts = NonNullable<ChatMessage["tts"]>;
+type SpeechVisemeFrame = { viseme: string; weight?: number } | null;
 type OpenClawDraft = {
   base_url: string;
   token: string;
@@ -187,6 +189,8 @@ type RealtimeAudioQueue = {
 };
 type RealtimeAudioQueueCtor = new (options?: {
   AudioCtor?: typeof Audio;
+  setSpeechLevel?: (level: number) => void;
+  setSpeechViseme?: (frame: SpeechVisemeFrame) => void;
   onError?: (event: { jobId: string; messageId?: string; fallback: RealtimeVoiceFallbackMode; error?: Error }) => void;
   onChunkStart?: (entry: { jobId: string; messageId?: string }) => void;
   onChunkEnd?: (entry: { jobId: string; messageId?: string }) => void;
@@ -301,11 +305,11 @@ const renderPipelineOptions: { value: RenderPipeline; label: string; description
   { value: "reze-npr", label: "Reze NPR", description: "reze-engine \u5b9e\u9a8c\u98ce\u683c" },
 ];
 
-const LOCKED_MIO_REFERENCE_CAMERA: MmdCameraSnapshot = {
+const MIO_REFERENCE_CAMERA_DEFAULT: MmdCameraSnapshot = {
   fov: 32,
-  position: [-3.137891, 12.522935, 45.135659],
+  position: [-9.39, 12.522935, 43.63],
   target: [-1.861732, -2.847643, 1.048369],
-  locked: true,
+  locked: false,
 };
 
 const EMOTION_SLOTS = ["neutral", "happy", "sad", "thinking", "excited", "caring"] as const;
@@ -350,6 +354,7 @@ function mapServerTtsToChatTts(messageTts?: MessageServiceMessage["tts"] | null)
     mediaType: messageTts.media_type || undefined,
     remoteAudioUrl: messageTts.remote_audio_url || undefined,
     proxyAudioUrl: messageTts.proxy_audio_url || undefined,
+    durationSeconds: messageTts.duration_seconds || undefined,
     taskId: messageTts.task_id || undefined,
     error: messageTts.error || undefined,
   };
@@ -360,6 +365,7 @@ function mapServerMessageToChatMessage(message: MessageServiceMessage): ChatMess
     id: message.id,
     role: message.role,
     content: message.content,
+    visibility: message.visibility,
     createdAt: message.created_at,
     traceId: message.trace_id || undefined,
     tts: mapServerTtsToChatTts(message.tts),
@@ -373,10 +379,6 @@ function formatMessageBridgeSessionLabel(item: MessageBridgeExternalSession): st
     item.external_session_key === "agent:main:feishu:direct:ou_229011826b88e09badbbb6f43ad38ba3";
   const channelKind = item.external_session_key.includes(":direct:") ? "direct" : "session";
   return `${isTargetDirect ? "[当前直连] " : ""}${name} · ${channelKind} · ${keyTail}`;
-}
-
-function buildFavoriteVmdCameraKey(pipeline: RenderPipeline, modelPath: string, assetId: string) {
-  return `${pipeline}::${encodeURIComponent(modelPath)}::${encodeURIComponent(assetId)}`;
 }
 
 export default function CompanionPage() {
@@ -517,7 +519,7 @@ export default function CompanionPage() {
           ttsMode: DEFAULT_COMPANION_TTS_MODE,
           mmdCamera: {
             ...(saved?.mmdCamera || {}),
-            "mio-reference": LOCKED_MIO_REFERENCE_CAMERA,
+            "mio-reference": MIO_REFERENCE_CAMERA_DEFAULT,
           },
         }
       : null;
@@ -698,10 +700,12 @@ export default function CompanionPage() {
     void loadMessageBridgeStatus({ silent: true });
   }, [loadMessageBridgeStatus, loadOpenClawConfig, session]);
 
-  const refreshDailyPodcast = useCallback(async ({ force = false }: { force?: boolean } = {}) => {
+  const refreshDailyPodcast = useCallback(async ({ triggerVoice = false }: { triggerVoice?: boolean } = {}) => {
     if (!session) return;
     try {
-      setDailyPodcast(await getLatestDailyPodcast(session.userId, { cacheBust: force }));
+      setDailyPodcast(
+        await (triggerVoice ? requestDailyPodcastRefresh(session.userId) : getLatestDailyPodcast(session.userId)),
+      );
     } catch {
       setDailyPodcast(null);
     }
@@ -931,30 +935,20 @@ export default function CompanionPage() {
     return buildAutoplayResumeInteraction(currentModelAutoplayAssets) as InteractionState | null;
   }, [currentModelAutoplayAssets]);
 
-  const activeFavoriteVmdAsset = useMemo(() => {
-    if (!activeVmdAssetId) return null;
-    return currentModelFavoriteAssets.find((asset) => asset.asset_id === activeVmdAssetId) || null;
-  }, [activeVmdAssetId, currentModelFavoriteAssets]);
-
-  const activeFavoriteVmdCameraKey =
-    activeFavoriteVmdAsset && selectedModel?.relative_path
-      ? buildFavoriteVmdCameraKey(renderPipeline, selectedModel.relative_path, activeFavoriteVmdAsset.asset_id)
-      : "";
-
   const currentChatSession = useMemo(
     () => chatSessions.find((item) => item.id === chatSessionId) || null,
     [chatSessionId, chatSessions],
   );
+  const currentSessionTitle = currentChatSession?.title?.trim() || "新对话";
+  const currentSessionIdentifier =
+    currentChatSession?.openclaw_session_key?.trim() || chatSessionId || currentSessionTitle || "------";
   const latestAssistantMessage = [...messages].reverse().find((item) => item.role === "assistant");
   const displayAssistantMessage = resolveEntryGreetingMessage({
     latestGreetingMessage: entryGreetingMessage,
     latestAssistantMessage,
   }) as ChatMessage | null;
   const latestAssistantMessageText = displayAssistantMessage?.content || DEFAULT_ASSISTANT_COPY;
-  const activeCameraSnapshot =
-    (activeFavoriteVmdCameraKey ? session?.mmdCameraByFavoriteVmd?.[activeFavoriteVmdCameraKey] : null) ??
-    session?.mmdCamera?.[renderPipeline] ??
-    null;
+  const stageCameraSnapshot = session?.mmdCamera?.[renderPipeline] ?? null;
 
   useEffect(() => {
     if (!autoFavoriteInteraction) return;
@@ -1380,29 +1374,17 @@ export default function CompanionPage() {
     const savedSnapshot: MmdCameraSnapshot = { ...snapshot, locked: false };
     stageRef.current?.unlockCamera();
     console.info("[mmd-camera] saved snapshot", savedSnapshot);
-    const nextSession: UserSession = activeFavoriteVmdCameraKey
-      ? {
-          ...session,
-          mmdCameraByFavoriteVmd: {
-            ...(session.mmdCameraByFavoriteVmd || {}),
-            [activeFavoriteVmdCameraKey]: savedSnapshot,
-          },
-        }
-      : {
-          ...session,
-          mmdCamera: {
-            ...(session.mmdCamera || {}),
-            [renderPipeline]: savedSnapshot,
-          },
-        };
+    const nextSession: UserSession = {
+      ...session,
+      mmdCamera: {
+        ...(session.mmdCamera || {}),
+        [renderPipeline]: savedSnapshot,
+      },
+    };
     setSession(nextSession);
     saveSession(nextSession);
     setCameraEditMode(false);
-    setAdvancedMessage(
-      activeFavoriteVmdAsset
-        ? `Camera saved for ${activeFavoriteVmdAsset.display_name || activeFavoriteVmdAsset.filename}.`
-        : `Camera saved for ${renderPipeline}.`,
-    );
+    setAdvancedMessage(`Camera saved for ${renderPipeline}.`);
   }
 
   function handleResetMmdCamera() {
@@ -1414,25 +1396,15 @@ export default function CompanionPage() {
       return;
     }
     const nextCamera = { ...(session.mmdCamera || {}) };
-    const nextFavoriteCameras = { ...(session.mmdCameraByFavoriteVmd || {}) };
-    if (activeFavoriteVmdCameraKey) {
-      delete nextFavoriteCameras[activeFavoriteVmdCameraKey];
-    } else {
-      delete nextCamera[renderPipeline];
-    }
+    delete nextCamera[renderPipeline];
     const nextSession: UserSession = {
       ...session,
       mmdCamera: Object.keys(nextCamera).length ? nextCamera : undefined,
-      mmdCameraByFavoriteVmd: Object.keys(nextFavoriteCameras).length ? nextFavoriteCameras : undefined,
     };
     setSession(nextSession);
     saveSession(nextSession);
     setCameraEditMode(false);
-    setAdvancedMessage(
-      activeFavoriteVmdAsset
-        ? `Camera reset for ${activeFavoriteVmdAsset.display_name || activeFavoriteVmdAsset.filename}.`
-        : `Camera reset to the ${renderPipeline} default.`,
-    );
+    setAdvancedMessage(`Camera reset to the ${renderPipeline} default.`);
   }
 
   function stopServerAudio({ updateSpeaking = true }: { updateSpeaking?: boolean } = {}) {
@@ -1450,6 +1422,8 @@ export default function CompanionPage() {
     if (updateSpeaking) {
       setSpeaking(false);
     }
+    setMmdSpeechLevel(0);
+    setMmdSpeechViseme(null);
     setActiveTtsMessageId("");
   }
 
@@ -1533,6 +1507,14 @@ export default function CompanionPage() {
     return `/api/backend${authenticatedPath.startsWith("/") ? authenticatedPath : `/${authenticatedPath}`}`;
   }
 
+  function setMmdSpeechLevel(level: number) {
+    stageRef.current?.setSpeechLevel(level);
+  }
+
+  function setMmdSpeechViseme(frame: SpeechVisemeFrame) {
+    stageRef.current?.setSpeechViseme(frame);
+  }
+
   async function refreshMessageFromServer(messageId: string) {
     if (!session) return null;
     const next = await getMessageById(session.userId, messageId);
@@ -1545,6 +1527,8 @@ export default function CompanionPage() {
     if (!audioQueueRef.current) {
       const RealtimeAudioQueue = AudioQueue as unknown as RealtimeAudioQueueCtor;
       audioQueueRef.current = new RealtimeAudioQueue({
+        setSpeechLevel: setMmdSpeechLevel,
+        setSpeechViseme: setMmdSpeechViseme,
         onChunkStart: (entry: { jobId: string; messageId?: string }) => {
           const messageId = entry.messageId || realtimeVoiceJobMessageRef.current.get(entry.jobId) || "";
           setSpeaking(true);
@@ -1757,6 +1741,7 @@ export default function CompanionPage() {
     audioQueueRef.current?.clear();
     realtimeVoiceJobMessageRef.current.clear();
     setSpeaking(false);
+    setMmdSpeechViseme(null);
     setActiveTtsMessageId("");
     setRealtimeVoiceStatus("idle");
     const socket = voiceSocketRef.current;
@@ -2015,11 +2000,14 @@ export default function CompanionPage() {
     }
   }
 
-  async function playServerAudio(audioBlob: Blob, messageId = "") {
+  async function playServerAudio(audioBlob: Blob, messageId = "", speechText = "") {
     stopSpeechPlayback();
     setActiveTtsMessageId(messageId);
     const controller = await playServerTtsAudio(audioBlob, {
       setSpeaking: (value?: boolean) => setSpeaking(Boolean(value)),
+      setSpeechLevel: setMmdSpeechLevel,
+      setSpeechViseme: setMmdSpeechViseme,
+      speechText,
       onAudioCreated: ({ audio, cleanup }: { audio: HTMLAudioElement; cleanup: () => void }) => {
         serverAudioRef.current = audio;
         serverAudioCleanupRef.current = cleanup;
@@ -2052,6 +2040,10 @@ export default function CompanionPage() {
       proxyAudioUrl,
       userId: session.userId,
       setSpeaking: (value?: boolean) => setSpeaking(Boolean(value)),
+      setSpeechLevel: setMmdSpeechLevel,
+      setSpeechViseme: setMmdSpeechViseme,
+      speechText: message.content,
+      speechDurationSeconds: message.tts?.durationSeconds || 0,
       onAudioCreated: ({ audio, cleanup }: { audio: HTMLAudioElement; cleanup: () => void }) => {
         serverAudioRef.current = audio;
         serverAudioCleanupRef.current = cleanup;
@@ -2167,7 +2159,7 @@ export default function CompanionPage() {
   async function playMessageAudio(message: ChatMessage) {
     if (message.tts?.status !== "ready") return;
     if (message.tts.mode === "server" && message.tts.audio) {
-      await playServerAudio(message.tts.audio, message.id || "");
+      await playServerAudio(message.tts.audio, message.id || "", message.content);
       return;
     }
     if (message.tts.mode === "server" && message.tts.remoteAudioUrl) {
@@ -2408,9 +2400,26 @@ export default function CompanionPage() {
           <div className="mio-session-meta">
             <span>USER: {session.userId}</span>
             <span>SESSION: {(chatSessionId || "------").slice(0, 6).toUpperCase()}</span>
-            <span>TITLE: {currentChatSession?.title || "新对话"}</span>
           </div>
           <div className="mio-session-actions">
+            <div className="mio-session-id-popover" data-testid="mio-session-id-popover">
+              <button
+                className="mio-session-id-trigger"
+                data-testid="mio-session-id-trigger"
+                type="button"
+                aria-label={`Current session ID: ${currentSessionIdentifier}`}
+                aria-describedby="mio-session-id-floating"
+              >
+                <span aria-hidden="true">#</span>
+              </button>
+              <div className="mio-session-id-floating" id="mio-session-id-floating" role="tooltip">
+                <span className="mio-session-id-label">CURRENT ID</span>
+                <strong className="mio-session-id-value">{currentSessionIdentifier}</strong>
+                {currentSessionTitle !== currentSessionIdentifier ? (
+                  <span className="mio-session-id-title">{currentSessionTitle}</span>
+                ) : null}
+              </div>
+            </div>
             <Link href="/traces" className="mio-trace-button">
               TRACE
             </Link>
@@ -2842,7 +2851,7 @@ export default function CompanionPage() {
             modelUrl={selectedModel?.url || ""}
             modelLabel={selectedModel ? getModelDisplayLabel(selectedModel) : ""}
             renderPipeline={renderPipeline}
-            cameraSnapshot={activeCameraSnapshot}
+            cameraSnapshot={stageCameraSnapshot}
             onModelChange={handleCharacterSwitch}
           />
           <div className="mio-stage-bottom-fade" data-testid="mio-stage-bottom-fade" aria-hidden="true" />
@@ -2864,7 +2873,7 @@ export default function CompanionPage() {
           memoryNotes={memoryNotes}
           traceRows={traceRows}
           dailyPodcast={dailyPodcast}
-          onRefreshDailyPodcast={() => refreshDailyPodcast({ force: true })}
+          onRefreshDailyPodcast={() => refreshDailyPodcast({ triggerVoice: true })}
           onBeforeAudioPlayback={() => stopSpeechPlayback({ includePodcast: false })}
           onPodcastAudioStopReady={(stop) => {
             podcastAudioStopRef.current = stop;
@@ -2968,15 +2977,13 @@ export default function CompanionPage() {
                     <div>
                       <strong>MMD Camera</strong>
                       <span>
-                        {activeFavoriteVmdAsset
-                          ? `Linked to ${activeFavoriteVmdAsset.display_name || activeFavoriteVmdAsset.filename}`
-                          : activeCameraSnapshot
-                            ? `Saved for ${renderPipeline}`
-                            : `Default ${renderPipeline} camera`}
+                        {stageCameraSnapshot
+                          ? `Saved for ${renderPipeline}`
+                          : `Default ${renderPipeline} camera`}
                       </span>
                     </div>
                     <span className={cameraEditMode ? "is-editing" : ""} data-testid="mio-camera-mode">
-                      {cameraEditMode ? "Editing" : activeCameraSnapshot?.locked ? "Locked" : "Free"}
+                      {cameraEditMode ? "Editing" : stageCameraSnapshot?.locked ? "Locked" : "Free"}
                     </span>
                   </div>
                   <p>Move the stage camera, then save this framing in the current session.</p>

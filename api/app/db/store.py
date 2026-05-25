@@ -40,6 +40,10 @@ def _normalize_message_content(value: str | None) -> str:
     return " ".join(str(value or "").split())
 
 
+def _normalize_message_visibility(value: str | None) -> str:
+    return "internal" if str(value or "").strip().lower() == "internal" else "chat"
+
+
 _BRIDGE_ECHO_SUPPRESSION_WINDOW_SECONDS = 5 * 60
 _BRIDGE_DUPLICATE_SUPPRESSION_WINDOW_SECONDS = 3
 _BRIDGE_DUPLICATE_SYNC_SOURCES = {"realtime", "realtime_backfill"}
@@ -173,6 +177,7 @@ class TraceStore:
                 account_id TEXT NOT NULL,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
+                visibility TEXT NOT NULL DEFAULT 'chat',
                 trace_id TEXT,
                 openclaw_message_id TEXT,
                 emotion TEXT,
@@ -301,6 +306,31 @@ class TraceStore:
             existing_columns,
             "favorite_model_relative_path",
             "ALTER TABLE asset_registry ADD COLUMN favorite_model_relative_path TEXT",
+        )
+        message_columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        self._add_column_if_missing(
+            message_columns,
+            "visibility",
+            "ALTER TABLE messages ADD COLUMN visibility TEXT NOT NULL DEFAULT 'chat'",
+        )
+        self._conn.execute(
+            """
+            UPDATE messages
+            SET visibility = 'internal'
+            WHERE visibility = 'chat'
+              AND (
+                (role = 'system' AND lower(trim(content)) = 'compaction')
+                OR (role = 'assistant' AND trim(content) = '[assistant turn failed before producing content]')
+              )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_messages_chat_visible
+            ON messages (workspace_id, account_id, session_id, deleted_at, visibility, created_at)
+            """
         )
         self._conn.commit()
 
@@ -531,17 +561,19 @@ class TraceStore:
         motion_plan: dict[str, Any] | None = None,
         memory_ops: list[dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
+        visibility: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now_iso()
         message_id = str(uuid4())
+        resolved_visibility = _normalize_message_visibility(visibility)
         self._conn.execute(
             """
             INSERT INTO messages (
-                id, workspace_id, session_id, account_id, role, content, trace_id, openclaw_message_id,
+                id, workspace_id, session_id, account_id, role, content, visibility, trace_id, openclaw_message_id,
                 emotion, action, tts_emotion_label, tts_pause_profile, motion_plan_json,
                 memory_ops_json, metadata_json, created_at, deleted_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             """,
             (
                 message_id,
@@ -550,6 +582,7 @@ class TraceStore:
                 account_id,
                 role,
                 content,
+                resolved_visibility,
                 trace_id,
                 openclaw_message_id,
                 emotion,
@@ -662,6 +695,7 @@ class TraceStore:
         motion_plan: dict[str, Any] | None = None,
         memory_ops: list[dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
+        visibility: str | None = None,
     ) -> dict[str, Any]:
         if openclaw_message_id:
             existing = self.get_message_by_openclaw_message_id(
@@ -687,6 +721,7 @@ class TraceStore:
             motion_plan=motion_plan,
             memory_ops=memory_ops,
             metadata=metadata,
+            visibility=visibility,
         )
 
     def soft_delete_message_bridge_echoes(
@@ -755,19 +790,34 @@ class TraceStore:
         message["motion_resolution"] = self.get_message_motion_resolution(message["workspace_id"], message["id"])
         return message
 
-    def list_messages(self, workspace_id: str, account_id: str, session_id: str) -> list[dict[str, Any]]:
+    def list_messages(
+        self,
+        workspace_id: str,
+        account_id: str,
+        session_id: str,
+        *,
+        visibility: str | None = None,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = [workspace_id, account_id, session_id]
+        visibility_filter = ""
+        if visibility is not None:
+            visibility_filter = "AND visibility = ?"
+            params.append(_normalize_message_visibility(visibility))
         rows = self._conn.execute(
-            """
+            f"""
             SELECT * FROM messages
             WHERE workspace_id = ? AND account_id = ? AND session_id = ? AND deleted_at IS NULL
+              {visibility_filter}
             ORDER BY created_at ASC
             """,
-            (workspace_id, account_id, session_id),
+            tuple(params),
         ).fetchall()
         return [self._hydrate_message(row) for row in rows]
 
     def list_messages_for_chat(self, workspace_id: str, account_id: str, session_id: str) -> list[dict[str, Any]]:
-        messages = self._suppress_message_bridge_echoes(self.list_messages(workspace_id, account_id, session_id))
+        messages = self._suppress_message_bridge_echoes(
+            self.list_messages(workspace_id, account_id, session_id, visibility="chat")
+        )
         return self._suppress_nearby_message_bridge_duplicates(messages)
 
     def _suppress_message_bridge_echoes(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
