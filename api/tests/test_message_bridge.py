@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -170,6 +170,65 @@ def test_chat_list_suppresses_nearby_bridge_duplicates_with_different_external_i
             openclaw_message_id="bridge-short-id",
             metadata={**metadata, "external_message_id": "bridge-short-id"},
         )
+
+        raw_messages = store.list_messages(ctx["workspace"]["id"], ctx["account"]["id"], session["id"])
+        chat_messages = store.list_messages_for_chat(ctx["workspace"]["id"], ctx["account"]["id"], session["id"])
+
+        assert [message["id"] for message in raw_messages] == [first["id"], second["id"]]
+        assert [message["id"] for message in chat_messages] == [first["id"]]
+    finally:
+        store.close()
+
+
+def test_chat_list_suppresses_backfill_duplicate_after_poll_interval():
+    store = _store()
+    try:
+        ctx = store.get_current_workspace_context("admin-1")
+        session = store.create_session(ctx["workspace"]["id"], ctx["account"]["id"])
+        external_session_key = "agent:main:feishu:direct:ou_abc"
+        base_time = datetime.now(UTC) - timedelta(seconds=20)
+
+        first = store.insert_message(
+            ctx["workspace"]["id"],
+            session["id"],
+            ctx["account"]["id"],
+            role="user",
+            content="MMD test",
+            openclaw_message_id="bridge-long-id",
+            metadata={
+                "source": "message_bridge",
+                "provider": "openclaw",
+                "channel": "feishu",
+                "external_session_key": external_session_key,
+                "synced_from": "realtime",
+                "external_message_id": "bridge-long-id",
+            },
+        )
+        second = store.insert_message(
+            ctx["workspace"]["id"],
+            session["id"],
+            ctx["account"]["id"],
+            role="user",
+            content="MMD test",
+            openclaw_message_id="bridge-short-id",
+            metadata={
+                "source": "message_bridge",
+                "provider": "openclaw",
+                "channel": "feishu",
+                "external_session_key": external_session_key,
+                "synced_from": "realtime_backfill",
+                "external_message_id": "bridge-short-id",
+            },
+        )
+        store._conn.execute(
+            "UPDATE messages SET created_at = ? WHERE id = ?",
+            (base_time.isoformat(), first["id"]),
+        )
+        store._conn.execute(
+            "UPDATE messages SET created_at = ? WHERE id = ?",
+            ((base_time + timedelta(seconds=15)).isoformat(), second["id"]),
+        )
+        store._conn.commit()
 
         raw_messages = store.list_messages(ctx["workspace"]["id"], ctx["account"]["id"], session["id"])
         chat_messages = store.list_messages_for_chat(ctx["workspace"]["id"], ctx["account"]["id"], session["id"])
@@ -734,6 +793,50 @@ def test_bridge_skips_nearby_duplicate_realtime_message_with_different_external_
                 raw={"role": "user"},
             ),
             source="realtime",
+        )
+        messages = store.list_messages(binding["workspace_id"], binding["account_id"], binding["local_session_id"])
+        user_messages = [message for message in messages if message["role"] == "user" and message["content"] == "MMD test"]
+
+        assert first is not None
+        assert duplicate is None
+        assert len(user_messages) == 1
+    finally:
+        store.close()
+
+
+def test_bridge_skips_backfill_duplicate_after_poll_interval():
+    store = _store()
+    try:
+        provider = FakeBridgeProvider()
+        service = MessageBridgeService(store=store, provider=provider)
+        binding = service.sync_default_binding_for_user("admin-1")
+
+        first = service.ingest_external_message(
+            binding,
+            ExternalMessage(
+                id="bridge-long-id",
+                role="user",
+                content="MMD test",
+                timestamp=301,
+                raw={"role": "user"},
+            ),
+            source="realtime",
+        )
+        store._conn.execute(
+            "UPDATE messages SET created_at = ? WHERE id = ?",
+            ((datetime.now(UTC) - timedelta(seconds=15)).isoformat(), first["id"]),
+        )
+        store._conn.commit()
+        duplicate = service.ingest_external_message(
+            binding,
+            ExternalMessage(
+                id="bridge-short-id",
+                role="user",
+                content="MMD test",
+                timestamp=316,
+                raw={"role": "user"},
+            ),
+            source="realtime_backfill",
         )
         messages = store.list_messages(binding["workspace_id"], binding["account_id"], binding["local_session_id"])
         user_messages = [message for message in messages if message["role"] == "user" and message["content"] == "MMD test"]
