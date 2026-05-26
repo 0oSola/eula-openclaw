@@ -45,7 +45,7 @@ def _normalize_message_visibility(value: str | None) -> str:
 
 
 _BRIDGE_ECHO_SUPPRESSION_WINDOW_SECONDS = 5 * 60
-_BRIDGE_DUPLICATE_SUPPRESSION_WINDOW_SECONDS = 3
+_BRIDGE_DUPLICATE_SUPPRESSION_WINDOW_SECONDS = 30
 _BRIDGE_DUPLICATE_SYNC_SOURCES = {"realtime", "realtime_backfill"}
 
 
