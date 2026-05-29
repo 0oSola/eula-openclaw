@@ -206,6 +206,15 @@ def runtime_health(request: Request, x_user_id: str | None = Header(default=None
             "message_tts_by_status": _counts_by_status(conn, "message_tts"),
             "jobs_by_status": _counts_by_status(conn, "tts_jobs"),
         },
+        "codex": {
+            "enabled": settings.codex_interactive_enabled,
+            "codex_bin": settings.codex_bin,
+            "codex_version": None,
+            "transport": settings.codex_transport,
+            "active_sessions": store.count_active_codex_sessions(),
+            "allowed_workspaces": settings.codex_allowed_workspaces,
+            "last_error": None,
+        },
         "database": {
             "account_count": _count_rows(conn, "accounts"),
             "workspace_count": _count_rows(conn, "workspaces"),

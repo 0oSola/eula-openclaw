@@ -1,12 +1,17 @@
 ﻿from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 
 def _parse_admin_ids(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _parse_csv(raw: object) -> list[str]:
+    return [item.strip() for item in str(raw or "").split(",") if item.strip()]
 
 
 def _parse_bool(raw: object, *, default: bool) -> bool:
@@ -36,6 +41,10 @@ def _resolve_setting_path(raw: str | Path, *, base_dir: Path) -> Path:
     if not path.is_absolute():
         path = base_dir / path
     return path.resolve()
+
+
+def _workspace_env_suffix(workspace_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "_", workspace_id).strip("_").upper()
 
 
 @dataclass(slots=True)
@@ -71,6 +80,29 @@ class Settings:
     realtime_voice_circuit_open_seconds: int
     realtime_voice_max_queue_wait_seconds: int
     openclaw_stream_mode: str
+    codex_interactive_enabled: bool
+    codex_bin: str
+    codex_home: Path
+    codex_transport: str
+    codex_allowed_users: list[str]
+    codex_allowed_workspaces: list[str]
+    codex_workspace_paths: dict[str, Path]
+    codex_default_sandbox: str
+    codex_patch_sandbox: str
+    codex_allow_danger_full_access: bool
+    codex_allow_yolo: bool
+    codex_use_worktree: bool
+    codex_worktree_root: Path
+    codex_branch_prefix: str
+    codex_max_concurrent_sessions: int
+    codex_session_idle_timeout_seconds: int
+    codex_turn_timeout_seconds: int
+    codex_process_start_timeout_seconds: int
+    codex_max_prompt_chars: int
+    codex_require_git_repo: bool
+    codex_require_git_clean_for_apply: bool
+    codex_require_human_approval: bool
+    codex_trace_redact_secrets: bool
 
     @classmethod
     def from_env(cls, overrides: dict | None = None) -> "Settings":
@@ -108,6 +140,26 @@ class Settings:
         ids = overrides.get("admin_user_ids")
         if ids is None:
             ids = _parse_admin_ids(str(resolve_value("admin_user_ids", "ADMIN_USER_IDS", "")))
+
+        codex_allowed_users = overrides.get("codex_allowed_users")
+        if codex_allowed_users is None:
+            codex_allowed_users = _parse_csv(resolve_value("codex_allowed_users", "CODEX_ALLOWED_USERS", ""))
+
+        codex_allowed_workspaces = overrides.get("codex_allowed_workspaces")
+        if codex_allowed_workspaces is None:
+            codex_allowed_workspaces = _parse_csv(
+                resolve_value("codex_allowed_workspaces", "CODEX_ALLOWED_WORKSPACES", "")
+            )
+
+        raw_codex_workspace_paths = overrides.get("codex_workspace_paths") or {}
+        codex_workspace_paths: dict[str, Path] = {}
+        for workspace_id in codex_allowed_workspaces:
+            raw_path = raw_codex_workspace_paths.get(workspace_id) if isinstance(raw_codex_workspace_paths, dict) else None
+            if raw_path is None:
+                env_key = f"CODEX_WORKSPACE_{_workspace_env_suffix(workspace_id)}"
+                raw_path = resolve_value(f"codex_workspace_{workspace_id}", env_key, "")
+            if str(raw_path or "").strip():
+                codex_workspace_paths[workspace_id] = _resolve_setting_path(str(raw_path), base_dir=project_root)
 
         return cls(
             data_dir=root,
@@ -181,4 +233,72 @@ class Settings:
             ),
             openclaw_stream_mode=str(resolve_value("openclaw_stream_mode", "OPENCLAW_STREAM_MODE", "http_sse")).strip()
             or "http_sse",
+            codex_interactive_enabled=_parse_bool(
+                resolve_value("codex_interactive_enabled", "CODEX_INTERACTIVE_ENABLED", False),
+                default=False,
+            ),
+            codex_bin=str(resolve_value("codex_bin", "CODEX_BIN", "codex")).strip() or "codex",
+            codex_home=_resolve_setting_path(
+                resolve_value("codex_home", "CODEX_HOME", root / "codex-home"),
+                base_dir=project_root,
+            ),
+            codex_transport=str(resolve_value("codex_transport", "CODEX_TRANSPORT", "stdio")).strip() or "stdio",
+            codex_allowed_users=list(codex_allowed_users),
+            codex_allowed_workspaces=list(codex_allowed_workspaces),
+            codex_workspace_paths=codex_workspace_paths,
+            codex_default_sandbox=str(
+                resolve_value("codex_default_sandbox", "CODEX_DEFAULT_SANDBOX", "read-only")
+            ).strip()
+            or "read-only",
+            codex_patch_sandbox=str(
+                resolve_value("codex_patch_sandbox", "CODEX_PATCH_SANDBOX", "workspace-write")
+            ).strip()
+            or "workspace-write",
+            codex_allow_danger_full_access=_parse_bool(
+                resolve_value("codex_allow_danger_full_access", "CODEX_ALLOW_DANGER_FULL_ACCESS", False),
+                default=False,
+            ),
+            codex_allow_yolo=_parse_bool(
+                resolve_value("codex_allow_yolo", "CODEX_ALLOW_YOLO", False),
+                default=False,
+            ),
+            codex_use_worktree=_parse_bool(
+                resolve_value("codex_use_worktree", "CODEX_USE_WORKTREE", True),
+                default=True,
+            ),
+            codex_worktree_root=_resolve_setting_path(
+                resolve_value("codex_worktree_root", "CODEX_WORKTREE_ROOT", root / "codex-worktrees"),
+                base_dir=project_root,
+            ),
+            codex_branch_prefix=str(resolve_value("codex_branch_prefix", "CODEX_BRANCH_PREFIX", "codex/")).strip()
+            or "codex/",
+            codex_max_concurrent_sessions=int(
+                resolve_value("codex_max_concurrent_sessions", "CODEX_MAX_CONCURRENT_SESSIONS", 1)
+            ),
+            codex_session_idle_timeout_seconds=int(
+                resolve_value("codex_session_idle_timeout_seconds", "CODEX_SESSION_IDLE_TIMEOUT_SECONDS", 1800)
+            ),
+            codex_turn_timeout_seconds=int(
+                resolve_value("codex_turn_timeout_seconds", "CODEX_TURN_TIMEOUT_SECONDS", 900)
+            ),
+            codex_process_start_timeout_seconds=int(
+                resolve_value("codex_process_start_timeout_seconds", "CODEX_PROCESS_START_TIMEOUT_SECONDS", 30)
+            ),
+            codex_max_prompt_chars=int(resolve_value("codex_max_prompt_chars", "CODEX_MAX_PROMPT_CHARS", 12000)),
+            codex_require_git_repo=_parse_bool(
+                resolve_value("codex_require_git_repo", "CODEX_REQUIRE_GIT_REPO", True),
+                default=True,
+            ),
+            codex_require_git_clean_for_apply=_parse_bool(
+                resolve_value("codex_require_git_clean_for_apply", "CODEX_REQUIRE_GIT_CLEAN_FOR_APPLY", True),
+                default=True,
+            ),
+            codex_require_human_approval=_parse_bool(
+                resolve_value("codex_require_human_approval", "CODEX_REQUIRE_HUMAN_APPROVAL", True),
+                default=True,
+            ),
+            codex_trace_redact_secrets=_parse_bool(
+                resolve_value("codex_trace_redact_secrets", "CODEX_TRACE_REDACT_SECRETS", True),
+                default=True,
+            ),
         )

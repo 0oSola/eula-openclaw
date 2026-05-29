@@ -2860,6 +2860,7 @@ export default function CompanionPage() {
         <CompanionRightRail
           collapsed={isRightRailCollapsed}
           activeView={activeRightPanelView}
+          userId={session?.userId || ""}
           sessions={chatSessions}
           activeSessionId={chatSessionId}
           sessionBusy={sessionBusy}

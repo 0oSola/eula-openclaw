@@ -1,6 +1,6 @@
 # 当前系统拓扑与架构蓝图
 
-更新时间：2026-05-25
+更新时间：2026-05-30
 
 本文用于两类场景：
 
@@ -11,7 +11,7 @@
 
 ## 1. 一句话概览
 
-当前项目是一个浏览器端 MMD 虚拟陪伴系统。前端由 Next.js 承载，后端由 FastAPI 负责会话、资源、OpenClaw 调用、TTS 调用和 trace 记录。文本能力来自 OpenClaw Gateway，语音能力来自独立的 Voice Workflow TTS 服务，MMD/PMX/VMD 资源来自本地 `MMD_ROOT_DIR`。
+当前项目是一个浏览器端 MMD 虚拟陪伴系统。前端由 Next.js 承载，后端由 FastAPI 负责会话、资源、OpenClaw 调用、TTS 调用、Codex 交互入口和 trace 记录。文本能力来自 OpenClaw Gateway，语音能力来自独立的 Voice Workflow TTS 服务，工程任务入口来自本地 Codex interactive provider，MMD/PMX/VMD 资源来自本地 `MMD_ROOT_DIR`。
 
 ```text
 Browser / Next.js UI
@@ -20,6 +20,7 @@ Browser / Next.js UI
       -> OpenClaw Gateway HTTP
       -> OpenClaw Gateway WebSocket RPC
       -> Voice Workflow TTS
+      -> Codex Interactive Provider (disabled by default)
       -> SQLite + NDJSON
       -> Local MMD/VMD files
 ```
@@ -34,6 +35,7 @@ Browser / Next.js UI
 | OpenClaw Gateway HTTP | `http://10.11.252.164:18789` | `/v1/models`、`/v1/responses` 文本生成 | 外部服务 | `GET /healthz/openclaw` |
 | OpenClaw Gateway WebSocket RPC | `ws://10.11.252.164:18789` | Feishu session 列表、history、实时消息订阅、agent/chat delta 事件 | 外部服务 | Bridge admin 状态、`sessions.list` |
 | Voice Workflow TTS | `http://10.11.252.164:5555` | 提交 TTS、查询任务、返回音频 URL | 外部服务 | `POST /api/v1/tts` + `GET /api/v1/tasks/{task_id}` |
+| Codex Interactive | FastAPI 内 `CodexInteractiveProvider`，目标进程为 `codex app-server --listen stdio://` | 产品内 Codex Console、只读多轮事件流、后续 worktree/diff/apply | 本项目内，默认关闭 | `GET /admin/runtime-health` 的 `codex` 字段 |
 | SQLite | `api/data/sqlite/trace.db` | 会话、消息、TTS、Bridge、trace、资源索引 | 本地数据 | API 查询和测试 |
 | NDJSON logs | `api/data/logs/*.ndjson` | trace 双写日志 | 本地数据 | 直接查日志 |
 | MMD assets | `MMD_ROOT_DIR=./MMD` | PMX/PMD 模型、贴图、VMD 动作资源 | 本地文件 | `GET /assets/mmd/models` |
@@ -64,6 +66,30 @@ OPENCLAW_STREAM_MODE=http_sse
 API_DATA_DIR=api/data
 MMD_ROOT_DIR=./MMD
 ADMIN_USER_IDS=admin-1,sola
+
+CODEX_INTERACTIVE_ENABLED=false
+CODEX_BIN=codex
+CODEX_HOME=api/data/codex-home
+CODEX_TRANSPORT=stdio
+CODEX_ALLOWED_USERS=admin-1,sola
+CODEX_ALLOWED_WORKSPACES=mmd-companion
+CODEX_WORKSPACE_MMD_COMPANION=.
+CODEX_DEFAULT_SANDBOX=read-only
+CODEX_PATCH_SANDBOX=workspace-write
+CODEX_ALLOW_DANGER_FULL_ACCESS=false
+CODEX_ALLOW_YOLO=false
+CODEX_USE_WORKTREE=true
+CODEX_WORKTREE_ROOT=api/data/codex-worktrees
+CODEX_BRANCH_PREFIX=codex/
+CODEX_MAX_CONCURRENT_SESSIONS=1
+CODEX_SESSION_IDLE_TIMEOUT_SECONDS=1800
+CODEX_TURN_TIMEOUT_SECONDS=900
+CODEX_PROCESS_START_TIMEOUT_SECONDS=30
+CODEX_MAX_PROMPT_CHARS=12000
+CODEX_REQUIRE_GIT_REPO=true
+CODEX_REQUIRE_GIT_CLEAN_FOR_APPLY=true
+CODEX_REQUIRE_HUMAN_APPROVAL=true
+CODEX_TRACE_REDACT_SECRETS=true
 ```
 
 当前文本生成应使用：
@@ -75,6 +101,8 @@ x-openclaw-message-channel = feishu
 ```
 
 不要把 `OPENCLAW_MODEL` 配成 `minimax-portal/MiniMax-M2.7`。当前 Gateway 对这种 model 名会返回无效模型或导致链路不可用。OpenClaw 默认 agent 当前走 `main`，默认模型由 OpenClaw 侧维护；MMD 项目不固定到业务专用 agent。OpenClaw `/v1/audio/speech` 当前实测为 404，实际音频链路不走这个接口。
+
+Codex interactive 第一版默认关闭。打开时必须同时配置 `CODEX_ALLOWED_USERS`、`CODEX_ALLOWED_WORKSPACES` 和对应的 `CODEX_WORKSPACE_*` 路径。浏览器不直连 Codex app-server；当前 Phase 1 只提供 FastAPI 管理的只读 session、WebSocket 事件流、SQLite 事件落库和右侧 Tasks 面板 Console。真实 `codex app-server --listen stdio://`、worktree patch、diff、approval、checks 和 apply 仍在后续阶段接入。
 
 ## 4. 主调用链：前端发消息
 

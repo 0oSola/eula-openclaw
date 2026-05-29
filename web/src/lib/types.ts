@@ -428,6 +428,15 @@ export type RuntimeHealthStatus = {
     message_tts_by_status: Record<string, number>;
     jobs_by_status: Record<string, number>;
   };
+  codex: {
+    enabled: boolean;
+    codex_bin: string;
+    codex_version?: string | null;
+    transport: string;
+    active_sessions: number;
+    allowed_workspaces: string[];
+    last_error?: string | null;
+  };
   database: {
     account_count: number;
     workspace_count: number;

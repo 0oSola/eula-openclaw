@@ -8,6 +8,7 @@ import { makeUrl } from "@/lib/api";
 import type { ChatMessage, DailyPodcast, MessageServiceSession } from "@/lib/types";
 
 import { CompanionChatbox } from "./CompanionChatbox";
+import { CodexConsole } from "./CodexConsole";
 
 export type RightPanelView = "overview" | "chat" | "tasks" | "tools" | "memory" | "skills";
 
@@ -16,6 +17,7 @@ type TraceRow = readonly [string, string, string, string];
 type CompanionRightRailProps = {
   collapsed: boolean;
   activeView: RightPanelView;
+  userId: string;
   sessions: MessageServiceSession[];
   activeSessionId: string;
   sessionBusy: boolean;
@@ -219,6 +221,7 @@ function PodcastAudioElement({
 export function CompanionRightRail({
   collapsed,
   activeView,
+  userId,
   sessions,
   activeSessionId,
   sessionBusy,
@@ -360,12 +363,7 @@ export function CompanionRightRail({
             onPlayTtsMessage={onPlayTtsMessage}
           />
         ) : activeView === "tasks" ? (
-          <PlaceholderWorkspace
-            title="任务面板"
-            label="TASKS"
-            description="这里将承接任务拆解、步骤状态和建议动作。"
-            actionLabel="查看任务规划"
-          />
+          <CodexConsole userId={userId} localChatSessionId={activeSessionId} />
         ) : activeView === "tools" ? (
           <PlaceholderWorkspace
             title="工具面板"

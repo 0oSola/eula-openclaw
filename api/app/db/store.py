@@ -281,6 +281,83 @@ class TraceStore:
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY(provider, channel)
             );
+
+            CREATE TABLE IF NOT EXISTS codex_interactive_sessions (
+                id TEXT PRIMARY KEY,
+                local_chat_session_id TEXT,
+                workspace_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                workspace_path TEXT NOT NULL,
+                worktree_path TEXT,
+                branch_name TEXT,
+                codex_thread_id TEXT,
+                codex_version TEXT,
+                transport TEXT NOT NULL DEFAULT 'stdio',
+                sandbox_mode TEXT NOT NULL DEFAULT 'read-only',
+                status TEXT NOT NULL,
+                process_id INTEGER,
+                created_at TEXT NOT NULL,
+                last_active_at TEXT NOT NULL,
+                closed_at TEXT,
+                error TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            );
+
+            CREATE TABLE IF NOT EXISTS codex_turns (
+                id TEXT PRIMARY KEY,
+                codex_session_id TEXT NOT NULL,
+                codex_turn_id TEXT,
+                user_message TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                final_text TEXT,
+                error TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY (codex_session_id) REFERENCES codex_interactive_sessions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS codex_events (
+                id TEXT PRIMARY KEY,
+                codex_session_id TEXT NOT NULL,
+                turn_id TEXT,
+                sequence INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (codex_session_id) REFERENCES codex_interactive_sessions(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_codex_events_session_sequence
+            ON codex_events(codex_session_id, sequence);
+
+            CREATE TABLE IF NOT EXISTS codex_approvals (
+                id TEXT PRIMARY KEY,
+                codex_session_id TEXT NOT NULL,
+                turn_id TEXT,
+                external_approval_id TEXT,
+                action_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                detail_json TEXT NOT NULL,
+                decision TEXT,
+                decided_by TEXT,
+                decided_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (codex_session_id) REFERENCES codex_interactive_sessions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS codex_artifacts (
+                id TEXT PRIMARY KEY,
+                codex_session_id TEXT NOT NULL,
+                turn_id TEXT,
+                kind TEXT NOT NULL,
+                path TEXT,
+                content_ref TEXT,
+                summary TEXT,
+                created_at TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY (codex_session_id) REFERENCES codex_interactive_sessions(id)
+            );
             """
         )
         existing_columns = {
@@ -346,6 +423,272 @@ class TraceStore:
             return json.loads(value)
         except json.JSONDecodeError:
             return fallback
+
+    def create_codex_interactive_session(
+        self,
+        *,
+        session_id: str,
+        local_chat_session_id: str | None,
+        workspace_id: str,
+        user_id: str,
+        workspace_path: str,
+        worktree_path: str | None,
+        branch_name: str | None,
+        codex_thread_id: str | None,
+        codex_version: str | None,
+        transport: str,
+        sandbox_mode: str,
+        status: str,
+        process_id: int | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO codex_interactive_sessions (
+                id, local_chat_session_id, workspace_id, user_id, workspace_path,
+                worktree_path, branch_name, codex_thread_id, codex_version, transport,
+                sandbox_mode, status, process_id, created_at, last_active_at, closed_at,
+                error, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+            """,
+            (
+                session_id,
+                local_chat_session_id,
+                workspace_id,
+                user_id,
+                workspace_path,
+                worktree_path,
+                branch_name,
+                codex_thread_id,
+                codex_version,
+                transport,
+                sandbox_mode,
+                status,
+                process_id,
+                now,
+                now,
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+        self._conn.commit()
+        return self.get_codex_interactive_session(session_id)  # type: ignore[return-value]
+
+    def get_codex_interactive_session(self, session_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM codex_interactive_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["metadata"] = self._json_loads(item.get("metadata_json"), {})
+        return item
+
+    def update_codex_interactive_session(
+        self,
+        session_id: str,
+        *,
+        status: str | None = None,
+        codex_thread_id: str | None = None,
+        closed: bool = False,
+        error: str | None = None,
+    ) -> dict[str, Any] | None:
+        current = self.get_codex_interactive_session(session_id)
+        if current is None:
+            return None
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE codex_interactive_sessions
+            SET status = ?, codex_thread_id = COALESCE(?, codex_thread_id),
+                last_active_at = ?, closed_at = ?, error = ?
+            WHERE id = ?
+            """,
+            (
+                status or current["status"],
+                codex_thread_id,
+                now,
+                now if closed else current.get("closed_at"),
+                error,
+                session_id,
+            ),
+        )
+        self._conn.commit()
+        return self.get_codex_interactive_session(session_id)
+
+    def count_active_codex_sessions(self) -> int:
+        row = self._conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM codex_interactive_sessions
+            WHERE status NOT IN ('closed', 'failed')
+            """
+        ).fetchone()
+        return int(row["count"] if row else 0)
+
+    def create_codex_turn(
+        self,
+        *,
+        turn_id: str,
+        codex_session_id: str,
+        codex_turn_id: str | None,
+        user_message: str,
+        status: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO codex_turns (
+                id, codex_session_id, codex_turn_id, user_message, status,
+                started_at, completed_at, final_text, error, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
+            """,
+            (
+                turn_id,
+                codex_session_id,
+                codex_turn_id,
+                user_message,
+                status,
+                now,
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+        self._conn.commit()
+        return self.get_codex_turn(turn_id)  # type: ignore[return-value]
+
+    def get_codex_turn(self, turn_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute("SELECT * FROM codex_turns WHERE id = ?", (turn_id,)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["metadata"] = self._json_loads(item.get("metadata_json"), {})
+        return item
+
+    def update_codex_turn(
+        self,
+        turn_id: str,
+        *,
+        status: str,
+        final_text: str | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any] | None:
+        self._conn.execute(
+            """
+            UPDATE codex_turns
+            SET status = ?, completed_at = ?, final_text = ?, error = ?
+            WHERE id = ?
+            """,
+            (status, _utc_now_iso(), final_text, error, turn_id),
+        )
+        self._conn.commit()
+        return self.get_codex_turn(turn_id)
+
+    def append_codex_event(
+        self,
+        codex_session_id: str,
+        turn_id: str | None,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM codex_events WHERE codex_session_id = ?",
+            (codex_session_id,),
+        ).fetchone()
+        sequence = int(row["next_sequence"] if row else 1)
+        event_id = str(uuid4())
+        self._conn.execute(
+            """
+            INSERT INTO codex_events (
+                id, codex_session_id, turn_id, sequence, event_type, payload_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                codex_session_id,
+                turn_id,
+                sequence,
+                event_type,
+                json.dumps(payload, ensure_ascii=False),
+                _utc_now_iso(),
+            ),
+        )
+        self._conn.commit()
+        return self._row_to_dict(
+            self._conn.execute("SELECT * FROM codex_events WHERE id = ?", (event_id,)).fetchone()
+        )  # type: ignore[return-value]
+
+    def list_codex_events(self, codex_session_id: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_events
+            WHERE codex_session_id = ?
+            ORDER BY sequence ASC
+            """,
+            (codex_session_id,),
+        ).fetchall()
+        events = [dict(row) for row in rows]
+        for event in events:
+            event["payload"] = self._json_loads(event.get("payload_json"), {})
+        return events
+
+    def create_codex_approval(
+        self,
+        *,
+        approval_id: str,
+        codex_session_id: str,
+        turn_id: str | None,
+        external_approval_id: str | None,
+        action_type: str,
+        title: str,
+        detail: dict[str, Any],
+    ) -> dict[str, Any]:
+        self._conn.execute(
+            """
+            INSERT INTO codex_approvals (
+                id, codex_session_id, turn_id, external_approval_id, action_type,
+                title, detail_json, decision, decided_by, decided_at, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
+            """,
+            (
+                approval_id,
+                codex_session_id,
+                turn_id,
+                external_approval_id,
+                action_type,
+                title,
+                json.dumps(detail, ensure_ascii=False),
+                _utc_now_iso(),
+            ),
+        )
+        self._conn.commit()
+        return self.get_codex_approval(approval_id)  # type: ignore[return-value]
+
+    def get_codex_approval(self, approval_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute("SELECT * FROM codex_approvals WHERE id = ?", (approval_id,)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["detail"] = self._json_loads(item.get("detail_json"), {})
+        return item
+
+    def decide_codex_approval(self, approval_id: str, *, decision: str, decided_by: str) -> dict[str, Any] | None:
+        self._conn.execute(
+            """
+            UPDATE codex_approvals
+            SET decision = ?, decided_by = ?, decided_at = ?
+            WHERE id = ?
+            """,
+            (decision, decided_by, _utc_now_iso(), approval_id),
+        )
+        self._conn.commit()
+        return self.get_codex_approval(approval_id)
 
     def resolve_account(self, external_user_id: str) -> dict[str, Any]:
         external_user_id = external_user_id.strip()

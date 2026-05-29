@@ -12,6 +12,7 @@ from app.config import Settings
 from app.db.store import TraceStore
 from app.routes.assets import router as assets_router
 from app.routes.chat import router as chat_router
+from app.routes.codex_interactive import router as codex_interactive_router
 from app.routes.config import router as config_router
 from app.routes.health import router as health_router
 from app.routes.message_bridge import router as message_bridge_router
@@ -22,6 +23,7 @@ from app.routes.trace import router as trace_router
 from app.routes.tts import router as tts_router
 from app.services.message_tts_reference import create_or_enqueue_message_tts_reference
 from app.services.message_tts_worker import run_message_tts_worker
+from app.services.codex_interactive_provider import CodexInteractiveProvider
 from app.services.message_bridge import MessageBridgeService, OpenClawGatewayProvider
 from app.services.openclaw_client import OpenClawClient
 from app.services.daily_podcast import DailyPodcastRefreshCooldown
@@ -58,6 +60,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         origin=settings.openclaw_base_url,
     )
     message_bridge_service = MessageBridgeService(store=trace_store, provider=message_bridge_provider)
+    codex_interactive_provider = CodexInteractiveProvider()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -146,6 +149,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.state.openclaw_client = openclaw_client
     app.state.tts_client = tts_client
     app.state.message_bridge_service = message_bridge_service
+    app.state.codex_interactive_provider = codex_interactive_provider
     app.state.daily_podcast_refresh_cooldown = DailyPodcastRefreshCooldown(cooldown_seconds=10)
     app.state.realtime_voice_registry = RealtimeVoiceChunkRegistry()
     app.state.realtime_voice_queues = {}
@@ -153,6 +157,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(chat_router)
+    app.include_router(codex_interactive_router)
     app.include_router(message_bridge_router)
     app.include_router(message_service_router)
     app.include_router(podcasts_router)
