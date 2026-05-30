@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.main import create_app
+from app.services.codex_app_server_client import CodexAppServerError
+from app.services.codex_interactive_provider import DeterministicCodexInteractiveProvider
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -48,12 +50,49 @@ def _client(enabled: bool = True, allowed_users: list[str] | None = None) -> tup
             "codex_allowed_workspaces": ["mmd-companion"],
             "codex_workspace_paths": {"mmd-companion": str(workspace_path)},
             "codex_worktree_root": str(case_dir / "worktrees"),
+            "codex_use_deterministic_provider": True,
             "codex_turn_timeout_seconds": 5,
             "codex_max_prompt_chars": 2000,
         }
     )
     client = TestClient(app)
     client.__enter__()
+    return client, app
+
+
+class FakeRouteProvider:
+    def __init__(self):
+        self.prepared: list[dict] = []
+        self.streamed: list[dict] = []
+        self.decisions: list[tuple[str, str, str]] = []
+        self.cancelled: list[tuple[str, str]] = []
+        self.closed: list[str] = []
+        self.fail_turn = False
+
+    async def prepare_session(self, session: dict) -> dict:
+        self.prepared.append(session)
+        return {"codex_thread_id": "thread-from-provider", "codex_version": "codex-test/1.0", "process_id": 123}
+
+    async def stream_turn(self, *, session: dict, turn_id: str, user_message: str, mode: str = "read_only"):
+        self.streamed.append({"session": session, "turn_id": turn_id, "user_message": user_message, "mode": mode})
+        if self.fail_turn:
+            raise CodexAppServerError("app-server crashed")
+        yield {"type": "text_delta", "turn_id": turn_id, "text": "real output"}
+        yield {"type": "turn_completed", "turn_id": turn_id, "final_text": "done"}
+
+    async def decide_approval(self, session_id: str, approval_id: str, decision: str) -> None:
+        self.decisions.append((session_id, approval_id, decision))
+
+    async def cancel_turn(self, session_id: str, turn_id: str) -> None:
+        self.cancelled.append((session_id, turn_id))
+
+    async def close_session(self, session_id: str) -> None:
+        self.closed.append(session_id)
+
+
+def _client_with_provider(provider: FakeRouteProvider) -> tuple[TestClient, object]:
+    client, app = _client()
+    app.state.codex_interactive_provider = provider
     return client, app
 
 
@@ -116,6 +155,25 @@ def test_create_patch_session_creates_workspace_write_worktree():
     assert _git(Path(payload["worktree_path"]), "branch", "--show-current") == payload["branch_name"]
 
 
+def test_create_session_prepares_provider_and_persists_codex_thread():
+    provider = FakeRouteProvider()
+    client, app = _client_with_provider(provider)
+
+    response = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "read_only"},
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert response.status_code == 200
+    session_id = response.json()["id"]
+    session = app.state.trace_store.get_codex_interactive_session(session_id)
+    assert provider.prepared[0]["id"] == session_id
+    assert session["codex_thread_id"] == "thread-from-provider"
+    assert session["codex_version"] == "codex-test/1.0"
+    assert session["process_id"] == 123
+
+
 def test_codex_diff_endpoint_returns_patch_and_persists_artifact():
     client, app = _client()
     session = client.post(
@@ -163,6 +221,34 @@ def test_codex_approval_decision_endpoint_persists_decision_event():
     assert response.json()["decision"] == "deny"
     assert app.state.trace_store.get_codex_approval("approval-1")["decided_by"] == "admin-1"
     assert app.state.trace_store.list_codex_events(session["id"])[-1]["event_type"] == "approval_decided"
+
+
+def test_codex_approval_decision_forwards_to_provider():
+    provider = FakeRouteProvider()
+    client, app = _client_with_provider(provider)
+    session = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "patch"},
+        headers={"x-user-id": "admin-1"},
+    ).json()
+    app.state.trace_store.create_codex_approval(
+        approval_id="approval-forward",
+        codex_session_id=session["id"],
+        turn_id=None,
+        external_approval_id=None,
+        action_type="command",
+        title="Run command",
+        detail={},
+    )
+
+    response = client.post(
+        f"/codex/interactive/{session['id']}/approvals/approval-forward",
+        json={"decision": "approve_once"},
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert response.status_code == 200
+    assert provider.decisions == [(session["id"], "approval-forward", "approve_once")]
 
 
 def test_codex_checks_are_blocked_by_pending_approval_and_record_artifact():
@@ -353,6 +439,84 @@ def test_codex_patch_websocket_persists_approval_required_event():
     approvals = app.state.trace_store.list_pending_codex_approvals(session["id"])
     assert approvals[0]["id"] == approval_required["approval_id"]
     assert approvals[0]["action_type"] == "command"
+
+
+def test_codex_patch_websocket_emits_diff_ready_after_turn_completion():
+    provider = FakeRouteProvider()
+    client, _ = _client_with_provider(provider)
+    session = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "patch"},
+        headers={"x-user-id": "admin-1"},
+    ).json()
+    worktree_path = Path(session["worktree_path"])
+    (worktree_path / "README.md").write_text("hello\nchanged by provider\n", encoding="utf-8")
+
+    with client.websocket_connect(f"/ws/codex/interactive/{session['id']}?user_id=admin-1") as websocket:
+        assert websocket.receive_json()["thread_id"] == "thread-from-provider"
+        websocket.send_json({"type": "user_message", "text": "modify README", "mode": "patch"})
+        turn_started = websocket.receive_json()
+        text_delta = websocket.receive_json()
+        completed = websocket.receive_json()
+        diff_ready = websocket.receive_json()
+
+    assert turn_started["type"] == "turn_started"
+    assert text_delta["text"] == "real output"
+    assert completed["type"] == "turn_completed"
+    assert diff_ready["type"] == "diff_ready"
+    assert diff_ready["changed_files"] == ["README.md"]
+
+
+def test_codex_websocket_marks_turn_failed_when_provider_crashes():
+    provider = FakeRouteProvider()
+    provider.fail_turn = True
+    client, app = _client_with_provider(provider)
+    session = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "read_only"},
+        headers={"x-user-id": "admin-1"},
+    ).json()
+
+    with client.websocket_connect(f"/ws/codex/interactive/{session['id']}?user_id=admin-1") as websocket:
+        assert websocket.receive_json()["type"] == "session_ready"
+        websocket.send_json({"type": "user_message", "text": "crash", "mode": "read_only"})
+        turn_started = websocket.receive_json()
+        failed = websocket.receive_json()
+
+    assert turn_started["type"] == "turn_started"
+    assert failed == {
+        "type": "turn_failed",
+        "turn_id": turn_started["turn_id"],
+        "error": "app-server crashed",
+    }
+    turn = app.state.trace_store.get_codex_turn(turn_started["turn_id"])
+    assert turn["status"] == "failed"
+    assert app.state.trace_store.get_codex_interactive_session(session["id"])["status"] == "failed"
+
+
+def test_codex_websocket_cancel_and_close_forward_to_provider():
+    provider = FakeRouteProvider()
+    client, _ = _client_with_provider(provider)
+    session = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "read_only"},
+        headers={"x-user-id": "admin-1"},
+    ).json()
+
+    with client.websocket_connect(f"/ws/codex/interactive/{session['id']}?user_id=admin-1") as websocket:
+        assert websocket.receive_json()["type"] == "session_ready"
+        websocket.send_json({"type": "user_message", "text": "slow", "mode": "read_only"})
+        turn_started = websocket.receive_json()
+        websocket.send_json({"type": "cancel_turn"})
+        websocket.receive_json()
+        websocket.send_json({"type": "close_session"})
+        closed = websocket.receive_json()
+        while closed["type"] != "session_closed":
+            closed = websocket.receive_json()
+
+    assert provider.cancelled == [(session["id"], turn_started["turn_id"])]
+    assert provider.closed == [session["id"]]
+    assert closed["type"] == "session_closed"
 
 
 def test_codex_websocket_rejects_wrong_user():

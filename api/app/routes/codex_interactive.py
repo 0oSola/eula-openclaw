@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect
 
 from app.services.codex_event_normalizer import normalize_codex_server_event
+from app.services.codex_app_server_client import CodexAppServerError
 from app.services.codex_worktree_manager import CodexWorktreeError
 
 
@@ -146,6 +147,18 @@ async def create_codex_interactive_session(
         process_id=None,
         metadata={"mode": mode},
     )
+    try:
+        prepared = await request.app.state.codex_interactive_provider.prepare_session(session)
+    except CodexAppServerError as exc:
+        request.app.state.trace_store.update_codex_interactive_session(session_id, status="failed", error=str(exc))
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if prepared:
+        session = request.app.state.trace_store.update_codex_interactive_session(
+            session_id,
+            codex_thread_id=prepared.get("codex_thread_id"),
+            codex_version=prepared.get("codex_version"),
+            process_id=prepared.get("process_id"),
+        ) or session
     return {
         "id": session["id"],
         "workspace_id": session["workspace_id"],
@@ -225,6 +238,10 @@ async def decide_codex_interactive_approval(
         decision=decision,
         decided_by=user_id,
     )
+    try:
+        await request.app.state.codex_interactive_provider.decide_approval(codex_session_id, approval_id, decision)
+    except CodexAppServerError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     event = {
         "type": "approval_decided",
         "approval_id": approval_id,
@@ -370,6 +387,7 @@ async def discard_codex_interactive_session(
             )
         except CodexWorktreeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await request.app.state.codex_interactive_provider.close_session(codex_session_id)
     closed = request.app.state.trace_store.update_codex_interactive_session(codex_session_id, status="closed", closed=True)
     request.app.state.trace_store.append_codex_event(
         codex_session_id,
@@ -417,21 +435,67 @@ async def codex_interactive_websocket(websocket: WebSocket, codex_session_id: st
         store.append_codex_event(codex_session_id, turn_id, _event_type(normalized), normalized)
         await websocket.send_json(normalized)
 
+    async def send_diff_ready(turn_id: str) -> None:
+        current_session = store.get_codex_interactive_session(codex_session_id)
+        if not current_session or not current_session.get("worktree_path"):
+            return
+        try:
+            diff = websocket.app.state.codex_worktree_manager.diff(Path(current_session["worktree_path"]))
+        except CodexWorktreeError as exc:
+            await send_and_store({"type": "turn_failed", "turn_id": turn_id, "error": str(exc)}, turn_id)
+            return
+        artifact = store.create_codex_artifact(
+            artifact_id=f"codex_artifact_{uuid4().hex}",
+            codex_session_id=codex_session_id,
+            turn_id=turn_id,
+            kind="diff",
+            path=None,
+            content_ref=None,
+            summary=diff.stat,
+            metadata={"changed_files": diff.changed_files},
+        )
+        await send_and_store(
+            {
+                "type": "diff_ready",
+                "turn_id": turn_id,
+                "artifact_id": artifact["id"],
+                "changed_files": diff.changed_files,
+            },
+            turn_id,
+        )
+
     async def run_turn(turn_id: str, user_message: str, mode: str) -> None:
         try:
+            current_session = store.get_codex_interactive_session(codex_session_id) or session
             async for event in websocket.app.state.codex_interactive_provider.stream_turn(
+                session=current_session,
                 turn_id=turn_id,
                 user_message=user_message,
                 mode=mode,
             ):
                 await send_and_store(event, turn_id)
-                if event.get("type") == "turn_completed":
+                if event.get("type") == "turn_started" and event.get("codex_turn_id"):
+                    store.update_codex_turn(turn_id, status="running", codex_turn_id=str(event["codex_turn_id"]))
+                elif event.get("type") == "turn_completed":
                     store.update_codex_turn(turn_id, status="completed", final_text=str(event.get("final_text") or ""))
                     store.update_codex_interactive_session(codex_session_id, status="ready")
+                    if mode == "patch":
+                        await send_diff_ready(turn_id)
+                elif event.get("type") == "turn_failed":
+                    store.update_codex_turn(turn_id, status="failed", error=str(event.get("error") or "Codex turn failed."))
+                    store.update_codex_interactive_session(
+                        codex_session_id,
+                        status="failed",
+                        error=str(event.get("error") or "Codex turn failed."),
+                    )
         except asyncio.CancelledError:
             store.update_codex_turn(turn_id, status="cancelled", error="Turn cancelled.")
             store.update_codex_interactive_session(codex_session_id, status="ready")
             await send_and_store({"type": "turn_failed", "turn_id": turn_id, "error": "Turn cancelled."}, turn_id)
+        except CodexAppServerError as exc:
+            store.update_codex_turn(turn_id, status="failed", error=str(exc))
+            store.update_codex_interactive_session(codex_session_id, status="failed", error=str(exc))
+            await send_and_store({"type": "turn_failed", "turn_id": turn_id, "error": str(exc)}, turn_id)
 
     await send_and_store({"type": "session_ready", "session_id": codex_session_id, "thread_id": session.get("codex_thread_id")})
 
@@ -443,12 +507,15 @@ async def codex_interactive_websocket(websocket: WebSocket, codex_session_id: st
                 if active_task and not active_task.done():
                     active_task.cancel()
                     await active_task
+                await websocket.app.state.codex_interactive_provider.close_session(codex_session_id)
                 store.update_codex_interactive_session(codex_session_id, status="closed", closed=True)
                 await send_and_store({"type": "session_closed", "reason": "client_closed"})
                 await websocket.close()
                 return
 
             if event_type == "cancel_turn":
+                if active_turn_id:
+                    await websocket.app.state.codex_interactive_provider.cancel_turn(codex_session_id, active_turn_id)
                 if active_task and not active_task.done():
                     active_task.cancel()
                     await active_task
@@ -491,3 +558,4 @@ async def codex_interactive_websocket(websocket: WebSocket, codex_session_id: st
             active_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await active_task
+        await websocket.app.state.codex_interactive_provider.close_session(codex_session_id)

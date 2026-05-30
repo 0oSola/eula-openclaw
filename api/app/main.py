@@ -23,7 +23,8 @@ from app.routes.trace import router as trace_router
 from app.routes.tts import router as tts_router
 from app.services.message_tts_reference import create_or_enqueue_message_tts_reference
 from app.services.message_tts_worker import run_message_tts_worker
-from app.services.codex_interactive_provider import CodexInteractiveProvider
+from app.services.codex_app_server_client import CodexAppServerClient
+from app.services.codex_interactive_provider import CodexInteractiveProvider, DeterministicCodexInteractiveProvider
 from app.services.codex_worktree_manager import CodexWorktreeManager
 from app.services.message_bridge import MessageBridgeService, OpenClawGatewayProvider
 from app.services.openclaw_client import OpenClawClient
@@ -61,7 +62,17 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         origin=settings.openclaw_base_url,
     )
     message_bridge_service = MessageBridgeService(store=trace_store, provider=message_bridge_provider)
-    codex_interactive_provider = CodexInteractiveProvider()
+    if overrides and overrides.get("codex_use_deterministic_provider"):
+        codex_interactive_provider = DeterministicCodexInteractiveProvider()
+    else:
+        codex_interactive_provider = CodexInteractiveProvider(
+            client_factory=lambda: CodexAppServerClient(
+                codex_bin=settings.codex_bin,
+                codex_home=settings.codex_home,
+                request_timeout_seconds=settings.codex_turn_timeout_seconds,
+                process_start_timeout_seconds=settings.codex_process_start_timeout_seconds,
+            )
+        )
     codex_worktree_manager = CodexWorktreeManager(
         worktree_root=settings.codex_worktree_root,
         branch_prefix=settings.codex_branch_prefix,

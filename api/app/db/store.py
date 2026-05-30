@@ -492,6 +492,8 @@ class TraceStore:
         *,
         status: str | None = None,
         codex_thread_id: str | None = None,
+        codex_version: str | None = None,
+        process_id: int | None = None,
         closed: bool = False,
         error: str | None = None,
     ) -> dict[str, Any] | None:
@@ -503,12 +505,16 @@ class TraceStore:
             """
             UPDATE codex_interactive_sessions
             SET status = ?, codex_thread_id = COALESCE(?, codex_thread_id),
+                codex_version = COALESCE(?, codex_version),
+                process_id = COALESCE(?, process_id),
                 last_active_at = ?, closed_at = ?, error = ?
             WHERE id = ?
             """,
             (
                 status or current["status"],
                 codex_thread_id,
+                codex_version,
+                process_id,
                 now,
                 now if closed else current.get("closed_at"),
                 error,
@@ -573,16 +579,19 @@ class TraceStore:
         turn_id: str,
         *,
         status: str,
+        codex_turn_id: str | None = None,
         final_text: str | None = None,
         error: str | None = None,
     ) -> dict[str, Any] | None:
+        completed_at = _utc_now_iso() if status in {"completed", "failed", "cancelled"} else None
         self._conn.execute(
             """
             UPDATE codex_turns
-            SET status = ?, completed_at = ?, final_text = ?, error = ?
+            SET status = ?, codex_turn_id = COALESCE(?, codex_turn_id),
+                completed_at = COALESCE(?, completed_at), final_text = ?, error = ?
             WHERE id = ?
             """,
-            (status, _utc_now_iso(), final_text, error, turn_id),
+            (status, codex_turn_id, completed_at, final_text, error, turn_id),
         )
         self._conn.commit()
         return self.get_codex_turn(turn_id)

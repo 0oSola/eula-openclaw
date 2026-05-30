@@ -102,7 +102,9 @@ x-openclaw-message-channel = feishu
 
 不要把 `OPENCLAW_MODEL` 配成 `minimax-portal/MiniMax-M2.7`。当前 Gateway 对这种 model 名会返回无效模型或导致链路不可用。OpenClaw 默认 agent 当前走 `main`，默认模型由 OpenClaw 侧维护；MMD 项目不固定到业务专用 agent。OpenClaw `/v1/audio/speech` 当前实测为 404，实际音频链路不走这个接口。
 
-Codex interactive 默认关闭。打开时必须同时配置 `CODEX_ALLOWED_USERS`、`CODEX_ALLOWED_WORKSPACES` 和对应的 `CODEX_WORKSPACE_*` 路径。浏览器不直连 Codex app-server；当前实现由 FastAPI 管理只读和 patch session、WebSocket 事件流、SQLite 事件/approval/artifact 落库和右侧 Tasks 面板 Console。Patch session 会通过 `CodexWorktreeManager` 在 `CODEX_WORKTREE_ROOT` 下创建独立 git worktree，sandbox 固定为 `workspace-write`，diff/check/apply 都只围绕该 worktree 执行。Apply 必须满足无 unresolved approval、显式 `confirm=true`、主 workspace 干净，并通过 `git apply --check` 后才会把 patch 写回主 workspace。真实 `codex app-server --listen stdio://` 仍在 provider seam 后面，当前 deterministic provider 用于本地 UI/接口闭环和测试。
+Codex interactive 默认关闭。打开时必须同时配置 `CODEX_ALLOWED_USERS`、`CODEX_ALLOWED_WORKSPACES` 和对应的 `CODEX_WORKSPACE_*` 路径。浏览器不直连 Codex app-server；当前实现由 FastAPI 管理只读和 patch session、WebSocket 事件流、SQLite 事件/approval/artifact 落库和右侧 Tasks 面板 Console。生产 provider 会为每个 Codex session 启动本地 `codex app-server --listen stdio://`，通过 stdin/stdout JSONL JSON-RPC 调用 `initialize`、`thread/start`、`turn/start` 和 `turn/interrupt`。FastAPI 只给 app-server 传白名单环境变量：`PATH`、`HOME`、`CODEX_HOME`、`NO_COLOR`，不会传 OpenClaw、TTS、数据库或 Feishu 相关密钥。Windows 上如果 `CODEX_BIN` 解析到 npm 的 `codex.cmd` shim，后端会优先定位同包内的 native `codex.exe` 再启动，避免 shim 进程的 stdio/lifecycle 问题；找不到 native executable 时才退回 shim。
+
+Patch session 会通过 `CodexWorktreeManager` 在 `CODEX_WORKTREE_ROOT` 下创建独立 git worktree，sandbox 固定为 `workspace-write`；read-only session 在 allowlisted workspace 下运行，sandbox 固定为 `read-only`。app-server notification 会在 FastAPI 归一化为稳定 UI 事件，例如 `item/agentMessage/delta -> text_delta`、`item/plan/delta -> plan_delta`、`item/commandExecution/outputDelta -> command_output`、`item/fileChange/patchUpdated -> file_changed`、`turn/completed -> turn_completed`。app-server 发起的 approval server request，例如 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval`，以及旧式 `execCommandApproval`、`applyPatchApproval`，会先落 SQLite，再等待前端 approve/deny；用户决策会通过同一个 JSON-RPC request id 回传给 app-server。Diff/check/apply 都围绕 worktree 执行；patch turn 完成后会自动生成 diff artifact，也支持前端手动刷新 diff。Apply 必须满足无 unresolved approval、显式 `confirm=true`、主 workspace 干净，并通过 `git apply --check` 后才会把 patch 写回主 workspace。测试可通过 `codex_use_deterministic_provider` 覆盖使用 deterministic provider，不启动真实 app-server。
 
 ## 4. 主调用链：前端发消息
 
@@ -294,7 +296,7 @@ Codex Interactive API：
 | `POST /codex/interactive/sessions` | 创建只读或 patch Codex session；patch 模式会创建独立 git worktree |
 | `WS /ws/codex/interactive/{session_id}` | Codex Console 事件流，支持 user message、cancel、approval decision、close |
 | `GET /codex/interactive/{session_id}/diff` | 从 session worktree 读取 changed files、stat 和 patch，并写入 diff artifact |
-| `POST /codex/interactive/{session_id}/approvals/{approval_id}` | 持久化 `approve_once` 或 `deny` 决策并写入 approval event |
+| `POST /codex/interactive/{session_id}/approvals/{approval_id}` | 持久化 `approve_once` 或 `deny` 决策、写入 approval event，并回传给 app-server |
 | `POST /codex/interactive/{session_id}/checks` | 在 worktree 内运行后端配置的 checks，并写入 checks artifact |
 | `POST /codex/interactive/{session_id}/apply` | 在 approval/clean/confirm/apply-check gate 后，把 worktree patch apply 到主 workspace |
 | `POST /codex/interactive/{session_id}/discard` | 关闭 session，并按请求移除对应 worktree |

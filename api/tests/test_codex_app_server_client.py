@@ -1,0 +1,247 @@
+import asyncio
+import json
+import os
+from pathlib import Path
+from uuid import uuid4
+
+from app.services.codex_app_server_client import CodexAppServerClient, CodexAppServerError
+
+
+class FakeWriter:
+    def __init__(self):
+        self.lines: list[dict] = []
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.lines.append(json.loads(data.decode("utf-8")))
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+def _client_with_writer() -> tuple[CodexAppServerClient, FakeWriter]:
+    writer = FakeWriter()
+    client = CodexAppServerClient(
+        codex_bin="codex",
+        codex_home=Path("D:/codex-home"),
+        request_timeout_seconds=2,
+    )
+    client.attach_writer_for_tests(writer)
+    return client, writer
+
+
+def test_request_matches_response_by_id():
+    async def run_case():
+        client, writer = _client_with_writer()
+        task = asyncio.create_task(client.request("thread/list", {"limit": 1}))
+        await asyncio.sleep(0)
+
+        assert writer.lines == [{"id": "codex_req_1", "method": "thread/list", "params": {"limit": 1}}]
+        await client.handle_message_for_tests({"id": "codex_req_1", "result": {"threads": []}})
+
+        assert await task == {"threads": []}
+
+    asyncio.run(run_case())
+
+
+def test_request_raises_on_error_response():
+    async def run_case():
+        client, _ = _client_with_writer()
+        task = asyncio.create_task(client.request("thread/list", {}))
+        await asyncio.sleep(0)
+        await client.handle_message_for_tests({"id": "codex_req_1", "error": {"message": "bad request"}})
+
+        try:
+            await task
+        except CodexAppServerError as exc:
+            assert "bad request" in str(exc)
+        else:
+            raise AssertionError("request should raise on app-server error")
+
+    asyncio.run(run_case())
+
+
+def test_notification_is_queued_for_streaming():
+    async def run_case():
+        client, _ = _client_with_writer()
+
+        await client.handle_message_for_tests(
+            {
+                "method": "item/agentMessage/delta",
+                "params": {"threadId": "thread-1", "turnId": "turn-1", "itemId": "item-1", "delta": "hello"},
+            }
+        )
+
+        assert await client.next_event() == {
+            "type": "text_delta",
+            "turn_id": "turn-1",
+            "text": "hello",
+            "raw_method": "item/agentMessage/delta",
+        }
+
+    asyncio.run(run_case())
+
+
+def test_command_approval_request_can_be_decided():
+    async def run_case():
+        client, writer = _client_with_writer()
+
+        await client.handle_message_for_tests(
+            {
+                "id": "server_req_1",
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": "item-1",
+                    "approvalId": "approval-from-codex",
+                    "command": "npm test",
+                    "cwd": "D:/repo",
+                    "reason": "needs command",
+                },
+            }
+        )
+        event = await client.next_event()
+
+        assert event["type"] == "approval_required"
+        assert event["approval_id"] == "approval-from-codex"
+        assert event["action_type"] == "command"
+        assert event["title"] == "Run command"
+        assert event["detail"]["command"] == "npm test"
+
+        await client.decide_approval("approval-from-codex", "approve_once")
+
+        assert writer.lines[-1] == {
+            "id": "server_req_1",
+            "result": {"decision": "accept"},
+        }
+
+    asyncio.run(run_case())
+
+
+def test_legacy_exec_approval_request_can_be_decided():
+    async def run_case():
+        client, writer = _client_with_writer()
+
+        await client.handle_message_for_tests(
+            {
+                "id": "server_req_legacy",
+                "method": "execCommandApproval",
+                "params": {
+                    "conversationId": "thread-1",
+                    "callId": "call-1",
+                    "approvalId": None,
+                    "command": ["git", "status"],
+                    "cwd": "D:/repo",
+                    "reason": None,
+                    "parsedCmd": [],
+                },
+            }
+        )
+        event = await client.next_event()
+
+        assert event["approval_id"] == "server_req_legacy"
+        assert event["detail"]["command"] == "git status"
+
+        await client.decide_approval("server_req_legacy", "deny")
+
+        assert writer.lines[-1] == {
+            "id": "server_req_legacy",
+            "result": {"decision": "denied"},
+        }
+
+    asyncio.run(run_case())
+
+
+def test_unknown_server_request_is_rejected_instead_of_hanging():
+    async def run_case():
+        client, writer = _client_with_writer()
+
+        await client.handle_message_for_tests({"id": "server_req_unknown", "method": "item/tool/call", "params": {}})
+
+        assert writer.lines[-1]["id"] == "server_req_unknown"
+        assert writer.lines[-1]["error"]["message"] == "Unsupported Codex app-server request"
+
+    asyncio.run(run_case())
+
+
+def test_process_stdout_close_fails_pending_request_and_emits_session_closed():
+    async def run_case():
+        client, writer = _client_with_writer()
+        reader = asyncio.StreamReader()
+        reader_task = asyncio.create_task(client._read_stdout_loop(reader))
+        request_task = asyncio.create_task(client.request("thread/start", {}))
+        await asyncio.sleep(0)
+
+        assert writer.lines[-1]["method"] == "thread/start"
+        reader.feed_eof()
+        await reader_task
+
+        try:
+            await request_task
+        except CodexAppServerError as exc:
+            assert "process closed" in str(exc)
+        else:
+            raise AssertionError("request should fail when app-server stdout closes")
+
+        assert await client.next_event() == {
+            "type": "session_closed",
+            "reason": "process_stdout_closed",
+            "exit_code": None,
+        }
+
+    asyncio.run(run_case())
+
+
+def test_windows_cmd_shim_resolves_to_packaged_native_executable():
+    if os.name != "nt":
+        return
+
+    tmp_path = Path(__file__).resolve().parent / "tests_runtime" / uuid4().hex
+    tmp_path.mkdir(parents=True)
+    shim = tmp_path / "codex.cmd"
+    native = (
+        tmp_path
+        / "node_modules"
+        / "@openai"
+        / "codex"
+        / "node_modules"
+        / "@openai"
+        / "codex-win32-x64"
+        / "vendor"
+        / "x86_64-pc-windows-msvc"
+        / "bin"
+        / "codex.exe"
+    )
+    native.parent.mkdir(parents=True)
+    shim.write_text("@ECHO off\n", encoding="utf-8")
+    native.write_text("", encoding="utf-8")
+    client = CodexAppServerClient(codex_bin=str(shim), codex_home=tmp_path / "codex-home")
+
+    assert client._app_server_command() == [str(native), "app-server", "--listen", "stdio://"]
+
+
+def test_env_whitelist_excludes_project_secrets():
+    env = CodexAppServerClient.build_env(
+        {
+            "PATH": "D:/bin",
+            "HOME": "C:/Users/test",
+            "OPENCLAW_TOKEN": "secret",
+            "TTS_SERVICE_BASE_URL": "http://voice.local",
+            "DATABASE_URL": "sqlite:///secret.db",
+        },
+        codex_home=Path("D:/codex-home"),
+    )
+
+    assert env == {
+        "PATH": "D:/bin",
+        "HOME": "D:\\codex-home",
+        "CODEX_HOME": "D:\\codex-home",
+        "NO_COLOR": "1",
+    }
