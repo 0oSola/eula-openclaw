@@ -60,3 +60,47 @@ def test_codex_store_persists_session_turn_events_and_approval():
     assert approval["decision"] is None
     assert decided["decision"] == "deny"
     assert decided["decided_by"] == "admin-1"
+
+
+def test_codex_store_tracks_artifacts_and_pending_approvals():
+    store = _store()
+    session = store.create_codex_interactive_session(
+        session_id="codex_sess_artifacts",
+        local_chat_session_id=None,
+        workspace_id="mmd-companion",
+        user_id="admin-1",
+        workspace_path="D:/repo",
+        worktree_path="D:/worktrees/codex_sess_artifacts",
+        branch_name="codex/codex_sess_artifacts",
+        codex_thread_id=None,
+        codex_version=None,
+        transport="stdio",
+        sandbox_mode="workspace-write",
+        status="ready",
+        process_id=None,
+        metadata={"mode": "patch"},
+    )
+    store.create_codex_approval(
+        approval_id="approval-pending",
+        codex_session_id=session["id"],
+        turn_id=None,
+        external_approval_id=None,
+        action_type="command",
+        title="Run check",
+        detail={"command": "pytest api/tests"},
+    )
+
+    artifact = store.create_codex_artifact(
+        artifact_id="artifact-diff",
+        codex_session_id=session["id"],
+        turn_id=None,
+        kind="diff",
+        path=None,
+        content_ref=None,
+        summary="1 file changed",
+        metadata={"changed_files": ["README.md"]},
+    )
+
+    assert artifact["metadata"] == {"changed_files": ["README.md"]}
+    assert store.list_pending_codex_approvals(session["id"])[0]["id"] == "approval-pending"
+    assert store.list_codex_artifacts(session["id"], kind="diff")[0]["id"] == "artifact-diff"

@@ -35,7 +35,7 @@ Browser / Next.js UI
 | OpenClaw Gateway HTTP | `http://10.11.252.164:18789` | `/v1/models`、`/v1/responses` 文本生成 | 外部服务 | `GET /healthz/openclaw` |
 | OpenClaw Gateway WebSocket RPC | `ws://10.11.252.164:18789` | Feishu session 列表、history、实时消息订阅、agent/chat delta 事件 | 外部服务 | Bridge admin 状态、`sessions.list` |
 | Voice Workflow TTS | `http://10.11.252.164:5555` | 提交 TTS、查询任务、返回音频 URL | 外部服务 | `POST /api/v1/tts` + `GET /api/v1/tasks/{task_id}` |
-| Codex Interactive | FastAPI 内 `CodexInteractiveProvider`，目标进程为 `codex app-server --listen stdio://` | 产品内 Codex Console、只读多轮事件流、后续 worktree/diff/apply | 本项目内，默认关闭 | `GET /admin/runtime-health` 的 `codex` 字段 |
+| Codex Interactive | FastAPI 内 `CodexInteractiveProvider`，目标进程为 `codex app-server --listen stdio://` | 产品内 Codex Console、只读/patch 多轮事件流、worktree diff、approval、checks、apply | 本项目内，默认关闭 | `GET /admin/runtime-health` 的 `codex` 字段 |
 | SQLite | `api/data/sqlite/trace.db` | 会话、消息、TTS、Bridge、trace、资源索引 | 本地数据 | API 查询和测试 |
 | NDJSON logs | `api/data/logs/*.ndjson` | trace 双写日志 | 本地数据 | 直接查日志 |
 | MMD assets | `MMD_ROOT_DIR=./MMD` | PMX/PMD 模型、贴图、VMD 动作资源 | 本地文件 | `GET /assets/mmd/models` |
@@ -102,7 +102,7 @@ x-openclaw-message-channel = feishu
 
 不要把 `OPENCLAW_MODEL` 配成 `minimax-portal/MiniMax-M2.7`。当前 Gateway 对这种 model 名会返回无效模型或导致链路不可用。OpenClaw 默认 agent 当前走 `main`，默认模型由 OpenClaw 侧维护；MMD 项目不固定到业务专用 agent。OpenClaw `/v1/audio/speech` 当前实测为 404，实际音频链路不走这个接口。
 
-Codex interactive 第一版默认关闭。打开时必须同时配置 `CODEX_ALLOWED_USERS`、`CODEX_ALLOWED_WORKSPACES` 和对应的 `CODEX_WORKSPACE_*` 路径。浏览器不直连 Codex app-server；当前 Phase 1 只提供 FastAPI 管理的只读 session、WebSocket 事件流、SQLite 事件落库和右侧 Tasks 面板 Console。真实 `codex app-server --listen stdio://`、worktree patch、diff、approval、checks 和 apply 仍在后续阶段接入。
+Codex interactive 默认关闭。打开时必须同时配置 `CODEX_ALLOWED_USERS`、`CODEX_ALLOWED_WORKSPACES` 和对应的 `CODEX_WORKSPACE_*` 路径。浏览器不直连 Codex app-server；当前实现由 FastAPI 管理只读和 patch session、WebSocket 事件流、SQLite 事件/approval/artifact 落库和右侧 Tasks 面板 Console。Patch session 会通过 `CodexWorktreeManager` 在 `CODEX_WORKTREE_ROOT` 下创建独立 git worktree，sandbox 固定为 `workspace-write`，diff/check/apply 都只围绕该 worktree 执行。Apply 必须满足无 unresolved approval、显式 `confirm=true`、主 workspace 干净，并通过 `git apply --check` 后才会把 patch 写回主 workspace。真实 `codex app-server --listen stdio://` 仍在 provider seam 后面，当前 deterministic provider 用于本地 UI/接口闭环和测试。
 
 ## 4. 主调用链：前端发消息
 
@@ -286,6 +286,18 @@ Admin API：
 | `GET /admin/message-bridge/openclaw/feishu/sessions` | 列出 OpenClaw Feishu sessions |
 | `POST /admin/message-bridge/bindings/default` | 切换默认绑定 |
 | `GET /admin/runtime-health` | 只读本地运行状态快照：API 进程、OpenClaw 配置、Bridge 状态/绑定/最新消息、TTS 队列、SQLite 计数、recent error trace |
+
+Codex Interactive API：
+
+| Endpoint | 作用 |
+| --- | --- |
+| `POST /codex/interactive/sessions` | 创建只读或 patch Codex session；patch 模式会创建独立 git worktree |
+| `WS /ws/codex/interactive/{session_id}` | Codex Console 事件流，支持 user message、cancel、approval decision、close |
+| `GET /codex/interactive/{session_id}/diff` | 从 session worktree 读取 changed files、stat 和 patch，并写入 diff artifact |
+| `POST /codex/interactive/{session_id}/approvals/{approval_id}` | 持久化 `approve_once` 或 `deny` 决策并写入 approval event |
+| `POST /codex/interactive/{session_id}/checks` | 在 worktree 内运行后端配置的 checks，并写入 checks artifact |
+| `POST /codex/interactive/{session_id}/apply` | 在 approval/clean/confirm/apply-check gate 后，把 worktree patch apply 到主 workspace |
+| `POST /codex/interactive/{session_id}/discard` | 关闭 session，并按请求移除对应 worktree |
 
 `GET /messages/greetings/latest` 会从本地 SQLite 查当前用户最新一条 `metadata.greeting_cron` 或 `metadata.auto_tts=true` 的 assistant 消息，并返回同一个 message response 结构（含 `tts` 引用）。Companion 页面进场时会调用该接口，气泡优先显示这条问候文本；如果该消息的 `tts.status=ready` 且有 `remote_audio_url` 或 `proxy_audio_url`，前端会在本页会话内只自动播放一次对应语音。找不到问候消息时，气泡回退到当前 Chatbox 最新 assistant 消息或默认文案。
 

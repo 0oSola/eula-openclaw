@@ -33,6 +33,12 @@ export function createCodexConsoleState() {
     sessionId: "",
     threadId: "",
     activeTurnId: "",
+    mode: "read_only",
+    changedFiles: [],
+    diffArtifactId: "",
+    pendingApprovals: [],
+    checks: [],
+    applied: false,
     transcript: [],
     error: "",
   };
@@ -45,6 +51,10 @@ function appendOrMergeAssistant(transcript, turnId, text) {
     return [...transcript, { id, kind: "assistant", turnId, text }];
   }
   return transcript.map((item, index) => (index === existingIndex ? { ...item, text: `${item.text}${text}` } : item));
+}
+
+function transcriptItem(id, kind, turnId, text) {
+  return { id, kind, turnId: turnId || "", text: text || "" };
 }
 
 export function codexConsoleReducer(state, event) {
@@ -62,6 +72,7 @@ export function codexConsoleReducer(state, event) {
         ...state,
         status: "running_turn",
         activeTurnId: event.turn_id || "",
+        mode: event.mode || state.mode,
         error: "",
       };
     case "text_delta":
@@ -75,26 +86,108 @@ export function codexConsoleReducer(state, event) {
         ...state,
         transcript: [
           ...state.transcript,
-          {
-            id: `${event.turn_id || state.activeTurnId}:command:${state.transcript.length}`,
-            kind: "command",
-            turnId: event.turn_id || state.activeTurnId,
-            text: event.command || "",
-          },
+          transcriptItem(
+            `${event.turn_id || state.activeTurnId}:command:${state.transcript.length}`,
+            "command",
+            event.turn_id || state.activeTurnId,
+            event.command || "",
+          ),
+        ],
+      };
+    case "command_output":
+      return {
+        ...state,
+        transcript: [
+          ...state.transcript,
+          transcriptItem(
+            `${event.turn_id || state.activeTurnId}:output:${state.transcript.length}`,
+            "output",
+            event.turn_id || state.activeTurnId,
+            `${event.stream || "stdout"}: ${event.text || ""}`,
+          ),
         ],
       };
     case "approval_required":
       return {
         ...state,
         status: "waiting_approval",
+        pendingApprovals: [
+          ...state.pendingApprovals,
+          {
+            id: event.approval_id || "",
+            turnId: event.turn_id || state.activeTurnId,
+            actionType: event.action_type || "",
+            title: event.title || "Approval required",
+            detail: event.detail || {},
+          },
+        ],
         transcript: [
           ...state.transcript,
-          {
-            id: `${event.approval_id}:approval`,
-            kind: "approval",
-            turnId: event.turn_id || state.activeTurnId,
-            text: event.title || "Approval required",
-          },
+          transcriptItem(
+            `${event.approval_id}:approval`,
+            "approval",
+            event.turn_id || state.activeTurnId,
+            event.title || "Approval required",
+          ),
+        ],
+      };
+    case "approval_decided":
+      return {
+        ...state,
+        status: state.pendingApprovals.length <= 1 ? "ready" : state.status,
+        pendingApprovals: state.pendingApprovals.filter((approval) => approval.id !== event.approval_id),
+        transcript: [
+          ...state.transcript,
+          transcriptItem(
+            `${event.approval_id}:decision`,
+            "approval_decision",
+            "",
+            event.decision || "",
+          ),
+        ],
+      };
+    case "diff_ready":
+      return {
+        ...state,
+        diffArtifactId: event.artifact_id || "",
+        changedFiles: Array.isArray(event.changed_files) ? event.changed_files : [],
+        transcript: [
+          ...state.transcript,
+          transcriptItem(
+            `${event.artifact_id || "diff"}:diff`,
+            "diff",
+            event.turn_id || state.activeTurnId,
+            Array.isArray(event.changed_files) ? event.changed_files.join("\n") : "",
+          ),
+        ],
+      };
+    case "checks_completed":
+      return {
+        ...state,
+        checks: Array.isArray(event.results) ? event.results : [],
+        transcript: [
+          ...state.transcript,
+          transcriptItem(
+            `${event.artifact_id || "checks"}:checks`,
+            "checks",
+            "",
+            `${Array.isArray(event.results) ? event.results.length : 0} check command(s) completed`,
+          ),
+        ],
+      };
+    case "apply_completed":
+      return {
+        ...state,
+        applied: true,
+        changedFiles: Array.isArray(event.changed_files) ? event.changed_files : state.changedFiles,
+        transcript: [
+          ...state.transcript,
+          transcriptItem(
+            `${event.artifact_id || "apply"}:apply`,
+            "apply",
+            "",
+            Array.isArray(event.changed_files) ? event.changed_files.join("\n") : "Applied",
+          ),
         ],
       };
     case "turn_completed":
@@ -129,7 +222,14 @@ export function codexConsoleReducer(state, event) {
         ],
       };
     case "session_closed":
-      return { ...state, status: "closed", activeTurnId: "" };
+      return {
+        ...state,
+        status: "closed",
+        sessionId: "",
+        threadId: "",
+        activeTurnId: "",
+        pendingApprovals: [],
+      };
     default:
       return state;
   }

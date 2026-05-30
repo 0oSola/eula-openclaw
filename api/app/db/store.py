@@ -690,6 +690,90 @@ class TraceStore:
         self._conn.commit()
         return self.get_codex_approval(approval_id)
 
+    def list_pending_codex_approvals(self, codex_session_id: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_approvals
+            WHERE codex_session_id = ? AND decision IS NULL
+            ORDER BY created_at ASC
+            """,
+            (codex_session_id,),
+        ).fetchall()
+        approvals = [dict(row) for row in rows]
+        for approval in approvals:
+            approval["detail"] = self._json_loads(approval.get("detail_json"), {})
+        return approvals
+
+    def create_codex_artifact(
+        self,
+        *,
+        artifact_id: str,
+        codex_session_id: str,
+        turn_id: str | None,
+        kind: str,
+        path: str | None,
+        content_ref: str | None,
+        summary: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self._conn.execute(
+            """
+            INSERT INTO codex_artifacts (
+                id, codex_session_id, turn_id, kind, path, content_ref,
+                summary, created_at, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                artifact_id,
+                codex_session_id,
+                turn_id,
+                kind,
+                path,
+                content_ref,
+                summary,
+                _utc_now_iso(),
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+        self._conn.commit()
+        return self.get_codex_artifact(artifact_id)  # type: ignore[return-value]
+
+    def get_codex_artifact(self, artifact_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute("SELECT * FROM codex_artifacts WHERE id = ?", (artifact_id,)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["metadata"] = self._json_loads(item.get("metadata_json"), {})
+        return item
+
+    def list_codex_artifacts(self, codex_session_id: str, kind: str | None = None) -> list[dict[str, Any]]:
+        if kind:
+            rows = self._conn.execute(
+                """
+                SELECT *
+                FROM codex_artifacts
+                WHERE codex_session_id = ? AND kind = ?
+                ORDER BY created_at DESC
+                """,
+                (codex_session_id, kind),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT *
+                FROM codex_artifacts
+                WHERE codex_session_id = ?
+                ORDER BY created_at DESC
+                """,
+                (codex_session_id,),
+            ).fetchall()
+        artifacts = [dict(row) for row in rows]
+        for artifact in artifacts:
+            artifact["metadata"] = self._json_loads(artifact.get("metadata_json"), {})
+        return artifacts
+
     def resolve_account(self, external_user_id: str) -> dict[str, Any]:
         external_user_id = external_user_id.strip()
         if not external_user_id:

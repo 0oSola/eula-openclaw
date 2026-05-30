@@ -24,6 +24,7 @@ from app.routes.tts import router as tts_router
 from app.services.message_tts_reference import create_or_enqueue_message_tts_reference
 from app.services.message_tts_worker import run_message_tts_worker
 from app.services.codex_interactive_provider import CodexInteractiveProvider
+from app.services.codex_worktree_manager import CodexWorktreeManager
 from app.services.message_bridge import MessageBridgeService, OpenClawGatewayProvider
 from app.services.openclaw_client import OpenClawClient
 from app.services.daily_podcast import DailyPodcastRefreshCooldown
@@ -61,6 +62,10 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     )
     message_bridge_service = MessageBridgeService(store=trace_store, provider=message_bridge_provider)
     codex_interactive_provider = CodexInteractiveProvider()
+    codex_worktree_manager = CodexWorktreeManager(
+        worktree_root=settings.codex_worktree_root,
+        branch_prefix=settings.codex_branch_prefix,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -150,6 +155,11 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.state.tts_client = tts_client
     app.state.message_bridge_service = message_bridge_service
     app.state.codex_interactive_provider = codex_interactive_provider
+    app.state.codex_worktree_manager = codex_worktree_manager
+    app.state.codex_check_commands = {
+        "api": [["pytest", "api/tests", "-q"]],
+        "web_basic": [["npm", "--prefix", "web", "run", "check:basic"]],
+    }
     app.state.daily_podcast_refresh_cooldown = DailyPodcastRefreshCooldown(cooldown_seconds=10)
     app.state.realtime_voice_registry = RealtimeVoiceChunkRegistry()
     app.state.realtime_voice_queues = {}
