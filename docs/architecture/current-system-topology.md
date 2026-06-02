@@ -460,6 +460,12 @@ Pointer up on MMDStage
 
 `companion_shared_config` 只保存 `/companion` 和 `desktop-pet` 共同需要的当前模型与渲染管线选择；不保存 pet camera、pet window position、notification profile、terminal/session registry 等 desktop-pet 专属状态。完整 desktop-pet 拓扑留到 Task 22 补充。
 
+共享配置 API 合约：
+
+- `GET /desktop-pet/shared-config`：返回 requester user 的共享 companion config。
+- `PUT /desktop-pet/shared-config`：为 requester user 写入 `selected_model_path` 与 `render_pipeline`。
+- 无效 `render_pipeline` 会被拒绝并返回 `422`。
+
 ## 9. 给其他服务做优化时的交接包
 
 ### 9.1 给 OpenClaw 服务
