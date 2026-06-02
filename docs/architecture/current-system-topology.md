@@ -462,8 +462,8 @@ Pointer up on MMDStage
 
 共享配置 API 合约：
 
-- `GET /desktop-pet/shared-config`：返回 requester user 的共享 companion config。
-- `PUT /desktop-pet/shared-config`：为 requester user 写入 `selected_model_path` 与 `render_pipeline`。
+- `GET /desktop-pet/shared-config`：按 `x-user-id` requester identity 返回该 user 的共享 companion config。
+- `PUT /desktop-pet/shared-config`：按 `x-user-id` requester identity 写入共享配置；body 字段为 `selected_model_path: string | null`（max 1000）与 `render_pipeline: "classic" | "genshin"`（default `classic`）。
 - 无效 `render_pipeline` 会被拒绝并返回 `422`。
 
 ## 9. 给其他服务做优化时的交接包
