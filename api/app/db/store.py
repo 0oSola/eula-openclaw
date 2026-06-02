@@ -117,6 +117,13 @@ class TraceStore:
                 PRIMARY KEY (user_id, slot)
             );
 
+            CREATE TABLE IF NOT EXISTS companion_shared_config (
+                user_id TEXT PRIMARY KEY,
+                selected_model_path TEXT,
+                render_pipeline TEXT NOT NULL DEFAULT 'classic',
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS asset_registry (
                 asset_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -2529,6 +2536,46 @@ class TraceStore:
             (user_id,),
         ).fetchall()
         return {row["slot"]: json.loads(row["config_json"]) for row in rows}
+
+    def get_companion_shared_config(self, user_id: str) -> dict[str, Any]:
+        row = self._conn.execute(
+            "SELECT * FROM companion_shared_config WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return {
+                "user_id": user_id,
+                "selected_model_path": None,
+                "render_pipeline": "classic",
+                "updated_at": None,
+            }
+        return dict(row)
+
+    def upsert_companion_shared_config(
+        self,
+        *,
+        user_id: str,
+        selected_model_path: str | None,
+        render_pipeline: str,
+    ) -> dict[str, Any]:
+        normalized_pipeline = (render_pipeline or "classic").strip()
+        if normalized_pipeline not in {"classic", "genshin"}:
+            raise ValueError("render_pipeline must be classic or genshin")
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO companion_shared_config (
+                user_id, selected_model_path, render_pipeline, updated_at
+            ) VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                selected_model_path = excluded.selected_model_path,
+                render_pipeline = excluded.render_pipeline,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, selected_model_path, normalized_pipeline, now),
+        )
+        self._conn.commit()
+        return self.get_companion_shared_config(user_id)
 
     def add_asset(
         self,
