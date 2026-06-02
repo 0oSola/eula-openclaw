@@ -120,7 +120,8 @@ class TraceStore:
             CREATE TABLE IF NOT EXISTS companion_shared_config (
                 user_id TEXT PRIMARY KEY,
                 selected_model_path TEXT,
-                render_pipeline TEXT NOT NULL DEFAULT 'classic',
+                render_pipeline TEXT NOT NULL DEFAULT 'classic'
+                    CHECK (render_pipeline IN ('classic', 'genshin')),
                 updated_at TEXT NOT NULL
             );
 
@@ -2558,7 +2559,9 @@ class TraceStore:
         selected_model_path: str | None,
         render_pipeline: str,
     ) -> dict[str, Any]:
-        normalized_pipeline = (render_pipeline or "classic").strip()
+        if not isinstance(render_pipeline, str):
+            raise ValueError("render_pipeline must be classic or genshin")
+        normalized_pipeline = render_pipeline.strip().lower()
         if normalized_pipeline not in {"classic", "genshin"}:
             raise ValueError("render_pipeline must be classic or genshin")
         now = _utc_now_iso()

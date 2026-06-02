@@ -44,3 +44,32 @@ def test_shared_companion_config_rejects_unknown_render_pipeline():
         assert "render_pipeline" in str(error)
     else:
         raise AssertionError("expected invalid render pipeline to fail")
+
+
+def test_shared_companion_config_normalizes_render_pipeline():
+    store = _store()
+
+    updated = store.upsert_companion_shared_config(
+        user_id="admin-1",
+        selected_model_path="Eula/Eula.pmx",
+        render_pipeline=" Genshin ",
+    )
+
+    assert updated["render_pipeline"] == "genshin"
+    assert store.get_companion_shared_config("admin-1")["render_pipeline"] == "genshin"
+
+
+def test_shared_companion_config_rejects_blank_render_pipeline_values():
+    store = _store()
+
+    for render_pipeline in [None, "", "   "]:
+        try:
+            store.upsert_companion_shared_config(
+                user_id="admin-1",
+                selected_model_path=None,
+                render_pipeline=render_pipeline,  # type: ignore[arg-type]
+            )
+        except ValueError as error:
+            assert "render_pipeline" in str(error)
+        else:
+            raise AssertionError(f"expected {render_pipeline!r} render pipeline to fail")
