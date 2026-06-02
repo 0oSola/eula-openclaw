@@ -443,6 +443,7 @@ Pointer up on MMDStage
 | 数据 | 落点 |
 | --- | --- |
 | 用户、workspace、session | SQLite `accounts`, `workspaces`, `sessions` |
+| `/companion` 与 `desktop-pet` 共享配置 | SQLite `companion_shared_config`：per-user `selected_model_path`、`render_pipeline`、`updated_at` |
 | 聊天消息 | SQLite `messages` |
 | TTS 状态 | SQLite `message_tts`, `tts_jobs` |
 | OpenClaw Bridge | SQLite `message_bridge_bindings`, `message_bridge_state` |
@@ -456,6 +457,8 @@ Pointer up on MMDStage
 | retry job | SQLite `retry_jobs` |
 | 本地 PMX/PMD/贴图 | `MMD_ROOT_DIR` |
 | 上传/存储的 VMD | `API_DATA_DIR` 下的 storage；收藏副本在 `MMD_ROOT_DIR/usage/vmd/{model}[动作]/`，可按动作意图继续分子目录 |
+
+`companion_shared_config` 只保存 `/companion` 和 `desktop-pet` 共同需要的当前模型与渲染管线选择；不保存 pet camera、pet window position、notification profile、terminal/session registry 等 desktop-pet 专属状态。完整 desktop-pet 拓扑留到 Task 22 补充。
 
 ## 9. 给其他服务做优化时的交接包
 
