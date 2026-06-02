@@ -1,6 +1,6 @@
 # 当前系统拓扑与架构蓝图
 
-更新时间：2026-05-30
+更新时间：2026-06-01
 
 本文用于两类场景：
 
@@ -102,9 +102,23 @@ x-openclaw-message-channel = feishu
 
 不要把 `OPENCLAW_MODEL` 配成 `minimax-portal/MiniMax-M2.7`。当前 Gateway 对这种 model 名会返回无效模型或导致链路不可用。OpenClaw 默认 agent 当前走 `main`，默认模型由 OpenClaw 侧维护；MMD 项目不固定到业务专用 agent。OpenClaw `/v1/audio/speech` 当前实测为 404，实际音频链路不走这个接口。
 
-Codex interactive 默认关闭。打开时必须同时配置 `CODEX_ALLOWED_USERS`、`CODEX_ALLOWED_WORKSPACES` 和对应的 `CODEX_WORKSPACE_*` 路径。浏览器不直连 Codex app-server；当前实现由 FastAPI 管理只读和 patch session、WebSocket 事件流、SQLite 事件/approval/artifact 落库和右侧 Tasks 面板 Console。生产 provider 会为每个 Codex session 启动本地 `codex app-server --listen stdio://`，通过 stdin/stdout JSONL JSON-RPC 调用 `initialize`、`thread/start`、`turn/start` 和 `turn/interrupt`。FastAPI 只给 app-server 传白名单环境变量：`PATH`、`HOME`、`CODEX_HOME`、`NO_COLOR`，不会传 OpenClaw、TTS、数据库或 Feishu 相关密钥。Windows 上如果 `CODEX_BIN` 解析到 npm 的 `codex.cmd` shim，后端会优先定位同包内的 native `codex.exe` 再启动，避免 shim 进程的 stdio/lifecycle 问题；找不到 native executable 时才退回 shim。
+Codex interactive 默认关闭。打开时必须配置 `CODEX_ALLOWED_USERS`；启动时的固定 workspace 仍来自 `CODEX_ALLOWED_WORKSPACES` 和对应的 `CODEX_WORKSPACE_*` 路径。浏览器不直连 Codex app-server；当前实现由 FastAPI 管理 `/companion/tasks` Codex Console、workspace 列表/登记、只读和 patch session、WebSocket 事件流、SQLite 事件/approval/artifact 落库。前端可通过 `GET /codex/workspaces` 读取 env workspace 和 UI 登记的 workspace，可通过 `POST /codex/workspaces/path-picker` 请求后端在本机拉起目录选择框并返回用户选择的绝对路径，也可通过 `POST /codex/workspaces` 登记新的本地 git 仓库根目录；后端要求 admin + Codex allowlisted user、slug workspace id、绝对路径、无 `..` traversal segment、已存在目录、且登记路径本身必须是 git repository root。UI 登记结果写入 SQLite `codex_workspaces`，不会改写 `.env`。这是对原始“configured root”措辞的有意偏离：UI 登记 repo 不要求位于 MMD 项目根目录下，安全边界由 admin+allowlist、路径 canonicalization、git root 校验和 Codex sandbox/worktree gate 共同提供。
 
-Patch session 会通过 `CodexWorktreeManager` 在 `CODEX_WORKTREE_ROOT` 下创建独立 git worktree，sandbox 固定为 `workspace-write`；read-only session 在 allowlisted workspace 下运行，sandbox 固定为 `read-only`。app-server notification 会在 FastAPI 归一化为稳定 UI 事件，例如 `item/agentMessage/delta -> text_delta`、`item/plan/delta -> plan_delta`、`item/commandExecution/outputDelta -> command_output`、`item/fileChange/patchUpdated -> file_changed`、`turn/completed -> turn_completed`。app-server 发起的 approval server request，例如 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval`，以及旧式 `execCommandApproval`、`applyPatchApproval`，会先落 SQLite，再等待前端 approve/deny；用户决策会通过同一个 JSON-RPC request id 回传给 app-server。Diff/check/apply 都围绕 worktree 执行；patch turn 完成后会自动生成 diff artifact，也支持前端手动刷新 diff。Apply 必须满足无 unresolved approval、显式 `confirm=true`、主 workspace 干净，并通过 `git apply --check` 后才会把 patch 写回主 workspace。测试可通过 `codex_use_deterministic_provider` 覆盖使用 deterministic provider，不启动真实 app-server。
+生产 provider 会为每个 Codex session 启动本地 `codex app-server --listen stdio://`，通过 stdin/stdout JSONL JSON-RPC 调用 pinned schema 中的 `initialize`、`thread/start`、`turn/start` 和 `turn/interrupt`。app-server JSON Schema 固定在 `api/app/codex_schema/generated/`，前端 TypeScript protocol 绑定固定在 `web/src/codex-schema/generated/`，兼容层常量位于 `api/app/codex_schema/methods.py` 和 `web/src/codex-schema/methods.ts`。本地升级 Codex CLI 后用以下命令重新生成 schema bundle，并检查 diff 后再提交：
+
+```powershell
+scripts\generate-codex-app-server-schema.ps1
+```
+
+服务启动脚本 `scripts/dev-stack.ps1` 会在启动 API 前调用 `scripts/check-codex-app-server-schema.ps1`。当 `CODEX_INTERACTIVE_ENABLED=true` 时，该 preflight 会读取本地 `codex --version`、`api/.env`/环境变量中的 `CODEX_BIN`、以及 pinned manifest；schema 缺失或版本不一致时默认 fail fast，并提示手动运行生成脚本。开发环境如果确实要在启动时自动刷新 schema，可显式设置 `CODEX_SCHEMA_AUTO_UPDATE=true`，此时 preflight 会调用 `scripts\generate-codex-app-server-schema.ps1`；生产或正常启动不应静默自动更新 repo 文件。
+
+FastAPI 只给 app-server 传白名单环境变量：`PATH`、`HOME`、`CODEX_HOME`、`NO_COLOR`，以及 Windows 网络/TLS/用户目录运行所需的 `SystemRoot`、`WINDIR`、`COMSPEC`、`PATHEXT`、`TEMP`、`TMP`、`USERPROFILE`、`APPDATA`、`LOCALAPPDATA`、`PROGRAMDATA`。不会传 OpenClaw、TTS、数据库、Feishu、OpenAI API key 或其他项目密钥。Windows 上如果 `CODEX_BIN` 解析到 npm 的 `codex.cmd` shim，后端会优先定位同包内的 native `codex.exe` 再启动，避免 shim 进程的 stdio/lifecycle 问题；找不到 native executable 时才退回 shim。运行时仍只支持本地 stdio app-server transport；不暴露浏览器直连 app-server，不启用 TCP/WebSocket app-server transport、Cloud Codex、Codex MCP、真实 PTY/xterm shell embedding、auto-apply 或 approval bypass。前端 `/companion/tasks` 的 Codex Console 仅使用 xterm.js 作为只读 transcript 渲染器，把后端 WebSocket UI 事件格式化显示为终端行；它不接入本地 shell，不向浏览器暴露 Codex app-server stdin/stdout，也不改变审批、diff、checks、apply 的现有 API 边界。Codex prompt 输入框采用聊天式快捷键：`Enter` 发送当前 turn，`Shift+Enter` 保留换行编辑。
+
+Patch session 会通过 `CodexWorktreeManager` 在 `CODEX_WORKTREE_ROOT` 下为当前选中的 workspace 创建独立 git worktree，sandbox 固定为 `workspace-write`；read-only session 在当前选中的 env 或 SQLite 登记 workspace 下运行，sandbox 固定为 `read-only`。`CODEX_MAX_CONCURRENT_SESSIONS` 在创建 session 前强制执行；执行前会按 `CODEX_SESSION_IDLE_TIMEOUT_SECONDS` 关闭超时 idle session，并同步关闭 provider runtime、更新 SQLite session status、写入 lifecycle trace。FastAPI shutdown 会调用 provider `close_all_sessions()` 关闭仍活跃的本地 Codex runtimes。turn request 或 event stream 超时会稳定产出 `turn_failed`，app-server stdout/process 关闭会产出 `session_closed`/`process_exit`，并把 session 标记为 failed 且写入 runtime-health last error。
+
+app-server notification 会在 FastAPI 归一化为稳定 UI 事件，例如 `item/agentMessage/delta -> text_delta`、`item/plan/delta -> plan_delta`、`item/commandExecution/outputDelta -> command_output`、`item/fileChange/patchUpdated -> file_changed`、`turn/completed -> turn_completed`、`process/exited -> process_exit`。`error` notification 只有在 `willRetry=false` 时归一化为终态 `turn_failed`；`willRetry=true` 的临时连接恢复提示归一化为非终态 `turn_retrying`，继续保持当前 turn running 并等待后续完成或最终失败。未知 app-server notification 继续以 `raw_codex_event` 原样落 SQLite，避免 schema drift 造成事件丢失。app-server 发起的 approval server request，例如 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval`，以及旧式 `execCommandApproval`、`applyPatchApproval`，会先落 SQLite，再等待前端 approve/deny；用户决策会通过同一个 JSON-RPC request id 回传给 app-server。approval 决策既支持 REST `POST /codex/interactive/{session_id}/approvals/{approval_id}`，也支持 Codex WebSocket `{ type: "approval_decision", approval_id, decision }`。
+
+Diff/check/apply 都围绕 worktree 执行；patch turn 完成后会自动生成 diff artifact，也支持前端手动刷新 diff。Apply 必须满足无 unresolved approval、显式 `confirm=true`、主 workspace 干净，并通过 `git apply --check` 后才会把 patch 写回主 workspace。Codex lifecycle 同时写入 `codex_events` 和通用 `trace_events`/NDJSON，覆盖 `codex.session.create|ready|failed`、`codex.turn.start|event|completed|failed`、`codex.approval.required|decided`、`codex.diff.ready`、`codex.checks.started|completed`、`codex.apply.started|completed|failed`、`codex.process.exit`；当 `CODEX_TRACE_REDACT_SECRETS=true` 时，trace payload 中 secret-like key 或 `TOKEN=...`/`SECRET=...` 等字符串值会先被替换为 `[REDACTED]`。测试可通过 `codex_use_deterministic_provider` 覆盖使用 deterministic provider，不启动真实 app-server。
 
 ## 4. 主调用链：前端发消息
 
@@ -293,6 +307,9 @@ Codex Interactive API：
 
 | Endpoint | 作用 |
 | --- | --- |
+| `GET /codex/workspaces` | 列出 env 配置的 Codex workspace 和 SQLite 中 UI 登记的 workspace |
+| `POST /codex/workspaces/path-picker` | 由后端在本机拉起目录选择框，返回用户选择的 workspace 路径或 `null` |
+| `POST /codex/workspaces` | 由 admin allowlisted 用户登记新的本地 git repo root workspace，写入 `codex_workspaces` |
 | `POST /codex/interactive/sessions` | 创建只读或 patch Codex session；patch 模式会创建独立 git worktree |
 | `WS /ws/codex/interactive/{session_id}` | Codex Console 事件流，支持 user message、cancel、approval decision、close |
 | `GET /codex/interactive/{session_id}/diff` | 从 session worktree 读取 changed files、stat 和 patch，并写入 diff artifact |
@@ -303,7 +320,7 @@ Codex Interactive API：
 
 `GET /messages/greetings/latest` 会从本地 SQLite 查当前用户最新一条 `metadata.greeting_cron` 或 `metadata.auto_tts=true` 的 assistant 消息，并返回同一个 message response 结构（含 `tts` 引用）。Companion 页面进场时会调用该接口，气泡优先显示这条问候文本；如果该消息的 `tts.status=ready` 且有 `remote_audio_url` 或 `proxy_audio_url`，前端会在本页会话内只自动播放一次对应语音。找不到问候消息时，气泡回退到当前 Chatbox 最新 assistant 消息或默认文案。
 
-`GET /admin/runtime-health` 不主动调用 `sessions.list`，因此 OpenClaw Gateway WebSocket 握手慢或 Feishu session list 不稳定时，健康后台仍能打开并显示本地已经收到的消息、最后连接时间、最新错误和 TTS/SQLite 状态。前端 `/status` 页面每 5 秒读取一次该接口；Companion 页面里的 Bridge 状态加载也已经把 `GET /admin/message-bridge/status` 和 `GET /admin/message-bridge/openclaw/feishu/sessions` 解耦，后者超时只会标记 session list 不可用，不会清空本地 Bridge status，也不会停止 2.5 秒一次的消息刷新轮询。`/admin/message-bridge/openclaw/feishu/sessions` 失败时返回 502，并写入 `message_bridge.openclaw.sessions.list` error trace，避免 ASGI 500 堆栈遮蔽根因。
+`GET /admin/runtime-health` 不主动调用 `sessions.list`，因此 OpenClaw Gateway WebSocket 握手慢或 Feishu session list 不稳定时，健康后台仍能打开并显示本地已经收到的消息、最后连接时间、最新错误和 TTS/SQLite 状态。Codex health 同样是只读快照，不会为了探测版本而启动 Codex；`codex.codex_version` 来自已 prepare 的真实 app-server session 或 SQLite 中最近的非空版本，`codex.last_error` 来自 provider/runtime 或 SQLite session error，`codex.workspaces` 同时列出 env workspace 和 SQLite UI-mounted workspace。前端 `/status` 页面每 5 秒读取一次该接口；Companion 页面里的 Bridge 状态加载也已经把 `GET /admin/message-bridge/status` 和 `GET /admin/message-bridge/openclaw/feishu/sessions` 解耦，后者超时只会标记 session list 不可用，不会清空本地 Bridge status，也不会停止 2.5 秒一次的消息刷新轮询。`/admin/message-bridge/openclaw/feishu/sessions` 失败时返回 502，并写入 `message_bridge.openclaw.sessions.list` error trace，避免 ASGI 500 堆栈遮蔽根因。
 
 Bridge 依赖 OpenClaw WebSocket RPC 的 operator 权限和 scopes：
 
@@ -432,6 +449,8 @@ Pointer up on MMDStage
 | 动作解析结果 | SQLite `message_motion_resolution` |
 | VMD 资产索引 | SQLite `asset_registry` |
 | Motion context exports | SQLite `motion_context_exports` |
+| Codex UI workspace 登记 | SQLite `codex_workspaces` |
+| Codex session/turn/event/approval/artifact | SQLite `codex_interactive_sessions`, `codex_turns`, `codex_events`, `codex_approvals`, `codex_artifacts` |
 | trace event | SQLite `trace_events` + NDJSON |
 | chat mirror | SQLite `chat_mirror` |
 | retry job | SQLite `retry_jobs` |

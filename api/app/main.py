@@ -71,7 +71,8 @@ def create_app(overrides: dict | None = None) -> FastAPI:
                 codex_home=settings.codex_home,
                 request_timeout_seconds=settings.codex_turn_timeout_seconds,
                 process_start_timeout_seconds=settings.codex_process_start_timeout_seconds,
-            )
+            ),
+            turn_timeout_seconds=settings.codex_turn_timeout_seconds,
         )
     codex_worktree_manager = CodexWorktreeManager(
         worktree_root=settings.codex_worktree_root,
@@ -104,6 +105,9 @@ def create_app(overrides: dict | None = None) -> FastAPI:
                 bridge_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await bridge_task
+            close_codex = getattr(app.state.codex_interactive_provider, "close_all_sessions", None)
+            if close_codex is not None:
+                await close_codex()
         await app.state.tts_client.close()
         await app.state.openclaw_client.close()
         await app.state.message_bridge_service.provider.close()

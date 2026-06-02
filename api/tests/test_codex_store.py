@@ -104,3 +104,46 @@ def test_codex_store_tracks_artifacts_and_pending_approvals():
     assert artifact["metadata"] == {"changed_files": ["README.md"]}
     assert store.list_pending_codex_approvals(session["id"])[0]["id"] == "approval-pending"
     assert store.list_codex_artifacts(session["id"], kind="diff")[0]["id"] == "artifact-diff"
+
+
+def test_latest_codex_error_ignores_older_failures_after_newer_success():
+    store = _store()
+
+    store.create_codex_interactive_session(
+        session_id="codex_sess_failed",
+        local_chat_session_id=None,
+        workspace_id="mmd-companion",
+        user_id="admin-1",
+        workspace_path="D:/repo",
+        worktree_path=None,
+        branch_name=None,
+        codex_thread_id=None,
+        codex_version=None,
+        transport="stdio",
+        sandbox_mode="read-only",
+        status="failed",
+        process_id=None,
+        metadata={"mode": "read_only"},
+    )
+    store.update_codex_interactive_session("codex_sess_failed", status="failed", error="old provider failure")
+
+    assert store.latest_codex_error() == "old provider failure"
+
+    store.create_codex_interactive_session(
+        session_id="codex_sess_success",
+        local_chat_session_id=None,
+        workspace_id="mmd-companion",
+        user_id="admin-1",
+        workspace_path="D:/repo",
+        worktree_path=None,
+        branch_name=None,
+        codex_thread_id=None,
+        codex_version=None,
+        transport="stdio",
+        sandbox_mode="read-only",
+        status="closed",
+        process_id=None,
+        metadata={"mode": "read_only"},
+    )
+
+    assert store.latest_codex_error() is None

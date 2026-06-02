@@ -1,11 +1,102 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
 
 import {
   codexConsoleReducer,
   codexWebSocketUrl,
   createCodexConsoleState,
 } from "../src/lib/codexEvents.js";
+import { shouldSendCodexPromptOnKeyDown } from "../src/lib/codexInput.js";
+import { formatCodexTerminalTranscript } from "../src/lib/codexTerminalLines.js";
+import { resolveCompanionNavTarget } from "../src/lib/companionNavigation.js";
+
+test("companion tasks navigation opens a dedicated page", () => {
+  assert.deepEqual(resolveCompanionNavTarget("tasks"), { kind: "page", href: "/companion/tasks" });
+  assert.deepEqual(resolveCompanionNavTarget("chat"), { kind: "panel", view: "chat" });
+});
+
+test("companion tasks page hosts the Codex console", () => {
+  const pageUrl = new URL("../src/app/companion/tasks/page.tsx", import.meta.url);
+  assert.equal(existsSync(pageUrl), true);
+  const source = readFileSync(pageUrl, "utf8");
+  assert.match(source, /<CodexConsole/);
+  assert.match(source, /loadSession\(\)/);
+});
+
+test("companion tasks page uses a tmux style terminal shell", () => {
+  const pageUrl = new URL("../src/app/companion/tasks/page.tsx", import.meta.url);
+  const cssUrl = new URL("../src/app/globals.css", import.meta.url);
+  const source = readFileSync(pageUrl, "utf8");
+  const css = readFileSync(cssUrl, "utf8");
+
+  assert.match(source, /codex-tmux-shell/);
+  assert.match(source, /codex-tmux-status/);
+  assert.match(source, /codex-tmux-pane/);
+  assert.match(css, /\.codex-tmux-shell/);
+  assert.match(css, /JetBrains Mono/);
+});
+
+test("codex terminal formatter renders transcript events as terminal lines", () => {
+  const lines = formatCodexTerminalTranscript(
+    [
+      { id: "turn-1:assistant", kind: "assistant", turnId: "turn-1", text: "hello" },
+      { id: "turn-1:command:1", kind: "command", turnId: "turn-1", text: "npm test" },
+      { id: "turn-1:output:2", kind: "output", turnId: "turn-1", text: "stdout: passed" },
+      { id: "turn-1:error", kind: "error", turnId: "turn-1", text: "failed" },
+    ],
+    { status: "running_turn", workspaceId: "mmd-companion", mode: "read_only" },
+  );
+
+  assert.deepEqual(
+    lines.map((line) => line.prompt),
+    ["codex", "$", ">", "error"],
+  );
+  assert.equal(lines[0].text, "hello");
+  assert.equal(lines.at(-1).tone, "danger");
+});
+
+test("codex console mounts xterm as a read-only transcript renderer", () => {
+  const consoleUrl = new URL("../src/app/companion/CodexConsole.tsx", import.meta.url);
+  const terminalUrl = new URL("../src/app/companion/CodexTerminalPane.tsx", import.meta.url);
+  const cssUrl = new URL("../src/app/globals.css", import.meta.url);
+  const consoleSource = readFileSync(consoleUrl, "utf8");
+  const terminalSource = readFileSync(terminalUrl, "utf8");
+  const css = readFileSync(cssUrl, "utf8");
+
+  assert.match(consoleSource, /<CodexTerminalPane/);
+  assert.match(terminalSource, /import\("@xterm\/xterm"\)/);
+  assert.match(terminalSource, /disableStdin:\s*true/);
+  assert.match(css, /@import "@xterm\/xterm\/css\/xterm\.css";/);
+});
+
+test("codex prompt sends on Enter while preserving Shift+Enter newlines", () => {
+  assert.equal(shouldSendCodexPromptOnKeyDown({ key: "Enter", shiftKey: false }), true);
+  assert.equal(shouldSendCodexPromptOnKeyDown({ key: "Enter", shiftKey: true }), false);
+  assert.equal(shouldSendCodexPromptOnKeyDown({ key: "a", shiftKey: false }), false);
+
+  const consoleUrl = new URL("../src/app/companion/CodexConsole.tsx", import.meta.url);
+  const source = readFileSync(consoleUrl, "utf8");
+  assert.match(source, /onKeyDown=\{handleDraftKeyDown\}/);
+});
+
+test("codex console exposes workspace selection and creation", () => {
+  const consoleUrl = new URL("../src/app/companion/CodexConsole.tsx", import.meta.url);
+  const apiUrl = new URL("../src/lib/codexApi.ts", import.meta.url);
+  const source = readFileSync(consoleUrl, "utf8");
+  const api = readFileSync(apiUrl, "utf8");
+
+  assert.match(api, /listCodexWorkspaces/);
+  assert.match(api, /createCodexWorkspace/);
+  assert.match(api, /pickCodexWorkspacePath/);
+  assert.match(source, /listCodexWorkspaces/);
+  assert.match(source, /createCodexWorkspace/);
+  assert.match(source, /pickCodexWorkspacePath/);
+  assert.match(source, /aria-label="Browse Codex workspace path"/);
+  assert.match(source, /Browse/);
+  assert.match(source, /aria-label="Codex workspace"/);
+  assert.match(source, /workspace_id: workspaceId/);
+});
 
 test("codexWebSocketUrl resolves backend websocket URL", () => {
   assert.equal(
@@ -46,6 +137,24 @@ test("codexConsoleReducer records cancellation failures", () => {
   assert.equal(state.error, "Turn cancelled.");
   assert.deepEqual(state.transcript, [
     { id: "turn-2:error", kind: "error", turnId: "turn-2", text: "Turn cancelled." },
+  ]);
+});
+
+test("codexConsoleReducer keeps turn running during retry notices", () => {
+  let state = createCodexConsoleState();
+  state = codexConsoleReducer(state, { type: "turn_started", turn_id: "turn-2" });
+  state = codexConsoleReducer(state, {
+    type: "turn_retrying",
+    turn_id: "turn-2",
+    message: "Reconnecting... 1/5",
+    will_retry: true,
+  });
+
+  assert.equal(state.status, "running_turn");
+  assert.equal(state.activeTurnId, "turn-2");
+  assert.equal(state.error, "");
+  assert.deepEqual(state.transcript, [
+    { id: "turn-2:retry:0", kind: "status", turnId: "turn-2", text: "Reconnecting... 1/5" },
   ]);
 });
 

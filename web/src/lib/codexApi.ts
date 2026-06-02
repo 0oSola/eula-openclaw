@@ -17,6 +17,33 @@ export type CodexInteractiveSession = {
   ws_url: string;
 };
 
+export type CodexWorkspace = {
+  id: string;
+  path: string;
+  source: "env" | "ui";
+};
+
+export type CodexWorkspaceListResponse = {
+  workspaces: CodexWorkspace[];
+};
+
+export type CodexWorkspaceCreatePayload = {
+  workspace_id: string;
+  path: string;
+};
+
+export type CodexWorkspaceCreateResponse = {
+  workspace: CodexWorkspace;
+};
+
+export type CodexWorkspacePathPickPayload = {
+  initial_path?: string | null;
+};
+
+export type CodexWorkspacePathPickResponse = {
+  path: string | null;
+};
+
 export type CodexDiff = {
   session_id: string;
   base_workspace: string;
@@ -83,6 +110,30 @@ async function codexJson<T>(path: string, userId: string, init?: RequestInit): P
     throw new Error(data?.detail || `Codex request failed: ${response.status}`);
   }
   return data as T;
+}
+
+export async function listCodexWorkspaces(userId: string): Promise<CodexWorkspaceListResponse> {
+  return codexJson<CodexWorkspaceListResponse>("/codex/workspaces", userId);
+}
+
+export async function createCodexWorkspace(
+  userId: string,
+  payload: CodexWorkspaceCreatePayload,
+): Promise<CodexWorkspaceCreateResponse> {
+  return codexJson<CodexWorkspaceCreateResponse>("/codex/workspaces", userId, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function pickCodexWorkspacePath(
+  userId: string,
+  payload: CodexWorkspacePathPickPayload = {},
+): Promise<CodexWorkspacePathPickResponse> {
+  return codexJson<CodexWorkspacePathPickResponse>("/codex/workspaces/path-picker", userId, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function getCodexDiff(userId: string, sessionId: string): Promise<CodexDiff> {

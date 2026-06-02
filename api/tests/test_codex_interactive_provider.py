@@ -17,6 +17,7 @@ class FakeCodexAppServerClient:
         self.closed = False
         self.thread_id = f"thread-{len(self.instances) + 1}"
         self.events: asyncio.Queue[dict] = asyncio.Queue()
+        self.hang_turn = False
         self.instances.append(self)
 
     async def start(self) -> None:
@@ -40,6 +41,8 @@ class FakeCodexAppServerClient:
                 "sandbox_policy": sandbox_policy,
             }
         )
+        if self.hang_turn:
+            return {"turn": {"id": codex_turn_id}}
         await self.events.put({"type": "turn_started", "turn_id": codex_turn_id})
         await self.events.put({"type": "text_delta", "turn_id": codex_turn_id, "text": user_message})
         await self.events.put({"type": "turn_completed", "turn_id": codex_turn_id, "final_text": "done"})
@@ -182,5 +185,41 @@ def test_session_close_during_turn_yields_turn_failed():
                 "codex_turn_id": "codex-turn-crash",
             },
         ]
+
+    asyncio.run(run_case())
+
+
+def test_turn_event_timeout_yields_stable_failure_and_records_last_error():
+    async def run_case():
+        provider = CodexInteractiveProvider(client_factory=FakeCodexAppServerClient, turn_timeout_seconds=0.01)
+        session = _session(mode="read_only", workspace_path="D:/repo-timeout")
+        await provider.prepare_session(session)
+        client = FakeCodexAppServerClient.instances[-1]
+        client.hang_turn = True
+
+        events = [event async for event in provider.stream_turn(session=session, turn_id="turn-timeout", user_message="hang")]
+
+        assert events == [
+            {
+                "type": "turn_failed",
+                "turn_id": "turn-timeout",
+                "error": "Codex turn timed out.",
+            }
+        ]
+        assert provider.runtime_health()["last_error"] == "Codex turn timed out."
+
+    asyncio.run(run_case())
+
+
+def test_close_all_sessions_closes_active_clients():
+    async def run_case():
+        provider = _provider()
+        await provider.prepare_session(_session(mode="read_only", workspace_path="D:/repo-one"))
+        await provider.prepare_session(_session(mode="patch", workspace_path="D:/repo-two", worktree_path="D:/repo-two-wt"))
+
+        await provider.close_all_sessions()
+
+        assert [client.closed for client in FakeCodexAppServerClient.instances] == [True, True]
+        assert provider.runtime_health()["active_sessions"] == 0
 
     asyncio.run(run_case())

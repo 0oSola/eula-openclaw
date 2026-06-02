@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import subprocess
 from uuid import uuid4
@@ -67,7 +68,9 @@ class FakeRouteProvider:
         self.decisions: list[tuple[str, str, str]] = []
         self.cancelled: list[tuple[str, str]] = []
         self.closed: list[str] = []
+        self.close_all_count = 0
         self.fail_turn = False
+        self.session_closed_turn = False
 
     async def prepare_session(self, session: dict) -> dict:
         self.prepared.append(session)
@@ -77,6 +80,9 @@ class FakeRouteProvider:
         self.streamed.append({"session": session, "turn_id": turn_id, "user_message": user_message, "mode": mode})
         if self.fail_turn:
             raise CodexAppServerError("app-server crashed")
+        if self.session_closed_turn:
+            yield {"type": "session_closed", "turn_id": turn_id, "reason": "process_stdout_closed", "exit_code": 1}
+            return
         yield {"type": "text_delta", "turn_id": turn_id, "text": "real output"}
         yield {"type": "turn_completed", "turn_id": turn_id, "final_text": "done"}
 
@@ -88,6 +94,9 @@ class FakeRouteProvider:
 
     async def close_session(self, session_id: str) -> None:
         self.closed.append(session_id)
+
+    async def close_all_sessions(self) -> None:
+        self.close_all_count += 1
 
 
 def _client_with_provider(provider: FakeRouteProvider) -> tuple[TestClient, object]:
@@ -138,6 +147,86 @@ def test_create_codex_session_returns_ready_read_only_session():
     assert payload["ws_url"].startswith(f"/api/backend/ws/codex/interactive/{payload['id']}?user_id=admin-1")
 
 
+def test_codex_workspaces_can_be_listed_and_created_for_session_selection():
+    client, app = _client()
+    extra_workspace_path = Path(app.state.settings.data_dir).parent / "extra-repo"
+    extra_workspace_path.mkdir()
+    _make_git_repo(extra_workspace_path)
+
+    listed = client.get("/codex/workspaces", headers={"x-user-id": "admin-1"})
+    assert listed.status_code == 200
+    assert listed.json()["workspaces"][0]["id"] == "mmd-companion"
+
+    created = client.post(
+        "/codex/workspaces",
+        json={"workspace_id": "extra-repo", "path": str(extra_workspace_path)},
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert created.status_code == 200
+    workspace = created.json()["workspace"]
+    assert workspace["id"] == "extra-repo"
+    assert workspace["source"] == "ui"
+    assert Path(workspace["path"]) == extra_workspace_path.resolve()
+
+    response = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "extra-repo", "mode": "read_only"},
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["workspace_id"] == "extra-repo"
+    session = app.state.trace_store.get_codex_interactive_session(response.json()["id"])
+    assert Path(session["workspace_path"]) == extra_workspace_path.resolve()
+
+
+def test_codex_workspace_create_rejects_non_git_directory():
+    client, app = _client()
+    non_git_path = Path(app.state.settings.data_dir).parent / "not-a-repo"
+    non_git_path.mkdir()
+
+    response = client.post(
+        "/codex/workspaces",
+        json={"workspace_id": "not-a-repo", "path": str(non_git_path)},
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert response.status_code == 400
+    assert "git" in response.json()["detail"].lower()
+
+
+def test_codex_workspace_path_picker_returns_selected_local_path():
+    client, app = _client()
+    selected_path = Path(app.state.settings.data_dir).parent / "selected-repo"
+    selected_path.mkdir()
+
+    app.state.codex_workspace_path_picker = lambda initial_path=None: str(selected_path)
+
+    response = client.post(
+        "/codex/workspaces/path-picker",
+        json={"initial_path": str(selected_path.parent)},
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert response.status_code == 200
+    assert Path(response.json()["path"]) == selected_path.resolve()
+
+
+def test_codex_workspace_path_picker_returns_null_when_cancelled():
+    client, app = _client()
+    app.state.codex_workspace_path_picker = lambda initial_path=None: None
+
+    response = client.post(
+        "/codex/workspaces/path-picker",
+        json={},
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["path"] is None
+
+
 def test_create_patch_session_creates_workspace_write_worktree():
     client, _ = _client()
 
@@ -172,6 +261,66 @@ def test_create_session_prepares_provider_and_persists_codex_thread():
     assert session["codex_thread_id"] == "thread-from-provider"
     assert session["codex_version"] == "codex-test/1.0"
     assert session["process_id"] == 123
+
+
+def test_create_session_enforces_max_concurrent_sessions():
+    client, _ = _client()
+
+    first = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "read_only"},
+        headers={"x-user-id": "admin-1"},
+    )
+    second = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "read_only"},
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert "maximum" in second.json()["detail"].lower()
+
+
+def test_create_session_closes_idle_sessions_before_enforcing_limit():
+    provider = FakeRouteProvider()
+    client, app = _client_with_provider(provider)
+    first = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "read_only"},
+        headers={"x-user-id": "admin-1"},
+    ).json()
+    old = (datetime.now(UTC) - timedelta(seconds=3600)).isoformat()
+    app.state.trace_store._conn.execute(
+        "UPDATE codex_interactive_sessions SET last_active_at = ? WHERE id = ?",
+        (old, first["id"]),
+    )
+    app.state.trace_store._conn.commit()
+    app.state.settings.codex_session_idle_timeout_seconds = 30
+
+    second = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "read_only"},
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert second.status_code == 200
+    assert provider.closed == [first["id"]]
+    assert app.state.trace_store.get_codex_interactive_session(first["id"])["status"] == "closed"
+
+
+def test_fastapi_shutdown_closes_active_codex_runtimes():
+    provider = FakeRouteProvider()
+    client, app = _client_with_provider(provider)
+    client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "read_only"},
+        headers={"x-user-id": "admin-1"},
+    )
+
+    client.__exit__(None, None, None)
+
+    assert provider.close_all_count == 1
 
 
 def test_codex_diff_endpoint_returns_patch_and_persists_artifact():
@@ -221,6 +370,8 @@ def test_codex_approval_decision_endpoint_persists_decision_event():
     assert response.json()["decision"] == "deny"
     assert app.state.trace_store.get_codex_approval("approval-1")["decided_by"] == "admin-1"
     assert app.state.trace_store.list_codex_events(session["id"])[-1]["event_type"] == "approval_decided"
+    traces = app.state.trace_store.query_events(trace_id=None, requester_user_id="admin-1", is_admin=True, limit=20)
+    assert any(event["stage"] == "codex.approval.decided" for event in traces)
 
 
 def test_codex_approval_decision_forwards_to_provider():
@@ -384,6 +535,36 @@ def test_codex_websocket_streams_turn_and_persists_events():
         "text_delta",
         "turn_completed",
     ]
+    traces = app.state.trace_store.query_events(trace_id=None, requester_user_id="admin-1", is_admin=True, limit=20)
+    stages = [event["stage"] for event in traces]
+    assert "codex.turn.start" in stages
+    assert "codex.turn.event" in stages
+    assert "codex.turn.completed" in stages
+
+
+def test_codex_trace_events_are_redacted_before_sqlite_and_ndjson_persistence():
+    client, app = _client()
+    session = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "read_only"},
+        headers={"x-user-id": "admin-1"},
+    ).json()
+
+    with client.websocket_connect(f"/ws/codex/interactive/{session['id']}?user_id=admin-1") as websocket:
+        websocket.receive_json()
+        websocket.send_json({"type": "user_message", "text": "inspect OPENCLAW_TOKEN=super-secret", "mode": "read_only"})
+        websocket.receive_json()
+        websocket.receive_json()
+        websocket.receive_json()
+
+    traces = app.state.trace_store.query_events(trace_id=None, requester_user_id="admin-1", is_admin=True, limit=30)
+    serialized = "\n".join(str(event["payload"]) for event in traces if event["stage"].startswith("codex."))
+    assert "super-secret" not in serialized
+    assert "[REDACTED]" in serialized
+
+    ndjson = "\n".join(path.read_text(encoding="utf-8") for path in app.state.trace_store.ndjson_dir.glob("*.ndjson"))
+    assert "super-secret" not in ndjson
+    assert "[REDACTED]" in ndjson
 
 
 def test_codex_websocket_can_cancel_running_turn():
@@ -441,6 +622,39 @@ def test_codex_patch_websocket_persists_approval_required_event():
     assert approvals[0]["action_type"] == "command"
 
 
+def test_codex_websocket_approval_decision_persists_and_forwards_to_provider():
+    provider = FakeRouteProvider()
+    client, app = _client_with_provider(provider)
+    session = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "patch"},
+        headers={"x-user-id": "admin-1"},
+    ).json()
+    app.state.trace_store.create_codex_approval(
+        approval_id="approval-ws",
+        codex_session_id=session["id"],
+        turn_id="turn-from-codex",
+        external_approval_id=None,
+        action_type="command",
+        title="Run command",
+        detail={"command": "git status"},
+    )
+
+    with client.websocket_connect(f"/ws/codex/interactive/{session['id']}?user_id=admin-1") as websocket:
+        assert websocket.receive_json()["type"] == "session_ready"
+        websocket.send_json({"type": "approval_decision", "approval_id": "approval-ws", "decision": "approve_once"})
+        decided = websocket.receive_json()
+
+    assert decided == {
+        "type": "approval_decided",
+        "approval_id": "approval-ws",
+        "decision": "approve_once",
+        "decided_by": "admin-1",
+    }
+    assert provider.decisions == [(session["id"], "approval-ws", "approve_once")]
+    assert app.state.trace_store.get_codex_approval("approval-ws")["decision"] == "approve_once"
+
+
 def test_codex_patch_websocket_emits_diff_ready_after_turn_completion():
     provider = FakeRouteProvider()
     client, _ = _client_with_provider(provider)
@@ -492,6 +706,32 @@ def test_codex_websocket_marks_turn_failed_when_provider_crashes():
     turn = app.state.trace_store.get_codex_turn(turn_started["turn_id"])
     assert turn["status"] == "failed"
     assert app.state.trace_store.get_codex_interactive_session(session["id"])["status"] == "failed"
+
+
+def test_codex_websocket_process_close_marks_session_failed_and_health_last_error():
+    provider = FakeRouteProvider()
+    provider.session_closed_turn = True
+    client, app = _client_with_provider(provider)
+    session = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "read_only"},
+        headers={"x-user-id": "admin-1"},
+    ).json()
+
+    with client.websocket_connect(f"/ws/codex/interactive/{session['id']}?user_id=admin-1") as websocket:
+        assert websocket.receive_json()["type"] == "session_ready"
+        websocket.send_json({"type": "user_message", "text": "crash", "mode": "read_only"})
+        turn_started = websocket.receive_json()
+        closed = websocket.receive_json()
+
+    assert turn_started["type"] == "turn_started"
+    assert closed["type"] == "session_closed"
+    stored_session = app.state.trace_store.get_codex_interactive_session(session["id"])
+    assert stored_session["status"] == "failed"
+    assert "process_stdout_closed" in stored_session["error"]
+
+    health = client.get("/admin/runtime-health", headers={"x-user-id": "admin-1"}).json()
+    assert "process_stdout_closed" in health["codex"]["last_error"]
 
 
 def test_codex_websocket_cancel_and_close_forward_to_provider():

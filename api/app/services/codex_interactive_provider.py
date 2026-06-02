@@ -89,11 +89,19 @@ class DeterministicCodexInteractiveProvider:
     async def close_session(self, session_id: str) -> None:
         return None
 
+    async def close_all_sessions(self) -> None:
+        return None
+
+    def runtime_health(self) -> dict[str, Any]:
+        return {"active_sessions": 0, "codex_version": None, "last_error": None}
+
 
 class CodexInteractiveProvider:
-    def __init__(self, *, client_factory: Callable[[], Any]):
+    def __init__(self, *, client_factory: Callable[[], Any], turn_timeout_seconds: float = 900):
         self._client_factory = client_factory
+        self._turn_timeout_seconds = turn_timeout_seconds
         self._runtimes: dict[str, _CodexRuntime] = {}
+        self._last_error: str | None = None
 
     async def prepare_session(self, session: dict[str, Any]) -> dict[str, Any]:
         session_id = str(session["id"])
@@ -108,9 +116,13 @@ class CodexInteractiveProvider:
         cwd = self._session_cwd(session)
         sandbox = str(session.get("sandbox_mode") or "read-only")
         client = self._client_factory()
-        await client.start()
-        initialize_response = await client.initialize()
-        thread_response = await client.start_thread(cwd=cwd, sandbox=sandbox, approval_policy="on-request")
+        try:
+            await client.start()
+            initialize_response = await client.initialize()
+            thread_response = await client.start_thread(cwd=cwd, sandbox=sandbox, approval_policy="on-request")
+        except Exception as exc:
+            self._last_error = str(exc)
+            raise
         thread = thread_response.get("thread") if isinstance(thread_response.get("thread"), dict) else {}
         thread_id = str(thread.get("id") or getattr(client, "thread_id", "") or "")
         runtime = _CodexRuntime(
@@ -137,29 +149,39 @@ class CodexInteractiveProvider:
         mode: str = "read_only",
     ) -> AsyncIterator[dict[str, Any]]:
         runtime = await self._runtime_for_session(session)
-        turn_response = await runtime.client.start_turn(
-            thread_id=runtime.thread_id,
-            user_message=user_message,
-            cwd=runtime.cwd,
-            sandbox_policy=self._sandbox_policy(runtime.sandbox, runtime.cwd),
-        )
-        turn = turn_response.get("turn") if isinstance(turn_response.get("turn"), dict) else {}
-        codex_turn_id = str(turn.get("id") or "")
-        if codex_turn_id:
-            runtime.active_turn_ids[turn_id] = codex_turn_id
-        completed = False
         try:
-            async for event in runtime.client.events_until_turn_complete():
-                localized = self._localize_turn_id(event, turn_id, codex_turn_id=codex_turn_id)
-                if localized.get("type") == "turn_completed":
-                    completed = True
-                if localized.get("type") == "session_closed" and not completed:
-                    yield {
-                        "type": "turn_failed",
-                        "turn_id": turn_id,
-                        "error": "Codex app-server session closed before the turn completed.",
-                    }
-                yield localized
+            turn_response = await runtime.client.start_turn(
+                thread_id=runtime.thread_id,
+                user_message=user_message,
+                cwd=runtime.cwd,
+                sandbox_policy=self._sandbox_policy(runtime.sandbox, runtime.cwd),
+            )
+            turn = turn_response.get("turn") if isinstance(turn_response.get("turn"), dict) else {}
+            codex_turn_id = str(turn.get("id") or "")
+            if codex_turn_id:
+                runtime.active_turn_ids[turn_id] = codex_turn_id
+            completed = False
+            async with asyncio.timeout(self._turn_timeout_seconds):
+                async for event in runtime.client.events_until_turn_complete():
+                    localized = self._localize_turn_id(event, turn_id, codex_turn_id=codex_turn_id)
+                    if localized.get("type") == "turn_completed":
+                        completed = True
+                    if localized.get("type") == "session_closed" and not completed:
+                        error = "Codex app-server session closed before the turn completed."
+                        self._last_error = f"{error} reason={localized.get('reason') or 'unknown'}"
+                        self._runtimes.pop(str(session["id"]), None)
+                        yield {
+                            "type": "turn_failed",
+                            "turn_id": turn_id,
+                            "error": error,
+                        }
+                    yield localized
+        except TimeoutError:
+            self._last_error = "Codex turn timed out."
+            yield {"type": "turn_failed", "turn_id": turn_id, "error": self._last_error}
+        except Exception as exc:
+            self._last_error = str(exc)
+            raise
         finally:
             runtime.active_turn_ids.pop(turn_id, None)
 
@@ -180,6 +202,22 @@ class CodexInteractiveProvider:
         runtime = self._runtimes.pop(session_id, None)
         if runtime is not None:
             await runtime.client.close()
+
+    async def close_all_sessions(self) -> None:
+        session_ids = list(self._runtimes.keys())
+        for session_id in session_ids:
+            await self.close_session(session_id)
+
+    def runtime_health(self) -> dict[str, Any]:
+        codex_version = None
+        for runtime in self._runtimes.values():
+            if runtime.codex_version:
+                codex_version = runtime.codex_version
+        return {
+            "active_sessions": len(self._runtimes),
+            "codex_version": codex_version,
+            "last_error": self._last_error,
+        }
 
     async def _runtime_for_session(self, session: dict[str, Any]) -> _CodexRuntime:
         session_id = str(session["id"])

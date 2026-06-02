@@ -107,6 +107,20 @@ export function codexConsoleReducer(state, event) {
           ),
         ],
       };
+    case "turn_retrying":
+      return {
+        ...state,
+        status: state.status === "idle" ? "running_turn" : state.status,
+        transcript: [
+          ...state.transcript,
+          transcriptItem(
+            `${event.turn_id || state.activeTurnId || "turn"}:retry:${state.transcript.length}`,
+            "status",
+            event.turn_id || state.activeTurnId,
+            event.message || "Codex is reconnecting.",
+          ),
+        ],
+      };
     case "approval_required":
       return {
         ...state,

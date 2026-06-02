@@ -2,27 +2,29 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.codex_schema.methods import SERVER_NOTIFICATION_METHODS
+
 
 def normalize_codex_server_event(event: dict[str, Any]) -> dict[str, Any]:
     if "method" in event:
         method = str(event.get("method") or "")
         params = event.get("params") if isinstance(event.get("params"), dict) else {}
-        if method == "turn/started":
+        if method == SERVER_NOTIFICATION_METHODS.TURN_STARTED:
             turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
             return {
                 "type": "turn_started",
                 "turn_id": str(turn.get("id") or ""),
                 "raw_method": method,
             }
-        if method == "item/agentMessage/delta":
+        if method == SERVER_NOTIFICATION_METHODS.AGENT_MESSAGE_DELTA:
             return {
                 "type": "text_delta",
                 "turn_id": str(params.get("turnId") or ""),
                 "text": str(params.get("delta") or ""),
                 "raw_method": method,
             }
-        if method in {"item/plan/delta", "turn/plan/updated"}:
-            if method == "turn/plan/updated":
+        if method in {SERVER_NOTIFICATION_METHODS.PLAN_DELTA, SERVER_NOTIFICATION_METHODS.TURN_PLAN_UPDATED}:
+            if method == SERVER_NOTIFICATION_METHODS.TURN_PLAN_UPDATED:
                 parts: list[str] = []
                 explanation = params.get("explanation")
                 if explanation:
@@ -40,7 +42,7 @@ def normalize_codex_server_event(event: dict[str, Any]) -> dict[str, Any]:
                 "text": text,
                 "raw_method": method,
             }
-        if method == "item/started":
+        if method == SERVER_NOTIFICATION_METHODS.ITEM_STARTED:
             item = params.get("item") if isinstance(params.get("item"), dict) else {}
             if item.get("type") == "commandExecution":
                 return {
@@ -51,7 +53,7 @@ def normalize_codex_server_event(event: dict[str, Any]) -> dict[str, Any]:
                     "raw_method": method,
                 }
             return {"type": "raw_codex_event", "raw_method": method, "payload": params}
-        if method == "item/commandExecution/outputDelta":
+        if method == SERVER_NOTIFICATION_METHODS.COMMAND_OUTPUT_DELTA:
             return {
                 "type": "command_output",
                 "turn_id": str(params.get("turnId") or ""),
@@ -59,7 +61,7 @@ def normalize_codex_server_event(event: dict[str, Any]) -> dict[str, Any]:
                 "text": str(params.get("delta") or ""),
                 "raw_method": method,
             }
-        if method == "item/fileChange/patchUpdated":
+        if method == SERVER_NOTIFICATION_METHODS.FILE_CHANGE_PATCH_UPDATED:
             changes = params.get("changes") if isinstance(params.get("changes"), list) else []
             changed_files = [
                 str(item.get("path"))
@@ -74,7 +76,7 @@ def normalize_codex_server_event(event: dict[str, Any]) -> dict[str, Any]:
                 "changed_files": changed_files,
                 "raw_method": method,
             }
-        if method == "turn/completed":
+        if method == SERVER_NOTIFICATION_METHODS.TURN_COMPLETED:
             turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
             return {
                 "type": "turn_completed",
@@ -82,20 +84,37 @@ def normalize_codex_server_event(event: dict[str, Any]) -> dict[str, Any]:
                 "final_text": _final_text_from_turn(turn),
                 "raw_method": method,
             }
-        if method == "error":
+        if method == SERVER_NOTIFICATION_METHODS.ERROR:
             error = params.get("error") if isinstance(params.get("error"), dict) else {}
+            message = str(error.get("message") or "Codex turn failed.")
+            if bool(params.get("willRetry")):
+                return {
+                    "type": "turn_retrying",
+                    "turn_id": str(params.get("turnId") or ""),
+                    "message": message,
+                    "will_retry": True,
+                    "raw_method": method,
+                }
             return {
                 "type": "turn_failed",
                 "turn_id": str(params.get("turnId") or ""),
-                "error": str(error.get("message") or "Codex turn failed."),
+                "error": message,
                 "will_retry": bool(params.get("willRetry")),
                 "raw_method": method,
             }
-        if method == "thread/closed":
+        if method == SERVER_NOTIFICATION_METHODS.THREAD_CLOSED:
             return {
                 "type": "session_closed",
                 "thread_id": str(params.get("threadId") or ""),
                 "reason": "thread_closed",
+                "raw_method": method,
+            }
+        if method == SERVER_NOTIFICATION_METHODS.PROCESS_EXITED:
+            return {
+                "type": "process_exit",
+                "process_handle": str(params.get("processHandle") or ""),
+                "exit_code": params.get("exitCode"),
+                "signal": params.get("signal"),
                 "raw_method": method,
             }
         return {"type": "raw_codex_event", "raw_method": method, "payload": params}

@@ -11,11 +11,32 @@ import shutil
 import subprocess
 from typing import Any
 
+from app.codex_schema.methods import (
+    CLIENT_NOTIFICATION_METHODS,
+    CLIENT_REQUEST_METHODS,
+    COMMAND_APPROVAL_REQUEST_METHODS,
+    FILE_CHANGE_APPROVAL_REQUEST_METHODS,
+    NEW_APPROVAL_REQUEST_METHODS,
+)
 from app.services.codex_event_normalizer import normalize_codex_server_event
 
 
 class CodexAppServerError(RuntimeError):
     pass
+
+
+_CODEX_APP_SERVER_SAFE_ENV_KEYS = (
+    "APPDATA",
+    "COMSPEC",
+    "LOCALAPPDATA",
+    "PATHEXT",
+    "PROGRAMDATA",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "WINDIR",
+)
 
 
 @dataclass(slots=True)
@@ -53,12 +74,17 @@ class CodexAppServerClient:
     def build_env(source_env: dict[str, str] | None = None, *, codex_home: Path) -> dict[str, str]:
         source = source_env or os.environ
         resolved_home = str(Path(codex_home))
-        return {
+        env = {
             "PATH": source.get("PATH", ""),
             "HOME": resolved_home,
             "CODEX_HOME": resolved_home,
             "NO_COLOR": "1",
         }
+        for key in _CODEX_APP_SERVER_SAFE_ENV_KEYS:
+            value = source.get(key)
+            if value:
+                env[key] = value
+        return env
 
     def attach_writer_for_tests(self, writer: Any) -> None:
         self._writer = writer
@@ -91,7 +117,7 @@ class CodexAppServerClient:
 
     async def initialize(self) -> dict[str, Any]:
         response = await self.request(
-            "initialize",
+            CLIENT_REQUEST_METHODS.INITIALIZE,
             {
                 "clientInfo": {
                     "name": "mmd-companion",
@@ -106,12 +132,12 @@ class CodexAppServerClient:
             },
         )
         self.user_agent = str(response.get("userAgent") or "")
-        await self.notify("initialized")
+        await self.notify(CLIENT_NOTIFICATION_METHODS.INITIALIZED)
         return response
 
     async def start_thread(self, *, cwd: Path, sandbox: str, approval_policy: str = "on-request") -> dict[str, Any]:
         response = await self.request(
-            "thread/start",
+            CLIENT_REQUEST_METHODS.THREAD_START,
             {
                 "cwd": str(Path(cwd)),
                 "approvalPolicy": approval_policy,
@@ -128,7 +154,7 @@ class CodexAppServerClient:
 
     async def start_turn(self, *, thread_id: str, user_message: str, cwd: Path, sandbox_policy: dict[str, Any]) -> dict[str, Any]:
         return await self.request(
-            "turn/start",
+            CLIENT_REQUEST_METHODS.TURN_START,
             {
                 "threadId": thread_id,
                 "input": [{"type": "text", "text": user_message, "text_elements": []}],
@@ -140,7 +166,7 @@ class CodexAppServerClient:
         )
 
     async def interrupt_turn(self, *, thread_id: str, turn_id: str) -> dict[str, Any]:
-        return await self.request("turn/interrupt", {"threadId": thread_id, "turnId": turn_id})
+        return await self.request(CLIENT_REQUEST_METHODS.TURN_INTERRUPT, {"threadId": thread_id, "turnId": turn_id})
 
     async def request(self, method: str, params: Any) -> Any:
         if self._writer is None:
@@ -263,7 +289,7 @@ class CodexAppServerClient:
             await self._write_error(request_id, "Unsupported Codex app-server request")
             return
 
-        if method in {"item/commandExecution/requestApproval", "execCommandApproval"}:
+        if method in COMMAND_APPROVAL_REQUEST_METHODS:
             approval_id = str(params.get("approvalId") or request_id)
             command = params.get("command")
             if isinstance(command, list):
@@ -289,7 +315,7 @@ class CodexAppServerClient:
             )
             return
 
-        if method in {"item/fileChange/requestApproval", "applyPatchApproval"}:
+        if method in FILE_CHANGE_APPROVAL_REQUEST_METHODS:
             approval_id = request_id
             turn_id = str(params.get("turnId") or "")
             self._pending_approvals[approval_id] = _PendingApproval(request_id, method, approval_id)
@@ -309,7 +335,7 @@ class CodexAppServerClient:
 
     def _approval_decision_for_method(self, method: str, decision: str) -> str:
         approved = decision == "approve_once"
-        if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
+        if method in NEW_APPROVAL_REQUEST_METHODS:
             return "accept" if approved else "decline"
         return "approved" if approved else "denied"
 

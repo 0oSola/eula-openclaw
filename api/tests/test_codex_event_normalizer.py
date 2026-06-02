@@ -172,6 +172,45 @@ def test_normalizes_error_and_thread_closed_events():
     }
 
 
+def test_normalizes_retriable_error_as_non_terminal_turn_status():
+    event = normalize_codex_server_event(
+        {
+            "method": "error",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "willRetry": True,
+                "error": {"message": "Reconnecting... 1/5"},
+            },
+        }
+    )
+
+    assert event == {
+        "type": "turn_retrying",
+        "turn_id": "turn-1",
+        "message": "Reconnecting... 1/5",
+        "will_retry": True,
+        "raw_method": "error",
+    }
+
+
+def test_normalizes_process_exited_event_for_lifecycle_trace():
+    event = normalize_codex_server_event(
+        {
+            "method": "process/exited",
+            "params": {"processHandle": "proc-1", "exitCode": 7, "signal": None},
+        }
+    )
+
+    assert event == {
+        "type": "process_exit",
+        "process_handle": "proc-1",
+        "exit_code": 7,
+        "signal": None,
+        "raw_method": "process/exited",
+    }
+
+
 def test_unknown_notification_is_preserved_as_raw_event():
     assert normalize_codex_server_event({"method": "model/verification", "params": {"ok": True}}) == {
         "type": "raw_codex_event",

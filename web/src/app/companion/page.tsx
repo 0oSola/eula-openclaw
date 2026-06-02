@@ -77,6 +77,7 @@ import {
 import { resolveEntryGreetingMessage, shouldAutoPlayEntryGreeting } from "@/lib/entryGreeting.js";
 import { clearSession, loadSession, saveSession } from "@/lib/session";
 import { DEFAULT_TTS_MODE, playRemoteTtsAudio, playServerTtsAudio } from "@/lib/ttsPlayback.js";
+import { resolveCompanionNavTarget } from "@/lib/companionNavigation.js";
 import type {
   ChatMessage,
   DailyPodcast,
@@ -599,6 +600,15 @@ export default function CompanionPage() {
   function handleRightPanelViewChange(view: RightPanelView) {
     setActiveRightPanelView(view);
     setIsRightRailCollapsed(false);
+  }
+
+  function handleCompanionNavigation(key: (typeof navIcons)[number]["key"]) {
+    const target = resolveCompanionNavTarget(key);
+    if (target.kind === "page") {
+      router.push(target.href);
+      return;
+    }
+    handleRightPanelViewChange(target.view as RightPanelView);
   }
 
   const loadOpenClawConfig = useCallback(
@@ -2733,7 +2743,7 @@ export default function CompanionPage() {
               type="button"
               aria-label={icon.label}
               aria-pressed={activeRightPanelView === icon.view}
-              onClick={() => handleRightPanelViewChange(icon.view)}
+              onClick={() => handleCompanionNavigation(icon.key)}
             >
               <span className="mio-nav-glyph" aria-hidden="true">
                 {renderSidebarIcon(icon.key)}

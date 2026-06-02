@@ -303,6 +303,15 @@ class TraceStore:
                 metadata_json TEXT NOT NULL DEFAULT '{}'
             );
 
+            CREATE TABLE IF NOT EXISTS codex_workspaces (
+                id TEXT PRIMARY KEY,
+                path TEXT NOT NULL,
+                source TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS codex_turns (
                 id TEXT PRIMARY KEY,
                 codex_session_id TEXT NOT NULL,
@@ -475,6 +484,55 @@ class TraceStore:
         self._conn.commit()
         return self.get_codex_interactive_session(session_id)  # type: ignore[return-value]
 
+    def upsert_codex_workspace(
+        self,
+        *,
+        workspace_id: str,
+        path: str,
+        source: str,
+        created_by: str,
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        current = self.get_codex_workspace(workspace_id)
+        if current:
+            self._conn.execute(
+                """
+                UPDATE codex_workspaces
+                SET path = ?, source = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (path, source, now, workspace_id),
+            )
+        else:
+            self._conn.execute(
+                """
+                INSERT INTO codex_workspaces (
+                    id, path, source, created_by, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (workspace_id, path, source, created_by, now, now),
+            )
+        self._conn.commit()
+        return self.get_codex_workspace(workspace_id)  # type: ignore[return-value]
+
+    def get_codex_workspace(self, workspace_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM codex_workspaces WHERE id = ?",
+            (workspace_id,),
+        ).fetchone()
+        return self._row_to_dict(row)
+
+    def list_codex_workspaces(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_workspaces
+            ORDER BY created_at ASC, id ASC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_codex_interactive_session(self, session_id: str) -> dict[str, Any] | None:
         row = self._conn.execute(
             "SELECT * FROM codex_interactive_sessions WHERE id = ?",
@@ -507,7 +565,7 @@ class TraceStore:
             SET status = ?, codex_thread_id = COALESCE(?, codex_thread_id),
                 codex_version = COALESCE(?, codex_version),
                 process_id = COALESCE(?, process_id),
-                last_active_at = ?, closed_at = ?, error = ?
+                last_active_at = ?, closed_at = ?, error = COALESCE(?, error)
             WHERE id = ?
             """,
             (
@@ -533,6 +591,45 @@ class TraceStore:
             """
         ).fetchone()
         return int(row["count"] if row else 0)
+
+    def list_idle_codex_sessions(self, idle_timeout_seconds: int) -> list[dict[str, Any]]:
+        cutoff = datetime.now(UTC) - timedelta(seconds=max(0, idle_timeout_seconds))
+        rows = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_interactive_sessions
+            WHERE status NOT IN ('closed', 'failed') AND last_active_at < ?
+            ORDER BY last_active_at ASC
+            """,
+            (cutoff.isoformat(),),
+        ).fetchall()
+        sessions = [dict(row) for row in rows]
+        for session in sessions:
+            session["metadata"] = self._json_loads(session.get("metadata_json"), {})
+        return sessions
+
+    def latest_codex_version(self) -> str | None:
+        row = self._conn.execute(
+            """
+            SELECT codex_version
+            FROM codex_interactive_sessions
+            WHERE codex_version IS NOT NULL AND codex_version != ''
+            ORDER BY last_active_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return str(row["codex_version"]) if row and row["codex_version"] else None
+
+    def latest_codex_error(self) -> str | None:
+        row = self._conn.execute(
+            """
+            SELECT error
+            FROM codex_interactive_sessions
+            ORDER BY last_active_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return str(row["error"]) if row and row["error"] else None
 
     def create_codex_turn(
         self,

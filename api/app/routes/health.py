@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -148,6 +149,30 @@ def _bridge_warnings(status: dict[str, Any], recent_errors: list[dict[str, Any]]
     return warnings
 
 
+def _codex_workspaces(settings, store) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for workspace_id in settings.codex_allowed_workspaces:
+        path = settings.codex_workspace_paths.get(workspace_id)
+        if path is None:
+            continue
+        items.append({"id": workspace_id, "path": str(path.resolve()), "source": "env"})
+        seen.add(workspace_id)
+    for workspace in store.list_codex_workspaces():
+        workspace_id = str(workspace["id"])
+        if workspace_id in seen:
+            continue
+        items.append(
+            {
+                "id": workspace_id,
+                "path": str(Path(str(workspace["path"])).resolve()),
+                "source": str(workspace.get("source") or "ui"),
+            }
+        )
+        seen.add(workspace_id)
+    return items
+
+
 @router.get("/admin/runtime-health")
 def runtime_health(request: Request, x_user_id: str | None = Header(default=None)) -> dict[str, Any]:
     user_id = _require_admin(request, x_user_id)
@@ -167,6 +192,12 @@ def runtime_health(request: Request, x_user_id: str | None = Header(default=None
         channel=channel,
     )
     recent_errors = _recent_errors(store, user_id)
+    codex_provider = getattr(request.app.state, "codex_interactive_provider", None)
+    codex_provider_health = {}
+    if codex_provider is not None and hasattr(codex_provider, "runtime_health"):
+        codex_provider_health = codex_provider.runtime_health()
+    codex_version = codex_provider_health.get("codex_version") or store.latest_codex_version()
+    codex_last_error = codex_provider_health.get("last_error") or store.latest_codex_error()
 
     return {
         "ok": True,
@@ -209,11 +240,12 @@ def runtime_health(request: Request, x_user_id: str | None = Header(default=None
         "codex": {
             "enabled": settings.codex_interactive_enabled,
             "codex_bin": settings.codex_bin,
-            "codex_version": None,
+            "codex_version": codex_version,
             "transport": settings.codex_transport,
             "active_sessions": store.count_active_codex_sessions(),
             "allowed_workspaces": settings.codex_allowed_workspaces,
-            "last_error": None,
+            "workspaces": _codex_workspaces(settings, store),
+            "last_error": codex_last_error,
         },
         "database": {
             "account_count": _count_rows(conn, "accounts"),

@@ -199,6 +199,37 @@ def test_process_stdout_close_fails_pending_request_and_emits_session_closed():
     asyncio.run(run_case())
 
 
+def test_events_until_turn_complete_continues_after_retriable_error():
+    async def run_case():
+        client, _ = _client_with_writer()
+
+        await client.handle_message_for_tests(
+            {
+                "method": "error",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "willRetry": True,
+                    "error": {"message": "Reconnecting... 1/5"},
+                },
+            }
+        )
+        await client.handle_message_for_tests(
+            {
+                "method": "turn/completed",
+                "params": {"threadId": "thread-1", "turn": {"id": "turn-1", "items": []}},
+            }
+        )
+
+        events = []
+        async for event in client.events_until_turn_complete():
+            events.append(event)
+
+        assert [event["type"] for event in events] == ["turn_retrying", "turn_completed"]
+
+    asyncio.run(run_case())
+
+
 def test_windows_cmd_shim_resolves_to_packaged_native_executable():
     if os.name != "nt":
         return
@@ -232,7 +263,18 @@ def test_env_whitelist_excludes_project_secrets():
         {
             "PATH": "D:/bin",
             "HOME": "C:/Users/test",
+            "SystemRoot": "C:/Windows",
+            "WINDIR": "C:/Windows",
+            "COMSPEC": "C:/Windows/System32/cmd.exe",
+            "PATHEXT": ".COM;.EXE;.BAT;.CMD",
+            "TEMP": "C:/Temp",
+            "TMP": "C:/Tmp",
+            "USERPROFILE": "C:/Users/test",
+            "APPDATA": "C:/Users/test/AppData/Roaming",
+            "LOCALAPPDATA": "C:/Users/test/AppData/Local",
+            "PROGRAMDATA": "C:/ProgramData",
             "OPENCLAW_TOKEN": "secret",
+            "OPENAI_API_KEY": "secret",
             "TTS_SERVICE_BASE_URL": "http://voice.local",
             "DATABASE_URL": "sqlite:///secret.db",
         },
@@ -244,4 +286,14 @@ def test_env_whitelist_excludes_project_secrets():
         "HOME": "D:\\codex-home",
         "CODEX_HOME": "D:\\codex-home",
         "NO_COLOR": "1",
+        "APPDATA": "C:/Users/test/AppData/Roaming",
+        "COMSPEC": "C:/Windows/System32/cmd.exe",
+        "LOCALAPPDATA": "C:/Users/test/AppData/Local",
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD",
+        "PROGRAMDATA": "C:/ProgramData",
+        "SystemRoot": "C:/Windows",
+        "TEMP": "C:/Temp",
+        "TMP": "C:/Tmp",
+        "USERPROFILE": "C:/Users/test",
+        "WINDIR": "C:/Windows",
     }

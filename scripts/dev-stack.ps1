@@ -204,6 +204,14 @@ switch ($Action) {
     Set-EnvValueInFile -FilePath $apiEnv -Key "ADMIN_USER_IDS" -Value $AdminUserIds
     Write-Info "Updated api/.env ADMIN_USER_IDS=$AdminUserIds"
 
+    $codexSchemaCheck = Join-Path $ProjectRoot "scripts\check-codex-app-server-schema.ps1"
+    if (Test-Path -LiteralPath $codexSchemaCheck) {
+      Write-Info "Running Codex app-server schema preflight. Set CODEX_SCHEMA_AUTO_UPDATE=true to regenerate in dev."
+      & $codexSchemaCheck
+    } else {
+      Write-WarnLine "Codex schema preflight script missing: $codexSchemaCheck"
+    }
+
     $apiLogs = New-LogPaths -RuntimeDir $RuntimeDir -Prefix "api"
     $webLogs = New-LogPaths -RuntimeDir $RuntimeDir -Prefix "web"
 

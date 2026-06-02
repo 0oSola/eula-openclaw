@@ -67,17 +67,46 @@ def test_runtime_health_includes_codex_snapshot():
         }
     )
     client = TestClient(app)
+    app.state.trace_store.create_codex_interactive_session(
+        session_id="codex_sess_health",
+        local_chat_session_id=None,
+        workspace_id="mmd-companion",
+        user_id="admin-1",
+        workspace_path=str(workspace_path),
+        worktree_path=None,
+        branch_name=None,
+        codex_thread_id="thread-health",
+        codex_version="codex-cli 0.135.0",
+        transport="stdio",
+        sandbox_mode="read-only",
+        status="failed",
+        process_id=123,
+        metadata={"mode": "read_only"},
+    )
+    app.state.trace_store.update_codex_interactive_session(
+        "codex_sess_health",
+        status="failed",
+        error="last app-server error",
+    )
+    app.state.trace_store.upsert_codex_workspace(
+        workspace_id="ui-mounted",
+        path=str(case_dir / "external-ui-repo"),
+        source="ui",
+        created_by="admin-1",
+    )
 
     response = client.get("/admin/runtime-health", headers={"x-user-id": "admin-1"})
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["codex"] == {
-        "enabled": True,
-        "codex_bin": "codex-test",
-        "codex_version": None,
-        "transport": "stdio",
-        "active_sessions": 0,
-        "allowed_workspaces": ["mmd-companion"],
-        "last_error": None,
-    }
+    assert payload["codex"]["enabled"] is True
+    assert payload["codex"]["codex_bin"] == "codex-test"
+    assert payload["codex"]["codex_version"] == "codex-cli 0.135.0"
+    assert payload["codex"]["transport"] == "stdio"
+    assert payload["codex"]["active_sessions"] == 0
+    assert payload["codex"]["allowed_workspaces"] == ["mmd-companion"]
+    assert payload["codex"]["last_error"] == "last app-server error"
+    assert payload["codex"]["workspaces"] == [
+        {"id": "mmd-companion", "path": str(workspace_path.resolve()), "source": "env"},
+        {"id": "ui-mounted", "path": str((case_dir / "external-ui-repo").resolve()), "source": "ui"},
+    ]

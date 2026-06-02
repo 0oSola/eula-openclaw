@@ -1,4 +1,5 @@
 @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap");
+@import "@xterm/xterm/css/xterm.css";
 
 :root {
   --bg-0: #0a131f;
@@ -5633,6 +5634,479 @@ a {
 .mio-gear-icon circle:last-child {
   fill: rgba(242, 248, 255, 0.96);
   stroke: none;
+}
+
+.codex-page {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0;
+  padding: 10px;
+  color: #d7ffe2;
+  background:
+    linear-gradient(90deg, rgba(38, 255, 145, 0.03) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(77, 198, 255, 0.025) 1px, transparent 1px),
+    #050607;
+  background-size: 18px 18px;
+  font-family: "JetBrains Mono", "Cascadia Mono", "SFMono-Regular", Consolas, "Noto Sans SC", monospace;
+}
+
+.codex-tmux-status {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid #2eff8e;
+  border-bottom: 0;
+  padding: 0 10px;
+  color: #051007;
+  background: #2eff8e;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.codex-tmux-status-left,
+.codex-tmux-status-right {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.codex-tmux-session,
+.codex-tmux-window,
+.codex-tmux-flag,
+.codex-tmux-status-right span,
+.codex-tmux-status-right a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border: 1px solid rgba(5, 16, 7, 0.28);
+  padding: 0 8px;
+  color: #061009;
+  background: rgba(5, 16, 7, 0.1);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.codex-tmux-session {
+  color: #f4ffe0;
+  background: #050607;
+}
+
+.codex-tmux-window {
+  background: #d8ff39;
+}
+
+.codex-tmux-flag {
+  background: #76e4ff;
+}
+
+.codex-tmux-shell {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.28fr);
+  border: 1px solid #2eff8e;
+  background: rgba(2, 4, 4, 0.96);
+}
+
+.codex-tmux-pane {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-right: 1px solid rgba(46, 255, 142, 0.72);
+}
+
+.codex-tmux-pane:last-child {
+  border-right: 0;
+}
+
+.codex-tmux-pane-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 28px;
+  border-bottom: 1px solid rgba(46, 255, 142, 0.72);
+  padding: 0 9px;
+  color: #87f7ff;
+  background: #0b1010;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.codex-tmux-pane-title span {
+  color: #ffdd57;
+}
+
+.codex-tmux-pane-title strong {
+  color: #d7ffe2;
+  font-size: 11px;
+}
+
+.codex-tmux-pane-main {
+  overflow: hidden;
+}
+
+.codex-tmux-pane-side {
+  color: #bafbd4;
+  background:
+    linear-gradient(180deg, rgba(46, 255, 142, 0.06), rgba(118, 228, 255, 0.035)),
+    #070909;
+}
+
+.codex-page-empty {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 8px;
+  padding: 16px;
+  color: #d7ffe2;
+  font-size: 13px;
+}
+
+.codex-page-empty p {
+  margin: 0;
+}
+
+.codex-page-empty a {
+  border: 1px solid #2eff8e;
+  padding: 6px 8px;
+  color: #061009;
+  background: #2eff8e;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.codex-tmux-facts {
+  display: grid;
+  align-content: start;
+  gap: 0;
+  margin: 0;
+  padding: 8px;
+}
+
+.codex-tmux-facts div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  border-bottom: 1px solid rgba(46, 255, 142, 0.16);
+  padding: 8px 0;
+}
+
+.codex-tmux-facts dt,
+.codex-tmux-facts dd {
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.codex-tmux-facts dt {
+  color: #ffdd57;
+  text-transform: uppercase;
+}
+
+.codex-tmux-facts dd {
+  color: #d7ffe2;
+}
+
+.codex-tmux-log {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid rgba(46, 255, 142, 0.72);
+  padding: 10px 8px;
+  color: #87f7ff;
+  font-size: 12px;
+}
+
+.codex-tmux-log p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.codex-page .mio-workspace-card {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 0;
+  border-radius: 0;
+  padding: 10px;
+  color: #d7ffe2;
+  background: transparent;
+  box-shadow: none;
+}
+
+.codex-page .mio-workspace-card h2 {
+  margin: 0;
+  color: #2eff8e;
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.codex-page .mio-workspace-card h2 small {
+  color: #ffdd57;
+}
+
+.codex-page .mio-card-copy {
+  gap: 4px;
+  overflow: visible;
+}
+
+.codex-page .mio-card p,
+.codex-page .mio-workspace-card p,
+.codex-page .mio-chatbox-message-body,
+.codex-page .mio-chatbox-empty span {
+  color: #c9fbd7;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.codex-page .mio-chatbox-session-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.codex-page .mio-card button,
+.codex-page .mio-chatbox-session-actions select,
+.codex-page .codex-workspace-create input {
+  width: auto;
+  min-height: 30px;
+  margin-top: 0;
+  border: 1px solid rgba(46, 255, 142, 0.72);
+  border-radius: 0;
+  color: #d7ffe2;
+  background: #09100d;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.codex-page .mio-card button:hover,
+.codex-page .mio-chatbox-session-actions select:hover {
+  color: #061009;
+  background: #2eff8e;
+}
+
+.codex-page .mio-chatbox-session-actions select {
+  padding: 6px 8px;
+}
+
+.codex-workspace-create {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(130px, 0.2fr) minmax(220px, 0.45fr) auto auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.codex-workspace-path {
+  min-width: 0;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  border: 1px solid rgba(46, 255, 142, 0.36);
+  padding: 6px 8px;
+  color: #87f7ff;
+  background: #020303;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-page .codex-workspace-create input {
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.codex-page .codex-workspace-create input:focus {
+  outline: 1px solid #d8ff39;
+  outline-offset: 0;
+}
+
+.codex-page .mio-chatbox-list {
+  min-height: 320px;
+  border: 1px solid rgba(46, 255, 142, 0.36);
+  border-radius: 0;
+  background: #040606;
+}
+
+.codex-page .mio-chatbox-list::before,
+.codex-page .mio-chatbox-list::after {
+  display: none;
+}
+
+.codex-terminal-frame {
+  min-height: 320px;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border: 1px solid rgba(46, 255, 142, 0.58);
+  background:
+    linear-gradient(180deg, rgba(46, 255, 142, 0.035), rgba(118, 228, 255, 0.025)),
+    #040606;
+}
+
+.codex-terminal-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid rgba(46, 255, 142, 0.46);
+  padding: 6px 8px;
+  color: #87f7ff;
+  background: #070909;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.codex-terminal-toolbar span {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid rgba(46, 255, 142, 0.28);
+  padding: 3px 6px;
+  color: #d7ffe2;
+  background: #020303;
+  overflow-wrap: anywhere;
+}
+
+.codex-terminal-host,
+.codex-terminal-fallback {
+  min-height: 292px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 8px;
+  background: #040606;
+}
+
+.codex-terminal-host .xterm {
+  width: 100%;
+  height: 100%;
+}
+
+.codex-terminal-host .xterm-viewport,
+.codex-terminal-host .xterm-screen {
+  background: transparent !important;
+}
+
+.codex-terminal-host .xterm-viewport::-webkit-scrollbar {
+  width: 7px;
+}
+
+.codex-terminal-host .xterm-viewport::-webkit-scrollbar-track {
+  background: #020303;
+}
+
+.codex-terminal-host .xterm-viewport::-webkit-scrollbar-thumb {
+  border: 1px solid rgba(216, 255, 57, 0.22);
+  background: rgba(46, 255, 142, 0.36);
+}
+
+.codex-terminal-fallback {
+  margin: 0;
+  color: #d7ffe2;
+  font-family: inherit;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.codex-page .mio-chatbox-message {
+  border-radius: 0;
+  border-color: rgba(46, 255, 142, 0.22);
+  background: rgba(10, 16, 13, 0.92);
+}
+
+.codex-page .mio-chatbox-message-head strong {
+  color: #87f7ff;
+}
+
+.codex-page .mio-chatbox-message-head span {
+  color: #ffdd57;
+}
+
+.codex-page .mio-chatbox-empty {
+  color: #d7ffe2;
+}
+
+.codex-page .mio-chatbox-footer {
+  align-items: stretch;
+  border-radius: 0;
+  border-color: rgba(46, 255, 142, 0.72);
+  background: #070909;
+  box-shadow: none;
+}
+
+.codex-page .mio-chatbox-footer textarea {
+  flex: 1 1 auto;
+  min-height: 78px;
+  resize: vertical;
+  border: 1px solid rgba(46, 255, 142, 0.36);
+  border-radius: 0;
+  color: #d7ffe2;
+  background: #020303;
+  font: inherit;
+}
+
+.codex-page .mio-advanced-json-preview {
+  border: 1px solid rgba(46, 255, 142, 0.36);
+  border-radius: 0;
+  color: #d7ffe2;
+  background: #020303;
+  font-family: inherit;
+}
+
+@media (max-width: 960px) {
+  .codex-tmux-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .codex-tmux-pane {
+    border-right: 0;
+    border-bottom: 1px solid rgba(46, 255, 142, 0.72);
+  }
+
+  .codex-tmux-pane:last-child {
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 780px) {
+  .codex-page {
+    padding: 6px;
+  }
+
+  .codex-tmux-status {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 6px;
+  }
+
+  .codex-tmux-status-left,
+  .codex-tmux-status-right {
+    width: 100%;
+  }
+
+  .codex-page .mio-chatbox-footer {
+    flex-direction: column;
+  }
+
+  .codex-workspace-create {
+    grid-template-columns: 1fr;
+  }
 }
 
 .podcast-page {
