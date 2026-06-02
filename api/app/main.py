@@ -14,6 +14,7 @@ from app.routes.assets import router as assets_router
 from app.routes.chat import router as chat_router
 from app.routes.codex_interactive import router as codex_interactive_router
 from app.routes.config import router as config_router
+from app.routes.desktop_pet import router as desktop_pet_router
 from app.routes.health import router as health_router
 from app.routes.message_bridge import router as message_bridge_router
 from app.routes.message_service import router as message_service_router
@@ -189,6 +190,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.include_router(realtime_voice_router)
     app.include_router(trace_router)
     app.include_router(config_router)
+    app.include_router(desktop_pet_router)
     app.include_router(assets_router)
     app.include_router(tts_router)
     return app
