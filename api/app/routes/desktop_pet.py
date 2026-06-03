@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Literal
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Path, Request
 from pydantic import BaseModel, Field, field_validator
 
 from app.security import resolve_requester
@@ -24,7 +24,7 @@ class DesktopPetSessionPayload(BaseModel):
     workspace_id: str | None = Field(default=None, max_length=120)
     workspace_path: str = Field(min_length=1, max_length=2000)
     codex_home: str | None = Field(default=None, max_length=2000)
-    display_title: str | None = Field(default=None, max_length=200)
+    display_title: str | None = Field(default=None, max_length=48)
     first_prompt_preview: str | None = Field(default=None, max_length=240)
     last_summary: str | None = Field(default=None, max_length=1000)
     last_status: str = Field(default="starting", max_length=80)
@@ -74,8 +74,8 @@ def upsert_pet_session(
 
 @router.delete("/sessions/{pet_session_id}")
 def delete_pet_session(
-    pet_session_id: str,
     request: Request,
+    pet_session_id: str = Path(..., min_length=1, max_length=120),
     x_user_id: str | None = Header(default=None),
 ):
     settings = request.app.state.settings

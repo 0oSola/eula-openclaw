@@ -469,9 +469,10 @@ Pointer up on MMDStage
 
 desktop-pet session registry API 合约：
 
-- `GET /desktop-pet/sessions?limit=N`：返回最近 desktop-pet Codex session registry rows；`limit` 会限制在 `1..50`。
-- `POST /desktop-pet/sessions`：upsert 一条 registry metadata row，保存 pet/Codex session id、workspace path、`CODEX_HOME`、display title、status/server metadata、bounded prompt preview/summary；`metadata` 保持 JSON object，但 serialized JSON 超过 4000 chars 会返回 `422`。
-- `DELETE /desktop-pet/sessions/{pet_session_id}`：删除指定 pet registry row，只影响 `desktop_pet_sessions` registry metadata。
+- 所有 session registry routes 都要求 `x-user-id` requester identity；缺失会返回 `401`。
+- `GET /desktop-pet/sessions?limit=N`：返回最近 desktop-pet Codex session registry rows，response shape 为 `{ sessions, limit }`；`limit` 会限制在 `1..50`。
+- `POST /desktop-pet/sessions`：upsert 一条 registry metadata row，保存 pet/Codex session id、workspace path、`CODEX_HOME`、display title、status/server metadata、bounded prompt preview/summary；key payload limits 为 `display_title <= 48`、`first_prompt_preview <= 240`、`last_summary <= 1000`，`metadata` 保持 JSON object，但 serialized JSON 超过 4000 chars 会返回 `422`。
+- `DELETE /desktop-pet/sessions/{pet_session_id}`：删除指定 pet registry row，response shape 为 `{ deleted }`，只影响 `desktop_pet_sessions` registry metadata。
 - 这些接口不读取、不复制、不移动、不落库 Codex transcripts；`codex resume` 仍使用用户既有 `CODEX_HOME` 中的 Codex session 持久化。
 
 ## 9. 给其他服务做优化时的交接包
