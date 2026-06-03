@@ -174,6 +174,7 @@ function run() {
     assert.match(typesSource, /export type DailyPodcast/);
     assert.match(typesSource, /ttsEnabled\?: boolean;/);
     assert.match(typesSource, /ttsMode\?: "browser" \| "server";/);
+    assert.match(typesSource, /export type CompanionSharedConfig/);
     assert.match(typesSource, /export type RuntimeHealthStatus = \{/);
     assert.match(chatboxSource, /onPlayTtsMessage: \(message: ChatMessage\) => void;/);
     assert.match(chatboxSource, /className="mio-message-voice-button"/);
@@ -201,6 +202,9 @@ function run() {
     assert.match(apiSource, /export async function refreshDailyPodcast/);
     assert.match(apiSource, /export async function listDailyPodcasts/);
     assert.match(apiSource, /export async function getDailyPodcast/);
+    assert.match(apiSource, /export async function getCompanionSharedConfig/);
+    assert.match(apiSource, /export async function putCompanionSharedConfig/);
+    assert.match(companionPageSource, /putCompanionSharedConfig/);
     assert.match(waveformSource, /<canvas/);
     assert.match(waveformSource, /decodeAudioData/);
     assert.match(waveformSource, /requestAnimationFrame/);

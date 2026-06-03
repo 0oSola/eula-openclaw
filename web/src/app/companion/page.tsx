@@ -61,6 +61,7 @@ import {
   postSessionMessage,
   patchMessageBridgeSettings,
   putOpenClawConfig,
+  putCompanionSharedConfig,
   regenerateMessageTts,
   setDefaultMessageBridgeBinding,
   sessionVoiceWebSocketUrl,
@@ -502,6 +503,23 @@ export default function CompanionPage() {
     previousInteractionRef.current = interaction;
     clearStageActionRecoveryTimer();
   }, [interaction]);
+
+  useEffect(() => {
+    if (!session?.userId) return;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      putCompanionSharedConfig(session.userId, {
+        selected_model_path: selectedModelPath || null,
+        render_pipeline: renderPipeline,
+      }).catch(() => {
+        // Shared config is best-effort. Local companion state must not break.
+      });
+    }, 250);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [session?.userId, selectedModelPath, renderPipeline]);
 
   useEffect(() => {
     return () => {

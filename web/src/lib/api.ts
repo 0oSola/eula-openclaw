@@ -3,6 +3,7 @@ import { requestServerTtsAudio } from "@/lib/ttsClient.js";
 export { sessionVoiceWebSocketUrl } from "@/lib/realtimeVoiceQueue.js";
 import type {
   ChatResponse,
+  CompanionSharedConfig,
   DailyPodcast,
   MappingConfig,
   MessageBridgeExternalSession,
@@ -17,6 +18,7 @@ import type {
   OpenClawConfig,
   OpenClawConfigSaveResult,
   OpenClawHealthStatus,
+  RenderPipeline,
   RuntimeHealthStatus,
   TraceEvent,
   TraceMirror,
@@ -272,6 +274,23 @@ export async function getLatestMotionContextExport(
   return requestJSON<MotionContextExport>(`/motion-context/exports/latest?${params.toString()}`, {
     method: "GET",
     userId,
+  });
+}
+
+export async function getCompanionSharedConfig(userId: string): Promise<CompanionSharedConfig> {
+  return requestJSON<CompanionSharedConfig>("/desktop-pet/shared-config", {
+    headers: buildTraceHeaders("", userId),
+  });
+}
+
+export async function putCompanionSharedConfig(
+  userId: string,
+  payload: { selected_model_path: string | null; render_pipeline: RenderPipeline },
+): Promise<CompanionSharedConfig> {
+  return requestJSON<CompanionSharedConfig>("/desktop-pet/shared-config", {
+    method: "PUT",
+    headers: buildTraceHeaders("", userId),
+    body: JSON.stringify(payload),
   });
 }
 

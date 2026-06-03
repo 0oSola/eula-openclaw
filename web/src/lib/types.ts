@@ -255,6 +255,13 @@ export type MmdMotionAsset = {
 
 export type RenderPipeline = "classic" | "hero-shot" | "genshin" | "mio-reference" | "reze-npr";
 
+export type CompanionSharedConfig = {
+  user_id: string;
+  selected_model_path: string | null;
+  render_pipeline: RenderPipeline;
+  updated_at: string | null;
+};
+
 export type MmdCameraSnapshot = {
   fov: number;
   position: [number, number, number];
