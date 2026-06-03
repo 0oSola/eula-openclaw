@@ -50,6 +50,8 @@ _BRIDGE_DUPLICATE_SYNC_SOURCES = {"realtime", "realtime_backfill"}
 COMPANION_RENDER_PIPELINES = ("classic", "hero-shot", "genshin", "mio-reference", "reze-npr")
 _COMPANION_RENDER_PIPELINE_SET = set(COMPANION_RENDER_PIPELINES)
 _COMPANION_RENDER_PIPELINE_SQL_VALUES = ", ".join(f"'{pipeline}'" for pipeline in COMPANION_RENDER_PIPELINES)
+_DESKTOP_PET_FIRST_PROMPT_PREVIEW_MAX_LENGTH = 240
+_DESKTOP_PET_LAST_SUMMARY_MAX_LENGTH = 1000
 
 
 class TraceStore:
@@ -2664,11 +2666,25 @@ class TraceStore:
         short_id = codex_session_id.replace("-", "")[:8]
         return f"{workspace_name} {short_id}".strip()
 
+    @staticmethod
+    def _desktop_pet_optional_text(value: str | None, max_length: int) -> str | None:
+        normalized = _normalize_message_content(value)
+        return normalized[:max_length] if normalized else None
+
+    @staticmethod
+    def _desktop_pet_session_limit(limit: Any) -> int:
+        try:
+            value = int(limit)
+        except (OverflowError, TypeError, ValueError):
+            value = 10
+        return max(1, min(value, 50))
+
     def _desktop_pet_session_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
         if row is None:
             return None
         item = dict(row)
-        item["metadata"] = self._json_loads(item.pop("metadata_json", None), {})
+        metadata = self._json_loads(item.pop("metadata_json", None), {})
+        item["metadata"] = metadata if isinstance(metadata, dict) else {}
         return item
 
     def upsert_desktop_pet_session(
@@ -2690,9 +2706,17 @@ class TraceStore:
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         now = _utc_now_iso()
+        normalized_first_prompt_preview = self._desktop_pet_optional_text(
+            first_prompt_preview,
+            _DESKTOP_PET_FIRST_PROMPT_PREVIEW_MAX_LENGTH,
+        )
+        normalized_last_summary = self._desktop_pet_optional_text(
+            last_summary,
+            _DESKTOP_PET_LAST_SUMMARY_MAX_LENGTH,
+        )
         title = self._desktop_pet_display_title(
             display_title=display_title,
-            first_prompt_preview=first_prompt_preview,
+            first_prompt_preview=normalized_first_prompt_preview,
             workspace_path=workspace_path,
             codex_session_id=codex_session_id,
         )
@@ -2728,8 +2752,8 @@ class TraceStore:
                 workspace_path,
                 codex_home,
                 title,
-                first_prompt_preview,
-                last_summary,
+                normalized_first_prompt_preview,
+                normalized_last_summary,
                 last_status,
                 launch_mode,
                 remote_url,
@@ -2755,10 +2779,10 @@ class TraceStore:
         rows = self._conn.execute(
             """
             SELECT * FROM desktop_pet_sessions
-            ORDER BY last_seen_at DESC, updated_at DESC
+            ORDER BY last_seen_at DESC, updated_at DESC, created_at DESC, pet_session_id ASC
             LIMIT ?
             """,
-            (max(1, min(int(limit), 50)),),
+            (self._desktop_pet_session_limit(limit),),
         ).fetchall()
         return [self._desktop_pet_session_row(row) for row in rows if row is not None]
 

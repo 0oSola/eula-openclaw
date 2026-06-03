@@ -452,14 +452,14 @@ Pointer up on MMDStage
 | Motion context exports | SQLite `motion_context_exports` |
 | Codex UI workspace 登记 | SQLite `codex_workspaces` |
 | Codex session/turn/event/approval/artifact | SQLite `codex_interactive_sessions`, `codex_turns`, `codex_events`, `codex_approvals`, `codex_artifacts` |
-| desktop-pet Codex session registry | SQLite `desktop_pet_sessions`：metadata-only menu/resume registry，保存 `pet_session_id`、`codex_session_id`、workspace path、`CODEX_HOME` path、title/status/server metadata |
+| desktop-pet Codex session registry | SQLite `desktop_pet_sessions`：metadata-only menu/resume registry，保存 `pet_session_id`、`codex_session_id`、workspace path、`CODEX_HOME` path、title/status/server metadata；prompt preview 和 summary 只保存 length-bounded 摘要字段 |
 | trace event | SQLite `trace_events` + NDJSON |
 | chat mirror | SQLite `chat_mirror` |
 | retry job | SQLite `retry_jobs` |
 | 本地 PMX/PMD/贴图 | `MMD_ROOT_DIR` |
 | 上传/存储的 VMD | `API_DATA_DIR` 下的 storage；收藏副本在 `MMD_ROOT_DIR/usage/vmd/{model}[动作]/`，可按动作意图继续分子目录 |
 
-`companion_shared_config` 只保存 `/companion` 和 `desktop-pet` 共同需要的当前模型与渲染管线选择；不保存 pet camera、pet window position、notification profile 等 desktop-pet 专属状态。`desktop_pet_sessions` 只保存可读菜单与 `codex resume` 所需 metadata，不复制、不移动、不落库 Codex transcripts；Codex session 持久化仍留在用户既有 `CODEX_HOME`。完整 desktop-pet 拓扑留到 Task 22 补充。
+`companion_shared_config` 只保存 `/companion` 和 `desktop-pet` 共同需要的当前模型与渲染管线选择；不保存 pet camera、pet window position、notification profile 等 desktop-pet 专属状态。`desktop_pet_sessions` 只保存可读菜单与 `codex resume` 所需 metadata，不复制、不移动、不落库 Codex transcripts；`first_prompt_preview` 最多 240 chars，`last_summary` 最多 1000 chars，Codex session 持久化仍留在用户既有 `CODEX_HOME`。完整 desktop-pet 拓扑留到 Task 22 补充。
 
 共享配置 API 合约：
 

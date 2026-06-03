@@ -16,6 +16,27 @@ def _store() -> TraceStore:
     return TraceStore(db_path=path / "sqlite" / "trace.db", ndjson_dir=path / "logs")
 
 
+def _upsert_pet_session(store: TraceStore, pet_session_id: str = "pet-1", **overrides):
+    payload = {
+        "pet_session_id": pet_session_id,
+        "codex_session_id": "11111111-1111-1111-1111-111111111111",
+        "workspace_id": "mmd-companion",
+        "workspace_path": "D:/workspace/MMD project",
+        "codex_home": "C:/Users/KSG/.codex",
+        "display_title": "Readable title",
+        "first_prompt_preview": "fix login layout and run checks",
+        "last_summary": None,
+        "last_status": "running",
+        "launch_mode": "workspace-write",
+        "remote_url": None,
+        "app_server_pid": None,
+        "app_server_port": None,
+        "metadata": {},
+    }
+    payload.update(overrides)
+    return store.upsert_desktop_pet_session(**payload)
+
+
 def test_shared_companion_config_defaults_and_updates():
     store = _store()
 
@@ -196,3 +217,104 @@ def test_desktop_pet_session_registry_delete_only_removes_registry_row():
     assert store.delete_desktop_pet_session("pet-1") is True
     assert store.get_desktop_pet_session("pet-1") is None
     assert store.delete_desktop_pet_session("pet-1") is False
+
+
+def test_desktop_pet_session_registry_round_trips_non_empty_metadata():
+    store = _store()
+
+    item = _upsert_pet_session(store, metadata={"approval_count": 2})
+
+    assert item["metadata"] == {"approval_count": 2}
+    assert store.get_desktop_pet_session("pet-1")["metadata"] == {"approval_count": 2}
+
+
+def test_desktop_pet_session_registry_preserves_created_at_on_upsert():
+    store = _store()
+
+    first = _upsert_pet_session(store)
+    second = _upsert_pet_session(
+        store,
+        last_status="completed",
+        last_summary="Done.",
+        metadata={"approval_count": 2},
+    )
+
+    assert second["created_at"] == first["created_at"]
+    assert second["updated_at"]
+    assert second["last_status"] == "completed"
+
+
+def test_desktop_pet_session_registry_list_limit_bounds_are_robust():
+    store = _store()
+    for index in range(55):
+        _upsert_pet_session(
+            store,
+            pet_session_id=f"pet-{index:02d}",
+            codex_session_id=f"11111111-1111-1111-1111-{index:012d}",
+        )
+
+    assert len(store.list_desktop_pet_sessions(limit=0)) == 1
+    assert len(store.list_desktop_pet_sessions(limit=None)) == 10  # type: ignore[arg-type]
+    assert len(store.list_desktop_pet_sessions(limit=-20)) == 1
+    assert len(store.list_desktop_pet_sessions(limit=500)) == 50
+    invalid_limit_items = store.list_desktop_pet_sessions(limit="bad")  # type: ignore[arg-type]
+    assert 1 <= len(invalid_limit_items) <= 50
+    infinite_limit_items = store.list_desktop_pet_sessions(limit=float("inf"))  # type: ignore[arg-type]
+    assert 1 <= len(infinite_limit_items) <= 50
+
+
+def test_desktop_pet_session_registry_ordering_is_stable_for_equal_timestamps():
+    store = _store()
+    _upsert_pet_session(store, pet_session_id="pet-b")
+    _upsert_pet_session(store, pet_session_id="pet-a")
+    tie_timestamp = "2026-01-01T00:00:00+00:00"
+    store._conn.execute(
+        """
+        UPDATE desktop_pet_sessions
+        SET last_seen_at = ?, updated_at = ?, created_at = ?
+        WHERE pet_session_id IN ('pet-a', 'pet-b')
+        """,
+        (tie_timestamp, tie_timestamp, tie_timestamp),
+    )
+    store._conn.commit()
+
+    sessions = store.list_desktop_pet_sessions(limit=10)
+
+    assert [item["pet_session_id"] for item in sessions] == ["pet-a", "pet-b"]
+
+
+def test_desktop_pet_session_registry_truncates_prompt_preview_and_summary():
+    store = _store()
+    long_preview = f"  {'p' * 300}  "
+    long_summary = f"  {'s' * 1200}  "
+
+    item = _upsert_pet_session(
+        store,
+        display_title=None,
+        first_prompt_preview=long_preview,
+        last_summary=long_summary,
+    )
+
+    assert item["display_title"] == "p" * 48
+    assert item["first_prompt_preview"] == "p" * 240
+    assert item["last_summary"] == "s" * 1000
+
+
+def test_desktop_pet_session_registry_non_dict_metadata_json_returns_empty_dict():
+    store = _store()
+    _upsert_pet_session(store, metadata={"approval_count": 2})
+    store._conn.execute(
+        "UPDATE desktop_pet_sessions SET metadata_json = ? WHERE pet_session_id = ?",
+        ('["not", "metadata"]', "pet-1"),
+    )
+    store._conn.commit()
+
+    assert store.get_desktop_pet_session("pet-1")["metadata"] == {}
+
+    store._conn.execute(
+        "UPDATE desktop_pet_sessions SET metadata_json = ? WHERE pet_session_id = ?",
+        ("not-json", "pet-1"),
+    )
+    store._conn.commit()
+
+    assert store.get_desktop_pet_session("pet-1")["metadata"] == {}
