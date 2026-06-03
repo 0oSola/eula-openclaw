@@ -31,3 +31,7 @@ export function describeMenuActionResult(action: MenuAction): string {
       return "VSCode focus is not wired yet";
   }
 }
+
+export function describeMainSiteSyncResult(modelLabel: string | null | undefined, renderPipeline: string): string {
+  return `Synced: ${modelLabel?.trim() || "no model"} · ${renderPipeline}`;
+}

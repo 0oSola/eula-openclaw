@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { pickSelectedModel, selectFavoriteVmdUrls } from "./petStageState";
+import { buildPetStageKey, pickSelectedModel, selectFavoriteVmdUrls } from "./petStageState";
 
 const models = [
   { relative_path: "Eula/Eula.pmx", url: "/assets/mmd/Eula/Eula.pmx", display_name: "Eula" },
@@ -44,5 +44,10 @@ describe("pet stage state", () => {
     );
 
     expect(urls).toEqual(["/assets/vmd/file/a"]);
+  });
+
+  it("builds a stage key that changes when explicit sync reloads", () => {
+    expect(buildPetStageKey("Eula/Eula.pmx", "mio-reference", 0)).toBe("Eula/Eula.pmx::mio-reference::0");
+    expect(buildPetStageKey("Eula/Eula.pmx", "mio-reference", 1)).toBe("Eula/Eula.pmx::mio-reference::1");
   });
 });

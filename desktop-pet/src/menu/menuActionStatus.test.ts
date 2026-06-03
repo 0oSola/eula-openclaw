@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeMenuActionResult } from "./menuActionStatus";
+import { describeMainSiteSyncResult, describeMenuActionResult } from "./menuActionStatus";
 
 describe("desktop pet menu action status", () => {
   it("describes notification detail changes", () => {
@@ -21,5 +21,13 @@ describe("desktop pet menu action status", () => {
 
   it("describes main site sync clearly", () => {
     expect(describeMenuActionResult({ type: "sync-main-site" })).toBe("Syncing from main site...");
+  });
+
+  it("describes completed main site sync with the loaded model and pipeline", () => {
+    expect(describeMainSiteSyncResult("Eula", "mio-reference")).toBe("Synced: Eula · mio-reference");
+  });
+
+  it("describes completed main site sync when no model is selected", () => {
+    expect(describeMainSiteSyncResult(null, "classic")).toBe("Synced: no model · classic");
   });
 });

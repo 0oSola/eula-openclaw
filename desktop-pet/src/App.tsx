@@ -4,8 +4,8 @@ import { MMDStage } from "@/features/stage/MMDStage";
 import type { CompanionSharedConfig, MmdModelAsset, RenderPipeline, VmdAsset } from "@/lib/types";
 
 import { createApiClient } from "./lib/apiClient";
-import { describeMenuActionResult } from "./menu/menuActionStatus";
-import { pickSelectedModel, selectFavoriteVmdUrls } from "./mmd/petStageState";
+import { describeMainSiteSyncResult, describeMenuActionResult } from "./menu/menuActionStatus";
+import { buildPetStageKey, pickSelectedModel, selectFavoriteVmdUrls } from "./mmd/petStageState";
 
 const DEFAULT_USER_ID = "admin-1";
 const DEFAULT_SHARED_CONFIG: CompanionSharedConfig = {
@@ -43,6 +43,7 @@ export function App() {
   const [interactionMode, setInteractionMode] = useState<PetInteractionMode>("window-drag");
   const [notificationProfile, setNotificationProfile] = useState<NotificationProfile>("medium");
   const [menuStatus, setMenuStatus] = useState<string | null>(null);
+  const [stageReloadRevision, setStageReloadRevision] = useState(0);
 
   useEffect(() => {
     window.desktopPet
@@ -81,7 +82,7 @@ export function App() {
     [api, favoriteVmdUrls],
   );
 
-  const loadPetState = useCallback(() => {
+  const loadPetState = useCallback((options: { syncFeedback?: boolean } = {}) => {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
@@ -91,10 +92,25 @@ export function App() {
         setSharedConfig(nextSharedConfig);
         setModels(nextModels);
         setVmdAssets(nextVmdAssets);
+        if (options.syncFeedback) {
+          const nextSelectedModel = pickSelectedModel(nextModels, nextSharedConfig.selected_model_path);
+          setStageReloadRevision((revision) => revision + 1);
+          setMenuStatus(
+            describeMainSiteSyncResult(
+              nextSelectedModel ? getModelLabel(nextSelectedModel) : null,
+              nextSharedConfig.render_pipeline || "classic",
+            ),
+          );
+          window.setTimeout(() => setMenuStatus(null), 3600);
+        }
       })
       .catch((error: Error) => {
         if (cancelled) return;
         setLoadError(error.message);
+        if (options.syncFeedback) {
+          setMenuStatus(`Sync failed: ${error.message}`);
+          window.setTimeout(() => setMenuStatus(null), 4200);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -113,7 +129,8 @@ export function App() {
         setNotificationProfile(action.profile);
       }
       if (action.type === "sync-main-site") {
-        loadPetState();
+        loadPetState({ syncFeedback: true });
+        return;
       }
       window.setTimeout(() => setMenuStatus(null), 2800);
     });
@@ -126,6 +143,7 @@ export function App() {
       <div className="pet-stage" data-render-pipeline={renderPipeline}>
         {selectedModel ? (
           <MMDStage
+            key={buildPetStageKey(selectedModel.relative_path, renderPipeline, stageReloadRevision)}
             chrome="bare"
             interaction={interaction}
             speaking={false}

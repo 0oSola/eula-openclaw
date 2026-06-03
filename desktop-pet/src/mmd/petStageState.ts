@@ -1,4 +1,4 @@
-import type { MmdModelAsset, VmdAsset } from "@/lib/types";
+import type { MmdModelAsset, RenderPipeline, VmdAsset } from "@/lib/types";
 
 const MIN_FALLBACK_MODEL_BYTES = 1024;
 
@@ -17,4 +17,8 @@ export function selectFavoriteVmdUrls(assets: VmdAsset[], selectedModelPath: str
   return assets
     .filter((asset) => asset.is_favorite && asset.favorite_model_relative_path === selectedModelPath)
     .map((asset) => `/assets/vmd/file/${asset.asset_id}`);
+}
+
+export function buildPetStageKey(selectedModelPath: string, renderPipeline: RenderPipeline, reloadRevision: number): string {
+  return `${selectedModelPath}::${renderPipeline}::${reloadRevision}`;
 }
