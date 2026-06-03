@@ -13,6 +13,7 @@ const DEFAULT_SHARED_CONFIG: CompanionSharedConfig = {
   render_pipeline: "classic",
   updated_at: null,
 };
+type PetInteractionMode = "window-drag" | "camera-adjust";
 
 function getModelLabel(model: MmdModelAsset): string {
   if (model.label?.trim()) return model.label.trim();
@@ -28,12 +29,21 @@ export function App() {
   const [vmdAssets, setVmdAssets] = useState<VmdAsset[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [interactionMode, setInteractionMode] = useState<PetInteractionMode>("window-drag");
 
   useEffect(() => {
     window.desktopPet
       ?.runtimeInfo()
       .then((info) => setApiBaseUrl(info.apiBaseUrl))
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    window.desktopPet?.interactionMode
+      ?.get()
+      .then((mode) => setInteractionMode(mode))
+      .catch(() => {});
+    return window.desktopPet?.interactionMode?.onChanged((mode) => setInteractionMode(mode));
   }, []);
 
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl, userId: DEFAULT_USER_ID }), [apiBaseUrl]);
@@ -77,7 +87,7 @@ export function App() {
   const renderPipeline: RenderPipeline = sharedConfig.render_pipeline || "classic";
 
   return (
-    <main className="pet-shell">
+    <main className="pet-shell" data-interaction-mode={interactionMode}>
       <div className="pet-stage" data-render-pipeline={renderPipeline}>
         {selectedModel ? (
           <MMDStage

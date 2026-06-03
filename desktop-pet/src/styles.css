@@ -21,6 +21,18 @@ body {
   background: transparent;
 }
 
+.pet-shell[data-interaction-mode="window-drag"] {
+  -webkit-app-region: drag;
+}
+
+.pet-shell[data-interaction-mode="camera-adjust"],
+.pet-shell[data-interaction-mode="camera-adjust"] .pet-stage,
+.pet-shell[data-interaction-mode="camera-adjust"] .mio-stage,
+.pet-shell[data-interaction-mode="camera-adjust"] .mio-stage-canvas,
+.pet-shell[data-interaction-mode="camera-adjust"] canvas {
+  -webkit-app-region: no-drag;
+}
+
 .pet-stage {
   position: fixed;
   inset: 0;
@@ -82,6 +94,7 @@ body {
   font-size: 13px;
   line-height: 1;
   white-space: nowrap;
+  -webkit-app-region: no-drag;
 }
 
 .pet-status-dot {

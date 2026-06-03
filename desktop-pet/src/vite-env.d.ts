@@ -4,6 +4,11 @@ declare global {
   interface Window {
     desktopPet: {
       runtimeInfo: () => Promise<{ apiBaseUrl: string }>;
+      interactionMode: {
+        get: () => Promise<"window-drag" | "camera-adjust">;
+        set: (mode: "window-drag" | "camera-adjust") => Promise<"window-drag" | "camera-adjust">;
+        onChanged: (callback: (mode: "window-drag" | "camera-adjust") => void) => () => void;
+      };
     };
   }
 }
