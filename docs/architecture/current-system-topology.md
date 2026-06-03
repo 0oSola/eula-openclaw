@@ -459,7 +459,7 @@ Pointer up on MMDStage
 | 本地 PMX/PMD/贴图 | `MMD_ROOT_DIR` |
 | 上传/存储的 VMD | `API_DATA_DIR` 下的 storage；收藏副本在 `MMD_ROOT_DIR/usage/vmd/{model}[动作]/`，可按动作意图继续分子目录 |
 
-`companion_shared_config` 只保存 `/companion` 和 `desktop-pet` 共同需要的当前模型与渲染管线选择；不保存 pet camera、pet window position、notification profile 等 desktop-pet 专属状态。`desktop_pet_sessions` 只保存可读菜单与 `codex resume` 所需 metadata，不复制、不移动、不落库 Codex transcripts；`first_prompt_preview` 最多 240 chars，`last_summary` 最多 1000 chars，Codex session 持久化仍留在用户既有 `CODEX_HOME`。当前 `desktop-pet` scaffold 是独立 Electron + Vite 子项目，dev 默认 renderer 为 `http://127.0.0.1:5174`；端口冲突时可用 `MMD_PET_DEV_PORT` 覆盖 Vite 端口，并用 `MMD_PET_RENDERER_URL` 指向 Electron dev renderer。完整 desktop-pet 拓扑留到 Task 22 补充。
+`companion_shared_config` 只保存 `/companion` 和 `desktop-pet` 共同需要的当前模型与渲染管线选择；不保存 pet camera、pet window position、notification profile 等 desktop-pet 专属状态。`desktop_pet_sessions` 只保存可读菜单与 `codex resume` 所需 metadata，不复制、不移动、不落库 Codex transcripts；`first_prompt_preview` 最多 240 chars，`last_summary` 最多 1000 chars，Codex session 持久化仍留在用户既有 `CODEX_HOME`。当前 `desktop-pet` 是独立 Electron + Vite 子项目，dev 默认 renderer 为 `http://127.0.0.1:5174`；端口冲突时可用 `MMD_PET_DEV_PORT` 覆盖 Vite 端口，并用 `MMD_PET_RENDERER_URL` 指向 Electron dev renderer。renderer 会读取 `/desktop-pet/shared-config`、`/assets/mmd/models` 和 `/assets/vmd`，复用 `web/src/features/stage/MMDStage` 在 transparent bare window 中渲染 MMD；当 shared config 为空时会跳过明显不可加载的 tiny placeholder PMX，选择第一个可加载模型作为 fallback。完整 desktop-pet 拓扑留到 Task 22 补充。
 
 共享配置 API 合约：
 
