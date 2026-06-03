@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu, app, ipcMain } from "electron";
+import { BrowserWindow, Menu, app, ipcMain, screen } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,12 +8,14 @@ import {
   type PetInteractionMode,
   normalizeInteractionMode,
 } from "./interactionMode.js";
+import { getDraggedWindowPosition, type WindowDragState } from "./windowDrag.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
 const devRendererUrl =
   process.env.MMD_PET_RENDERER_URL ?? `http://127.0.0.1:${process.env.MMD_PET_DEV_PORT ?? "5174"}`;
 let currentInteractionMode: PetInteractionMode = DEFAULT_INTERACTION_MODE;
+let activeWindowDrag: (WindowDragState & { windowId: number }) | null = null;
 
 function publishInteractionMode(window: BrowserWindow, mode: PetInteractionMode) {
   currentInteractionMode = mode;
@@ -77,6 +79,35 @@ ipcMain.handle("pet:interaction-mode:set", (event, nextMode: unknown) => {
     currentInteractionMode = mode;
   }
   return currentInteractionMode;
+});
+
+ipcMain.handle("pet:window-drag:start", (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window || currentInteractionMode !== "window-drag") return false;
+  const cursor = screen.getCursorScreenPoint();
+  const bounds = window.getBounds();
+  activeWindowDrag = {
+    windowId: window.id,
+    startCursor: { x: cursor.x, y: cursor.y },
+    startWindow: { x: bounds.x, y: bounds.y },
+  };
+  return true;
+});
+
+ipcMain.handle("pet:window-drag:move", (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window || !activeWindowDrag || activeWindowDrag.windowId !== window.id) return null;
+  const cursor = screen.getCursorScreenPoint();
+  const nextPosition = getDraggedWindowPosition(activeWindowDrag, { x: cursor.x, y: cursor.y });
+  window.setPosition(nextPosition.x, nextPosition.y, false);
+  return nextPosition;
+});
+
+ipcMain.handle("pet:window-drag:end", (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window || !activeWindowDrag || activeWindowDrag.windowId !== window.id) return false;
+  activeWindowDrag = null;
+  return true;
 });
 
 app.whenReady().then(createPetWindow);

@@ -11,4 +11,9 @@ contextBridge.exposeInMainWorld("desktopPet", {
       return () => ipcRenderer.removeListener("pet:interaction-mode:changed", listener);
     },
   },
+  windowDrag: {
+    start: () => ipcRenderer.invoke("pet:window-drag:start"),
+    move: () => ipcRenderer.invoke("pet:window-drag:move"),
+    end: () => ipcRenderer.invoke("pet:window-drag:end"),
+  },
 });

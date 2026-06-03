@@ -9,6 +9,11 @@ declare global {
         set: (mode: "window-drag" | "camera-adjust") => Promise<"window-drag" | "camera-adjust">;
         onChanged: (callback: (mode: "window-drag" | "camera-adjust") => void) => () => void;
       };
+      windowDrag: {
+        start: () => Promise<boolean>;
+        move: () => Promise<{ x: number; y: number } | null>;
+        end: () => Promise<boolean>;
+      };
     };
   }
 }
