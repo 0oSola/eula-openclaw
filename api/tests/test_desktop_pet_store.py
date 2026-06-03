@@ -129,3 +129,70 @@ def test_shared_companion_config_rejects_blank_render_pipeline_values():
             assert "render_pipeline" in str(error)
         else:
             raise AssertionError(f"expected {render_pipeline!r} render pipeline to fail")
+
+
+def test_desktop_pet_session_registry_round_trip_and_sorting():
+    store = _store()
+
+    first = store.upsert_desktop_pet_session(
+        pet_session_id="pet-1",
+        codex_session_id="11111111-1111-1111-1111-111111111111",
+        workspace_id="mmd-companion",
+        workspace_path="D:/workspace/MMD project",
+        codex_home="C:/Users/KSG/.codex",
+        display_title=None,
+        first_prompt_preview="fix login layout and run checks",
+        last_summary=None,
+        last_status="running",
+        launch_mode="workspace-write",
+        remote_url="ws://127.0.0.1:4501",
+        app_server_pid=1234,
+        app_server_port=4501,
+        metadata={"approval_count": 0},
+    )
+    second = store.upsert_desktop_pet_session(
+        pet_session_id="pet-2",
+        codex_session_id="22222222-2222-2222-2222-222222222222",
+        workspace_id="mmd-companion",
+        workspace_path="D:/workspace/MMD project",
+        codex_home="C:/Users/KSG/.codex",
+        display_title="Codex Console integration",
+        first_prompt_preview=None,
+        last_summary="Added status bridge.",
+        last_status="completed",
+        launch_mode="read-only",
+        remote_url=None,
+        app_server_pid=None,
+        app_server_port=None,
+        metadata={},
+    )
+
+    assert first["display_title"] == "fix login layout and run checks"
+    assert second["display_title"] == "Codex Console integration"
+    sessions = store.list_desktop_pet_sessions(limit=10)
+    assert [item["pet_session_id"] for item in sessions] == ["pet-2", "pet-1"]
+    assert sessions[0]["metadata"] == {}
+
+
+def test_desktop_pet_session_registry_delete_only_removes_registry_row():
+    store = _store()
+    store.upsert_desktop_pet_session(
+        pet_session_id="pet-1",
+        codex_session_id="11111111-1111-1111-1111-111111111111",
+        workspace_id="mmd-companion",
+        workspace_path="D:/workspace/MMD project",
+        codex_home=None,
+        display_title="Readable title",
+        first_prompt_preview=None,
+        last_summary=None,
+        last_status="failed",
+        launch_mode="workspace-write",
+        remote_url=None,
+        app_server_pid=None,
+        app_server_port=None,
+        metadata={},
+    )
+
+    assert store.delete_desktop_pet_session("pet-1") is True
+    assert store.get_desktop_pet_session("pet-1") is None
+    assert store.delete_desktop_pet_session("pet-1") is False

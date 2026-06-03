@@ -128,6 +128,29 @@ class TraceStore:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS desktop_pet_sessions (
+                pet_session_id TEXT PRIMARY KEY,
+                codex_session_id TEXT NOT NULL,
+                workspace_id TEXT,
+                workspace_path TEXT NOT NULL,
+                codex_home TEXT,
+                display_title TEXT NOT NULL,
+                first_prompt_preview TEXT,
+                last_summary TEXT,
+                last_status TEXT NOT NULL,
+                launch_mode TEXT NOT NULL,
+                remote_url TEXT,
+                app_server_pid INTEGER,
+                app_server_port INTEGER,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_desktop_pet_sessions_last_seen
+            ON desktop_pet_sessions(last_seen_at DESC);
+
             CREATE TABLE IF NOT EXISTS asset_registry (
                 asset_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -2624,6 +2647,128 @@ class TraceStore:
         )
         self._conn.commit()
         return self.get_companion_shared_config(user_id)
+
+    @staticmethod
+    def _desktop_pet_display_title(
+        *,
+        display_title: str | None,
+        first_prompt_preview: str | None,
+        workspace_path: str,
+        codex_session_id: str,
+    ) -> str:
+        for candidate in (display_title, first_prompt_preview):
+            normalized = _normalize_message_content(candidate)
+            if normalized:
+                return normalized[:48]
+        workspace_name = Path(workspace_path).name or "Codex session"
+        short_id = codex_session_id.replace("-", "")[:8]
+        return f"{workspace_name} {short_id}".strip()
+
+    def _desktop_pet_session_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["metadata"] = self._json_loads(item.pop("metadata_json", None), {})
+        return item
+
+    def upsert_desktop_pet_session(
+        self,
+        *,
+        pet_session_id: str,
+        codex_session_id: str,
+        workspace_id: str | None,
+        workspace_path: str,
+        codex_home: str | None,
+        display_title: str | None,
+        first_prompt_preview: str | None,
+        last_summary: str | None,
+        last_status: str,
+        launch_mode: str,
+        remote_url: str | None,
+        app_server_pid: int | None,
+        app_server_port: int | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        title = self._desktop_pet_display_title(
+            display_title=display_title,
+            first_prompt_preview=first_prompt_preview,
+            workspace_path=workspace_path,
+            codex_session_id=codex_session_id,
+        )
+        self._conn.execute(
+            """
+            INSERT INTO desktop_pet_sessions (
+                pet_session_id, codex_session_id, workspace_id, workspace_path,
+                codex_home, display_title, first_prompt_preview, last_summary,
+                last_status, launch_mode, remote_url, app_server_pid,
+                app_server_port, metadata_json, created_at, updated_at, last_seen_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(pet_session_id) DO UPDATE SET
+                codex_session_id = excluded.codex_session_id,
+                workspace_id = excluded.workspace_id,
+                workspace_path = excluded.workspace_path,
+                codex_home = excluded.codex_home,
+                display_title = excluded.display_title,
+                first_prompt_preview = excluded.first_prompt_preview,
+                last_summary = excluded.last_summary,
+                last_status = excluded.last_status,
+                launch_mode = excluded.launch_mode,
+                remote_url = excluded.remote_url,
+                app_server_pid = excluded.app_server_pid,
+                app_server_port = excluded.app_server_port,
+                metadata_json = excluded.metadata_json,
+                updated_at = excluded.updated_at,
+                last_seen_at = excluded.last_seen_at
+            """,
+            (
+                pet_session_id,
+                codex_session_id,
+                workspace_id,
+                workspace_path,
+                codex_home,
+                title,
+                first_prompt_preview,
+                last_summary,
+                last_status,
+                launch_mode,
+                remote_url,
+                app_server_pid,
+                app_server_port,
+                json.dumps(metadata or {}, ensure_ascii=False),
+                now,
+                now,
+                now,
+            ),
+        )
+        self._conn.commit()
+        return self.get_desktop_pet_session(pet_session_id) or {}
+
+    def get_desktop_pet_session(self, pet_session_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM desktop_pet_sessions WHERE pet_session_id = ?",
+            (pet_session_id,),
+        ).fetchone()
+        return self._desktop_pet_session_row(row)
+
+    def list_desktop_pet_sessions(self, limit: int = 10) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM desktop_pet_sessions
+            ORDER BY last_seen_at DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 50)),),
+        ).fetchall()
+        return [self._desktop_pet_session_row(row) for row in rows if row is not None]
+
+    def delete_desktop_pet_session(self, pet_session_id: str) -> bool:
+        cursor = self._conn.execute(
+            "DELETE FROM desktop_pet_sessions WHERE pet_session_id = ?",
+            (pet_session_id,),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
 
     def add_asset(
         self,
