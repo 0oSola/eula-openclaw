@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { MMDStage } from "@/features/stage/MMDStage";
 import type { CompanionSharedConfig, MmdModelAsset, RenderPipeline, VmdAsset } from "@/lib/types";
 
 import { createApiClient } from "./lib/apiClient";
+import { describeMenuActionResult } from "./menu/menuActionStatus";
 import { pickSelectedModel, selectFavoriteVmdUrls } from "./mmd/petStageState";
 
 const DEFAULT_USER_ID = "admin-1";
@@ -14,6 +15,14 @@ const DEFAULT_SHARED_CONFIG: CompanionSharedConfig = {
   updated_at: null,
 };
 type PetInteractionMode = "window-drag" | "camera-adjust";
+type NotificationProfile = "low" | "medium" | "high";
+type DesktopPetMenuAction =
+  | { type: "new-session" }
+  | { type: "restore-session"; petSessionId: string }
+  | { type: "more-sessions" }
+  | { type: "notification-detail"; profile: NotificationProfile }
+  | { type: "focus-vscode" }
+  | { type: "retry-api" };
 
 function getModelLabel(model: MmdModelAsset): string {
   if (model.label?.trim()) return model.label.trim();
@@ -30,6 +39,8 @@ export function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [interactionMode, setInteractionMode] = useState<PetInteractionMode>("window-drag");
+  const [notificationProfile, setNotificationProfile] = useState<NotificationProfile>("medium");
+  const [menuStatus, setMenuStatus] = useState<string | null>(null);
 
   useEffect(() => {
     window.desktopPet
@@ -44,6 +55,13 @@ export function App() {
       .then((mode) => setInteractionMode(mode))
       .catch(() => {});
     return window.desktopPet?.interactionMode?.onChanged((mode) => setInteractionMode(mode));
+  }, []);
+
+  useEffect(() => {
+    window.desktopPet?.notificationProfile
+      ?.get()
+      .then((profile) => setNotificationProfile(profile))
+      .catch(() => {});
   }, []);
 
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl, userId: DEFAULT_USER_ID }), [apiBaseUrl]);
@@ -61,7 +79,7 @@ export function App() {
     [api, favoriteVmdUrls],
   );
 
-  useEffect(() => {
+  const loadPetState = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
@@ -84,6 +102,21 @@ export function App() {
     };
   }, [api]);
 
+  useEffect(() => loadPetState(), [loadPetState]);
+
+  useEffect(() => {
+    return window.desktopPet?.menu?.onAction((action: DesktopPetMenuAction) => {
+      setMenuStatus(describeMenuActionResult(action));
+      if (action.type === "notification-detail") {
+        setNotificationProfile(action.profile);
+      }
+      if (action.type === "retry-api") {
+        loadPetState();
+      }
+      window.setTimeout(() => setMenuStatus(null), 2800);
+    });
+  }, [loadPetState]);
+
   const renderPipeline: RenderPipeline = sharedConfig.render_pipeline || "classic";
 
   return (
@@ -104,10 +137,13 @@ export function App() {
           />
         ) : null}
       </div>
-      {loading || loadError || !selectedModel ? (
+      {menuStatus || loading || loadError || !selectedModel ? (
         <div className="pet-status" role="status">
           <span className="pet-status-dot" />
-          <span>{loadError ? "API unavailable" : loading ? "Loading MMD" : "No MMD model"}</span>
+          <span>
+            {menuStatus ||
+              (loadError ? "API unavailable" : loading ? "Loading MMD" : `No MMD model · ${notificationProfile}`)}
+          </span>
         </div>
       ) : null}
     </main>

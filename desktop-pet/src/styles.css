@@ -103,6 +103,9 @@ body {
   line-height: 1;
   white-space: nowrap;
   -webkit-app-region: no-drag;
+  max-width: calc(100vw - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pet-status-dot {
