@@ -467,6 +467,13 @@ Pointer up on MMDStage
 - `PUT /desktop-pet/shared-config`：按 `x-user-id` requester identity 写入共享配置；body 字段为 `selected_model_path: string | null`（max 1000）与 `render_pipeline: "classic" | "hero-shot" | "genshin" | "mio-reference" | "reze-npr"`（default `classic`）。
 - 无效 `render_pipeline` 会被拒绝并返回 `422`。
 
+desktop-pet session registry API 合约：
+
+- `GET /desktop-pet/sessions?limit=N`：返回最近 desktop-pet Codex session registry rows；`limit` 会限制在 `1..50`。
+- `POST /desktop-pet/sessions`：upsert 一条 registry metadata row，保存 pet/Codex session id、workspace path、`CODEX_HOME`、display title、status/server metadata、bounded prompt preview/summary；`metadata` 保持 JSON object，但 serialized JSON 超过 4000 chars 会返回 `422`。
+- `DELETE /desktop-pet/sessions/{pet_session_id}`：删除指定 pet registry row，只影响 `desktop_pet_sessions` registry metadata。
+- 这些接口不读取、不复制、不移动、不落库 Codex transcripts；`codex resume` 仍使用用户既有 `CODEX_HOME` 中的 Codex session 持久化。
+
 ## 9. 给其他服务做优化时的交接包
 
 ### 9.1 给 OpenClaw 服务

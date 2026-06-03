@@ -133,3 +133,80 @@ def test_shared_config_rejects_invalid_pipeline():
     )
 
     assert response.status_code == 422
+
+
+def test_desktop_pet_sessions_crud():
+    client = _client()
+
+    created = client.post(
+        "/desktop-pet/sessions",
+        json={
+            "pet_session_id": "pet-1",
+            "codex_session_id": "11111111-1111-1111-1111-111111111111",
+            "workspace_id": "mmd-companion",
+            "workspace_path": "D:/workspace/MMD project",
+            "codex_home": "C:/Users/KSG/.codex",
+            "display_title": None,
+            "first_prompt_preview": "fix login layout and run checks",
+            "last_summary": None,
+            "last_status": "waiting_approval",
+            "launch_mode": "workspace-write",
+            "remote_url": "ws://127.0.0.1:4501",
+            "app_server_pid": 1234,
+            "app_server_port": 4501,
+            "metadata": {"approval_count": 1},
+        },
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert created.status_code == 200
+    assert created.json()["display_title"] == "fix login layout and run checks"
+
+    listed = client.get("/desktop-pet/sessions?limit=5", headers={"x-user-id": "admin-1"})
+    assert listed.status_code == 200
+    assert listed.json()["sessions"][0]["pet_session_id"] == "pet-1"
+    assert listed.json()["sessions"][0]["metadata"]["approval_count"] == 1
+
+    deleted = client.delete("/desktop-pet/sessions/pet-1", headers={"x-user-id": "admin-1"})
+    assert deleted.status_code == 200
+    assert deleted.json() == {"deleted": True}
+
+
+def test_desktop_pet_sessions_limit_is_bounded():
+    client = _client()
+
+    response = client.get("/desktop-pet/sessions?limit=500", headers={"x-user-id": "admin-1"})
+
+    assert response.status_code == 200
+    assert response.json()["limit"] == 50
+
+
+def test_desktop_pet_sessions_rejects_oversized_metadata_without_storing():
+    client = _client()
+
+    response = client.post(
+        "/desktop-pet/sessions",
+        json={
+            "pet_session_id": "pet-oversized",
+            "codex_session_id": "11111111-1111-1111-1111-111111111111",
+            "workspace_id": "mmd-companion",
+            "workspace_path": "D:/workspace/MMD project",
+            "codex_home": "C:/Users/KSG/.codex",
+            "display_title": None,
+            "first_prompt_preview": "fix login layout and run checks",
+            "last_summary": None,
+            "last_status": "waiting_approval",
+            "launch_mode": "workspace-write",
+            "remote_url": "ws://127.0.0.1:4501",
+            "app_server_pid": 1234,
+            "app_server_port": 4501,
+            "metadata": {"blob": "x" * 4100},
+        },
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert response.status_code == 422
+
+    listed = client.get("/desktop-pet/sessions?limit=5", headers={"x-user-id": "admin-1"})
+    assert listed.status_code == 200
+    assert listed.json()["sessions"] == []
