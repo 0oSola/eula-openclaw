@@ -47,6 +47,9 @@ def _normalize_message_visibility(value: str | None) -> str:
 _BRIDGE_ECHO_SUPPRESSION_WINDOW_SECONDS = 5 * 60
 _BRIDGE_DUPLICATE_SUPPRESSION_WINDOW_SECONDS = 30
 _BRIDGE_DUPLICATE_SYNC_SOURCES = {"realtime", "realtime_backfill"}
+COMPANION_RENDER_PIPELINES = ("classic", "hero-shot", "genshin", "mio-reference", "reze-npr")
+_COMPANION_RENDER_PIPELINE_SET = set(COMPANION_RENDER_PIPELINES)
+_COMPANION_RENDER_PIPELINE_SQL_VALUES = ", ".join(f"'{pipeline}'" for pipeline in COMPANION_RENDER_PIPELINES)
 
 
 class TraceStore:
@@ -121,7 +124,7 @@ class TraceStore:
                 user_id TEXT PRIMARY KEY,
                 selected_model_path TEXT,
                 render_pipeline TEXT NOT NULL DEFAULT 'classic'
-                    CHECK (render_pipeline IN ('classic', 'genshin')),
+                    CHECK (render_pipeline IN ('classic', 'hero-shot', 'genshin', 'mio-reference', 'reze-npr')),
                 updated_at TEXT NOT NULL
             );
 
@@ -377,6 +380,7 @@ class TraceStore:
             );
             """
         )
+        self._migrate_companion_shared_config_render_pipeline_check()
         existing_columns = {
             row["name"] for row in self._conn.execute("PRAGMA table_info(asset_registry)").fetchall()
         }
@@ -427,6 +431,47 @@ class TraceStore:
             """
         )
         self._conn.commit()
+
+    def _migrate_companion_shared_config_render_pipeline_check(self) -> None:
+        row = self._conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'companion_shared_config'
+            """
+        ).fetchone()
+        schema_sql = str(row["sql"] or "") if row else ""
+        if schema_sql and all(f"'{pipeline}'" in schema_sql for pipeline in COMPANION_RENDER_PIPELINES):
+            return
+
+        self._conn.execute("DROP TABLE IF EXISTS companion_shared_config_next")
+        self._conn.execute(
+            f"""
+            CREATE TABLE companion_shared_config_next (
+                user_id TEXT PRIMARY KEY,
+                selected_model_path TEXT,
+                render_pipeline TEXT NOT NULL DEFAULT 'classic'
+                    CHECK (render_pipeline IN ({_COMPANION_RENDER_PIPELINE_SQL_VALUES})),
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        self._conn.execute(
+            f"""
+            INSERT INTO companion_shared_config_next (
+                user_id, selected_model_path, render_pipeline, updated_at
+            )
+            SELECT
+                user_id,
+                selected_model_path,
+                lower(trim(render_pipeline)),
+                updated_at
+            FROM companion_shared_config
+            WHERE lower(trim(render_pipeline)) IN ({_COMPANION_RENDER_PIPELINE_SQL_VALUES})
+            """
+        )
+        self._conn.execute("DROP TABLE companion_shared_config")
+        self._conn.execute("ALTER TABLE companion_shared_config_next RENAME TO companion_shared_config")
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -2560,10 +2605,10 @@ class TraceStore:
         render_pipeline: str,
     ) -> dict[str, Any]:
         if not isinstance(render_pipeline, str):
-            raise ValueError("render_pipeline must be classic or genshin")
+            raise ValueError(f"render_pipeline must be one of {', '.join(COMPANION_RENDER_PIPELINES)}")
         normalized_pipeline = render_pipeline.strip().lower()
-        if normalized_pipeline not in {"classic", "genshin"}:
-            raise ValueError("render_pipeline must be classic or genshin")
+        if not normalized_pipeline or normalized_pipeline not in _COMPANION_RENDER_PIPELINE_SET:
+            raise ValueError(f"render_pipeline must be one of {', '.join(COMPANION_RENDER_PIPELINES)}")
         now = _utc_now_iso()
         self._conn.execute(
             """

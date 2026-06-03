@@ -505,13 +505,17 @@ export default function CompanionPage() {
   }, [interaction]);
 
   useEffect(() => {
-    if (!session?.userId) return;
+    if (!session?.userId || !selectedModelPath) return;
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => {
-      putCompanionSharedConfig(session.userId, {
-        selected_model_path: selectedModelPath || null,
-        render_pipeline: renderPipeline,
-      }).catch(() => {
+      putCompanionSharedConfig(
+        session.userId,
+        {
+          selected_model_path: selectedModelPath,
+          render_pipeline: renderPipeline,
+        },
+        { signal: controller.signal },
+      ).catch(() => {
         // Shared config is best-effort. Local companion state must not break.
       });
     }, 250);

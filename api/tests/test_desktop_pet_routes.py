@@ -48,6 +48,21 @@ def test_shared_config_round_trip():
     assert updated.json()["updated_at"]
 
 
+def test_shared_config_accepts_full_render_pipeline_contract():
+    client = _client()
+
+    for render_pipeline in ["mio-reference", "reze-npr"]:
+        response = client.put(
+            "/desktop-pet/shared-config",
+            json={"selected_model_path": "Eula/Eula.pmx", "render_pipeline": render_pipeline},
+            headers={"x-user-id": "admin-1"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["render_pipeline"] == render_pipeline
+        assert response.json()["selected_model_path"] == "Eula/Eula.pmx"
+
+
 def test_shared_config_uses_requester_not_payload_user():
     client = _client()
 

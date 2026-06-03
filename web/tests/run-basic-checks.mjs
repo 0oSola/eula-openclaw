@@ -205,6 +205,8 @@ function run() {
     assert.match(apiSource, /export async function getCompanionSharedConfig/);
     assert.match(apiSource, /export async function putCompanionSharedConfig/);
     assert.match(companionPageSource, /putCompanionSharedConfig/);
+    assert.match(companionPageSource, /if \(!session\?\.userId \|\| !selectedModelPath\) return;/);
+    assert.match(companionPageSource, /signal:\s*controller\.signal/);
     assert.match(waveformSource, /<canvas/);
     assert.match(waveformSource, /decodeAudioData/);
     assert.match(waveformSource, /requestAnimationFrame/);

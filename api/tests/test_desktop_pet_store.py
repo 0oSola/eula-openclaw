@@ -1,11 +1,18 @@
 from pathlib import Path
+import sqlite3
 from uuid import uuid4
 
 from app.db.store import TraceStore
 
 
-def _store() -> TraceStore:
+def _case_dir() -> Path:
     path = Path(__file__).resolve().parent / "tests_runtime" / uuid4().hex
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _store() -> TraceStore:
+    path = _case_dir()
     return TraceStore(db_path=path / "sqlite" / "trace.db", ndjson_dir=path / "logs")
 
 
@@ -49,14 +56,63 @@ def test_shared_companion_config_rejects_unknown_render_pipeline():
 def test_shared_companion_config_normalizes_render_pipeline():
     store = _store()
 
+    mio = store.upsert_companion_shared_config(
+        user_id="admin-1",
+        selected_model_path="Eula/Eula.pmx",
+        render_pipeline=" mio-reference ",
+    )
+
+    assert mio["render_pipeline"] == "mio-reference"
+    assert store.get_companion_shared_config("admin-1")["render_pipeline"] == "mio-reference"
+
+    reze = store.upsert_companion_shared_config(
+        user_id="admin-1",
+        selected_model_path="Eula/Eula.pmx",
+        render_pipeline=" REZE-NPR ",
+    )
+
+    assert reze["render_pipeline"] == "reze-npr"
+    assert store.get_companion_shared_config("admin-1")["render_pipeline"] == "reze-npr"
+
+
+def test_shared_companion_config_migrates_old_render_pipeline_check_constraint():
+    path = _case_dir()
+    db_path = path / "sqlite" / "trace.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE companion_shared_config (
+                user_id TEXT PRIMARY KEY,
+                selected_model_path TEXT,
+                render_pipeline TEXT NOT NULL DEFAULT 'classic'
+                    CHECK (render_pipeline IN ('classic', 'genshin')),
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO companion_shared_config (
+                user_id, selected_model_path, render_pipeline, updated_at
+            ) VALUES ('admin-1', 'Eula/Eula.pmx', 'genshin', '2026-01-01T00:00:00+00:00')
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    store = TraceStore(db_path=db_path, ndjson_dir=path / "logs")
+
     updated = store.upsert_companion_shared_config(
         user_id="admin-1",
         selected_model_path="Eula/Eula.pmx",
-        render_pipeline=" Genshin ",
+        render_pipeline="mio-reference",
     )
 
-    assert updated["render_pipeline"] == "genshin"
-    assert store.get_companion_shared_config("admin-1")["render_pipeline"] == "genshin"
+    assert updated["render_pipeline"] == "mio-reference"
+    assert store.get_companion_shared_config("admin-1")["render_pipeline"] == "mio-reference"
 
 
 def test_shared_companion_config_rejects_blank_render_pipeline_values():

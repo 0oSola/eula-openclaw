@@ -286,11 +286,13 @@ export async function getCompanionSharedConfig(userId: string): Promise<Companio
 export async function putCompanionSharedConfig(
   userId: string,
   payload: { selected_model_path: string | null; render_pipeline: RenderPipeline },
+  init: { signal?: AbortSignal } = {},
 ): Promise<CompanionSharedConfig> {
   return requestJSON<CompanionSharedConfig>("/desktop-pet/shared-config", {
     method: "PUT",
     headers: buildTraceHeaders("", userId),
     body: JSON.stringify(payload),
+    signal: init.signal,
   });
 }
 

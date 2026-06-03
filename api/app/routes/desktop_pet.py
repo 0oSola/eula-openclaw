@@ -13,7 +13,7 @@ router = APIRouter(prefix="/desktop-pet", tags=["desktop-pet"])
 
 class CompanionSharedConfigPayload(BaseModel):
     selected_model_path: str | None = Field(default=None, max_length=1000)
-    render_pipeline: Literal["classic", "genshin"] = "classic"
+    render_pipeline: Literal["classic", "hero-shot", "genshin", "mio-reference", "reze-npr"] = "classic"
 
 
 @router.get("/shared-config")
