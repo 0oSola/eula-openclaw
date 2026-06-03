@@ -1,8 +1,10 @@
 import type { PetInteractionMode } from "./interactionMode.js";
 
 export const NOTIFICATION_PROFILES = ["low", "medium", "high"] as const;
+export const MENU_LANGUAGES = ["en", "zh-CN"] as const;
 
 export type NotificationProfile = (typeof NOTIFICATION_PROFILES)[number];
+export type MenuLanguage = (typeof MENU_LANGUAGES)[number];
 
 export type PetMenuSession = {
   pet_session_id?: string;
@@ -21,6 +23,7 @@ export type PetMenuAction =
   | { type: "more-sessions" }
   | { type: "interaction-mode"; mode: PetInteractionMode }
   | { type: "notification-detail"; profile: NotificationProfile }
+  | { type: "menu-language"; language: MenuLanguage }
   | { type: "focus-vscode" }
   | { type: "retry-api" }
   | { type: "close" };
@@ -35,22 +38,98 @@ export type PetMenuItemModel = {
   submenu?: PetMenuItemModel[];
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  no_session: "no session",
-  starting: "starting",
-  running: "running",
-  command_running: "running command",
-  file_changed: "changed files",
-  waiting_approval: "waiting approval",
-  completed: "completed",
-  failed: "failed",
-  disconnected: "disconnected",
+const STATUS_LABELS: Record<MenuLanguage, Record<string, string>> = {
+  en: {
+    no_session: "no session",
+    starting: "starting",
+    running: "running",
+    command_running: "running command",
+    file_changed: "changed files",
+    waiting_approval: "waiting approval",
+    completed: "completed",
+    failed: "failed",
+    disconnected: "disconnected",
+  },
+  "zh-CN": {
+    no_session: "无会话",
+    starting: "启动中",
+    running: "运行中",
+    command_running: "命令运行中",
+    file_changed: "文件已变更",
+    waiting_approval: "等待审批",
+    completed: "已完成",
+    failed: "已失败",
+    disconnected: "已断开",
+  },
 };
 
-const PROFILE_LABELS: Record<NotificationProfile, string> = {
-  low: "Low",
-  medium: "Medium",
-  high: "High",
+const PROFILE_LABELS: Record<MenuLanguage, Record<NotificationProfile, string>> = {
+  en: {
+    low: "Low",
+    medium: "Medium",
+    high: "High",
+  },
+  "zh-CN": {
+    low: "低",
+    medium: "中",
+    high: "高",
+  },
+};
+
+const MENU_LABELS: Record<
+  MenuLanguage,
+  {
+    newSession: string;
+    recentSessions: string;
+    noRecentSessions: string;
+    moreSessions: string;
+    interactionMode: string;
+    dragWholeApp: string;
+    adjustCamera: string;
+    notificationDetail: string;
+    menuLanguage: string;
+    focusVscode: string;
+    retryApi: string;
+    retryApiConnection: string;
+    close: string;
+    continuePrefix: string;
+    unknownStatus: string;
+  }
+> = {
+  en: {
+    newSession: "New Codex Session",
+    recentSessions: "Recent Sessions",
+    noRecentSessions: "No recent sessions",
+    moreSessions: "More Sessions...",
+    interactionMode: "Interaction Mode",
+    dragWholeApp: "Drag Whole App",
+    adjustCamera: "Adjust Camera",
+    notificationDetail: "Notification Detail",
+    menuLanguage: "Language / 语言",
+    focusVscode: "Focus VSCode Terminal",
+    retryApi: "Retry API",
+    retryApiConnection: "Retry API Connection",
+    close: "Close",
+    continuePrefix: "Continue",
+    unknownStatus: "unknown",
+  },
+  "zh-CN": {
+    newSession: "新建 Codex 会话",
+    recentSessions: "最近会话",
+    noRecentSessions: "暂无最近会话",
+    moreSessions: "更多会话...",
+    interactionMode: "交互模式",
+    dragWholeApp: "拖动整个窗口",
+    adjustCamera: "调整相机",
+    notificationDetail: "提醒精度",
+    menuLanguage: "Language / 语言",
+    focusVscode: "聚焦 VSCode 终端",
+    retryApi: "重试 API",
+    retryApiConnection: "重试 API 连接",
+    close: "关闭",
+    continuePrefix: "继续",
+    unknownStatus: "未知",
+  },
 };
 
 export function shortSessionId(id: string): string {
@@ -59,63 +138,74 @@ export function shortSessionId(id: string): string {
   return `${compact.slice(0, 8)}...${compact.slice(-8)}`;
 }
 
-export function formatSessionMenuLabel(session: PetMenuSession, now = new Date()): string {
+export function formatSessionMenuLabel(session: PetMenuSession, now = new Date(), language: MenuLanguage = "en"): string {
+  const labels = MENU_LABELS[language];
   const fallbackTitle = session.first_prompt_preview || "Codex session";
   const title = String(session.display_title || fallbackTitle).slice(0, 48);
   const statusKey = String(session.last_status || "");
-  const status = STATUS_LABELS[statusKey] || statusKey || "unknown";
+  const status = STATUS_LABELS[language][statusKey] || statusKey || labels.unknownStatus;
   const seen = new Date(session.last_seen_at || session.updated_at || now);
   const sameDay = seen.toDateString() === now.toDateString();
+  const locale = language === "zh-CN" ? "zh-CN" : undefined;
   const time = sameDay
-    ? seen.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : seen.toLocaleDateString([], { month: "short", day: "numeric" });
-  return `Continue: ${title} · ${time} · ${status}`;
+    ? seen.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })
+    : seen.toLocaleDateString(locale, { month: "short", day: "numeric" });
+  return language === "zh-CN"
+    ? `${labels.continuePrefix}：${title} · ${time} · ${status}`
+    : `${labels.continuePrefix}: ${title} · ${time} · ${status}`;
 }
 
 export function normalizeNotificationProfile(value: unknown): NotificationProfile {
   return NOTIFICATION_PROFILES.includes(value as NotificationProfile) ? (value as NotificationProfile) : "medium";
 }
 
+export function normalizeMenuLanguage(value: unknown): MenuLanguage {
+  return MENU_LANGUAGES.includes(value as MenuLanguage) ? (value as MenuLanguage) : "en";
+}
+
 export function buildPetMenuModel(options: {
   interactionMode: PetInteractionMode;
   notificationProfile: NotificationProfile;
+  menuLanguage: MenuLanguage;
   sessions: PetMenuSession[];
   apiAvailable: boolean;
   now?: Date;
 }): PetMenuItemModel[] {
   const now = options.now ?? new Date();
+  const language = normalizeMenuLanguage(options.menuLanguage);
+  const labels = MENU_LABELS[language];
   const recentSessions = options.sessions.slice(0, 10);
   return [
-    { id: "new-session", label: "New Codex Session", action: { type: "new-session" } },
+    { id: "new-session", label: labels.newSession, action: { type: "new-session" } },
     {
       id: "recent-sessions",
-      label: "Recent Sessions",
+      label: labels.recentSessions,
       enabled: recentSessions.length > 0,
       submenu:
         recentSessions.length > 0
           ? recentSessions.map((session) => ({
               id: `restore-session:${session.pet_session_id || session.codex_session_id || ""}`,
-              label: formatSessionMenuLabel(session, now),
+              label: formatSessionMenuLabel(session, now, language),
               action: { type: "restore-session", petSessionId: String(session.pet_session_id || "") },
             }))
-          : [{ id: "no-recent-sessions", label: "No recent sessions", enabled: false }],
+          : [{ id: "no-recent-sessions", label: labels.noRecentSessions, enabled: false }],
     },
-    { id: "more-sessions", label: "More Sessions...", action: { type: "more-sessions" } },
+    { id: "more-sessions", label: labels.moreSessions, action: { type: "more-sessions" } },
     { id: "separator", type: "separator" },
     {
       id: "interaction-mode",
-      label: "Interaction Mode",
+      label: labels.interactionMode,
       submenu: [
         {
           id: "interaction-mode:window-drag",
-          label: "Drag Whole App",
+          label: labels.dragWholeApp,
           type: "radio",
           checked: options.interactionMode === "window-drag",
           action: { type: "interaction-mode", mode: "window-drag" },
         },
         {
           id: "interaction-mode:camera-adjust",
-          label: "Adjust Camera",
+          label: labels.adjustCamera,
           type: "radio",
           checked: options.interactionMode === "camera-adjust",
           action: { type: "interaction-mode", mode: "camera-adjust" },
@@ -124,22 +214,42 @@ export function buildPetMenuModel(options: {
     },
     {
       id: "notification-detail",
-      label: "Notification Detail",
+      label: labels.notificationDetail,
       submenu: NOTIFICATION_PROFILES.map((profile) => ({
         id: `notification-detail:${profile}`,
-        label: PROFILE_LABELS[profile],
+        label: PROFILE_LABELS[language][profile],
         type: "radio",
         checked: options.notificationProfile === profile,
         action: { type: "notification-detail", profile },
       })),
     },
-    { id: "focus-vscode", label: "Focus VSCode Terminal", action: { type: "focus-vscode" } },
+    {
+      id: "menu-language",
+      label: labels.menuLanguage,
+      submenu: [
+        {
+          id: "menu-language:en",
+          label: "English",
+          type: "radio",
+          checked: language === "en",
+          action: { type: "menu-language", language: "en" },
+        },
+        {
+          id: "menu-language:zh-CN",
+          label: "中文",
+          type: "radio",
+          checked: language === "zh-CN",
+          action: { type: "menu-language", language: "zh-CN" },
+        },
+      ],
+    },
+    { id: "focus-vscode", label: labels.focusVscode, action: { type: "focus-vscode" } },
     {
       id: "retry-api",
-      label: options.apiAvailable ? "Retry API" : "Retry API Connection",
+      label: options.apiAvailable ? labels.retryApi : labels.retryApiConnection,
       action: { type: "retry-api" },
     },
     { id: "separator", type: "separator" },
-    { id: "close", label: "Close", action: { type: "close" } },
+    { id: "close", label: labels.close, action: { type: "close" } },
   ];
 }

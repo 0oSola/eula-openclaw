@@ -13,4 +13,9 @@ describe("desktop pet menu action status", () => {
     expect(describeMenuActionResult({ type: "new-session" })).toContain("not wired yet");
     expect(describeMenuActionResult({ type: "focus-vscode" })).toContain("not wired yet");
   });
+
+  it("describes menu language changes", () => {
+    expect(describeMenuActionResult({ type: "menu-language", language: "zh-CN" })).toBe("菜单语言：中文");
+    expect(describeMenuActionResult({ type: "menu-language", language: "en" })).toBe("Menu language: English");
+  });
 });

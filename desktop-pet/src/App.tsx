@@ -16,11 +16,13 @@ const DEFAULT_SHARED_CONFIG: CompanionSharedConfig = {
 };
 type PetInteractionMode = "window-drag" | "camera-adjust";
 type NotificationProfile = "low" | "medium" | "high";
+type MenuLanguage = "en" | "zh-CN";
 type DesktopPetMenuAction =
   | { type: "new-session" }
   | { type: "restore-session"; petSessionId: string }
   | { type: "more-sessions" }
   | { type: "notification-detail"; profile: NotificationProfile }
+  | { type: "menu-language"; language: MenuLanguage }
   | { type: "focus-vscode" }
   | { type: "retry-api" };
 

@@ -25,6 +25,7 @@ type DesktopPetMenuAction =
   | { type: "restore-session"; petSessionId: string }
   | { type: "more-sessions" }
   | { type: "notification-detail"; profile: "low" | "medium" | "high" }
+  | { type: "menu-language"; language: "en" | "zh-CN" }
   | { type: "focus-vscode" }
   | { type: "retry-api" };
 

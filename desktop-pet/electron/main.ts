@@ -10,7 +10,9 @@ import {
 } from "./interactionMode.js";
 import {
   buildPetMenuModel,
+  normalizeMenuLanguage,
   normalizeNotificationProfile,
+  type MenuLanguage,
   type NotificationProfile,
   type PetMenuAction,
   type PetMenuItemModel,
@@ -25,6 +27,7 @@ const apiBaseUrl = process.env.MMD_PET_API_BASE_URL ?? "http://127.0.0.1:8000";
 const menuUserId = process.env.MMD_PET_USER_ID ?? "admin-1";
 let currentInteractionMode: PetInteractionMode = DEFAULT_INTERACTION_MODE;
 let currentNotificationProfile: NotificationProfile = "medium";
+let currentMenuLanguage: MenuLanguage = "en";
 let lastApiAvailable = true;
 
 function publishInteractionMode(window: BrowserWindow, mode: PetInteractionMode) {
@@ -39,6 +42,9 @@ function dispatchMenuAction(window: BrowserWindow, action: PetMenuAction) {
   }
   if (action.type === "notification-detail") {
     currentNotificationProfile = normalizeNotificationProfile(action.profile);
+  }
+  if (action.type === "menu-language") {
+    currentMenuLanguage = normalizeMenuLanguage(action.language);
   }
   if (action.type === "close") {
     window.close();
@@ -86,6 +92,7 @@ async function openPetContextMenu(window: BrowserWindow, position?: ScreenPoint)
       buildPetMenuModel({
         interactionMode: currentInteractionMode,
         notificationProfile: currentNotificationProfile,
+        menuLanguage: currentMenuLanguage,
         sessions,
         apiAvailable: lastApiAvailable,
       }),

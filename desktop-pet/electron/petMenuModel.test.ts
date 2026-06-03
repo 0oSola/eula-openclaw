@@ -28,6 +28,7 @@ describe("desktop pet menu model", () => {
     const model = buildPetMenuModel({
       interactionMode: "window-drag",
       notificationProfile: "medium",
+      menuLanguage: "en",
       sessions: [],
       apiAvailable: true,
       now: new Date("2026-06-03T00:00:00+08:00"),
@@ -40,6 +41,7 @@ describe("desktop pet menu model", () => {
       "separator",
       "interaction-mode",
       "notification-detail",
+      "menu-language",
       "focus-vscode",
       "retry-api",
       "separator",
@@ -59,6 +61,7 @@ describe("desktop pet menu model", () => {
     const recent = buildPetMenuModel({
       interactionMode: "window-drag",
       notificationProfile: "low",
+      menuLanguage: "en",
       sessions,
       apiAvailable: true,
       now: new Date("2026-06-03T00:00:00+08:00"),
@@ -67,5 +70,35 @@ describe("desktop pet menu model", () => {
     expect(recent?.submenu).toHaveLength(10);
     expect(recent?.submenu?.[0].label).toContain("Continue: session 0");
     expect(recent?.submenu?.[0].label).not.toContain("11111111-2222");
+  });
+
+  it("builds Chinese menu labels when language is Chinese", () => {
+    const model = buildPetMenuModel({
+      interactionMode: "camera-adjust",
+      notificationProfile: "high",
+      menuLanguage: "zh-CN",
+      sessions: [
+        {
+          pet_session_id: "pet-1",
+          display_title: "修复登录页布局",
+          last_status: "waiting_approval",
+          last_seen_at: "2026-06-03T10:18:00+08:00",
+        },
+      ],
+      apiAvailable: false,
+      now: new Date("2026-06-03T11:00:00+08:00"),
+    });
+
+    expect(model.find((item) => item.id === "new-session")?.label).toBe("新建 Codex 会话");
+    expect(model.find((item) => item.id === "recent-sessions")?.label).toBe("最近会话");
+    expect(model.find((item) => item.id === "retry-api")?.label).toBe("重试 API 连接");
+    expect(model.find((item) => item.id === "menu-language")?.submenu?.map((item) => item.label)).toEqual([
+      "English",
+      "中文",
+    ]);
+    expect(model.find((item) => item.id === "recent-sessions")?.submenu?.[0].label).toContain(
+      "继续：修复登录页布局",
+    );
+    expect(model.find((item) => item.id === "recent-sessions")?.submenu?.[0].label).toContain("等待审批");
   });
 });

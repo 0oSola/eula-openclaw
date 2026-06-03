@@ -3,6 +3,7 @@ type MenuAction =
   | { type: "restore-session"; petSessionId: string }
   | { type: "more-sessions" }
   | { type: "notification-detail"; profile: "low" | "medium" | "high" }
+  | { type: "menu-language"; language: "en" | "zh-CN" }
   | { type: "focus-vscode" }
   | { type: "retry-api" };
 
@@ -18,6 +19,8 @@ export function describeMenuActionResult(action: MenuAction): string {
       return `Notification detail: ${PROFILE_LABELS[action.profile]}`;
     case "retry-api":
       return "Retrying API...";
+    case "menu-language":
+      return action.language === "zh-CN" ? "菜单语言：中文" : "Menu language: English";
     case "new-session":
       return "New Codex session is not wired yet";
     case "restore-session":
