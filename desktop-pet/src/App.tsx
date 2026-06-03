@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { MMDStage } from "@/features/stage/MMDStage";
 import type { CompanionSharedConfig, MmdModelAsset, RenderPipeline, VmdAsset } from "@/lib/types";
@@ -30,7 +30,6 @@ export function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [interactionMode, setInteractionMode] = useState<PetInteractionMode>("window-drag");
-  const dragPointerIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     window.desktopPet
@@ -86,27 +85,6 @@ export function App() {
   }, [api]);
 
   const renderPipeline: RenderPipeline = sharedConfig.render_pipeline || "classic";
-  const handleWindowDragPointerDown = useCallback(
-    (event: PointerEvent<HTMLDivElement>) => {
-      if (interactionMode !== "window-drag" || event.button !== 0) return;
-      event.preventDefault();
-      dragPointerIdRef.current = event.pointerId;
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-      void window.desktopPet?.windowDrag?.start();
-    },
-    [interactionMode],
-  );
-  const handleWindowDragPointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (dragPointerIdRef.current !== event.pointerId) return;
-    event.preventDefault();
-    void window.desktopPet?.windowDrag?.move();
-  }, []);
-  const endWindowDrag = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (dragPointerIdRef.current !== event.pointerId) return;
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-    dragPointerIdRef.current = null;
-    void window.desktopPet?.windowDrag?.end();
-  }, []);
 
   return (
     <main className="pet-shell" data-interaction-mode={interactionMode}>
@@ -126,14 +104,6 @@ export function App() {
           />
         ) : null}
       </div>
-      <div
-        className="pet-drag-layer"
-        aria-hidden="true"
-        onPointerDown={handleWindowDragPointerDown}
-        onPointerMove={handleWindowDragPointerMove}
-        onPointerUp={endWindowDrag}
-        onPointerCancel={endWindowDrag}
-      />
       {loading || loadError || !selectedModel ? (
         <div className="pet-status" role="status">
           <span className="pet-status-dot" />
