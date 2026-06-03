@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { toWindowMenuPosition, type ScreenPoint } from "./contextMenuPosition.js";
+import { toElectronMenuTemplate } from "./electronMenuTemplate.js";
 import {
   DEFAULT_INTERACTION_MODE,
   type PetInteractionMode,
@@ -15,7 +16,6 @@ import {
   type MenuLanguage,
   type NotificationProfile,
   type PetMenuAction,
-  type PetMenuItemModel,
   type PetMenuSession,
 } from "./petMenuModel.js";
 
@@ -53,22 +53,6 @@ function dispatchMenuAction(window: BrowserWindow, action: PetMenuAction) {
   window.webContents.send("pet:menu:action", action);
 }
 
-function toElectronMenuTemplate(window: BrowserWindow, items: PetMenuItemModel[]): Electron.MenuItemConstructorOptions[] {
-  return items.map((item) => {
-    if (item.type === "separator") {
-      return { type: "separator" };
-    }
-    return {
-      label: item.label,
-      type: item.type === "radio" ? "radio" : "normal",
-      checked: item.checked,
-      enabled: item.enabled !== false,
-      submenu: item.submenu ? toElectronMenuTemplate(window, item.submenu) : undefined,
-      click: item.action ? () => dispatchMenuAction(window, item.action!) : undefined,
-    };
-  });
-}
-
 async function listRecentSessions(): Promise<PetMenuSession[]> {
   try {
     const response = await fetch(`${apiBaseUrl}/desktop-pet/sessions?limit=10`, {
@@ -88,7 +72,6 @@ async function openPetContextMenu(window: BrowserWindow, position?: ScreenPoint)
   const sessions = await listRecentSessions();
   const menu = Menu.buildFromTemplate(
     toElectronMenuTemplate(
-      window,
       buildPetMenuModel({
         interactionMode: currentInteractionMode,
         notificationProfile: currentNotificationProfile,
@@ -96,6 +79,7 @@ async function openPetContextMenu(window: BrowserWindow, position?: ScreenPoint)
         sessions,
         apiAvailable: lastApiAvailable,
       }),
+      (action) => dispatchMenuAction(window, action),
     ),
   );
   menu.popup({ window, ...(position ?? {}) });
