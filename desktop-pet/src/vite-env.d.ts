@@ -27,6 +27,6 @@ type DesktopPetMenuAction =
   | { type: "notification-detail"; profile: "low" | "medium" | "high" }
   | { type: "menu-language"; language: "en" | "zh-CN" }
   | { type: "focus-vscode" }
-  | { type: "retry-api" };
+  | { type: "sync-main-site" };
 
 export {};

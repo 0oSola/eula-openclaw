@@ -43,7 +43,7 @@ describe("desktop pet menu model", () => {
       "notification-detail",
       "menu-language",
       "focus-vscode",
-      "retry-api",
+      "sync-main-site",
       "separator",
       "close",
     ]);
@@ -91,7 +91,7 @@ describe("desktop pet menu model", () => {
 
     expect(model.find((item) => item.id === "new-session")?.label).toBe("新建 Codex 会话");
     expect(model.find((item) => item.id === "recent-sessions")?.label).toBe("最近会话");
-    expect(model.find((item) => item.id === "retry-api")?.label).toBe("重试 API 连接");
+    expect(model.find((item) => item.id === "sync-main-site")?.label).toBe("从主站同步");
     expect(model.find((item) => item.id === "menu-language")?.submenu?.map((item) => item.label)).toEqual([
       "English",
       "中文",

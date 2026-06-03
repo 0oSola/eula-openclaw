@@ -18,4 +18,8 @@ describe("desktop pet menu action status", () => {
     expect(describeMenuActionResult({ type: "menu-language", language: "zh-CN" })).toBe("菜单语言：中文");
     expect(describeMenuActionResult({ type: "menu-language", language: "en" })).toBe("Menu language: English");
   });
+
+  it("describes main site sync clearly", () => {
+    expect(describeMenuActionResult({ type: "sync-main-site" })).toBe("Syncing from main site...");
+  });
 });

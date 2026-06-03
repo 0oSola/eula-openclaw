@@ -25,7 +25,7 @@ export type PetMenuAction =
   | { type: "notification-detail"; profile: NotificationProfile }
   | { type: "menu-language"; language: MenuLanguage }
   | { type: "focus-vscode" }
-  | { type: "retry-api" }
+  | { type: "sync-main-site" }
   | { type: "close" };
 
 export type PetMenuItemModel = {
@@ -89,8 +89,7 @@ const MENU_LABELS: Record<
     notificationDetail: string;
     menuLanguage: string;
     focusVscode: string;
-    retryApi: string;
-    retryApiConnection: string;
+    syncMainSite: string;
     close: string;
     continuePrefix: string;
     unknownStatus: string;
@@ -107,8 +106,7 @@ const MENU_LABELS: Record<
     notificationDetail: "Notification Detail",
     menuLanguage: "Language / 语言",
     focusVscode: "Focus VSCode Terminal",
-    retryApi: "Retry API",
-    retryApiConnection: "Retry API Connection",
+    syncMainSite: "Sync from Main Site",
     close: "Close",
     continuePrefix: "Continue",
     unknownStatus: "unknown",
@@ -124,8 +122,7 @@ const MENU_LABELS: Record<
     notificationDetail: "提醒精度",
     menuLanguage: "Language / 语言",
     focusVscode: "聚焦 VSCode 终端",
-    retryApi: "重试 API",
-    retryApiConnection: "重试 API 连接",
+    syncMainSite: "从主站同步",
     close: "关闭",
     continuePrefix: "继续",
     unknownStatus: "未知",
@@ -245,9 +242,9 @@ export function buildPetMenuModel(options: {
     },
     { id: "focus-vscode", label: labels.focusVscode, action: { type: "focus-vscode" } },
     {
-      id: "retry-api",
-      label: options.apiAvailable ? labels.retryApi : labels.retryApiConnection,
-      action: { type: "retry-api" },
+      id: "sync-main-site",
+      label: labels.syncMainSite,
+      action: { type: "sync-main-site" },
     },
     { id: "separator", type: "separator" },
     { id: "close", label: labels.close, action: { type: "close" } },

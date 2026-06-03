@@ -24,7 +24,7 @@ type DesktopPetMenuAction =
   | { type: "notification-detail"; profile: NotificationProfile }
   | { type: "menu-language"; language: MenuLanguage }
   | { type: "focus-vscode" }
-  | { type: "retry-api" };
+  | { type: "sync-main-site" };
 
 function getModelLabel(model: MmdModelAsset): string {
   if (model.label?.trim()) return model.label.trim();
@@ -112,7 +112,7 @@ export function App() {
       if (action.type === "notification-detail") {
         setNotificationProfile(action.profile);
       }
-      if (action.type === "retry-api") {
+      if (action.type === "sync-main-site") {
         loadPetState();
       }
       window.setTimeout(() => setMenuStatus(null), 2800);

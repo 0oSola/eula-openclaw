@@ -5,7 +5,7 @@ type MenuAction =
   | { type: "notification-detail"; profile: "low" | "medium" | "high" }
   | { type: "menu-language"; language: "en" | "zh-CN" }
   | { type: "focus-vscode" }
-  | { type: "retry-api" };
+  | { type: "sync-main-site" };
 
 const PROFILE_LABELS: Record<"low" | "medium" | "high", string> = {
   low: "Low",
@@ -17,8 +17,8 @@ export function describeMenuActionResult(action: MenuAction): string {
   switch (action.type) {
     case "notification-detail":
       return `Notification detail: ${PROFILE_LABELS[action.profile]}`;
-    case "retry-api":
-      return "Retrying API...";
+    case "sync-main-site":
+      return "Syncing from main site...";
     case "menu-language":
       return action.language === "zh-CN" ? "菜单语言：中文" : "Menu language: English";
     case "new-session":

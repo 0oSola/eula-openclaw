@@ -30,12 +30,12 @@ describe("desktop pet Electron menu template", () => {
   it("keeps leaf menu items normal and clickable", () => {
     const onAction = vi.fn();
     const template = toElectronMenuTemplate(
-      [{ id: "retry-api", label: "Retry API", action: { type: "retry-api" } }],
+      [{ id: "sync-main-site", label: "Sync from Main Site", action: { type: "sync-main-site" } }],
       onAction,
     );
 
     expect(template[0].type).toBe("normal");
     template[0].click?.();
-    expect(onAction).toHaveBeenCalledWith({ type: "retry-api" });
+    expect(onAction).toHaveBeenCalledWith({ type: "sync-main-site" });
   });
 });

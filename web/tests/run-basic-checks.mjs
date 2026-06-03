@@ -205,6 +205,9 @@ function run() {
     assert.match(apiSource, /export async function getCompanionSharedConfig/);
     assert.match(apiSource, /export async function putCompanionSharedConfig/);
     assert.match(companionPageSource, /putCompanionSharedConfig/);
+    assert.match(companionPageSource, /function handleSaveCompanionSharedConfig\(/);
+    assert.match(companionPageSource, /data-testid="mio-shared-config-save"/);
+    assert.match(companionPageSource, /保存到桌面 Pet/);
     assert.match(companionPageSource, /if \(!session\?\.userId \|\| !selectedModelPath\) return;/);
     assert.match(companionPageSource, /signal:\s*controller\.signal/);
     assert.match(waveformSource, /<canvas/);

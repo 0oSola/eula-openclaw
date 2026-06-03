@@ -446,6 +446,7 @@ export default function CompanionPage() {
   const [advancedBusy, setAdvancedBusy] = useState(false);
   const [advancedError, setAdvancedError] = useState("");
   const [advancedMessage, setAdvancedMessage] = useState("");
+  const [sharedConfigSaving, setSharedConfigSaving] = useState(false);
   const [latestMotionContextExport, setLatestMotionContextExport] = useState<MotionContextExport | null>(null);
   const [cameraEditMode, setCameraEditMode] = useState(false);
   const [renameTarget, setRenameTarget] = useState<VmdAsset | null>(null);
@@ -1382,6 +1383,32 @@ export default function CompanionPage() {
     const nextSession = { ...session, renderPipeline: nextPipeline };
     setSession(nextSession);
     saveSession(nextSession);
+  }
+
+  async function handleSaveCompanionSharedConfig() {
+    setAdvancedError("");
+    setAdvancedMessage("");
+    if (!session?.userId) {
+      setAdvancedError("请先登录后再保存到桌面 Pet。");
+      return;
+    }
+    if (!selectedModelPath) {
+      setAdvancedError("请先选择一个 MMD 模型。");
+      return;
+    }
+    setSharedConfigSaving(true);
+    try {
+      await putCompanionSharedConfig(session.userId, {
+        selected_model_path: selectedModelPath,
+        render_pipeline: renderPipeline,
+      });
+      setAdvancedMessage("已保存到桌面 Pet。请在 pet 右键菜单选择 Sync from Main Site / 从主站同步。");
+      pushToast("已保存到桌面 Pet。");
+    } catch (err) {
+      setAdvancedError(err instanceof Error ? err.message : "保存到桌面 Pet 失败。");
+    } finally {
+      setSharedConfigSaving(false);
+    }
   }
 
   function handleUnlockMmdCamera() {
@@ -3002,6 +3029,17 @@ export default function CompanionPage() {
                         <span>{option.description}</span>
                       </button>
                     ))}
+                  </div>
+                  <div className="mio-camera-actions">
+                    <button
+                      type="button"
+                      className="mio-advanced-mini is-active"
+                      data-testid="mio-shared-config-save"
+                      onClick={() => void handleSaveCompanionSharedConfig()}
+                      disabled={sharedConfigSaving || !session?.userId || !selectedModelPath}
+                    >
+                      {sharedConfigSaving ? "Saving..." : "保存到桌面 Pet"}
+                    </button>
                   </div>
                 </section>
 
