@@ -38,4 +38,25 @@ describe("desktop pet Electron menu template", () => {
     template[0].click?.();
     expect(onAction).toHaveBeenCalledWith({ type: "sync-main-site" });
   });
+
+  it("maps checked model items to Electron checkbox menu items", () => {
+    const onAction = vi.fn();
+    const template = toElectronMenuTemplate(
+      [
+        {
+          id: "always-on-top",
+          label: "Always on Top",
+          type: "checkbox",
+          checked: true,
+          action: { type: "always-on-top", enabled: false },
+        },
+      ],
+      onAction,
+    );
+
+    expect(template[0].type).toBe("checkbox");
+    expect(template[0].checked).toBe(true);
+    template[0].click?.();
+    expect(onAction).toHaveBeenCalledWith({ type: "always-on-top", enabled: false });
+  });
 });

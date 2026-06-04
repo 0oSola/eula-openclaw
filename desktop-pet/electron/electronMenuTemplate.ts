@@ -20,7 +20,7 @@ export function toElectronMenuTemplate(
     }
     return {
       label: item.label,
-      type: item.type === "radio" ? "radio" : "normal",
+      type: item.type === "radio" || item.type === "checkbox" ? item.type : "normal",
       checked: item.checked,
       enabled: item.enabled !== false,
       click: item.action ? () => onAction(item.action!) : undefined,

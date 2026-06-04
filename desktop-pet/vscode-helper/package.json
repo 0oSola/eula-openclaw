@@ -1,0 +1,25 @@
+{
+  "name": "mmd-codex-pet-vscode-helper",
+  "displayName": "MMD Codex Pet VSCode Helper",
+  "description": "Runs desktop Pet Codex requests in the VSCode integrated terminal.",
+  "version": "0.1.0",
+  "publisher": "mmd-codex-pet",
+  "type": "commonjs",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "*",
+    "onCommand:mmd-codex-pet.runPendingTerminalRequest"
+  ],
+  "main": "./extension.cjs",
+  "contributes": {
+    "commands": [
+      {
+        "command": "mmd-codex-pet.runPendingTerminalRequest",
+        "title": "MMD Codex Pet: Run Pending Terminal Request"
+      }
+    ]
+  }
+}

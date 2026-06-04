@@ -49,6 +49,16 @@ type StagePointerCandidate = {
   timeStamp: number;
 };
 
+export function shouldCaptureStagePointer({
+  enableCharacterClickCapture,
+  button,
+}: {
+  enableCharacterClickCapture: boolean;
+  button: number;
+}): boolean {
+  return enableCharacterClickCapture && button === 0;
+}
+
 function toAbsolute(url: string): string {
   if (!url) return "";
   if (/^https?:\/\//i.test(url)) return url;
@@ -61,6 +71,8 @@ export type MMDStageHandle = {
   lockCamera: () => MmdCameraSnapshot | null;
   captureCamera: () => MmdCameraSnapshot | null;
   resetCamera: () => MmdCameraSnapshot | null;
+  hitTestCharacterAtClientPoint: (clientX: number, clientY: number) => boolean;
+  getStageRect: () => DOMRect | null;
   setSpeechLevel: (level: number) => void;
   setSpeechViseme: (frame: { viseme: string; weight?: number } | null) => void;
 };
@@ -80,6 +92,8 @@ type MMDStageProps = {
   renderPipeline?: RenderPipeline;
   cameraSnapshot?: MmdCameraSnapshot | null;
   chrome?: "panel" | "bare";
+  enableCharacterClickCapture?: boolean;
+  cameraLocked?: boolean;
 };
 
 export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDStage({
@@ -97,6 +111,8 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   renderPipeline = "classic",
   cameraSnapshot = null,
   chrome = "panel",
+  enableCharacterClickCapture = true,
+  cameraLocked,
 }: MMDStageProps, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const statusRef = useRef<HTMLParagraphElement | null>(null);
@@ -104,12 +120,14 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   const currentInteractionRef = useRef(interaction);
   const currentSpeakingRef = useRef(speaking);
   const cameraSnapshotRef = useRef<MmdCameraSnapshot | null>(cameraSnapshot);
+  const cameraLockedRef = useRef<boolean | undefined>(cameraLocked);
   const onInteractionErrorRef = useRef(onInteractionError);
   const stagePointerCandidateRef = useRef<StagePointerCandidate | null>(null);
 
   currentInteractionRef.current = interaction;
   currentSpeakingRef.current = speaking;
   cameraSnapshotRef.current = cameraSnapshot;
+  cameraLockedRef.current = cameraLocked;
   onInteractionErrorRef.current = onInteractionError;
 
   useImperativeHandle(
@@ -126,6 +144,12 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       },
       resetCamera() {
         return runtimeRef.current?.resetCameraToDefault?.() ?? null;
+      },
+      hitTestCharacterAtClientPoint(clientX: number, clientY: number) {
+        return Boolean(runtimeRef.current?.hitTestModelAtClientPoint?.(clientX, clientY));
+      },
+      getStageRect() {
+        return containerRef.current?.getBoundingClientRect() ?? null;
       },
       setSpeechLevel(level: number) {
         runtimeRef.current?.setSpeechLevel?.(level);
@@ -169,6 +193,9 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
           speaking: currentSpeakingRef.current,
           resolveUrl: toAbsolute,
         });
+        if (typeof cameraLockedRef.current === "boolean") {
+          runtime.setCameraLocked(cameraLockedRef.current);
+        }
       })
       .catch((error: Error) => {
         if (disposed) return;
@@ -188,6 +215,12 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
     if (!runtime) return;
     runtime.setSpeaking(speaking);
   }, [speaking]);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime || typeof cameraLocked !== "boolean") return;
+    runtime.setCameraLocked(cameraLocked);
+  }, [cameraLocked]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -268,7 +301,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   }
 
   function handleStagePointerDown(event: PointerEvent<HTMLElement>) {
-    if (event.button !== 0) return;
+    if (!shouldCaptureStagePointer({ enableCharacterClickCapture, button: event.button })) return;
     stagePointerCandidateRef.current = {
       pointerId: event.pointerId,
       clientX: event.clientX,
@@ -279,6 +312,10 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   }
 
   function handleStagePointerUp(event: PointerEvent<HTMLElement>) {
+    if (!enableCharacterClickCapture) {
+      stagePointerCandidateRef.current = null;
+      return;
+    }
     const candidate = stagePointerCandidateRef.current;
     stagePointerCandidateRef.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
