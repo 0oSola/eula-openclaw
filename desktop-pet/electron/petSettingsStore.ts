@@ -2,7 +2,7 @@ import nodeFs from "node:fs";
 import path from "node:path";
 
 import { resolvePetWorkspacePath } from "./codexLauncher.js";
-import { MENU_LANGUAGES, NOTIFICATION_PROFILES, type MenuLanguage, type NotificationProfile } from "./petMenuModel.js";
+import { MENU_LANGUAGES, NOTIFICATION_PROFILES, PET_AGENTS, type MenuLanguage, type NotificationProfile, type PetAgent } from "./petMenuModel.js";
 
 type LauncherEnv = NodeJS.ProcessEnv | Record<string, string | undefined>;
 
@@ -18,11 +18,12 @@ export type PetSettings = {
   menuLanguage?: MenuLanguage;
   notificationProfile?: NotificationProfile;
   alwaysOnTop?: boolean;
+  agent?: PetAgent;
   windowBounds?: PetWindowBounds;
 };
 
 export const PET_SETTINGS_FILE_NAME = "pet-settings.json";
-export const PET_WINDOW_SETTINGS_WIDTH = 320;
+export const PET_WINDOW_SETTINGS_WIDTH = 360;
 export const PET_WINDOW_SETTINGS_HEIGHT = 420;
 
 export type PetWindowBounds = {
@@ -53,6 +54,10 @@ function normalizeAlwaysOnTop(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function normalizeAgentSetting(value: unknown): PetAgent | undefined {
+  return PET_AGENTS.includes(value as PetAgent) ? (value as PetAgent) : undefined;
+}
+
 export function normalizePetWindowBounds(value: unknown): PetWindowBounds | undefined {
   if (!value || typeof value !== "object") return undefined;
   const bounds = value as Record<string, unknown>;
@@ -73,11 +78,13 @@ function normalizePetSettingsPayload(payload: Record<string, unknown>): PetSetti
   const menuLanguage = normalizeMenuLanguageSetting(payload.menuLanguage);
   const notificationProfile = normalizeNotificationProfileSetting(payload.notificationProfile);
   const alwaysOnTop = normalizeAlwaysOnTop(payload.alwaysOnTop);
+  const agent = normalizeAgentSetting(payload.agent);
   const windowBounds = normalizePetWindowBounds(payload.windowBounds);
   if (selectedWorkspacePath) settings.selectedWorkspacePath = selectedWorkspacePath;
   if (menuLanguage) settings.menuLanguage = menuLanguage;
   if (notificationProfile) settings.notificationProfile = notificationProfile;
   if (alwaysOnTop !== undefined) settings.alwaysOnTop = alwaysOnTop;
+  if (agent) settings.agent = agent;
   if (windowBounds) settings.windowBounds = windowBounds;
   return settings;
 }
@@ -132,4 +139,9 @@ export function resolveSelectedWorkspacePath(options: {
 }): string {
   const settings = readPetSettings({ userDataPath: options.userDataPath, fs: options.fs });
   return settings.selectedWorkspacePath ?? resolvePetWorkspacePath({ cwd: options.cwd, env: options.env });
+}
+
+export function resolvePetAgent(options: { userDataPath: string; fs?: PetSettingsFs }): PetAgent {
+  const settings = readPetSettings({ userDataPath: options.userDataPath, fs: options.fs });
+  return settings.agent ?? "codex";
 }

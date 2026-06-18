@@ -7,11 +7,84 @@ describe("Desktop Pet App integration wiring", () => {
     const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
 
     expect(source).toContain("formatCodexStatusNotification");
+    expect(source).toContain("buildCodexStatusCard");
     expect(source).toContain("buildApprovalFallback");
     expect(source).toContain("getCodexStatusPresentation");
     expect(source).toContain("buildCodexStatusPetStageResolution");
     expect(source).toContain("codexStatusInteraction");
     expect(source).toContain("approvalFallback");
+  });
+
+  it("renders Codex status output as a clickable VSCode focus target", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+    const styles = readFileSync(path.resolve(__dirname, "styles.css"), "utf8");
+
+    expect(source).toContain("visibleCodexStatusCard.outputLines");
+    expect(source).toContain("buildIdleCodexStatusCardFallback");
+    expect(source).toContain("const visibleCodexStatusCard = codexStatusCard ?? idleCodexStatusCard");
+    expect(source).toContain("data-status-tone={codexStatusPresentation.statusTone}");
+    expect(source).toContain('data-codex-card={visibleCodexStatusCard && !menuStatus ? "true" : "false"}');
+    expect(source).toContain("focusVscodeForStatus");
+    expect(source).toContain("workspacePath: codexStatus?.workspacePath");
+    expect(source).toContain("pet-status-output");
+    expect(styles).toContain('.pet-status[data-codex-card="true"] .pet-status-title');
+    expect(styles).toContain("position: absolute;");
+    expect(styles).toContain('content: "";');
+    expect(styles).toContain('.pet-status[data-status-tone="attention"] .pet-status-dot');
+  });
+
+  it("renders a manually dismissible completion bubble that opens the completed workspace", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+    const styles = readFileSync(path.resolve(__dirname, "styles.css"), "utf8");
+
+    expect(source).toContain("buildCodexCompletionNotice");
+    expect(source).toContain("dismissedCompletionNoticeKey");
+    expect(source).toContain("pet-completion-bubble");
+    expect(source).toContain("focusWorkspaceFromCompletionNotice");
+    expect(source).toContain("setDismissedCompletionNoticeKey(completionNotice.key)");
+    expect(source).toContain('closest(".pet-panel, .pet-status-action, .pet-completion-bubble")');
+    expect(styles).toContain(".pet-completion-bubble");
+    expect(styles).toContain(".pet-completion-dismiss");
+    expect(styles).toContain(".pet-completion-bubble::after");
+  });
+
+  it("wraps long Codex status output instead of truncating it to a single line", () => {
+    const styles = readFileSync(path.resolve(__dirname, "styles.css"), "utf8");
+    const outputBlock = styles.match(/\.pet-status-output\s*\{[\s\S]*?\}/)?.[0] ?? "";
+    const outputLineBlock = styles.match(/\.pet-status-output span\s*\{[\s\S]*?\}/)?.[0] ?? "";
+
+    expect(outputBlock).toContain("max-height:");
+    expect(outputBlock).toContain("overflow: hidden;");
+    expect(outputLineBlock).toContain("white-space: normal;");
+    expect(outputLineBlock).toContain("overflow-wrap: anywhere;");
+    expect(outputLineBlock).not.toContain("text-overflow: ellipsis;");
+    expect(outputLineBlock).not.toContain("white-space: nowrap;");
+  });
+
+  it("clears the VSCode focus toast after a successful focus request", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+
+    expect(source).toContain("showVscodeFocusSuccess");
+    expect(source.match(/\.then\(showVscodeFocusSuccess\)/g)?.length).toBe(3);
+    expect(source).toContain('setMenuStatus("VSCode workspace open")');
+  });
+
+  it("focuses active sessions from the bottom dialog instead of restoring a duplicate window", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+
+    expect(source).toContain("focusActiveSessionFromPanel");
+    expect(source).toContain("window.desktopPet?.sessions?.focusActive");
+    expect(source).toContain("item.isActive ? focusActiveSessionFromPanel(item.petSessionId) : restoreSessionFromPanel(item.petSessionId)");
+  });
+
+  it("renders direct approve and deny actions for relay approvals", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+
+    expect(source).toContain("decideApprovalFromStatus");
+    expect(source).toContain("window.desktopPet?.approvals?.decide");
+    expect(source).toContain('approvalFallback.secondaryAction');
+    expect(source).toContain('decision: "approve_once"');
+    expect(source).toContain('decision: "deny"');
   });
 
   it("observes API runtime status and retries MMD state loading when API becomes available", () => {
@@ -40,5 +113,32 @@ describe("Desktop Pet App integration wiring", () => {
     expect(source).toContain("setStageInteractionState(petAutoplayIdleState)");
     expect(source).toContain("buildPetStageClickInteractionState(clickAction)");
     expect(source).toContain('stageInteractionState.source === "stage-click"');
+  });
+
+  it("replays active Codex status motions when a procedural status action completes", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+
+    expect(source).toContain("shouldReplayCodexStatusMotionOnCompletion");
+    expect(source).toContain("codexStatusMotionReplayRevision");
+    expect(source).toContain("setCodexStatusMotionReplayRevision");
+  });
+
+  it("falls back to the favorite idle loop when a Codex status motion has no playable hit", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+
+    expect(source).toContain("resolvePetStageInteractionWithFallback");
+    expect(source).toContain("fallbackResult.interaction");
+    expect(source).toContain("petAutoplayIdleState.interaction");
+    expect(source).toContain("if (!fallbackResult.interaction) return null");
+  });
+
+  it("keeps stage click hit and motion selection wired to shared main-site helpers", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+    const petStageState = readFileSync(path.resolve(__dirname, "mmd", "petStageState.ts"), "utf8");
+
+    expect(source).toContain("shouldTriggerStageCharacterClick");
+    expect(source).toContain("createStageClickRipple");
+    expect(petStageState).toContain('from "@/features/stage/stageCharacterClick.js"');
+    expect(petStageState).toContain("resolveStageCharacterClickInteraction({");
   });
 });

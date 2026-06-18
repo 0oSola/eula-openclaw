@@ -1,0 +1,46 @@
+{
+  "id": "thinking_chin_edge",
+  "generator": "momask",
+  "duration_seconds": 3,
+  "motion_type": "stationary_upper_body",
+  "momask_prompt": "A person stands still and slowly raises the right hand toward the chin in a thoughtful gesture.",
+  "lower_body_policy": "stable_stance",
+  "vmd_stationary_stabilization": {
+    "reference_frame": 0,
+    "position_locked_bones": [
+      "センター",
+      "右足ＩＫ",
+      "左足ＩＫ",
+      "右つま先ＩＫ",
+      "左つま先ＩＫ"
+    ],
+    "rotation_locked_bones": [
+      "グルーブ",
+      "センター",
+      "腰",
+      "右足",
+      "右足首",
+      "右足ＩＫ",
+      "右つま先ＩＫ",
+      "左足",
+      "左足首",
+      "左足ＩＫ",
+      "左つま先ＩＫ"
+    ]
+  },
+  "contacts": [
+    "right_wrist_to_chin_edge"
+  ],
+  "hand_presets": {
+    "right": "thinking_relaxed",
+    "left": "soft_rest"
+  },
+  "quality_checks": [
+    "right_wrist_near_chin_edge",
+    "right_elbow_naturalness",
+    "head_chin_down",
+    "left_arm_support",
+    "feet_stable",
+    "smoothness"
+  ]
+}

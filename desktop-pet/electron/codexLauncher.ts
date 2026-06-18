@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import nodeFs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 type LauncherEnv = NodeJS.ProcessEnv | Record<string, string | undefined>;
@@ -21,25 +22,10 @@ export type CodexLauncherOptions = {
   platform?: NodeJS.Platform;
   spawn?: SpawnFn;
   fs?: LauncherFs;
+  userDataDir?: string;
 };
 
-export type CodexLaunchResult = {
-  workspacePath: string;
-};
-
-export type CodexResumeOptions = CodexLauncherOptions & {
-  codexSessionId: string;
-};
-
-export type CodexResumeResult = CodexLaunchResult & {
-  codexSessionId: string;
-};
-
-export type CodexPromptOptions = CodexLauncherOptions & {
-  prompt: string;
-};
-
-export type VscodeTerminalRequestMode = "new" | "resume" | "prompt";
+export type VscodeTerminalRequestMode = "new" | "resume";
 
 export type VscodeTerminalRequest = {
   id: string;
@@ -51,9 +37,38 @@ export type VscodeTerminalRequest = {
   createdAt: string;
 };
 
+export type VscodeTerminalRequestRef = {
+  id: string;
+  path: string;
+  globalPath: string;
+  workspacePath: string;
+};
+
+export type CodexLaunchResult = {
+  workspacePath: string;
+  commandLine: string;
+  userDataDir: string;
+  terminalRequest?: VscodeTerminalRequestRef;
+};
+
+export type VscodeWorkspaceOpenResult = {
+  workspacePath: string;
+  userDataDir: string;
+};
+
+export type CodexResumeOptions = CodexLauncherOptions & {
+  codexSessionId: string;
+};
+
+export type CodexResumeResult = CodexLaunchResult & {
+  codexSessionId: string;
+};
+
 const VSCODE_TERMINAL_REQUEST_DIR = ".codex-pet";
 const VSCODE_TERMINAL_REQUEST_FILE = "vscode-terminal-request.json";
 const VSCODE_TERMINAL_NAME = "Codex Pet";
+const VSCODE_GLOBAL_REQUEST_DIR = "mmd-codex-pet";
+export const VSCODE_USER_DATA_ROOT_DIR = "mmd-pet-vscode-ud";
 
 function cleanPath(value: string | undefined): string | null {
   const trimmed = value?.trim();
@@ -126,38 +141,85 @@ function buildCodexTerminalCommand(options: {
   return `${codexCli} resume --cd ${quoteTerminalArg(options.workspacePath)} ${quoteTerminalArg(options.codexSessionId)}`;
 }
 
+// VSCode de-duplicates windows by "folder + user-data-dir": opening the same
+// workspace folder under the same user-data-dir focuses the existing window
+// instead of opening a new one. To guarantee a fresh window for repeat Pet
+// opens, each launch gets a throwaway user-data-dir under the OS temp area.
+// Callers pass an explicit userDataDir; this helper provides the default.
+export function defaultVscodeUserDataDir(now = Date.now(), random = Math.random()): string {
+  const stamp = `${now}-${random.toString(36).slice(2, 10)}`;
+  return path.join(os.tmpdir(), VSCODE_USER_DATA_ROOT_DIR, stamp);
+}
+
 function vscodeTerminalRequestPath(workspacePath: string): string {
   return path.join(workspacePath, VSCODE_TERMINAL_REQUEST_DIR, VSCODE_TERMINAL_REQUEST_FILE);
+}
+
+function globalVscodeTerminalRequestPath(): string {
+  return path.join(os.tmpdir(), VSCODE_GLOBAL_REQUEST_DIR, VSCODE_TERMINAL_REQUEST_FILE);
 }
 
 function writeVscodeTerminalRequest(options: {
   fs: LauncherFs;
   workspacePath: string;
   request: VscodeTerminalRequest;
+}): VscodeTerminalRequestRef {
+  const requestPath = vscodeTerminalRequestPath(options.workspacePath);
+  const globalPath = globalVscodeTerminalRequestPath();
+  const serialized = `${JSON.stringify(options.request, null, 2)}\n`;
+
+  options.fs.mkdirSync(path.dirname(requestPath), { recursive: true });
+  options.fs.writeFileSync(requestPath, serialized, "utf8");
+  options.fs.mkdirSync(path.dirname(globalPath), { recursive: true });
+  options.fs.writeFileSync(globalPath, serialized, "utf8");
+
+  return {
+    id: options.request.id,
+    path: requestPath,
+    globalPath,
+    workspacePath: options.workspacePath,
+  };
+}
+
+function openVscodeWindow(options: {
+  workspacePath: string;
+  userDataDir: string;
+  env: LauncherEnv;
+  platform: NodeJS.Platform;
+  spawn: SpawnFn;
 }) {
-  const requestDir = path.join(options.workspacePath, VSCODE_TERMINAL_REQUEST_DIR);
-  options.fs.mkdirSync(requestDir, { recursive: true });
-  options.fs.writeFileSync(vscodeTerminalRequestPath(options.workspacePath), `${JSON.stringify(options.request, null, 2)}\n`, "utf8");
+  const codeCli = options.env.MMD_PET_VSCODE_CLI?.trim() || "code";
+  const args = ["--new-window", "--user-data-dir", options.userDataDir, options.workspacePath];
+
+  launchDetached(
+    options.spawn,
+    prepareShellSpawnValue(codeCli, options.platform),
+    prepareShellSpawnArgs(args, options.platform),
+    {
+      cwd: options.workspacePath,
+      detached: true,
+      stdio: "ignore",
+      shell: options.platform === "win32",
+      windowsHide: true,
+    },
+  );
 }
 
 function openVscodeWorkspaceWithHelper(options: {
-  workspacePath: string;
   cwd?: string;
+  workspacePath: string;
+  userDataDir: string;
   env: LauncherEnv;
   platform: NodeJS.Platform;
   spawn: SpawnFn;
 }) {
   const codeCli = options.env.MMD_PET_VSCODE_CLI?.trim() || "code";
   const helperMode = resolveVscodeHelperMode(options.env);
-  const args =
-    helperMode === "installed"
-      ? ["--reuse-window", options.workspacePath]
-      : [
-          "--reuse-window",
-          "--extensionDevelopmentPath",
-          resolveVscodeHelperExtensionPath({ cwd: options.cwd, env: options.env }),
-          options.workspacePath,
-        ];
+  const args = ["--new-window", "--user-data-dir", options.userDataDir];
+  if (helperMode !== "installed") {
+    args.push("--extensionDevelopmentPath", resolveVscodeHelperExtensionPath({ cwd: options.cwd, env: options.env }));
+  }
+  args.push(options.workspacePath);
 
   launchDetached(
     options.spawn,
@@ -176,24 +238,21 @@ function openVscodeWorkspaceWithHelper(options: {
 function requestCodexInVscodeTerminal(options: {
   mode: VscodeTerminalRequestMode;
   codexSessionId?: string;
-  prompt?: string;
   cwd?: string;
   workspacePath: string;
+  userDataDir: string;
   env: LauncherEnv;
   platform: NodeJS.Platform;
   spawn: SpawnFn;
   fs: LauncherFs;
 }) {
   const codexCli = options.env.MMD_PET_CODEX_CLI?.trim() || "codex";
-  const commandLine =
-    options.mode === "prompt"
-      ? options.prompt ?? ""
-      : buildCodexTerminalCommand({
-          codexCli,
-          workspacePath: options.workspacePath,
-          codexSessionId: options.codexSessionId,
-        });
-  writeVscodeTerminalRequest({
+  const commandLine = buildCodexTerminalCommand({
+    codexCli,
+    workspacePath: options.workspacePath,
+    codexSessionId: options.codexSessionId,
+  });
+  const terminalRequest = writeVscodeTerminalRequest({
     fs: options.fs,
     workspacePath: options.workspacePath,
     request: {
@@ -206,31 +265,29 @@ function requestCodexInVscodeTerminal(options: {
       createdAt: new Date().toISOString(),
     },
   });
+
   openVscodeWorkspaceWithHelper({
-    workspacePath: options.workspacePath,
     cwd: options.cwd,
+    workspacePath: options.workspacePath,
+    userDataDir: options.userDataDir,
     env: options.env,
     platform: options.platform,
     spawn: options.spawn,
   });
+
+  return { commandLine, terminalRequest };
 }
 
-export function focusVscodeWorkspace(options: CodexLauncherOptions = {}): CodexLaunchResult {
+export function focusVscodeWorkspace(options: CodexLauncherOptions = {}): VscodeWorkspaceOpenResult {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const workspacePath = resolveLauncherWorkspacePath({ cwd: options.cwd, workspacePath: options.workspacePath, env });
   const spawn = options.spawn ?? nodeSpawn;
-  const codeCli = env.MMD_PET_VSCODE_CLI?.trim() || "code";
+  const userDataDir = options.userDataDir?.trim() || defaultVscodeUserDataDir();
 
-  launchDetached(spawn, prepareShellSpawnValue(codeCli, platform), prepareShellSpawnArgs(["--reuse-window", workspacePath], platform), {
-    cwd: workspacePath,
-    detached: true,
-    stdio: "ignore",
-    shell: platform === "win32",
-    windowsHide: true,
-  });
+  openVscodeWindow({ workspacePath, userDataDir, env, platform, spawn });
 
-  return { workspacePath };
+  return { workspacePath, userDataDir };
 }
 
 export function launchNewCodexSession(options: CodexLauncherOptions = {}): CodexLaunchResult {
@@ -239,10 +296,19 @@ export function launchNewCodexSession(options: CodexLauncherOptions = {}): Codex
   const workspacePath = resolveLauncherWorkspacePath({ cwd: options.cwd, workspacePath: options.workspacePath, env });
   const spawn = options.spawn ?? nodeSpawn;
   const fs = options.fs ?? nodeFs;
+  const userDataDir = options.userDataDir?.trim() || defaultVscodeUserDataDir();
+  const { commandLine, terminalRequest } = requestCodexInVscodeTerminal({
+    mode: "new",
+    cwd: options.cwd,
+    workspacePath,
+    userDataDir,
+    env,
+    platform,
+    spawn,
+    fs,
+  });
 
-  requestCodexInVscodeTerminal({ mode: "new", cwd: options.cwd, workspacePath, env, platform, spawn, fs });
-
-  return { workspacePath };
+  return { workspacePath, commandLine, userDataDir, terminalRequest };
 }
 
 export function resumeCodexSession(options: CodexResumeOptions): CodexResumeResult {
@@ -257,24 +323,18 @@ export function resumeCodexSession(options: CodexResumeOptions): CodexResumeResu
     throw new Error("codexSessionId is required");
   }
 
-  requestCodexInVscodeTerminal({ mode: "resume", codexSessionId, cwd: options.cwd, workspacePath, env, platform, spawn, fs });
+  const userDataDir = options.userDataDir?.trim() || defaultVscodeUserDataDir();
+  const { commandLine, terminalRequest } = requestCodexInVscodeTerminal({
+    mode: "resume",
+    codexSessionId,
+    cwd: options.cwd,
+    workspacePath,
+    userDataDir,
+    env,
+    platform,
+    spawn,
+    fs,
+  });
 
-  return { workspacePath, codexSessionId };
-}
-
-export function sendCodexPrompt(options: CodexPromptOptions): CodexLaunchResult {
-  const prompt = options.prompt.trim();
-  if (!prompt) {
-    throw new Error("prompt is required");
-  }
-
-  const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
-  const workspacePath = resolveLauncherWorkspacePath({ cwd: options.cwd, workspacePath: options.workspacePath, env });
-  const spawn = options.spawn ?? nodeSpawn;
-  const fs = options.fs ?? nodeFs;
-
-  requestCodexInVscodeTerminal({ mode: "prompt", prompt, cwd: options.cwd, workspacePath, env, platform, spawn, fs });
-
-  return { workspacePath };
+  return { workspacePath, commandLine, userDataDir, terminalRequest, codexSessionId };
 }

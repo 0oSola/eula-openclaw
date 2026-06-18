@@ -17,8 +17,18 @@ export type CodexStatus = {
   workspacePath?: string;
   sessionTitle?: string;
   codexSessionId?: string;
+  lastOutput?: string;
   error?: string;
   updatedAt?: string;
+  source?: "app-server-relay" | "codex-jsonl" | "claude-jsonl" | "terminal";
+  /** Command the user should paste into the freshly opened VSCode terminal. */
+  commandLine?: string;
+  pendingApprovals?: Array<{
+    id: string;
+    title: string;
+    actionType: string;
+    detail: Record<string, unknown>;
+  }>;
 };
 
 export type CodexStatusMotionIntent =

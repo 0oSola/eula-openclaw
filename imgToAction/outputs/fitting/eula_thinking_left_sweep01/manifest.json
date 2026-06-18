@@ -1,0 +1,434 @@
+[
+  {
+    "id": "Lshoulder_x_m30",
+    "deltas": {
+      "左肩": {
+        "x": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lshoulder_x_m30/direct_pose.json"
+  },
+  {
+    "id": "Lshoulder_x_m15",
+    "deltas": {
+      "左肩": {
+        "x": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lshoulder_x_m15/direct_pose.json"
+  },
+  {
+    "id": "Lshoulder_x_p15",
+    "deltas": {
+      "左肩": {
+        "x": 15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lshoulder_x_p15/direct_pose.json"
+  },
+  {
+    "id": "Lshoulder_x_p30",
+    "deltas": {
+      "左肩": {
+        "x": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lshoulder_x_p30/direct_pose.json"
+  },
+  {
+    "id": "Lshoulder_y_m30",
+    "deltas": {
+      "左肩": {
+        "y": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lshoulder_y_m30/direct_pose.json"
+  },
+  {
+    "id": "Lshoulder_y_m15",
+    "deltas": {
+      "左肩": {
+        "y": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lshoulder_y_m15/direct_pose.json"
+  },
+  {
+    "id": "Lshoulder_y_p15",
+    "deltas": {
+      "左肩": {
+        "y": 15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lshoulder_y_p15/direct_pose.json"
+  },
+  {
+    "id": "Lshoulder_y_p30",
+    "deltas": {
+      "左肩": {
+        "y": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lshoulder_y_p30/direct_pose.json"
+  },
+  {
+    "id": "Lshoulder_z_m30",
+    "deltas": {
+      "左肩": {
+        "z": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lshoulder_z_m30/direct_pose.json"
+  },
+  {
+    "id": "Lshoulder_z_m15",
+    "deltas": {
+      "左肩": {
+        "z": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lshoulder_z_m15/direct_pose.json"
+  },
+  {
+    "id": "Lshoulder_z_p15",
+    "deltas": {
+      "左肩": {
+        "z": 15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lshoulder_z_p15/direct_pose.json"
+  },
+  {
+    "id": "Lshoulder_z_p30",
+    "deltas": {
+      "左肩": {
+        "z": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lshoulder_z_p30/direct_pose.json"
+  },
+  {
+    "id": "Larm_x_m30",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Larm_x_m30/direct_pose.json"
+  },
+  {
+    "id": "Larm_x_m15",
+    "deltas": {
+      "左腕": {
+        "x": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Larm_x_m15/direct_pose.json"
+  },
+  {
+    "id": "Larm_x_p15",
+    "deltas": {
+      "左腕": {
+        "x": 15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Larm_x_p15/direct_pose.json"
+  },
+  {
+    "id": "Larm_x_p30",
+    "deltas": {
+      "左腕": {
+        "x": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Larm_x_p30/direct_pose.json"
+  },
+  {
+    "id": "Larm_y_m30",
+    "deltas": {
+      "左腕": {
+        "y": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Larm_y_m30/direct_pose.json"
+  },
+  {
+    "id": "Larm_y_m15",
+    "deltas": {
+      "左腕": {
+        "y": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Larm_y_m15/direct_pose.json"
+  },
+  {
+    "id": "Larm_y_p15",
+    "deltas": {
+      "左腕": {
+        "y": 15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Larm_y_p15/direct_pose.json"
+  },
+  {
+    "id": "Larm_y_p30",
+    "deltas": {
+      "左腕": {
+        "y": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Larm_y_p30/direct_pose.json"
+  },
+  {
+    "id": "Larm_z_m30",
+    "deltas": {
+      "左腕": {
+        "z": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Larm_z_m30/direct_pose.json"
+  },
+  {
+    "id": "Larm_z_m15",
+    "deltas": {
+      "左腕": {
+        "z": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Larm_z_m15/direct_pose.json"
+  },
+  {
+    "id": "Larm_z_p15",
+    "deltas": {
+      "左腕": {
+        "z": 15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Larm_z_p15/direct_pose.json"
+  },
+  {
+    "id": "Larm_z_p30",
+    "deltas": {
+      "左腕": {
+        "z": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Larm_z_p30/direct_pose.json"
+  },
+  {
+    "id": "Lelbow_x_m30",
+    "deltas": {
+      "左ひじ": {
+        "x": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lelbow_x_m30/direct_pose.json"
+  },
+  {
+    "id": "Lelbow_x_m15",
+    "deltas": {
+      "左ひじ": {
+        "x": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lelbow_x_m15/direct_pose.json"
+  },
+  {
+    "id": "Lelbow_x_p15",
+    "deltas": {
+      "左ひじ": {
+        "x": 15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lelbow_x_p15/direct_pose.json"
+  },
+  {
+    "id": "Lelbow_x_p30",
+    "deltas": {
+      "左ひじ": {
+        "x": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lelbow_x_p30/direct_pose.json"
+  },
+  {
+    "id": "Lelbow_y_m30",
+    "deltas": {
+      "左ひじ": {
+        "y": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lelbow_y_m30/direct_pose.json"
+  },
+  {
+    "id": "Lelbow_y_m15",
+    "deltas": {
+      "左ひじ": {
+        "y": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lelbow_y_m15/direct_pose.json"
+  },
+  {
+    "id": "Lelbow_y_p15",
+    "deltas": {
+      "左ひじ": {
+        "y": 15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lelbow_y_p15/direct_pose.json"
+  },
+  {
+    "id": "Lelbow_y_p30",
+    "deltas": {
+      "左ひじ": {
+        "y": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lelbow_y_p30/direct_pose.json"
+  },
+  {
+    "id": "Lelbow_z_m30",
+    "deltas": {
+      "左ひじ": {
+        "z": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lelbow_z_m30/direct_pose.json"
+  },
+  {
+    "id": "Lelbow_z_m15",
+    "deltas": {
+      "左ひじ": {
+        "z": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lelbow_z_m15/direct_pose.json"
+  },
+  {
+    "id": "Lelbow_z_p15",
+    "deltas": {
+      "左ひじ": {
+        "z": 15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lelbow_z_p15/direct_pose.json"
+  },
+  {
+    "id": "Lelbow_z_p30",
+    "deltas": {
+      "左ひじ": {
+        "z": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lelbow_z_p30/direct_pose.json"
+  },
+  {
+    "id": "Lwrist_x_m30",
+    "deltas": {
+      "左手首": {
+        "x": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lwrist_x_m30/direct_pose.json"
+  },
+  {
+    "id": "Lwrist_x_m15",
+    "deltas": {
+      "左手首": {
+        "x": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lwrist_x_m15/direct_pose.json"
+  },
+  {
+    "id": "Lwrist_x_p15",
+    "deltas": {
+      "左手首": {
+        "x": 15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lwrist_x_p15/direct_pose.json"
+  },
+  {
+    "id": "Lwrist_x_p30",
+    "deltas": {
+      "左手首": {
+        "x": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lwrist_x_p30/direct_pose.json"
+  },
+  {
+    "id": "Lwrist_y_m30",
+    "deltas": {
+      "左手首": {
+        "y": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lwrist_y_m30/direct_pose.json"
+  },
+  {
+    "id": "Lwrist_y_m15",
+    "deltas": {
+      "左手首": {
+        "y": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lwrist_y_m15/direct_pose.json"
+  },
+  {
+    "id": "Lwrist_y_p15",
+    "deltas": {
+      "左手首": {
+        "y": 15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lwrist_y_p15/direct_pose.json"
+  },
+  {
+    "id": "Lwrist_y_p30",
+    "deltas": {
+      "左手首": {
+        "y": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lwrist_y_p30/direct_pose.json"
+  },
+  {
+    "id": "Lwrist_z_m30",
+    "deltas": {
+      "左手首": {
+        "z": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lwrist_z_m30/direct_pose.json"
+  },
+  {
+    "id": "Lwrist_z_m15",
+    "deltas": {
+      "左手首": {
+        "z": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lwrist_z_m15/direct_pose.json"
+  },
+  {
+    "id": "Lwrist_z_p15",
+    "deltas": {
+      "左手首": {
+        "z": 15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lwrist_z_p15/direct_pose.json"
+  },
+  {
+    "id": "Lwrist_z_p30",
+    "deltas": {
+      "左手首": {
+        "z": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_sweep01/Lwrist_z_p30/direct_pose.json"
+  }
+]

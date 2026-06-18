@@ -1,0 +1,127 @@
+[
+  {
+    "id": "base",
+    "deltas": {},
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_tune01/base/direct_pose.json"
+  },
+  {
+    "id": "rarmym5",
+    "deltas": {
+      "右腕": {
+        "y": -5
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_tune01/rarmym5/direct_pose.json"
+  },
+  {
+    "id": "rarmym10",
+    "deltas": {
+      "右腕": {
+        "y": -10
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_tune01/rarmym10/direct_pose.json"
+  },
+  {
+    "id": "relbowxp5",
+    "deltas": {
+      "右ひじ": {
+        "x": 5
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_tune01/relbowxp5/direct_pose.json"
+  },
+  {
+    "id": "relbowzp5",
+    "deltas": {
+      "右ひじ": {
+        "z": 5
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_tune01/relbowzp5/direct_pose.json"
+  },
+  {
+    "id": "leftmild",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_tune01/leftmild/direct_pose.json"
+  },
+  {
+    "id": "leftmild_rarmym5",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -5
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_tune01/leftmild_rarmym5/direct_pose.json"
+  },
+  {
+    "id": "leftmild_rarmym10",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_tune01/leftmild_rarmym10/direct_pose.json"
+  },
+  {
+    "id": "leftmid",
+    "deltas": {
+      "左腕": {
+        "x": -45
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_tune01/leftmid/direct_pose.json"
+  },
+  {
+    "id": "leftmid_rarmym5",
+    "deltas": {
+      "左腕": {
+        "x": -45
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -5
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_tune01/leftmid_rarmym5/direct_pose.json"
+  }
+]

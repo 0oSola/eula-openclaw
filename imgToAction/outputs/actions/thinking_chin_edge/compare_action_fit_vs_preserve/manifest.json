@@ -1,0 +1,38 @@
+{
+  "createdAt": "2026-06-17T10:30:28.189Z",
+  "model": "MMD/优菈_by_原神_339146e6e418d79e85a515b26414c0b0/优菈.pmx",
+  "renderPipeline": "genshin",
+  "captures": [
+    {
+      "label": "action_fit",
+      "frame": 0,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/compare_action_fit_vs_preserve/action_fit_frame_000.png"
+    },
+    {
+      "label": "action_fit",
+      "frame": 120,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/compare_action_fit_vs_preserve/action_fit_frame_120.png"
+    },
+    {
+      "label": "action_fit",
+      "frame": 292,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/compare_action_fit_vs_preserve/action_fit_frame_292.png"
+    },
+    {
+      "label": "preserve",
+      "frame": 0,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/compare_action_fit_vs_preserve/preserve_frame_000.png"
+    },
+    {
+      "label": "preserve",
+      "frame": 120,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/compare_action_fit_vs_preserve/preserve_frame_120.png"
+    },
+    {
+      "label": "preserve",
+      "frame": 292,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/compare_action_fit_vs_preserve/preserve_frame_292.png"
+    }
+  ],
+  "consoleMessages": []
+}

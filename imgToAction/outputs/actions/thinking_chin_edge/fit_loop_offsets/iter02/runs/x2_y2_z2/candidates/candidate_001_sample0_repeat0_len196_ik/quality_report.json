@@ -1,0 +1,1611 @@
+{
+  "candidate_id": "candidate_001_sample0_repeat0_len196_ik",
+  "mode": "action-fit",
+  "source_type": "bvh",
+  "source_path": "D:\\workspace\\MMD project\\imgToAction\\samples\\bvh\\sample0_repeat0_len196_ik.bvh",
+  "score_type": "thinking_chin_edge",
+  "score": 84.696,
+  "blocking": true,
+  "components": {
+    "contact_score": 100.0,
+    "elbow_score": 56.534,
+    "head_score": 75.168,
+    "left_arm_support_score": 55.0,
+    "stable_stance_score": 100.0,
+    "smoothness_score": 100.0,
+    "hand_preset_score": 100.0
+  },
+  "violations": [
+    {
+      "frame": 69,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 70,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 71,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 72,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 73,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 74,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 75,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 76,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 77,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 78,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 79,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 80,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 81,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 82,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 83,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 84,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 85,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 86,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 87,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 88,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 89,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 90,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 91,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 92,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 93,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 94,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 95,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 96,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 97,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 98,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 99,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 100,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 101,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 102,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 103,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 104,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 105,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 106,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 107,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 108,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 109,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 110,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 111,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 112,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 113,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 114,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 115,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 116,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 117,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 118,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 119,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 120,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 121,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 122,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 123,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 124,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 125,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 126,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 127,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 128,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 129,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 130,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 131,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 132,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 133,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 134,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 135,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 136,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 137,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 138,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 139,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 140,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 141,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 142,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 143,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 144,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 145,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 146,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 147,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 148,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 149,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 150,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 151,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 152,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 153,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 154,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 155,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 156,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 157,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 158,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 159,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 160,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 161,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 162,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 163,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 164,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 165,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 166,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 167,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 168,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 169,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 170,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 171,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 172,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 173,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 174,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 175,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 176,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 177,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 178,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 179,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 180,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 181,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 182,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 183,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 184,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 185,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 186,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 187,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 188,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 189,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 190,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 191,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 192,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 193,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 194,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    },
+    {
+      "frame": 195,
+      "code": "right_wrist_contact_unreachable",
+      "severity": "blocking",
+      "detail": "target distance exceeds arm reach"
+    }
+  ],
+  "warnings": [],
+  "constraint_report": {
+    "contact": "right_wrist_to_chin_edge",
+    "applied": true,
+    "violations": [
+      {
+        "frame": 69,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 70,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 71,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 72,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 73,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 74,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 75,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 76,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 77,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 78,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 79,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 80,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 81,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 82,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 83,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 84,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 85,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 86,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 87,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 88,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 89,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 90,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 91,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 92,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 93,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 94,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 95,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 96,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 97,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 98,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 99,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 100,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 101,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 102,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 103,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 104,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 105,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 106,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 107,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 108,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 109,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 110,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 111,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 112,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 113,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 114,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 115,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 116,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 117,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 118,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 119,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 120,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 121,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 122,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 123,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 124,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 125,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 126,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 127,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 128,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 129,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 130,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 131,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 132,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 133,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 134,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 135,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 136,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 137,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 138,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 139,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 140,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 141,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 142,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 143,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 144,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 145,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 146,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 147,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 148,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 149,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 150,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 151,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 152,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 153,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 154,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 155,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 156,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 157,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 158,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 159,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 160,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 161,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 162,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 163,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 164,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 165,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 166,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 167,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 168,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 169,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 170,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 171,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 172,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 173,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 174,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 175,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 176,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 177,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 178,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 179,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 180,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 181,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 182,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 183,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 184,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 185,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 186,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 187,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 188,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 189,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 190,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 191,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 192,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 193,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 194,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      },
+      {
+        "frame": 195,
+        "code": "right_wrist_contact_unreachable",
+        "severity": "blocking",
+        "detail": "target distance exceeds arm reach"
+      }
+    ]
+  },
+  "hand_preset_overlay_applied": true,
+  "action_score_skipped": false,
+  "outputs": {
+    "skeleton": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter02\\runs\\x2_y2_z2\\candidates\\candidate_001_sample0_repeat0_len196_ik\\skeleton.json",
+    "final_skeleton": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter02\\runs\\x2_y2_z2\\candidates\\candidate_001_sample0_repeat0_len196_ik\\final_skeleton.json",
+    "draft_vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter02\\runs\\x2_y2_z2\\candidates\\candidate_001_sample0_repeat0_len196_ik\\draft.vmd",
+    "final_candidate_vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter02\\runs\\x2_y2_z2\\candidates\\candidate_001_sample0_repeat0_len196_ik\\final_candidate.vmd",
+    "bvh_motion": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter02\\runs\\x2_y2_z2\\candidates\\candidate_001_sample0_repeat0_len196_ik\\bvh_motion.json"
+  },
+  "vmd_summary": {
+    "path": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter02\\runs\\x2_y2_z2\\candidates\\candidate_001_sample0_repeat0_len196_ik\\final_candidate.vmd",
+    "header": "Vocaloid Motion Data 0002",
+    "model_name": "Eula",
+    "bone_frame_count": 7056,
+    "max_frame": 292,
+    "bone_names": [
+      "センター",
+      "下半身",
+      "上半身",
+      "上半身2",
+      "首",
+      "頭",
+      "右肩",
+      "右腕",
+      "右ひじ",
+      "右手首",
+      "左肩",
+      "左腕",
+      "左ひじ",
+      "左手首",
+      "右足",
+      "右ひざ",
+      "右足首",
+      "左足",
+      "左ひざ",
+      "左足首",
+      "右親指０",
+      "右親指１",
+      "右人指１",
+      "右人指２",
+      "右中指１",
+      "右中指２",
+      "右薬指１",
+      "右薬指２",
+      "右小指１",
+      "右小指２",
+      "左親指０",
+      "左親指１",
+      "左人指１",
+      "左中指１",
+      "左薬指１",
+      "左小指１"
+    ]
+  },
+  "frame_counts": {
+    "skeleton": 196,
+    "draft_bone_frames": 3920,
+    "final_bone_frames": 7056
+  },
+  "source_bvh": "D:\\workspace\\MMD project\\imgToAction\\samples\\bvh\\sample0_repeat0_len196_ik.bvh"
+}

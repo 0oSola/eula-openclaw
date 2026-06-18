@@ -18,6 +18,9 @@ describe("desktop pet menu action status", () => {
     expect(describeMenuActionResult({ type: "restore-session", petSessionId: "codex:session-1" })).toBe(
       "Opening VSCode workspace and resuming Codex...",
     );
+    expect(describeMenuActionResult({ type: "focus-active-session", petSessionId: "codex:session-1" })).toBe(
+      "Opening existing task window...",
+    );
   });
 
   it("describes menu language changes", () => {
@@ -41,6 +44,9 @@ describe("desktop pet menu action status", () => {
 
   it("describes workspace selection", () => {
     expect(describeMenuActionResult({ type: "select-workspace" })).toBe("Selecting Codex workspace...");
+    expect(describeMenuActionResult({ type: "switch-workspace", workspacePath: "D:\\workspace\\other project" })).toBe(
+      "Switching workspace: other project",
+    );
     expect(describeMenuActionResult({ type: "workspace-selected", workspacePath: "D:\\workspace\\MMD project" })).toBe(
       "Workspace selected: MMD project",
     );

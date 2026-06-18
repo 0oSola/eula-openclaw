@@ -1,0 +1,1751 @@
+{
+  "model": "Eula thinking MediaPipe reference",
+  "image_width": 1024,
+  "image_height": 1536,
+  "coordinate_system": "pixel_top_left",
+  "source_dir": "output/imagegen/eula-thinking-gesture",
+  "generator": "mediapipe_pose_landmarker",
+  "note": "Generated from MediaPipe Pose Landmarker IMAGE mode. Low-confidence points should be manually reviewed before fitting.",
+  "frames": {
+    "frame_00_front": {
+      "image": "output/imagegen/eula-thinking-gesture/frame_00_front.png",
+      "frame": 0,
+      "view": "front",
+      "image_width": 1024,
+      "image_height": 1536,
+      "landmarks": {
+        "head": {
+          "x": 560.435,
+          "y": 193.64,
+          "z": -0.505394,
+          "weight": 0.9,
+          "confidence": 0.991,
+          "source_indices": [
+            0
+          ]
+        },
+        "left_shoulder": {
+          "x": 593.476,
+          "y": 325.35,
+          "z": 0.061289,
+          "weight": 1.0,
+          "confidence": 0.999,
+          "source_indices": [
+            11
+          ]
+        },
+        "right_shoulder": {
+          "x": 405.667,
+          "y": 299.873,
+          "z": -0.286171,
+          "weight": 1.0,
+          "confidence": 0.968,
+          "source_indices": [
+            12
+          ]
+        },
+        "left_elbow": {
+          "x": 631.51,
+          "y": 487.775,
+          "z": 0.13151,
+          "weight": 1.1,
+          "confidence": 0.712,
+          "source_indices": [
+            13
+          ]
+        },
+        "right_elbow": {
+          "x": 401.914,
+          "y": 401.406,
+          "z": -0.679298,
+          "weight": 1.1,
+          "confidence": 0.928,
+          "source_indices": [
+            14
+          ]
+        },
+        "left_wrist": {
+          "x": 676.823,
+          "y": 654.733,
+          "z": -0.023162,
+          "weight": 1.5,
+          "confidence": 0.493,
+          "source_indices": [
+            15
+          ]
+        },
+        "right_wrist": {
+          "x": 442.997,
+          "y": 308.944,
+          "z": -1.074495,
+          "weight": 1.5,
+          "confidence": 0.844,
+          "source_indices": [
+            16
+          ]
+        },
+        "left_hip": {
+          "x": 565.517,
+          "y": 677.898,
+          "z": 0.08303,
+          "weight": 0.8,
+          "confidence": 0.997,
+          "source_indices": [
+            23
+          ]
+        },
+        "right_hip": {
+          "x": 446.808,
+          "y": 686.098,
+          "z": -0.082744,
+          "weight": 0.8,
+          "confidence": 0.99,
+          "source_indices": [
+            24
+          ]
+        },
+        "left_knee": {
+          "x": 545.893,
+          "y": 952.802,
+          "z": -0.011771,
+          "weight": 0.9,
+          "confidence": 0.777,
+          "source_indices": [
+            25
+          ]
+        },
+        "right_knee": {
+          "x": 476.636,
+          "y": 955.083,
+          "z": -0.120823,
+          "weight": 0.9,
+          "confidence": 0.679,
+          "source_indices": [
+            26
+          ]
+        },
+        "left_ankle": {
+          "x": 525.877,
+          "y": 1204.783,
+          "z": 0.351157,
+          "weight": 1.2,
+          "confidence": 0.716,
+          "source_indices": [
+            27
+          ]
+        },
+        "right_ankle": {
+          "x": 479.257,
+          "y": 1202.821,
+          "z": 0.231639,
+          "weight": 1.2,
+          "confidence": 0.727,
+          "source_indices": [
+            28
+          ]
+        },
+        "left_toe": {
+          "x": 547.868,
+          "y": 1263.796,
+          "z": 0.059992,
+          "weight": 1.1,
+          "confidence": 0.709,
+          "source_indices": [
+            31
+          ]
+        },
+        "right_toe": {
+          "x": 487.989,
+          "y": 1266.513,
+          "z": -0.08864,
+          "weight": 1.1,
+          "confidence": 0.693,
+          "source_indices": [
+            32
+          ]
+        },
+        "neck": {
+          "x": 499.572,
+          "y": 312.612,
+          "z": -0.112441,
+          "weight": 1.0,
+          "confidence": 0.968,
+          "source_indices": [
+            11,
+            12
+          ]
+        },
+        "pelvis": {
+          "x": 506.163,
+          "y": 681.998,
+          "z": 0.000143,
+          "weight": 1.0,
+          "confidence": 0.99,
+          "source_indices": [
+            23,
+            24
+          ]
+        }
+      },
+      "missing": [],
+      "low_confidence": [
+        "left_wrist"
+      ]
+    },
+    "frame_00_side": {
+      "image": "output/imagegen/eula-thinking-gesture/frame_00_side.png",
+      "frame": 0,
+      "view": "side",
+      "image_width": 1024,
+      "image_height": 1536,
+      "landmarks": {
+        "head": {
+          "x": 597.284,
+          "y": 203.319,
+          "z": -0.037329,
+          "weight": 0.9,
+          "confidence": 0.977,
+          "source_indices": [
+            0
+          ]
+        },
+        "left_shoulder": {
+          "x": 524.211,
+          "y": 331.422,
+          "z": 0.40149,
+          "weight": 1.0,
+          "confidence": 0.994,
+          "source_indices": [
+            11
+          ]
+        },
+        "right_shoulder": {
+          "x": 516.701,
+          "y": 328.655,
+          "z": -0.450638,
+          "weight": 1.0,
+          "confidence": 0.997,
+          "source_indices": [
+            12
+          ]
+        },
+        "left_elbow": {
+          "x": 487.288,
+          "y": 518.167,
+          "z": 0.41786,
+          "weight": 1.1,
+          "confidence": 0.023,
+          "source_indices": [
+            13
+          ]
+        },
+        "right_elbow": {
+          "x": 474.624,
+          "y": 521.363,
+          "z": -0.490198,
+          "weight": 1.1,
+          "confidence": 0.896,
+          "source_indices": [
+            14
+          ]
+        },
+        "left_wrist": {
+          "x": 513.396,
+          "y": 641.64,
+          "z": 0.204294,
+          "weight": 1.5,
+          "confidence": 0.024,
+          "source_indices": [
+            15
+          ]
+        },
+        "right_wrist": {
+          "x": 511.0,
+          "y": 635.967,
+          "z": -0.308742,
+          "weight": 1.5,
+          "confidence": 0.653,
+          "source_indices": [
+            16
+          ]
+        },
+        "left_hip": {
+          "x": 510.338,
+          "y": 697.048,
+          "z": 0.267533,
+          "weight": 0.8,
+          "confidence": 0.989,
+          "source_indices": [
+            23
+          ]
+        },
+        "right_hip": {
+          "x": 501.685,
+          "y": 699.937,
+          "z": -0.267512,
+          "weight": 0.8,
+          "confidence": 0.991,
+          "source_indices": [
+            24
+          ]
+        },
+        "left_knee": {
+          "x": 502.875,
+          "y": 961.689,
+          "z": 0.265566,
+          "weight": 0.9,
+          "confidence": 0.295,
+          "source_indices": [
+            25
+          ]
+        },
+        "right_knee": {
+          "x": 499.705,
+          "y": 974.416,
+          "z": -0.256899,
+          "weight": 0.9,
+          "confidence": 0.881,
+          "source_indices": [
+            26
+          ]
+        },
+        "left_ankle": {
+          "x": 476.053,
+          "y": 1235.92,
+          "z": 0.405036,
+          "weight": 1.2,
+          "confidence": 0.434,
+          "source_indices": [
+            27
+          ]
+        },
+        "right_ankle": {
+          "x": 479.017,
+          "y": 1279.791,
+          "z": -0.148264,
+          "weight": 1.2,
+          "confidence": 0.884,
+          "source_indices": [
+            28
+          ]
+        },
+        "left_toe": {
+          "x": 551.716,
+          "y": 1345.116,
+          "z": 0.255163,
+          "weight": 1.1,
+          "confidence": 0.588,
+          "source_indices": [
+            31
+          ]
+        },
+        "right_toe": {
+          "x": 563.795,
+          "y": 1373.893,
+          "z": -0.35965,
+          "weight": 1.1,
+          "confidence": 0.879,
+          "source_indices": [
+            32
+          ]
+        },
+        "neck": {
+          "x": 520.456,
+          "y": 330.038,
+          "z": -0.024574,
+          "weight": 1.0,
+          "confidence": 0.994,
+          "source_indices": [
+            11,
+            12
+          ]
+        },
+        "pelvis": {
+          "x": 506.012,
+          "y": 698.492,
+          "z": 1e-05,
+          "weight": 1.0,
+          "confidence": 0.989,
+          "source_indices": [
+            23,
+            24
+          ]
+        }
+      },
+      "missing": [],
+      "low_confidence": [
+        "left_elbow",
+        "left_wrist",
+        "left_knee",
+        "left_ankle"
+      ]
+    },
+    "frame_00_45": {
+      "image": "output/imagegen/eula-thinking-gesture/frame_00_45.png",
+      "frame": 0,
+      "view": "45",
+      "image_width": 1024,
+      "image_height": 1536,
+      "landmarks": {
+        "head": {
+          "x": 584.698,
+          "y": 197.036,
+          "z": -0.447238,
+          "weight": 0.9,
+          "confidence": 0.99,
+          "source_indices": [
+            0
+          ]
+        },
+        "left_shoulder": {
+          "x": 546.886,
+          "y": 325.271,
+          "z": 0.092645,
+          "weight": 1.0,
+          "confidence": 0.999,
+          "source_indices": [
+            11
+          ]
+        },
+        "right_shoulder": {
+          "x": 448.836,
+          "y": 359.365,
+          "z": -0.5616,
+          "weight": 1.0,
+          "confidence": 0.995,
+          "source_indices": [
+            12
+          ]
+        },
+        "left_elbow": {
+          "x": 589.216,
+          "y": 511.899,
+          "z": 0.16782,
+          "weight": 1.1,
+          "confidence": 0.183,
+          "source_indices": [
+            13
+          ]
+        },
+        "right_elbow": {
+          "x": 475.614,
+          "y": 576.215,
+          "z": -0.565237,
+          "weight": 1.1,
+          "confidence": 0.877,
+          "source_indices": [
+            14
+          ]
+        },
+        "left_wrist": {
+          "x": 640.114,
+          "y": 651.769,
+          "z": -0.044936,
+          "weight": 1.5,
+          "confidence": 0.268,
+          "source_indices": [
+            15
+          ]
+        },
+        "right_wrist": {
+          "x": 577.806,
+          "y": 645.085,
+          "z": -0.490069,
+          "weight": 1.5,
+          "confidence": 0.749,
+          "source_indices": [
+            16
+          ]
+        },
+        "left_hip": {
+          "x": 544.834,
+          "y": 709.423,
+          "z": 0.181041,
+          "weight": 0.8,
+          "confidence": 0.992,
+          "source_indices": [
+            23
+          ]
+        },
+        "right_hip": {
+          "x": 479.695,
+          "y": 724.133,
+          "z": -0.181101,
+          "weight": 0.8,
+          "confidence": 0.989,
+          "source_indices": [
+            24
+          ]
+        },
+        "left_knee": {
+          "x": 531.023,
+          "y": 965.448,
+          "z": 0.291794,
+          "weight": 0.9,
+          "confidence": 0.245,
+          "source_indices": [
+            25
+          ]
+        },
+        "right_knee": {
+          "x": 493.721,
+          "y": 997.445,
+          "z": -0.069716,
+          "weight": 0.9,
+          "confidence": 0.346,
+          "source_indices": [
+            26
+          ]
+        },
+        "left_ankle": {
+          "x": 506.9,
+          "y": 1210.465,
+          "z": 0.603625,
+          "weight": 1.2,
+          "confidence": 0.32,
+          "source_indices": [
+            27
+          ]
+        },
+        "right_ankle": {
+          "x": 467.717,
+          "y": 1245.163,
+          "z": 0.276189,
+          "weight": 1.2,
+          "confidence": 0.456,
+          "source_indices": [
+            28
+          ]
+        },
+        "left_toe": {
+          "x": 588.067,
+          "y": 1284.423,
+          "z": 0.417077,
+          "weight": 1.1,
+          "confidence": 0.474,
+          "source_indices": [
+            31
+          ]
+        },
+        "right_toe": {
+          "x": 532.74,
+          "y": 1314.879,
+          "z": 0.041562,
+          "weight": 1.1,
+          "confidence": 0.527,
+          "source_indices": [
+            32
+          ]
+        },
+        "neck": {
+          "x": 497.861,
+          "y": 342.318,
+          "z": -0.234478,
+          "weight": 1.0,
+          "confidence": 0.995,
+          "source_indices": [
+            11,
+            12
+          ]
+        },
+        "pelvis": {
+          "x": 512.264,
+          "y": 716.778,
+          "z": -3e-05,
+          "weight": 1.0,
+          "confidence": 0.989,
+          "source_indices": [
+            23,
+            24
+          ]
+        }
+      },
+      "missing": [],
+      "low_confidence": [
+        "left_elbow",
+        "left_wrist",
+        "left_knee",
+        "right_knee",
+        "left_ankle",
+        "right_ankle",
+        "left_toe"
+      ]
+    },
+    "frame_30_front": {
+      "image": "output/imagegen/eula-thinking-gesture/frame_30_front.png",
+      "frame": 30,
+      "view": "front",
+      "image_width": 1024,
+      "image_height": 1536,
+      "landmarks": {
+        "head": {
+          "x": 541.772,
+          "y": 204.755,
+          "z": -0.403751,
+          "weight": 0.9,
+          "confidence": 0.996,
+          "source_indices": [
+            0
+          ]
+        },
+        "left_shoulder": {
+          "x": 586.161,
+          "y": 308.731,
+          "z": 0.082081,
+          "weight": 1.0,
+          "confidence": 0.999,
+          "source_indices": [
+            11
+          ]
+        },
+        "right_shoulder": {
+          "x": 407.25,
+          "y": 305.333,
+          "z": -0.105258,
+          "weight": 1.0,
+          "confidence": 0.988,
+          "source_indices": [
+            12
+          ]
+        },
+        "left_elbow": {
+          "x": 626.562,
+          "y": 458.718,
+          "z": -0.048844,
+          "weight": 1.1,
+          "confidence": 0.715,
+          "source_indices": [
+            13
+          ]
+        },
+        "right_elbow": {
+          "x": 406.376,
+          "y": 455.561,
+          "z": -0.374305,
+          "weight": 1.1,
+          "confidence": 0.78,
+          "source_indices": [
+            14
+          ]
+        },
+        "left_wrist": {
+          "x": 589.047,
+          "y": 480.718,
+          "z": -0.427939,
+          "weight": 1.5,
+          "confidence": 0.737,
+          "source_indices": [
+            15
+          ]
+        },
+        "right_wrist": {
+          "x": 486.531,
+          "y": 371.281,
+          "z": -0.717464,
+          "weight": 1.5,
+          "confidence": 0.717,
+          "source_indices": [
+            16
+          ]
+        },
+        "left_hip": {
+          "x": 570.357,
+          "y": 687.369,
+          "z": 0.052105,
+          "weight": 0.8,
+          "confidence": 0.99,
+          "source_indices": [
+            23
+          ]
+        },
+        "right_hip": {
+          "x": 452.521,
+          "y": 691.362,
+          "z": -0.051462,
+          "weight": 0.8,
+          "confidence": 0.981,
+          "source_indices": [
+            24
+          ]
+        },
+        "left_knee": {
+          "x": 559.233,
+          "y": 950.607,
+          "z": -0.071543,
+          "weight": 0.9,
+          "confidence": 0.502,
+          "source_indices": [
+            25
+          ]
+        },
+        "right_knee": {
+          "x": 479.563,
+          "y": 959.058,
+          "z": -0.145208,
+          "weight": 0.9,
+          "confidence": 0.454,
+          "source_indices": [
+            26
+          ]
+        },
+        "left_ankle": {
+          "x": 546.565,
+          "y": 1220.0,
+          "z": 0.136227,
+          "weight": 1.2,
+          "confidence": 0.345,
+          "source_indices": [
+            27
+          ]
+        },
+        "right_ankle": {
+          "x": 479.906,
+          "y": 1240.572,
+          "z": 0.067128,
+          "weight": 1.2,
+          "confidence": 0.338,
+          "source_indices": [
+            28
+          ]
+        },
+        "left_toe": {
+          "x": 579.222,
+          "y": 1299.388,
+          "z": -0.12378,
+          "weight": 1.1,
+          "confidence": 0.342,
+          "source_indices": [
+            31
+          ]
+        },
+        "right_toe": {
+          "x": 505.704,
+          "y": 1322.297,
+          "z": -0.221299,
+          "weight": 1.1,
+          "confidence": 0.308,
+          "source_indices": [
+            32
+          ]
+        },
+        "neck": {
+          "x": 496.706,
+          "y": 307.032,
+          "z": -0.011588,
+          "weight": 1.0,
+          "confidence": 0.988,
+          "source_indices": [
+            11,
+            12
+          ]
+        },
+        "pelvis": {
+          "x": 511.439,
+          "y": 689.365,
+          "z": 0.000322,
+          "weight": 1.0,
+          "confidence": 0.981,
+          "source_indices": [
+            23,
+            24
+          ]
+        }
+      },
+      "missing": [],
+      "low_confidence": [
+        "right_knee",
+        "left_ankle",
+        "right_ankle",
+        "left_toe",
+        "right_toe"
+      ]
+    },
+    "frame_30_side": {
+      "image": "output/imagegen/eula-thinking-gesture/frame_30_side.png",
+      "frame": 30,
+      "view": "side",
+      "image_width": 1024,
+      "image_height": 1536,
+      "landmarks": {
+        "head": {
+          "x": 593.808,
+          "y": 200.437,
+          "z": -0.036326,
+          "weight": 0.9,
+          "confidence": 0.971,
+          "source_indices": [
+            0
+          ]
+        },
+        "left_shoulder": {
+          "x": 530.461,
+          "y": 313.603,
+          "z": 0.412505,
+          "weight": 1.0,
+          "confidence": 0.992,
+          "source_indices": [
+            11
+          ]
+        },
+        "right_shoulder": {
+          "x": 489.329,
+          "y": 321.907,
+          "z": -0.370139,
+          "weight": 1.0,
+          "confidence": 0.99,
+          "source_indices": [
+            12
+          ]
+        },
+        "left_elbow": {
+          "x": 497.486,
+          "y": 502.569,
+          "z": 0.463357,
+          "weight": 1.1,
+          "confidence": 0.031,
+          "source_indices": [
+            13
+          ]
+        },
+        "right_elbow": {
+          "x": 459.315,
+          "y": 507.405,
+          "z": -0.406688,
+          "weight": 1.1,
+          "confidence": 0.809,
+          "source_indices": [
+            14
+          ]
+        },
+        "left_wrist": {
+          "x": 484.353,
+          "y": 630.251,
+          "z": 0.316506,
+          "weight": 1.5,
+          "confidence": 0.028,
+          "source_indices": [
+            15
+          ]
+        },
+        "right_wrist": {
+          "x": 461.472,
+          "y": 599.071,
+          "z": -0.278657,
+          "weight": 1.5,
+          "confidence": 0.57,
+          "source_indices": [
+            16
+          ]
+        },
+        "left_hip": {
+          "x": 517.859,
+          "y": 665.837,
+          "z": 0.243834,
+          "weight": 0.8,
+          "confidence": 0.987,
+          "source_indices": [
+            23
+          ]
+        },
+        "right_hip": {
+          "x": 488.18,
+          "y": 668.619,
+          "z": -0.243741,
+          "weight": 0.8,
+          "confidence": 0.981,
+          "source_indices": [
+            24
+          ]
+        },
+        "left_knee": {
+          "x": 505.478,
+          "y": 950.948,
+          "z": 0.184794,
+          "weight": 0.9,
+          "confidence": 0.23,
+          "source_indices": [
+            25
+          ]
+        },
+        "right_knee": {
+          "x": 497.588,
+          "y": 952.337,
+          "z": -0.26454,
+          "weight": 0.9,
+          "confidence": 0.779,
+          "source_indices": [
+            26
+          ]
+        },
+        "left_ankle": {
+          "x": 481.702,
+          "y": 1239.202,
+          "z": 0.256058,
+          "weight": 1.2,
+          "confidence": 0.36,
+          "source_indices": [
+            27
+          ]
+        },
+        "right_ankle": {
+          "x": 481.606,
+          "y": 1274.246,
+          "z": -0.204079,
+          "weight": 1.2,
+          "confidence": 0.801,
+          "source_indices": [
+            28
+          ]
+        },
+        "left_toe": {
+          "x": 570.407,
+          "y": 1336.408,
+          "z": 0.103298,
+          "weight": 1.1,
+          "confidence": 0.508,
+          "source_indices": [
+            31
+          ]
+        },
+        "right_toe": {
+          "x": 572.154,
+          "y": 1368.306,
+          "z": -0.417768,
+          "weight": 1.1,
+          "confidence": 0.798,
+          "source_indices": [
+            32
+          ]
+        },
+        "neck": {
+          "x": 509.895,
+          "y": 317.755,
+          "z": 0.021183,
+          "weight": 1.0,
+          "confidence": 0.99,
+          "source_indices": [
+            11,
+            12
+          ]
+        },
+        "pelvis": {
+          "x": 503.02,
+          "y": 667.228,
+          "z": 4.6e-05,
+          "weight": 1.0,
+          "confidence": 0.981,
+          "source_indices": [
+            23,
+            24
+          ]
+        }
+      },
+      "missing": [],
+      "low_confidence": [
+        "left_elbow",
+        "left_wrist",
+        "left_knee",
+        "left_ankle"
+      ]
+    },
+    "frame_30_45": {
+      "image": "output/imagegen/eula-thinking-gesture/frame_30_45.png",
+      "frame": 30,
+      "view": "45",
+      "image_width": 1024,
+      "image_height": 1536,
+      "landmarks": {
+        "head": {
+          "x": 562.747,
+          "y": 199.899,
+          "z": -0.240127,
+          "weight": 0.9,
+          "confidence": 0.993,
+          "source_indices": [
+            0
+          ]
+        },
+        "left_shoulder": {
+          "x": 573.702,
+          "y": 308.541,
+          "z": 0.299845,
+          "weight": 1.0,
+          "confidence": 0.999,
+          "source_indices": [
+            11
+          ]
+        },
+        "right_shoulder": {
+          "x": 450.655,
+          "y": 305.586,
+          "z": -0.351951,
+          "weight": 1.0,
+          "confidence": 0.996,
+          "source_indices": [
+            12
+          ]
+        },
+        "left_elbow": {
+          "x": 581.257,
+          "y": 472.698,
+          "z": 0.271781,
+          "weight": 1.1,
+          "confidence": 0.143,
+          "source_indices": [
+            13
+          ]
+        },
+        "right_elbow": {
+          "x": 513.772,
+          "y": 464.648,
+          "z": -0.340356,
+          "weight": 1.1,
+          "confidence": 0.93,
+          "source_indices": [
+            14
+          ]
+        },
+        "left_wrist": {
+          "x": 556.023,
+          "y": 582.924,
+          "z": -0.06345,
+          "weight": 1.5,
+          "confidence": 0.132,
+          "source_indices": [
+            15
+          ]
+        },
+        "right_wrist": {
+          "x": 598.504,
+          "y": 389.654,
+          "z": -0.077862,
+          "weight": 1.5,
+          "confidence": 0.642,
+          "source_indices": [
+            16
+          ]
+        },
+        "left_hip": {
+          "x": 562.514,
+          "y": 683.042,
+          "z": 0.199781,
+          "weight": 0.8,
+          "confidence": 0.997,
+          "source_indices": [
+            23
+          ]
+        },
+        "right_hip": {
+          "x": 476.918,
+          "y": 686.922,
+          "z": -0.199547,
+          "weight": 0.8,
+          "confidence": 0.992,
+          "source_indices": [
+            24
+          ]
+        },
+        "left_knee": {
+          "x": 542.92,
+          "y": 969.943,
+          "z": 0.143373,
+          "weight": 0.9,
+          "confidence": 0.604,
+          "source_indices": [
+            25
+          ]
+        },
+        "right_knee": {
+          "x": 493.642,
+          "y": 972.319,
+          "z": -0.212965,
+          "weight": 0.9,
+          "confidence": 0.879,
+          "source_indices": [
+            26
+          ]
+        },
+        "left_ankle": {
+          "x": 494.524,
+          "y": 1243.355,
+          "z": 0.352334,
+          "weight": 1.2,
+          "confidence": 0.822,
+          "source_indices": [
+            27
+          ]
+        },
+        "right_ankle": {
+          "x": 480.703,
+          "y": 1270.426,
+          "z": 0.02704,
+          "weight": 1.2,
+          "confidence": 0.916,
+          "source_indices": [
+            28
+          ]
+        },
+        "left_toe": {
+          "x": 559.126,
+          "y": 1348.067,
+          "z": 0.120355,
+          "weight": 1.1,
+          "confidence": 0.872,
+          "source_indices": [
+            31
+          ]
+        },
+        "right_toe": {
+          "x": 542.853,
+          "y": 1369.145,
+          "z": -0.249004,
+          "weight": 1.1,
+          "confidence": 0.913,
+          "source_indices": [
+            32
+          ]
+        },
+        "neck": {
+          "x": 512.178,
+          "y": 307.063,
+          "z": -0.026053,
+          "weight": 1.0,
+          "confidence": 0.996,
+          "source_indices": [
+            11,
+            12
+          ]
+        },
+        "pelvis": {
+          "x": 519.716,
+          "y": 684.982,
+          "z": 0.000117,
+          "weight": 1.0,
+          "confidence": 0.992,
+          "source_indices": [
+            23,
+            24
+          ]
+        }
+      },
+      "missing": [],
+      "low_confidence": [
+        "left_elbow",
+        "left_wrist"
+      ]
+    },
+    "frame_60_front": {
+      "image": "output/imagegen/eula-thinking-gesture/frame_60_front.png",
+      "frame": 60,
+      "view": "front",
+      "image_width": 1024,
+      "image_height": 1536,
+      "landmarks": {
+        "head": {
+          "x": 495.848,
+          "y": 210.779,
+          "z": -0.337845,
+          "weight": 0.9,
+          "confidence": 0.925,
+          "source_indices": [
+            0
+          ]
+        },
+        "left_shoulder": {
+          "x": 600.049,
+          "y": 323.19,
+          "z": -0.004405,
+          "weight": 1.0,
+          "confidence": 0.988,
+          "source_indices": [
+            11
+          ]
+        },
+        "right_shoulder": {
+          "x": 422.523,
+          "y": 310.349,
+          "z": 0.037745,
+          "weight": 1.0,
+          "confidence": 0.964,
+          "source_indices": [
+            12
+          ]
+        },
+        "left_elbow": {
+          "x": 605.07,
+          "y": 474.159,
+          "z": -0.206476,
+          "weight": 1.1,
+          "confidence": 0.651,
+          "source_indices": [
+            13
+          ]
+        },
+        "right_elbow": {
+          "x": 404.429,
+          "y": 444.338,
+          "z": -0.272404,
+          "weight": 1.1,
+          "confidence": 0.687,
+          "source_indices": [
+            14
+          ]
+        },
+        "left_wrist": {
+          "x": 541.813,
+          "y": 475.744,
+          "z": -0.49904,
+          "weight": 1.5,
+          "confidence": 0.507,
+          "source_indices": [
+            15
+          ]
+        },
+        "right_wrist": {
+          "x": 464.613,
+          "y": 398.65,
+          "z": -0.704736,
+          "weight": 1.5,
+          "confidence": 0.648,
+          "source_indices": [
+            16
+          ]
+        },
+        "left_hip": {
+          "x": 562.149,
+          "y": 687.663,
+          "z": -0.012651,
+          "weight": 0.8,
+          "confidence": 0.984,
+          "source_indices": [
+            23
+          ]
+        },
+        "right_hip": {
+          "x": 444.323,
+          "y": 682.506,
+          "z": 0.013122,
+          "weight": 0.8,
+          "confidence": 0.973,
+          "source_indices": [
+            24
+          ]
+        },
+        "left_knee": {
+          "x": 558.207,
+          "y": 950.948,
+          "z": -0.086597,
+          "weight": 0.9,
+          "confidence": 0.848,
+          "source_indices": [
+            25
+          ]
+        },
+        "right_knee": {
+          "x": 447.584,
+          "y": 942.837,
+          "z": -0.000899,
+          "weight": 0.9,
+          "confidence": 0.851,
+          "source_indices": [
+            26
+          ]
+        },
+        "left_ankle": {
+          "x": 549.572,
+          "y": 1193.78,
+          "z": 0.164061,
+          "weight": 1.2,
+          "confidence": 0.729,
+          "source_indices": [
+            27
+          ]
+        },
+        "right_ankle": {
+          "x": 440.907,
+          "y": 1174.195,
+          "z": 0.26168,
+          "weight": 1.2,
+          "confidence": 0.753,
+          "source_indices": [
+            28
+          ]
+        },
+        "left_toe": {
+          "x": 541.359,
+          "y": 1237.871,
+          "z": -0.122427,
+          "weight": 1.1,
+          "confidence": 0.525,
+          "source_indices": [
+            31
+          ]
+        },
+        "right_toe": {
+          "x": 421.518,
+          "y": 1252.166,
+          "z": -0.006467,
+          "weight": 1.1,
+          "confidence": 0.565,
+          "source_indices": [
+            32
+          ]
+        },
+        "neck": {
+          "x": 511.286,
+          "y": 316.769,
+          "z": 0.01667,
+          "weight": 1.0,
+          "confidence": 0.964,
+          "source_indices": [
+            11,
+            12
+          ]
+        },
+        "pelvis": {
+          "x": 503.236,
+          "y": 685.085,
+          "z": 0.000235,
+          "weight": 1.0,
+          "confidence": 0.973,
+          "source_indices": [
+            23,
+            24
+          ]
+        }
+      },
+      "missing": [],
+      "low_confidence": []
+    },
+    "frame_60_side": {
+      "image": "output/imagegen/eula-thinking-gesture/frame_60_side.png",
+      "frame": 60,
+      "view": "side",
+      "image_width": 1024,
+      "image_height": 1536,
+      "landmarks": {
+        "head": {
+          "x": 580.427,
+          "y": 197.784,
+          "z": -0.031979,
+          "weight": 0.9,
+          "confidence": 0.996,
+          "source_indices": [
+            0
+          ]
+        },
+        "left_shoulder": {
+          "x": 532.67,
+          "y": 299.584,
+          "z": 0.420345,
+          "weight": 1.0,
+          "confidence": 0.998,
+          "source_indices": [
+            11
+          ]
+        },
+        "right_shoulder": {
+          "x": 504.45,
+          "y": 304.316,
+          "z": -0.368138,
+          "weight": 1.0,
+          "confidence": 0.999,
+          "source_indices": [
+            12
+          ]
+        },
+        "left_elbow": {
+          "x": 571.672,
+          "y": 454.729,
+          "z": 0.253738,
+          "weight": 1.1,
+          "confidence": 0.02,
+          "source_indices": [
+            13
+          ]
+        },
+        "right_elbow": {
+          "x": 592.701,
+          "y": 465.902,
+          "z": -0.258617,
+          "weight": 1.1,
+          "confidence": 0.908,
+          "source_indices": [
+            14
+          ]
+        },
+        "left_wrist": {
+          "x": 575.237,
+          "y": 430.111,
+          "z": -0.192912,
+          "weight": 1.5,
+          "confidence": 0.029,
+          "source_indices": [
+            15
+          ]
+        },
+        "right_wrist": {
+          "x": 619.08,
+          "y": 404.546,
+          "z": 0.291029,
+          "weight": 1.5,
+          "confidence": 0.435,
+          "source_indices": [
+            16
+          ]
+        },
+        "left_hip": {
+          "x": 525.959,
+          "y": 682.764,
+          "z": 0.257436,
+          "weight": 0.8,
+          "confidence": 0.993,
+          "source_indices": [
+            23
+          ]
+        },
+        "right_hip": {
+          "x": 513.883,
+          "y": 691.381,
+          "z": -0.257785,
+          "weight": 0.8,
+          "confidence": 0.991,
+          "source_indices": [
+            24
+          ]
+        },
+        "left_knee": {
+          "x": 510.29,
+          "y": 937.334,
+          "z": 0.315976,
+          "weight": 0.9,
+          "confidence": 0.146,
+          "source_indices": [
+            25
+          ]
+        },
+        "right_knee": {
+          "x": 511.834,
+          "y": 947.514,
+          "z": -0.239294,
+          "weight": 0.9,
+          "confidence": 0.797,
+          "source_indices": [
+            26
+          ]
+        },
+        "left_ankle": {
+          "x": 486.66,
+          "y": 1218.106,
+          "z": 0.394644,
+          "weight": 1.2,
+          "confidence": 0.315,
+          "source_indices": [
+            27
+          ]
+        },
+        "right_ankle": {
+          "x": 493.093,
+          "y": 1260.18,
+          "z": -0.18656,
+          "weight": 1.2,
+          "confidence": 0.844,
+          "source_indices": [
+            28
+          ]
+        },
+        "left_toe": {
+          "x": 570.321,
+          "y": 1274.942,
+          "z": 0.296793,
+          "weight": 1.1,
+          "confidence": 0.504,
+          "source_indices": [
+            31
+          ]
+        },
+        "right_toe": {
+          "x": 577.886,
+          "y": 1346.479,
+          "z": -0.339811,
+          "weight": 1.1,
+          "confidence": 0.814,
+          "source_indices": [
+            32
+          ]
+        },
+        "neck": {
+          "x": 518.56,
+          "y": 301.95,
+          "z": 0.026104,
+          "weight": 1.0,
+          "confidence": 0.998,
+          "source_indices": [
+            11,
+            12
+          ]
+        },
+        "pelvis": {
+          "x": 519.921,
+          "y": 687.072,
+          "z": -0.000175,
+          "weight": 1.0,
+          "confidence": 0.991,
+          "source_indices": [
+            23,
+            24
+          ]
+        }
+      },
+      "missing": [],
+      "low_confidence": [
+        "left_elbow",
+        "left_wrist",
+        "right_wrist",
+        "left_knee",
+        "left_ankle"
+      ]
+    },
+    "frame_60_45": {
+      "image": "output/imagegen/eula-thinking-gesture/frame_60_45.png",
+      "frame": 60,
+      "view": "45",
+      "image_width": 1024,
+      "image_height": 1536,
+      "landmarks": {
+        "head": {
+          "x": 549.638,
+          "y": 205.575,
+          "z": -0.25101,
+          "weight": 0.9,
+          "confidence": 0.985,
+          "source_indices": [
+            0
+          ]
+        },
+        "left_shoulder": {
+          "x": 556.991,
+          "y": 304.955,
+          "z": 0.264427,
+          "weight": 1.0,
+          "confidence": 0.995,
+          "source_indices": [
+            11
+          ]
+        },
+        "right_shoulder": {
+          "x": 483.887,
+          "y": 305.741,
+          "z": -0.305237,
+          "weight": 1.0,
+          "confidence": 0.992,
+          "source_indices": [
+            12
+          ]
+        },
+        "left_elbow": {
+          "x": 575.724,
+          "y": 465.693,
+          "z": 0.247813,
+          "weight": 1.1,
+          "confidence": 0.134,
+          "source_indices": [
+            13
+          ]
+        },
+        "right_elbow": {
+          "x": 535.714,
+          "y": 448.559,
+          "z": -0.306994,
+          "weight": 1.1,
+          "confidence": 0.786,
+          "source_indices": [
+            14
+          ]
+        },
+        "left_wrist": {
+          "x": 571.767,
+          "y": 491.987,
+          "z": -0.033958,
+          "weight": 1.5,
+          "confidence": 0.145,
+          "source_indices": [
+            15
+          ]
+        },
+        "right_wrist": {
+          "x": 584.891,
+          "y": 371.789,
+          "z": -0.131302,
+          "weight": 1.5,
+          "confidence": 0.392,
+          "source_indices": [
+            16
+          ]
+        },
+        "left_hip": {
+          "x": 550.872,
+          "y": 701.368,
+          "z": 0.203504,
+          "weight": 0.8,
+          "confidence": 0.99,
+          "source_indices": [
+            23
+          ]
+        },
+        "right_hip": {
+          "x": 506.116,
+          "y": 694.363,
+          "z": -0.203506,
+          "weight": 0.8,
+          "confidence": 0.985,
+          "source_indices": [
+            24
+          ]
+        },
+        "left_knee": {
+          "x": 528.355,
+          "y": 954.6,
+          "z": 0.215809,
+          "weight": 0.9,
+          "confidence": 0.291,
+          "source_indices": [
+            25
+          ]
+        },
+        "right_knee": {
+          "x": 512.566,
+          "y": 971.534,
+          "z": -0.221667,
+          "weight": 0.9,
+          "confidence": 0.807,
+          "source_indices": [
+            26
+          ]
+        },
+        "left_ankle": {
+          "x": 484.635,
+          "y": 1245.155,
+          "z": 0.390741,
+          "weight": 1.2,
+          "confidence": 0.552,
+          "source_indices": [
+            27
+          ]
+        },
+        "right_ankle": {
+          "x": 488.089,
+          "y": 1288.714,
+          "z": -0.067996,
+          "weight": 1.2,
+          "confidence": 0.852,
+          "source_indices": [
+            28
+          ]
+        },
+        "left_toe": {
+          "x": 567.965,
+          "y": 1325.16,
+          "z": 0.213186,
+          "weight": 1.1,
+          "confidence": 0.643,
+          "source_indices": [
+            31
+          ]
+        },
+        "right_toe": {
+          "x": 557.64,
+          "y": 1383.232,
+          "z": -0.295411,
+          "weight": 1.1,
+          "confidence": 0.82,
+          "source_indices": [
+            32
+          ]
+        },
+        "neck": {
+          "x": 520.439,
+          "y": 305.348,
+          "z": -0.020405,
+          "weight": 1.0,
+          "confidence": 0.992,
+          "source_indices": [
+            11,
+            12
+          ]
+        },
+        "pelvis": {
+          "x": 528.494,
+          "y": 697.865,
+          "z": -1e-06,
+          "weight": 1.0,
+          "confidence": 0.985,
+          "source_indices": [
+            23,
+            24
+          ]
+        }
+      },
+      "missing": [],
+      "low_confidence": [
+        "left_elbow",
+        "left_wrist",
+        "right_wrist",
+        "left_knee"
+      ]
+    }
+  },
+  "model_landmark_map": {
+    "head": [
+      "頭"
+    ],
+    "neck": [
+      "首"
+    ],
+    "left_shoulder": [
+      "左肩"
+    ],
+    "right_shoulder": [
+      "右肩"
+    ],
+    "left_elbow": [
+      "左ひじ"
+    ],
+    "right_elbow": [
+      "右ひじ"
+    ],
+    "left_wrist": [
+      "左手首"
+    ],
+    "right_wrist": [
+      "右手首"
+    ],
+    "pelvis": [
+      "下半身"
+    ],
+    "left_hip": [
+      "左足"
+    ],
+    "right_hip": [
+      "右足"
+    ],
+    "left_knee": [
+      "左ひざ"
+    ],
+    "right_knee": [
+      "右ひざ"
+    ],
+    "left_ankle": [
+      "左足首"
+    ],
+    "right_ankle": [
+      "右足首"
+    ],
+    "left_toe": [
+      "左つま先ＩＫ"
+    ],
+    "right_toe": [
+      "右つま先ＩＫ"
+    ]
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "selected_candidate_id": "candidate_001_seed_good",
+  "selected_score": 99.57,
+  "selected_blocking": false,
+  "reason": "highest_non_blocking_score",
+  "eligible_candidates": [
+    {
+      "candidate_id": "candidate_001_seed_good",
+      "score": 99.57,
+      "blocking": false,
+      "quality_report": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_001_seed_good\\quality_report.json",
+      "final_candidate_vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_001_seed_good\\final_candidate.vmd",
+      "source_npy": "D:\\workspace\\MMD project\\imgToAction\\outputs\\actions\\thinking_chin_edge\\smoke_input\\seed_good.npy"
+    },
+    {
+      "candidate_id": "candidate_002_seed_drift",
+      "score": 87.57,
+      "blocking": false,
+      "quality_report": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_002_seed_drift\\quality_report.json",
+      "final_candidate_vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_002_seed_drift\\final_candidate.vmd",
+      "source_npy": "D:\\workspace\\MMD project\\imgToAction\\outputs\\actions\\thinking_chin_edge\\smoke_input\\seed_drift.npy"
+    }
+  ],
+  "candidates": [
+    {
+      "candidate_id": "candidate_001_seed_good",
+      "score": 99.57,
+      "blocking": false,
+      "quality_report": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_001_seed_good\\quality_report.json",
+      "final_candidate_vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_001_seed_good\\final_candidate.vmd",
+      "source_npy": "D:\\workspace\\MMD project\\imgToAction\\outputs\\actions\\thinking_chin_edge\\smoke_input\\seed_good.npy"
+    },
+    {
+      "candidate_id": "candidate_002_seed_drift",
+      "score": 87.57,
+      "blocking": false,
+      "quality_report": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_002_seed_drift\\quality_report.json",
+      "final_candidate_vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_002_seed_drift\\final_candidate.vmd",
+      "source_npy": "D:\\workspace\\MMD project\\imgToAction\\outputs\\actions\\thinking_chin_edge\\smoke_input\\seed_drift.npy"
+    }
+  ],
+  "action": "thinking_chin_edge",
+  "model_profile": "eula",
+  "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke",
+  "action_path": "D:\\workspace\\MMD project\\imgToAction\\actions\\thinking_chin_edge.json",
+  "model_profile_path": "D:\\workspace\\MMD project\\imgToAction\\config\\model_profile.eula.json",
+  "hand_presets_path": "D:\\workspace\\MMD project\\imgToAction\\config\\hand_presets.json",
+  "final_vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\final.vmd",
+  "out": "imgToAction\\outputs\\vmd\\eula_thinking_chin_edge_smoke.vmd"
+}

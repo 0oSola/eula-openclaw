@@ -6,8 +6,9 @@
 
 ## 准备
 
-- [ ] 在 `desktop-pet` 目录运行 `.\start-pet.ps1`；如已有 Pet 正在运行，脚本会直接返回现有 PID，不重复启动。
-- [ ] 需要强制新开实例时运行 `.\start-pet.ps1 -ForceNew`。
+- [ ] 在 `desktop-pet` 目录运行 `.\start-pet.ps1`；如已有 Pet 正在运行，脚本会先停止当前 Electron 主进程，再重新拉起 Pet。
+- [ ] 只想复用当前 Pet、不重启时运行 `.\start-pet.ps1 -ReuseExisting`。
+- [ ] 需要强制新开并保留旧实例时运行 `.\start-pet.ps1 -ForceNew`。
 - [ ] 需要前台查看 Vite/Electron 日志时，可手动分两步运行：`npm run dev`，再另开终端执行 `$env:MMD_PET_DEBUG_EVENTS="1"; $env:MMD_PET_DEBUG_EVENTS_LOG="D:\workspace\MMD project\.worktrees\desktop-mmd-codex-pet\desktop-pet-debug-events.ndjson"; npm run dev:electron`。
 - [ ] 确认 Pet 窗口可见，右键菜单可打开，日志文件持续写入 `context-menu:*` 事件。
 
@@ -56,7 +57,7 @@
 
 - [ ] 右键菜单选择 `Interaction Mode` -> `Drag Whole App`。
 - [ ] 左键按住 Pet 空白或角色区域拖动，窗口随鼠标移动。
-- [ ] 松开后窗口尺寸保持 320x420 附近，不发生 resize/maximize/fullscreen。
+- [ ] 松开后窗口尺寸保持 360x420 附近，不发生 resize/maximize/fullscreen。
 - [ ] 右键按下不会启动窗口拖动。
 
 ### PET-INT-025 相机
@@ -81,7 +82,8 @@
 
 - [ ] 右键菜单打开 `Workspace`，确认当前 workspace 名称正确。
 - [ ] 点击 `New Codex Session`。
-- [ ] VSCode 打开或聚焦当前 workspace，并在内置终端 `Codex Pet` 执行 `codex`。
+- [ ] VSCode 新开一个当前 workspace 窗口；同一 workspace 连续触发时也应出现新的窗口，而不是只复用/聚焦已有窗口。
+- [ ] VSCode 内置终端 `Codex Pet` 执行 `codex`，并删除 `<workspace>\.codex-pet\vscode-terminal-request.json`。
 - [ ] Pet 常驻状态条从 `starting` / `launched` 进入 running 类状态。
 
 ### Codex 恢复

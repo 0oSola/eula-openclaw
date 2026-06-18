@@ -103,6 +103,24 @@ class Settings:
     codex_require_git_clean_for_apply: bool
     codex_require_human_approval: bool
     codex_trace_redact_secrets: bool
+    codex_openclaw_review_enabled: bool
+    codex_openclaw_review_agent_id: str
+    codex_openclaw_review_channel: str
+    codex_openclaw_review_sync_interval_seconds: float
+    codex_openclaw_review_max_payload_chars: int
+    codex_openclaw_review_dump_debug_files: bool
+    codex_openclaw_control_plane_enabled: bool
+    codex_openclaw_control_plane_base_url: str
+    codex_openclaw_control_plane_token: str
+    codex_openclaw_control_plane_workspace_id: str
+    codex_openclaw_control_plane_sync_interval_seconds: float
+    codex_openclaw_control_plane_snapshot_limit: int
+    codex_review_memory_enabled: bool
+    codex_review_memory_export_root: Path
+    codex_review_memory_target: str
+    openkb_sync_enabled: bool
+    openkb_base_url: str
+    openkb_token: str
 
     @classmethod
     def from_env(cls, overrides: dict | None = None) -> "Settings":
@@ -161,10 +179,15 @@ class Settings:
             if str(raw_path or "").strip():
                 codex_workspace_paths[workspace_id] = _resolve_setting_path(str(raw_path), base_dir=project_root)
 
+        openclaw_token = str(resolve_value("openclaw_token", "OPENCLAW_TOKEN", ""))
+        control_plane_token = str(
+            resolve_value("codex_openclaw_control_plane_token", "OPENCLAW_CONTROL_PLANE_TOKEN", "")
+        ).strip() or openclaw_token
+
         return cls(
             data_dir=root,
             openclaw_base_url=str(resolve_value("openclaw_base_url", "OPENCLAW_BASE_URL", "http://127.0.0.1:18789")).rstrip("/"),
-            openclaw_token=str(resolve_value("openclaw_token", "OPENCLAW_TOKEN", "")),
+            openclaw_token=openclaw_token,
             openclaw_agent_id=str(resolve_value("openclaw_agent_id", "OPENCLAW_AGENT_ID", "main")).strip(),
             openclaw_model=str(resolve_value("openclaw_model", "OPENCLAW_MODEL", "")).strip(),
             openclaw_message_channel=str(resolve_value("openclaw_message_channel", "OPENCLAW_MESSAGE_CHANNEL", "feishu")).strip(),
@@ -301,4 +324,90 @@ class Settings:
                 resolve_value("codex_trace_redact_secrets", "CODEX_TRACE_REDACT_SECRETS", True),
                 default=True,
             ),
+            codex_openclaw_review_enabled=_parse_bool(
+                resolve_value("codex_openclaw_review_enabled", "CODEX_OPENCLAW_REVIEW_ENABLED", False),
+                default=False,
+            ),
+            codex_openclaw_review_agent_id=str(
+                resolve_value("codex_openclaw_review_agent_id", "CODEX_OPENCLAW_REVIEW_AGENT_ID", "codex-manager")
+            ).strip()
+            or "codex-manager",
+            codex_openclaw_review_channel=str(
+                resolve_value("codex_openclaw_review_channel", "CODEX_OPENCLAW_REVIEW_CHANNEL", "codex-pet")
+            ).strip()
+            or "codex-pet",
+            codex_openclaw_review_sync_interval_seconds=float(
+                resolve_value(
+                    "codex_openclaw_review_sync_interval_seconds",
+                    "CODEX_OPENCLAW_REVIEW_SYNC_INTERVAL_SECONDS",
+                    10,
+                )
+            ),
+            codex_openclaw_review_max_payload_chars=int(
+                resolve_value("codex_openclaw_review_max_payload_chars", "CODEX_OPENCLAW_REVIEW_MAX_PAYLOAD_CHARS", 8000)
+            ),
+            codex_openclaw_review_dump_debug_files=_parse_bool(
+                resolve_value("codex_openclaw_review_dump_debug_files", "CODEX_OPENCLAW_REVIEW_DUMP_DEBUG_FILES", False),
+                default=False,
+            ),
+            codex_openclaw_control_plane_enabled=_parse_bool(
+                resolve_value(
+                    "codex_openclaw_control_plane_enabled",
+                    "CODEX_OPENCLAW_CONTROL_PLANE_ENABLED",
+                    False,
+                ),
+                default=False,
+            ),
+            codex_openclaw_control_plane_base_url=str(
+                resolve_value(
+                    "codex_openclaw_control_plane_base_url",
+                    "OPENCLAW_CONTROL_PLANE_BASE_URL",
+                    "",
+                )
+            ).rstrip("/"),
+            codex_openclaw_control_plane_token=control_plane_token,
+            codex_openclaw_control_plane_workspace_id=str(
+                resolve_value(
+                    "codex_openclaw_control_plane_workspace_id",
+                    "CODEX_OPENCLAW_CONTROL_PLANE_WORKSPACE_ID",
+                    "mmd-companion",
+                )
+            ).strip()
+            or "mmd-companion",
+            codex_openclaw_control_plane_sync_interval_seconds=float(
+                resolve_value(
+                    "codex_openclaw_control_plane_sync_interval_seconds",
+                    "CODEX_OPENCLAW_CONTROL_PLANE_SYNC_INTERVAL_SECONDS",
+                    60,
+                )
+            ),
+            codex_openclaw_control_plane_snapshot_limit=int(
+                resolve_value(
+                    "codex_openclaw_control_plane_snapshot_limit",
+                    "CODEX_OPENCLAW_CONTROL_PLANE_SNAPSHOT_LIMIT",
+                    20,
+                )
+            ),
+            codex_review_memory_enabled=_parse_bool(
+                resolve_value("codex_review_memory_enabled", "CODEX_REVIEW_MEMORY_ENABLED", False),
+                default=False,
+            ),
+            codex_review_memory_export_root=_resolve_setting_path(
+                resolve_value(
+                    "codex_review_memory_export_root",
+                    "CODEX_REVIEW_MEMORY_EXPORT_ROOT",
+                    "api/data/openkb/codex-review",
+                ),
+                base_dir=project_root,
+            ),
+            codex_review_memory_target=str(
+                resolve_value("codex_review_memory_target", "CODEX_REVIEW_MEMORY_TARGET", "openclaw_wiki")
+            ).strip()
+            or "openclaw_wiki",
+            openkb_sync_enabled=_parse_bool(
+                resolve_value("openkb_sync_enabled", "OPENKB_SYNC_ENABLED", False),
+                default=False,
+            ),
+            openkb_base_url=str(resolve_value("openkb_base_url", "OPENKB_BASE_URL", "")).rstrip("/"),
+            openkb_token=str(resolve_value("openkb_token", "OPENKB_TOKEN", "")),
         )

@@ -21,6 +21,7 @@ export type SessionPickerItem = {
   promptPreview: string;
   summaryPreview: string;
   searchText: string;
+  isActive: boolean;
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -34,6 +35,8 @@ const STATUS_LABELS: Record<string, string> = {
   failed: "failed",
   disconnected: "disconnected",
 };
+
+const ACTIVE_SESSION_STATUSES = new Set(["starting", "running", "command_running", "file_changed", "waiting_approval"]);
 
 function compactText(value: unknown): string {
   return typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
@@ -74,6 +77,10 @@ function statusLabel(status: string | null | undefined): string {
   return STATUS_LABELS[key] || key || "unknown";
 }
 
+function isActiveSessionStatus(status: string | null | undefined): boolean {
+  return ACTIVE_SESSION_STATUSES.has(compactText(status));
+}
+
 function sessionTitle(session: DesktopPetSession): string {
   return truncatePreview(
     safeDetailText(session.display_title) ||
@@ -108,6 +115,7 @@ export function buildSessionPickerItems(sessions: DesktopPetSession[], now = new
       const promptPreview = previewText(promptText, "No prompt preview");
       const summaryPreview = previewText(summaryText, "No summary yet");
       const subtitle = `${workspace} · ${status} · ${time}`;
+      const isActive = isActiveSessionStatus(session.last_status);
       const searchText = [
         title,
         workspace,
@@ -129,6 +137,7 @@ export function buildSessionPickerItems(sessions: DesktopPetSession[], now = new
         promptPreview,
         summaryPreview,
         searchText,
+        isActive,
       };
     })
     .filter((item): item is SessionPickerItem => Boolean(item));

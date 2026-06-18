@@ -23,12 +23,20 @@ declare global {
       };
       sessions: {
         restore: (petSessionId: string) => Promise<boolean>;
+        focusActive: (petSessionId: string) => Promise<boolean>;
       };
       prompt: {
         send: (prompt: string) => Promise<boolean>;
       };
+      approvals: {
+        decide: (options: {
+          codexSessionId: string;
+          approvalId: string;
+          decision: "approve_once" | "deny";
+        }) => Promise<boolean>;
+      };
       vscode: {
-        focus: () => Promise<boolean>;
+        focus: (options?: { workspacePath?: string }) => Promise<boolean>;
       };
       codexStatus: {
         get: () => Promise<DesktopPetCodexStatus>;
@@ -39,20 +47,33 @@ declare global {
         set: (mode: "window-drag" | "camera-adjust") => Promise<"window-drag" | "camera-adjust">;
         onChanged: (callback: (mode: "window-drag" | "camera-adjust") => void) => () => void;
       };
+      agent: {
+        get: () => Promise<DesktopPetAgent>;
+        onChanged: (callback: (agent: DesktopPetAgent) => void) => () => void;
+      };
+      clipboard: {
+        writeText: (text: string) => Promise<boolean>;
+      };
     };
   }
 }
 
+type DesktopPetAgent = "codex" | "claude";
+
 type DesktopPetMenuAction =
   | { type: "select-workspace" }
+  | { type: "switch-workspace"; workspacePath: string }
   | { type: "workspace-selected"; workspacePath: string }
   | { type: "new-session" }
   | { type: "send-prompt" }
-  | { type: "prompt-sent" }
+  | { type: "prompt-sent"; source?: "app-server-relay" | "terminal" }
+  | { type: "approval-decided"; approvalId: string; decision: "approve_once" | "deny" }
   | { type: "restore-session"; petSessionId: string }
+  | { type: "focus-active-session"; petSessionId: string }
   | { type: "more-sessions"; sessions?: DesktopPetSession[] }
   | { type: "notification-detail"; profile: "low" | "medium" | "high" }
   | { type: "menu-language"; language: "en" | "zh-CN" }
+  | { type: "agent"; agent: DesktopPetAgent }
   | { type: "always-on-top"; enabled: boolean }
   | { type: "focus-vscode" }
   | { type: "sync-main-site" };
@@ -74,8 +95,17 @@ type DesktopPetCodexStatus = {
   workspacePath?: string;
   sessionTitle?: string;
   codexSessionId?: string;
+  lastOutput?: string;
   error?: string;
   updatedAt?: string;
+  commandLine?: string;
+  source?: "app-server-relay" | "codex-jsonl" | "claude-jsonl" | "terminal";
+  pendingApprovals?: Array<{
+    id: string;
+    title: string;
+    actionType: string;
+    detail: Record<string, unknown>;
+  }>;
 };
 
 type DesktopPetApiRuntimeStatus = {

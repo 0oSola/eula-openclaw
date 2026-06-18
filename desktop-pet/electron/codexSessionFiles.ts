@@ -18,6 +18,24 @@ export type CodexSessionJsonEvent = {
   payload?: unknown;
 };
 
+export type CodexReviewFacts = {
+  failed_commands: Array<{
+    command: string | null;
+    exit_code: number;
+    excerpt: string;
+  }>;
+  changed_files: string[];
+  approvals: Array<{
+    title: string;
+    action_type: string | null;
+  }>;
+  errors: Array<{
+    type: string;
+    excerpt: string;
+  }>;
+  event_counts: Record<string, number>;
+};
+
 export type CodexSessionFileSummary = {
   codexSessionId: string;
   workspacePath: string;
@@ -25,11 +43,13 @@ export type CodexSessionFileSummary = {
   firstPromptPreview: string | null;
   displayTitle: string;
   lastSummary: string | null;
+  lastOutput: string | null;
   lastStatus: CodexSessionStatus;
   originator: string | null;
   cliVersion: string | null;
   lastEventAt: string | null;
   fileModifiedAt: string;
+  reviewFacts: CodexReviewFacts;
 };
 
 export type DesktopPetSessionPayload = {
@@ -57,6 +77,13 @@ type ParseOptions = {
 const DEFAULT_HEAD_BYTES = 1024 * 1024;
 const DEFAULT_TAIL_BYTES = 256 * 1024;
 const DEFAULT_SCAN_FILE_LIMIT = 80;
+const REVIEW_FACT_MAX_FAILED_COMMANDS = 6;
+const REVIEW_FACT_MAX_FAILED_COMMAND_EXCERPT = 500;
+const REVIEW_FACT_MAX_ERRORS = 8;
+const REVIEW_FACT_MAX_ERROR_EXCERPT = 500;
+const REVIEW_FACT_MAX_APPROVALS = 10;
+const REVIEW_FACT_MAX_CHANGED_FILES = 40;
+const REVIEW_FACT_MAX_TEXT = 240;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -71,6 +98,41 @@ function truncateText(value: string | null | undefined, maxLength: number): stri
   const text = compactText(value);
   if (!text) return null;
   return Array.from(text).slice(0, maxLength).join("");
+}
+
+function normalizeOutputText(value: unknown): string {
+  if (typeof value === "string") return value.replace(/\r\n/g, "\n").trim();
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => normalizeOutputText(item))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  if (!value || typeof value !== "object") return "";
+  const record = asRecord(value);
+  return normalizeOutputText(record.text ?? record.output ?? record.content ?? record.message);
+}
+
+function truncateOutput(value: string | null | undefined, maxLength: number): string | null {
+  const text = value?.replace(/\r\n/g, "\n").trim() ?? "";
+  if (!text) return null;
+  return Array.from(text).slice(0, maxLength).join("");
+}
+
+function redactSensitiveText(value: string): string {
+  return value
+    .replace(
+      /\b((?:[\w.-]*?(?:token|password|passwd|pwd|secret|api[_-]?key|access[_-]?key|private[_-]?key)[\w.-]*?)\s*[:=]\s*)(["']?)[^\s"',;]+/gi,
+      "$1[redacted]",
+    )
+    .replace(/\b(?:sk|ghp|github_pat|xox[abprs])[-_][A-Za-z0-9._-]{8,}\b/g, "[redacted]");
+}
+
+function boundedFactText(value: unknown, maxLength = 1000): string {
+  const output = redactSensitiveText(normalizeOutputText(value)).replace(/\r\n/g, "\n").trim();
+  if (!output) return "";
+  return Array.from(output).slice(0, maxLength).join("");
 }
 
 function workspaceName(workspacePath: string): string {
@@ -182,12 +244,139 @@ function assistantSummaryFromEvent(event: CodexSessionJsonEvent): string | null 
   return null;
 }
 
+function outputFromEvent(event: CodexSessionJsonEvent): string | null {
+  const payload = asRecord(event.payload);
+  if (event.type === "response_item" && payload.type === "function_call_output") {
+    return truncateOutput(normalizeOutputText(payload.output), 1000);
+  }
+  return assistantSummaryFromEvent(event);
+}
+
 function isApprovalEvent(event: CodexSessionJsonEvent): boolean {
   const payload = asRecord(event.payload);
   const eventType = String(payload.type || "");
   if (/approval|permission/i.test(eventType)) return true;
   const message = compactText(payload.message);
   return /APPROVAL REQUEST START|approval request|permission request/i.test(message);
+}
+
+function eventFactType(event: CodexSessionJsonEvent): string | null {
+  const payload = asRecord(event.payload);
+  const payloadType = compactText(payload.type);
+  if (event.type === "response_item" && payloadType === "message") {
+    const role = compactText(payload.role);
+    return role ? `${role}_message` : payloadType;
+  }
+  return payloadType || compactText(event.type) || null;
+}
+
+function parseFunctionCallCommand(payload: Record<string, unknown>): string | null {
+  for (const key of ["command", "cmd"]) {
+    const direct = compactText(payload[key]);
+    if (direct) return direct;
+  }
+
+  const args = payload.arguments;
+  if (typeof args === "string") {
+    try {
+      return parseFunctionCallCommand(JSON.parse(args));
+    } catch {
+      return compactText(args) || null;
+    }
+  }
+  if (args && typeof args === "object") {
+    const nested = asRecord(args);
+    for (const key of ["command", "cmd"]) {
+      const value = compactText(nested[key]);
+      if (value) return value;
+    }
+  }
+
+  return compactText(payload.name) || null;
+}
+
+function parseExitCode(payload: Record<string, unknown>, output: string): number | null {
+  if (typeof payload.exit_code === "number" && Number.isFinite(payload.exit_code)) return payload.exit_code;
+  if (typeof payload.exitCode === "number" && Number.isFinite(payload.exitCode)) return payload.exitCode;
+  const match = output.match(/\bExit code:\s*(-?\d+)/i);
+  return match ? Number(match[1]) : null;
+}
+
+function addUnique(items: string[], value: unknown, maxItems: number, maxLength = REVIEW_FACT_MAX_TEXT) {
+  const text = truncateText(compactText(value), maxLength);
+  if (!text || items.includes(text) || items.length >= maxItems) return;
+  items.push(text);
+}
+
+function addChangedFiles(target: string[], value: unknown) {
+  if (Array.isArray(value)) {
+    for (const item of value) addUnique(target, item, REVIEW_FACT_MAX_CHANGED_FILES);
+    return;
+  }
+  addUnique(target, value, REVIEW_FACT_MAX_CHANGED_FILES);
+}
+
+export function extractCodexReviewFacts(events: CodexSessionJsonEvent[]): CodexReviewFacts {
+  const facts: CodexReviewFacts = {
+    failed_commands: [],
+    changed_files: [],
+    approvals: [],
+    errors: [],
+    event_counts: {},
+  };
+  let lastCommand: string | null = null;
+
+  for (const event of events) {
+    const payload = asRecord(event.payload);
+    const factType = eventFactType(event);
+    if (factType) {
+      facts.event_counts[factType] = (facts.event_counts[factType] ?? 0) + 1;
+    }
+
+    if (event.type === "response_item" && payload.type === "function_call") {
+      lastCommand = parseFunctionCallCommand(payload);
+    }
+
+    if (event.type === "response_item" && payload.type === "function_call_output") {
+      const excerpt = boundedFactText(payload.output, REVIEW_FACT_MAX_FAILED_COMMAND_EXCERPT);
+      const exitCode = parseExitCode(payload, excerpt);
+      if (exitCode !== null && exitCode !== 0 && facts.failed_commands.length < REVIEW_FACT_MAX_FAILED_COMMANDS) {
+        facts.failed_commands.push({
+          command: truncateText(lastCommand, REVIEW_FACT_MAX_TEXT),
+          exit_code: exitCode,
+          excerpt,
+        });
+      }
+    }
+
+    addChangedFiles(facts.changed_files, payload.path);
+    addChangedFiles(facts.changed_files, payload.file_path);
+    addChangedFiles(facts.changed_files, payload.changed_files);
+
+    if (isApprovalEvent(event) && facts.approvals.length < REVIEW_FACT_MAX_APPROVALS) {
+      const title = compactText(payload.title) || compactText(payload.message) || compactText(payload.type) || "Approval request";
+      facts.approvals.push({
+        title: truncateText(title, REVIEW_FACT_MAX_TEXT) || "Approval request",
+        action_type: truncateText(compactText(payload.action_type) || compactText(payload.actionType), 80),
+      });
+    }
+
+    const payloadType = compactText(payload.type);
+    if (/failed|error/i.test(payloadType) && facts.errors.length < REVIEW_FACT_MAX_ERRORS) {
+      const excerpt = boundedFactText(
+        payload.message ?? payload.error ?? payload.detail ?? payload.reason,
+        REVIEW_FACT_MAX_ERROR_EXCERPT,
+      );
+      if (excerpt) {
+        facts.errors.push({
+          type: payloadType || "error",
+          excerpt,
+        });
+      }
+    }
+  }
+
+  return facts;
 }
 
 export function inferCodexSessionStatus(events: CodexSessionJsonEvent[]): CodexSessionStatus {
@@ -256,6 +445,7 @@ export function parseCodexSessionFile(filePath: string, options: ParseOptions = 
 
   const firstPromptPreview = truncateText(events.map(userPromptFromEvent).find(Boolean), 240);
   const lastSummary = truncateText(events.map(assistantSummaryFromEvent).filter(Boolean).at(-1), 1000);
+  const lastOutput = truncateOutput(events.map(outputFromEvent).filter(Boolean).at(-1), 1000);
   const displayTitle = truncateText(firstPromptPreview || workspaceName(meta.workspacePath), 48) || "Codex session";
   const lastEventAt = [...events]
     .reverse()
@@ -268,9 +458,11 @@ export function parseCodexSessionFile(filePath: string, options: ParseOptions = 
     firstPromptPreview,
     displayTitle,
     lastSummary,
+    lastOutput,
     lastStatus: inferCodexSessionStatus(events),
     lastEventAt: lastEventAt || null,
     fileModifiedAt: stat.mtime.toISOString(),
+    reviewFacts: extractCodexReviewFacts(events),
   };
 }
 
@@ -348,6 +540,8 @@ export function buildDesktopPetSessionPayload(
       originator: summary.originator,
       cli_version: summary.cliVersion,
       last_event_at: summary.lastEventAt,
+      last_output: summary.lastOutput,
+      facts: summary.reviewFacts,
     },
   };
 }

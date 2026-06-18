@@ -29,6 +29,7 @@ describe("desktop pet session picker", () => {
       petSessionId: "pet-login",
       title: "fix login layout",
       subtitle: "MMD project · waiting approval · 10:18",
+      isActive: true,
     });
     expect(items[0].searchText).toContain("fix login layout");
     expect(items[0].searchText).toContain("mmd project");
@@ -42,6 +43,15 @@ describe("desktop pet session picker", () => {
     expect(filterSessionPickerItems(items, "login").map((item) => item.petSessionId)).toEqual(["pet-login"]);
     expect(filterSessionPickerItems(items, "Other completed").map((item) => item.petSessionId)).toEqual(["pet-api"]);
     expect(filterSessionPickerItems(items, "missing")).toEqual([]);
+  });
+
+  it("marks active tasks so the bottom dialog can focus their existing window", () => {
+    const items = buildSessionPickerItems(sessions, new Date("2026-06-03T11:00:00+08:00"));
+
+    expect(items.map((item) => [item.petSessionId, item.isActive])).toEqual([
+      ["pet-login", true],
+      ["pet-api", false],
+    ]);
   });
 
   it("builds readable session details with redacted and truncated prompt and summary previews", () => {

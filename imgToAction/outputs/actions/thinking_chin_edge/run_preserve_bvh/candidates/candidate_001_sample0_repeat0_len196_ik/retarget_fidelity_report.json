@@ -1,0 +1,22 @@
+{
+  "candidate_id": "candidate_001_sample0_repeat0_len196_ik",
+  "mode": "preserve-source-motion",
+  "score_type": "retarget_fidelity",
+  "score": 100.0,
+  "source_type": "bvh",
+  "source_path": "D:\\workspace\\MMD project\\imgToAction\\samples\\bvh\\sample0_repeat0_len196_ik.bvh",
+  "source_frame_count": 196,
+  "source_fps": 20,
+  "vmd_bone_frame_count": 3920,
+  "max_frame": 292,
+  "checks": {
+    "source_skeleton_written": true,
+    "constraints_applied": false,
+    "hand_preset_overlay_applied": false,
+    "final_vmd_path": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_preserve_bvh\\candidates\\candidate_001_sample0_repeat0_len196_ik\\final_candidate.vmd"
+  },
+  "limitations": [
+    "pmx_render_fidelity_not_measured",
+    "bvh_local_rotation_to_pmx_bone_space_not_preserved_by_current_retargeter"
+  ]
+}

@@ -1,7 +1,7 @@
 import type { MmdModelAsset, RenderPipeline, VmdAsset } from "@/lib/types";
 import { buildAutoFavoriteInteraction } from "@/features/mapping/vmdPreview.js";
 import { resolveStageCharacterClickInteraction } from "@/features/stage/stageCharacterClick.js";
-import type { CodexStatusMotionIntent } from "../codex/codexStatus";
+import type { CodexLaunchState, CodexStatusMotionIntent } from "../codex/codexStatus";
 
 const MIN_FALLBACK_MODEL_BYTES = 1024;
 
@@ -44,6 +44,12 @@ type CodexStatusPetStageResolution = {
   shouldApply: boolean;
   interaction: PetStageInteraction | null;
   blockedBy?: "click-interaction-active" | "idle-not-interrupted";
+};
+
+type PetStageInteractionFallbackResult = {
+  interaction: PetStageInteraction | null;
+  fallbackApplied: boolean;
+  reason?: "missing-interaction" | "unsupported-procedural-action" | "no-playable-fallback";
 };
 
 const PROCEDURAL_IDLE_INTERACTION: PetStageInteraction = {
@@ -93,6 +99,18 @@ const CODEX_STATUS_INTERACTIONS: Record<CodexStatusMotionIntent, PetStageInterac
     mode: "procedural",
   },
 };
+
+const SUPPORTED_RUNTIME_PROCEDURAL_ACTIONS = new Set([
+  "idle",
+  "nod",
+  "wave",
+  "think",
+  "cheer",
+  "comfort",
+  "lean_in",
+  "look_away",
+  "headshake",
+]);
 
 function isFallbackLoadable(model: MmdModelAsset): boolean {
   return typeof model.size_bytes !== "number" || model.size_bytes >= MIN_FALLBACK_MODEL_BYTES;
@@ -243,4 +261,70 @@ export function buildCodexStatusPetStageResolution(
     shouldApply: true,
     interaction: CODEX_STATUS_INTERACTIONS[presentation.motionIntent],
   };
+}
+
+function hasPlayableVmdHit(interaction: PetStageInteraction): boolean {
+  return Boolean(interaction.mode === "vmd" && interaction.vmdUrl);
+}
+
+function hasSupportedProceduralHit(interaction: PetStageInteraction): boolean {
+  if (interaction.mode !== "procedural") return false;
+  if (SUPPORTED_RUNTIME_PROCEDURAL_ACTIONS.has(interaction.action)) return true;
+  return Boolean(
+    interaction.sequence?.some((step) => SUPPORTED_RUNTIME_PROCEDURAL_ACTIONS.has(step.action)),
+  );
+}
+
+export function resolvePetStageInteractionWithFallback(
+  requestedInteraction: PetStageInteraction | null | undefined,
+  favoriteLoopInteraction: PetStageInteraction,
+): PetStageInteractionFallbackResult {
+  if (!requestedInteraction) {
+    if (!hasPlayableVmdHit(favoriteLoopInteraction)) {
+      return {
+        interaction: null,
+        fallbackApplied: true,
+        reason: "no-playable-fallback",
+      };
+    }
+    return {
+      interaction: favoriteLoopInteraction,
+      fallbackApplied: true,
+      reason: "missing-interaction",
+    };
+  }
+
+  if (hasPlayableVmdHit(requestedInteraction) || hasSupportedProceduralHit(requestedInteraction)) {
+    return {
+      interaction: requestedInteraction,
+      fallbackApplied: false,
+    };
+  }
+
+  if (!hasPlayableVmdHit(favoriteLoopInteraction)) {
+    return {
+      interaction: null,
+      fallbackApplied: true,
+      reason: "no-playable-fallback",
+    };
+  }
+
+  return {
+    interaction: favoriteLoopInteraction,
+    fallbackApplied: true,
+    reason: "unsupported-procedural-action",
+  };
+}
+
+export function shouldReplayCodexStatusMotionOnCompletion(state: CodexLaunchState | null | undefined): boolean {
+  return (
+    state === "starting" ||
+    state === "launched" ||
+    state === "resuming" ||
+    state === "running" ||
+    state === "command_running" ||
+    state === "file_changed" ||
+    state === "waiting_approval" ||
+    state === "disconnected"
+  );
 }

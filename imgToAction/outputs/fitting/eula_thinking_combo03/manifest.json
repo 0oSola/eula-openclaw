@@ -1,0 +1,239 @@
+[
+  {
+    "id": "leftbest",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest/direct_pose.json"
+  },
+  {
+    "id": "leftbest_rarmym5",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      },
+      "右腕": {
+        "y": -5
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest_rarmym5/direct_pose.json"
+  },
+  {
+    "id": "leftbest_rarmym10",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      },
+      "右腕": {
+        "y": -10
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest_rarmym10/direct_pose.json"
+  },
+  {
+    "id": "leftbest_rarmzp5",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      },
+      "右腕": {
+        "z": 5
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest_rarmzp5/direct_pose.json"
+  },
+  {
+    "id": "leftbest_rarmzp10",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      },
+      "右腕": {
+        "z": 10
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest_rarmzp10/direct_pose.json"
+  },
+  {
+    "id": "leftbest_relbowxp5",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      },
+      "右ひじ": {
+        "x": 5
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest_relbowxp5/direct_pose.json"
+  },
+  {
+    "id": "leftbest_relbowxp10",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      },
+      "右ひじ": {
+        "x": 10
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest_relbowxp10/direct_pose.json"
+  },
+  {
+    "id": "leftbest_relbowzp5",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      },
+      "右ひじ": {
+        "z": 5
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest_relbowzp5/direct_pose.json"
+  },
+  {
+    "id": "leftbest_relbowzp10",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      },
+      "右ひじ": {
+        "z": 10
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest_relbowzp10/direct_pose.json"
+  },
+  {
+    "id": "leftbest_rshoulderzp5",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      },
+      "右肩": {
+        "z": 5
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest_rshoulderzp5/direct_pose.json"
+  },
+  {
+    "id": "leftbest_rshoulderzp8",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      },
+      "右肩": {
+        "z": 8
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest_rshoulderzp8/direct_pose.json"
+  },
+  {
+    "id": "leftbest_rarmym5_relbowzp5",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      },
+      "右腕": {
+        "y": -5
+      },
+      "右ひじ": {
+        "z": 5
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest_rarmym5_relbowzp5/direct_pose.json"
+  },
+  {
+    "id": "leftbest_rarmym5_relbowxp5",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      },
+      "右腕": {
+        "y": -5
+      },
+      "右ひじ": {
+        "x": 5
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_combo03/leftbest_rarmym5_relbowxp5/direct_pose.json"
+  }
+]

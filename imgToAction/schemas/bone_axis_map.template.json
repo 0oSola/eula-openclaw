@@ -1,0 +1,79 @@
+{
+  "model": "优菈.pmx",
+  "version": "template",
+  "note": "由校准 VMD + 预览截图确认后填写。语义轴不要直接假设等同 MMD 本地 X/Y/Z。",
+  "semantic_to_pmx_axis": {
+    "右腕": {
+      "raise": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "needs_calibration"
+      },
+      "open_side": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "needs_calibration"
+      },
+      "forward": {
+        "axis": "local_x",
+        "sign": 1,
+        "confidence": "needs_calibration"
+      }
+    },
+    "左腕": {
+      "raise": {
+        "axis": "local_z",
+        "sign": -1,
+        "confidence": "needs_calibration"
+      },
+      "open_side": {
+        "axis": "local_y",
+        "sign": -1,
+        "confidence": "needs_calibration"
+      },
+      "forward": {
+        "axis": "local_x",
+        "sign": 1,
+        "confidence": "needs_calibration"
+      }
+    },
+    "右ひじ": {
+      "bend": {
+        "axis": "local_z",
+        "sign": -1,
+        "confidence": "needs_calibration"
+      }
+    },
+    "左ひじ": {
+      "bend": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "needs_calibration"
+      }
+    },
+    "上半身": {
+      "turn_y": {
+        "axis": "local_y",
+        "sign": 1
+      },
+      "tilt_z": {
+        "axis": "local_z",
+        "sign": 1
+      },
+      "lean_x": {
+        "axis": "local_x",
+        "sign": 1
+      }
+    },
+    "下半身": {
+      "turn_y": {
+        "axis": "local_y",
+        "sign": 1
+      },
+      "tilt_z": {
+        "axis": "local_z",
+        "sign": 1
+      }
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "selected_candidate_id": "candidate_001_sample0_repeat0_len196_ik",
+  "selected_score": 92.52,
+  "selected_blocking": false,
+  "reason": "highest_non_blocking_score",
+  "eligible_candidates": [
+    {
+      "candidate_id": "candidate_001_sample0_repeat0_len196_ik",
+      "score": 92.52,
+      "blocking": false,
+      "quality_report": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter03\\runs\\x014_y010_z009\\candidates\\candidate_001_sample0_repeat0_len196_ik\\quality_report.json",
+      "final_candidate_vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter03\\runs\\x014_y010_z009\\candidates\\candidate_001_sample0_repeat0_len196_ik\\final_candidate.vmd",
+      "source_type": "bvh",
+      "source_path": "D:\\workspace\\MMD project\\imgToAction\\samples\\bvh\\sample0_repeat0_len196_ik.bvh"
+    }
+  ],
+  "candidates": [
+    {
+      "candidate_id": "candidate_001_sample0_repeat0_len196_ik",
+      "score": 92.52,
+      "blocking": false,
+      "quality_report": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter03\\runs\\x014_y010_z009\\candidates\\candidate_001_sample0_repeat0_len196_ik\\quality_report.json",
+      "final_candidate_vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter03\\runs\\x014_y010_z009\\candidates\\candidate_001_sample0_repeat0_len196_ik\\final_candidate.vmd",
+      "source_type": "bvh",
+      "source_path": "D:\\workspace\\MMD project\\imgToAction\\samples\\bvh\\sample0_repeat0_len196_ik.bvh"
+    }
+  ],
+  "action": "thinking_chin_edge",
+  "model_profile": "eula",
+  "mode": "action-fit",
+  "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter03\\runs\\x014_y010_z009",
+  "action_path": "D:\\workspace\\MMD project\\imgToAction\\actions\\thinking_chin_edge.json",
+  "model_profile_path": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter03\\profiles\\model_profile.eula.x014_y010_z009.json",
+  "hand_presets_path": "D:\\workspace\\MMD project\\imgToAction\\config\\hand_presets.json",
+  "final_vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter03\\runs\\x014_y010_z009\\final.vmd",
+  "out": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter03\\vmd\\x014_y010_z009.vmd"
+}

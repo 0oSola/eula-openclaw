@@ -143,22 +143,26 @@ describe("desktop pet startup script", () => {
     expect(script).toContain("MMD_PET_DEBUG_EVENTS_LOG");
   });
 
-  it("does not open duplicate Pet windows unless explicitly forced", () => {
+  it("restarts an existing Pet window by default and reuses it only when requested", () => {
     const script = readFileSync(scriptPath, "utf8");
 
     expect(script).toContain("[switch]$ForceNew");
+    expect(script).toContain("[switch]$ReuseExisting");
     expect(script).toContain("Get-DesktopPetMainProcess");
     expect(script).toContain("Get-CimInstance Win32_Process");
     expect(script).toContain("desktop-pet\\\\node_modules\\\\electron\\\\dist\\\\electron\\.exe");
     expect(script).toContain("--type=");
-    expect(script).toContain("if ($existingPet -and -not $ForceNew)");
+    expect(script).toContain("if ($existingPet -and $ReuseExisting)");
+    expect(script).toContain("Stop-DesktopPetMainProcesses");
   });
 
   it("prints key-value startup status for scripts and humans", () => {
     const script = readFileSync(scriptPath, "utf8");
 
     expect(script).toContain('Write-Output "status=already-running"');
+    expect(script).toContain('Write-Output "status=restarting"');
     expect(script).toContain('Write-Output "status=started"');
+    expect(script).toContain('Write-Output "stoppedElectronPids=');
     expect(script).toContain('Write-Output "electronPid=');
     expect(script).toContain('Write-Output "rendererUrl=');
   });

@@ -1,0 +1,272 @@
+[
+  {
+    "id": "core",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/core/direct_pose.json"
+  },
+  {
+    "id": "rwristxm30",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      },
+      "右手首": {
+        "x": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/rwristxm30/direct_pose.json"
+  },
+  {
+    "id": "rwristxm60",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      },
+      "右手首": {
+        "x": -60
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/rwristxm60/direct_pose.json"
+  },
+  {
+    "id": "rwristxp30",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      },
+      "右手首": {
+        "x": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/rwristxp30/direct_pose.json"
+  },
+  {
+    "id": "rwristxp60",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      },
+      "右手首": {
+        "x": 60
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/rwristxp60/direct_pose.json"
+  },
+  {
+    "id": "rwristym30",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      },
+      "右手首": {
+        "y": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/rwristym30/direct_pose.json"
+  },
+  {
+    "id": "rwristym60",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      },
+      "右手首": {
+        "y": -60
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/rwristym60/direct_pose.json"
+  },
+  {
+    "id": "rwristyp30",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      },
+      "右手首": {
+        "y": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/rwristyp30/direct_pose.json"
+  },
+  {
+    "id": "rwristyp60",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      },
+      "右手首": {
+        "y": 60
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/rwristyp60/direct_pose.json"
+  },
+  {
+    "id": "rwristzm30",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      },
+      "右手首": {
+        "z": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/rwristzm30/direct_pose.json"
+  },
+  {
+    "id": "rwristzm60",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      },
+      "右手首": {
+        "z": -60
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/rwristzm60/direct_pose.json"
+  },
+  {
+    "id": "rwristzp30",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      },
+      "右手首": {
+        "z": 30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/rwristzp30/direct_pose.json"
+  },
+  {
+    "id": "rwristzp60",
+    "deltas": {
+      "左腕": {
+        "x": -30
+      },
+      "左ひじ": {
+        "y": -15
+      },
+      "左肩": {
+        "z": -15
+      },
+      "右腕": {
+        "y": -10
+      },
+      "右手首": {
+        "z": 60
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_fit10_wrist01/rwristzp60/direct_pose.json"
+  }
+]

@@ -1,0 +1,365 @@
+{
+  "model": "MMD/优菈_by_原神_339146e6e418d79e85a515b26414c0b0/优菈.pmx",
+  "version": "eula-render-calibrated-20260615",
+  "note": "Model-specific semantic axis map filled from render calibration screenshots. High-confidence arm raise/open and elbow bend directions come from direct-sample renders; arm forward/backward is confirmed with a side-view probe. Wrist, lower-body, and center mappings are structurally usable but marked as limited where the current render view is less discriminating.",
+  "calibration_basis": {
+    "front_target_renders": "imgToAction/outputs/axis-calibration-full-target-20260615-direct-sample",
+    "side_probe_renders": "imgToAction/outputs/axis-calibration-side-probe-20260615",
+    "fps": 30,
+    "frame_kind": "target"
+  },
+  "semantic_to_pmx_axis": {
+    "右腕": {
+      "raise": {
+        "axis": "local_z",
+        "sign": -1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/006-右腕-Z-minus-target-f0257.png"
+      },
+      "open_side": {
+        "axis": "local_z",
+        "sign": -1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/006-右腕-Z-minus-target-f0257.png"
+      },
+      "forward": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "side_probe_confirmed",
+        "evidence": "axis-calibration-side-probe-20260615/right-arm-Y-plus.png"
+      },
+      "backward": {
+        "axis": "local_y",
+        "sign": -1,
+        "confidence": "side_probe_confirmed",
+        "evidence": "axis-calibration-side-probe-20260615/right-arm-Y-minus.png"
+      }
+    },
+    "左腕": {
+      "raise": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/011-左腕-Z-plus-target-f0482.png"
+      },
+      "open_side": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/011-左腕-Z-plus-target-f0482.png"
+      },
+      "forward": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "side_probe_confirmed",
+        "evidence": "axis-calibration-side-probe-20260615/left-arm-Y-plus.png"
+      },
+      "backward": {
+        "axis": "local_y",
+        "sign": -1,
+        "confidence": "side_probe_confirmed",
+        "evidence": "axis-calibration-side-probe-20260615/left-arm-Y-minus.png"
+      }
+    },
+    "右ひじ": {
+      "bend": {
+        "axis": "local_z",
+        "sign": -1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/018-右ひじ-Z-minus-target-f0797.png"
+      }
+    },
+    "左ひじ": {
+      "bend": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/023-左ひじ-Z-plus-target-f1022.png"
+      }
+    },
+    "右肩": {
+      "raise": {
+        "axis": "local_z",
+        "sign": -1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/030-右肩-Z-minus-target-f1337.png"
+      },
+      "open_side": {
+        "axis": "local_z",
+        "sign": -1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/030-右肩-Z-minus-target-f1337.png"
+      },
+      "forward": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "upper_body/027-右肩-Y-plus-target-f1202.png"
+      }
+    },
+    "左肩": {
+      "raise": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/035-左肩-Z-plus-target-f1562.png"
+      },
+      "open_side": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/035-左肩-Z-plus-target-f1562.png"
+      },
+      "backward": {
+        "axis": "local_y",
+        "sign": -1,
+        "confidence": "front_view_limited",
+        "evidence": "upper_body/034-左肩-Y-minus-target-f1517.png"
+      }
+    },
+    "右手首": {
+      "pitch": {
+        "axis": "local_x",
+        "sign": 1,
+        "confidence": "wrist_visibility_limited",
+        "evidence": "upper_body/037-右手首-X-plus-target-f1652.png"
+      },
+      "yaw": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "wrist_visibility_limited",
+        "evidence": "upper_body/039-右手首-Y-plus-target-f1742.png"
+      },
+      "roll": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "wrist_visibility_limited",
+        "evidence": "upper_body/041-右手首-Z-plus-target-f1832.png"
+      }
+    },
+    "左手首": {
+      "pitch": {
+        "axis": "local_x",
+        "sign": 1,
+        "confidence": "wrist_visibility_limited",
+        "evidence": "upper_body/043-左手首-X-plus-target-f1922.png"
+      },
+      "yaw": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "wrist_visibility_limited",
+        "evidence": "upper_body/045-左手首-Y-plus-target-f2012.png"
+      },
+      "roll": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "wrist_visibility_limited",
+        "evidence": "upper_body/047-左手首-Z-plus-target-f2102.png"
+      }
+    },
+    "上半身": {
+      "turn_y": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/051-上半身-Y-plus-target-f2282.png"
+      },
+      "tilt_z": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/053-上半身-Z-plus-target-f2372.png"
+      },
+      "lean_x": {
+        "axis": "local_x",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "upper_body/049-上半身-X-plus-target-f2192.png"
+      }
+    },
+    "上半身2": {
+      "turn_y": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/057-上半身2-Y-plus-target-f2552.png"
+      },
+      "tilt_z": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/059-上半身2-Z-plus-target-f2642.png"
+      },
+      "lean_x": {
+        "axis": "local_x",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "upper_body/055-上半身2-X-plus-target-f2462.png"
+      }
+    },
+    "下半身": {
+      "turn_y": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/063-下半身-Y-plus-target-f2822.png"
+      },
+      "tilt_z": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/065-下半身-Z-plus-target-f2912.png"
+      },
+      "lean_x": {
+        "axis": "local_x",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "upper_body/061-下半身-X-plus-target-f2732.png"
+      }
+    },
+    "頭": {
+      "turn_y": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/069-頭-Y-plus-target-f3092.png"
+      },
+      "chin_up": {
+        "axis": "local_x",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/067-頭-X-plus-target-f3002.png"
+      },
+      "tilt_z": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "render_confirmed",
+        "evidence": "upper_body/071-頭-Z-plus-target-f3182.png"
+      }
+    },
+    "右足": {
+      "forward": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "lower_body/003-右足-Y-plus-target-f0122.png"
+      },
+      "open_side": {
+        "axis": "local_z",
+        "sign": -1,
+        "confidence": "front_view_limited",
+        "evidence": "lower_body/006-右足-Z-minus-target-f0257.png"
+      }
+    },
+    "左足": {
+      "forward": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "lower_body/009-左足-Y-plus-target-f0392.png"
+      },
+      "open_side": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "lower_body/011-左足-Z-plus-target-f0482.png"
+      }
+    },
+    "右ひざ": {
+      "bend": {
+        "axis": "local_z",
+        "sign": -1,
+        "confidence": "front_view_limited",
+        "evidence": "lower_body/018-右ひざ-Z-minus-target-f0797.png"
+      }
+    },
+    "左ひざ": {
+      "bend": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "lower_body/023-左ひざ-Z-plus-target-f1022.png"
+      }
+    },
+    "右足首": {
+      "pitch": {
+        "axis": "local_x",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "lower_body/025-右足首-X-plus-target-f1112.png"
+      },
+      "yaw": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "lower_body/027-右足首-Y-plus-target-f1202.png"
+      },
+      "roll": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "lower_body/029-右足首-Z-plus-target-f1292.png"
+      }
+    },
+    "左足首": {
+      "pitch": {
+        "axis": "local_x",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "lower_body/031-左足首-X-plus-target-f1382.png"
+      },
+      "yaw": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "lower_body/033-左足首-Y-plus-target-f1472.png"
+      },
+      "roll": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "front_view_limited",
+        "evidence": "lower_body/035-左足首-Z-plus-target-f1562.png"
+      }
+    },
+    "センター": {
+      "shift_x": {
+        "axis": "local_x",
+        "sign": 1,
+        "confidence": "coordinate_standard_limited",
+        "evidence": "ik_center/013-センター-X-plus-target-f0572.png"
+      },
+      "shift_y": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "coordinate_standard_limited",
+        "evidence": "ik_center/015-センター-Y-plus-target-f0662.png"
+      },
+      "shift_z": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "coordinate_standard_limited",
+        "evidence": "ik_center/017-センター-Z-plus-target-f0752.png"
+      }
+    },
+    "グルーブ": {
+      "shift_x": {
+        "axis": "local_x",
+        "sign": 1,
+        "confidence": "coordinate_standard_limited",
+        "evidence": "ik_center/019-グルーブ-X-plus-target-f0842.png"
+      },
+      "shift_y": {
+        "axis": "local_y",
+        "sign": 1,
+        "confidence": "coordinate_standard_limited",
+        "evidence": "ik_center/021-グルーブ-Y-plus-target-f0932.png"
+      },
+      "shift_z": {
+        "axis": "local_z",
+        "sign": 1,
+        "confidence": "coordinate_standard_limited",
+        "evidence": "ik_center/023-グルーブ-Z-plus-target-f1022.png"
+      }
+    }
+  }
+}

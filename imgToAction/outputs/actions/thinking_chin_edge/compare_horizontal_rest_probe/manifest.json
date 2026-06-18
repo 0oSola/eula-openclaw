@@ -1,0 +1,38 @@
+{
+  "createdAt": "2026-06-17T10:25:56.093Z",
+  "model": "MMD/优菈_by_原神_339146e6e418d79e85a515b26414c0b0/优菈.pmx",
+  "renderPipeline": "genshin",
+  "captures": [
+    {
+      "label": "preserve_old",
+      "frame": 0,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/compare_horizontal_rest_probe/preserve_old_frame_000.png"
+    },
+    {
+      "label": "preserve_old",
+      "frame": 120,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/compare_horizontal_rest_probe/preserve_old_frame_120.png"
+    },
+    {
+      "label": "preserve_old",
+      "frame": 292,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/compare_horizontal_rest_probe/preserve_old_frame_292.png"
+    },
+    {
+      "label": "horizontal_rest_probe",
+      "frame": 0,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/compare_horizontal_rest_probe/horizontal_rest_probe_frame_000.png"
+    },
+    {
+      "label": "horizontal_rest_probe",
+      "frame": 120,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/compare_horizontal_rest_probe/horizontal_rest_probe_frame_120.png"
+    },
+    {
+      "label": "horizontal_rest_probe",
+      "frame": 292,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/compare_horizontal_rest_probe/horizontal_rest_probe_frame_292.png"
+    }
+  ],
+  "consoleMessages": []
+}

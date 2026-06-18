@@ -101,6 +101,7 @@ describe("desktop pet Codex session files", () => {
       firstPromptPreview: "只做状态/提醒，预留直接发 prompt、查看摘要、处理审批",
       lastStatus: "completed",
       lastSummary: "已补上状态同步。",
+      lastOutput: "已补上状态同步。",
     });
     expect(payload).toMatchObject({
       pet_session_id: "codex:019e88e4-4f27-7f20-be48-fd1ef50e9492",
@@ -115,6 +116,102 @@ describe("desktop pet Codex session files", () => {
       source: "codex-jsonl",
       session_file: filePath,
       originator: "codex-tui",
+    });
+  });
+
+  it("extracts the latest command output for the desktop status card", () => {
+    const filePath = writeSessionFile([
+      sessionMeta(),
+      {
+        timestamp: "2026-06-03T11:15:55.848Z",
+        type: "response_item",
+        payload: { type: "function_call", name: "shell_command" },
+      },
+      {
+        timestamp: "2026-06-03T11:15:56.929Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-1",
+          output: "line one\nline two\nline three\nline four",
+        },
+      },
+    ]);
+
+    const summary = parseCodexSessionFile(filePath);
+    const payload = buildDesktopPetSessionPayload(summary, "C:\\Users\\KSG\\.codex");
+
+    expect(summary).toMatchObject({
+      lastStatus: "running",
+      lastSummary: null,
+      lastOutput: "line one\nline two\nline three\nline four",
+    });
+    expect(payload.metadata).toMatchObject({
+      last_output: "line one\nline two\nline three\nline four",
+    });
+  });
+
+  it("extracts bounded review facts from Codex JSONL events", () => {
+    const filePath = writeSessionFile([
+      sessionMeta(),
+      {
+        timestamp: "2026-06-03T11:15:48.267Z",
+        type: "event_msg",
+        payload: { type: "user_message", message: "Implement OpenClaw review sync" },
+      },
+      {
+        timestamp: "2026-06-03T11:15:55.848Z",
+        type: "response_item",
+        payload: { type: "function_call", name: "shell_command", arguments: { command: "npm run build" } },
+      },
+      {
+        timestamp: "2026-06-03T11:15:56.929Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-1",
+          output: "Exit code: 1\nschema mismatch\nSECRET_TOKEN=should-not-leak",
+        },
+      },
+      {
+        timestamp: "2026-06-03T11:16:00.000Z",
+        type: "event_msg",
+        payload: { type: "file_change", path: "api/app/routes/desktop_pet.py" },
+      },
+      {
+        timestamp: "2026-06-03T11:16:01.000Z",
+        type: "event_msg",
+        payload: { type: "approval_request", message: "Allow command npm test?" },
+      },
+      {
+        timestamp: "2026-06-03T11:16:02.000Z",
+        type: "event_msg",
+        payload: { type: "turn_failed", message: "OpenClaw returned invalid JSON" },
+      },
+    ]);
+
+    const summary = parseCodexSessionFile(filePath);
+    const payload = buildDesktopPetSessionPayload(summary, "C:\\Users\\KSG\\.codex");
+
+    expect(payload.metadata.facts).toMatchObject({
+      failed_commands: [
+        {
+          command: "npm run build",
+          exit_code: 1,
+          excerpt: "Exit code: 1\nschema mismatch\nSECRET_TOKEN=[redacted]",
+        },
+      ],
+      changed_files: ["api/app/routes/desktop_pet.py"],
+      approvals: [{ title: "Allow command npm test?" }],
+      errors: [{ type: "turn_failed", excerpt: "OpenClaw returned invalid JSON" }],
+      event_counts: {
+        user_message: 1,
+        function_call: 1,
+        function_call_output: 1,
+        file_change: 1,
+        approval_request: 1,
+        turn_failed: 1,
+      },
     });
   });
 

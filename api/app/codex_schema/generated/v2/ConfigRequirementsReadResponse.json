@@ -146,6 +146,15 @@
             "$ref": "#/definitions/WebSearchMode"
           }
         },
+        "allowedWindowsSandboxImplementations": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/WindowsSandboxSetupMode"
+          }
+        },
         "computerUse": {
           "anyOf": [
             {
@@ -505,7 +514,7 @@
       "type": "string",
       "enum": [
         "allow",
-        "none"
+        "deny"
       ]
     },
     "ResidencyRequirement": {
@@ -528,6 +537,13 @@
         "disabled",
         "cached",
         "live"
+      ]
+    },
+    "WindowsSandboxSetupMode": {
+      "type": "string",
+      "enum": [
+        "elevated",
+        "unelevated"
       ]
     }
   }

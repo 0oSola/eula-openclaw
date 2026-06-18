@@ -1,0 +1,176 @@
+{
+  "createdAt": "2026-06-17T10:53:06.489Z",
+  "model": "MMD/优菈_by_原神_339146e6e418d79e85a515b26414c0b0/优菈.pmx",
+  "vmd": "imgToAction/outputs/vmd/eula_thinking_chin_edge_bvh_fit02.vmd",
+  "rows": [
+    {
+      "frame": 0,
+      "right_wrist_to_chin_screen": 217.89413347998644,
+      "left_wrist_to_waist_screen": 62.26305470956047,
+      "projected": {
+        "right_wrist": {
+          "x": 677.39889306015,
+          "y": 446.4332936209486,
+          "z": 0.9973529437969171
+        },
+        "chin": {
+          "x": 701.0297375850216,
+          "y": 229.82434507072017,
+          "z": 0.9972688600497223
+        },
+        "left_wrist": {
+          "x": 701.0796819638667,
+          "y": 437.68858033022667,
+          "z": 0.9973617064532843
+        },
+        "waist": {
+          "x": 692.8856072086957,
+          "y": 499.4100929548569,
+          "z": 0.9973199733398155
+        }
+      },
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit02_final_preview/frame_000.png"
+    },
+    {
+      "frame": 60,
+      "right_wrist_to_chin_screen": 221.91610044202173,
+      "left_wrist_to_waist_screen": 62.95412588271316,
+      "projected": {
+        "right_wrist": {
+          "x": 677.3960895087135,
+          "y": 450.90130215346375,
+          "z": 0.997355392500509
+        },
+        "chin": {
+          "x": 698.7599326239751,
+          "y": 230.01594310325424,
+          "z": 0.9972696340413935
+        },
+        "left_wrist": {
+          "x": 707.9516603227771,
+          "y": 438.39286916606585,
+          "z": 0.9973707351092342
+        },
+        "waist": {
+          "x": 692.885317439647,
+          "y": 499.51755548660617,
+          "z": 0.9973199841190723
+        }
+      },
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit02_final_preview/frame_060.png"
+    },
+    {
+      "frame": 120,
+      "right_wrist_to_chin_screen": 119.93905980747938,
+      "left_wrist_to_waist_screen": 78.442099157421,
+      "projected": {
+        "right_wrist": {
+          "x": 599.9667460156805,
+          "y": 304.5019225883426,
+          "z": 0.9975071992940984
+        },
+        "chin": {
+          "x": 694.3542514637661,
+          "y": 230.49937612682052,
+          "z": 0.9972730826244218
+        },
+        "left_wrist": {
+          "x": 749.856836098171,
+          "y": 445.61133685642864,
+          "z": 0.9974021672716282
+        },
+        "waist": {
+          "x": 692.8852793225221,
+          "y": 499.5316914433718,
+          "z": 0.9973199855370094
+        }
+      },
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit02_final_preview/frame_120.png"
+    },
+    {
+      "frame": 180,
+      "right_wrist_to_chin_screen": 22.046950009027587,
+      "left_wrist_to_waist_screen": 77.35489720854815,
+      "projected": {
+        "right_wrist": {
+          "x": 683.4960105653665,
+          "y": 245.71018918988872,
+          "z": 0.9974298479434199
+        },
+        "chin": {
+          "x": 698.9111416468621,
+          "y": 229.94815447222393,
+          "z": 0.9972700405678995
+        },
+        "left_wrist": {
+          "x": 743.3915320714322,
+          "y": 440.7830415375963,
+          "z": 0.9974193367701537
+        },
+        "waist": {
+          "x": 692.8857035887196,
+          "y": 499.37434986417213,
+          "z": 0.9973199697545291
+        }
+      },
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit02_final_preview/frame_180.png"
+    },
+    {
+      "frame": 240,
+      "right_wrist_to_chin_screen": 9.143399734827092,
+      "left_wrist_to_waist_screen": 78.72386551380636,
+      "projected": {
+        "right_wrist": {
+          "x": 687.7365782126903,
+          "y": 228.70310272807617,
+          "z": 0.9973868842363507
+        },
+        "chin": {
+          "x": 696.8527980767317,
+          "y": 229.40758416948836,
+          "z": 0.9972669095431469
+        },
+        "left_wrist": {
+          "x": 720.3444299780936,
+          "y": 425.4677046531789,
+          "z": 0.9974015727035034
+        },
+        "waist": {
+          "x": 692.8860451616988,
+          "y": 499.24767554440825,
+          "z": 0.997319957048193
+        }
+      },
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit02_final_preview/frame_240.png"
+    },
+    {
+      "frame": 292,
+      "right_wrist_to_chin_screen": 17.209472302269205,
+      "left_wrist_to_waist_screen": 71.74760013845652,
+      "projected": {
+        "right_wrist": {
+          "x": 686.6239869044967,
+          "y": 217.7081812769985,
+          "z": 0.9973913335246455
+        },
+        "chin": {
+          "x": 699.3160504120451,
+          "y": 229.33046422153782,
+          "z": 0.9972660110926469
+        },
+        "left_wrist": {
+          "x": 722.5298379843948,
+          "y": 433.9519951831718,
+          "z": 0.9973897080486627
+        },
+        "waist": {
+          "x": 692.8859330543149,
+          "y": 499.28925121772096,
+          "z": 0.997319961218529
+        }
+      },
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit02_final_preview/frame_292.png"
+    }
+  ],
+  "sheet": "imgToAction/outputs/actions/thinking_chin_edge/fit02_final_preview/contact_sheet.png"
+}

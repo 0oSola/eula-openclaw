@@ -4,18 +4,20 @@ export type NotificationDetailLevel = "low" | "medium" | "high";
 
 const LOW_LABELS: Record<CodexLaunchState, string | null> = {
   idle: null,
-  starting: "Codex starting",
-  launched: "Codex terminal running",
-  resuming: "Codex resuming",
-  running: "Codex running",
-  command_running: "Codex running command",
-  file_changed: "Codex changed files",
-  waiting_approval: "Codex needs approval",
-  completed: "Codex completed",
-  failed: "Codex failed",
-  disconnected: "Codex disconnected",
+  starting: "{agent} starting",
+  launched: "{agent} terminal running",
+  resuming: "{agent} resuming",
+  running: "{agent} running",
+  command_running: "{agent} running command",
+  file_changed: "{agent} changed files",
+  waiting_approval: "{agent} needs approval",
+  completed: "{agent} completed",
+  failed: "{agent} failed",
+  disconnected: "{agent} disconnected",
   "vscode-opened": "VSCode workspace open",
 };
+
+const DEFAULT_AGENT_LABEL = "Codex";
 
 function compact(value: string | null | undefined): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";
@@ -38,10 +40,12 @@ export function normalizeNotificationDetailLevel(value: unknown): NotificationDe
 export function formatCodexStatusNotification(
   status: CodexStatus | null | undefined,
   detailLevel: NotificationDetailLevel,
+  agentLabel: string = DEFAULT_AGENT_LABEL,
 ): string | null {
   if (!status) return null;
-  const label = LOW_LABELS[status.state];
-  if (!label) return null;
+  const labelTemplate = LOW_LABELS[status.state];
+  if (!labelTemplate) return null;
+  const label = labelTemplate.replace("{agent}", agentLabel);
 
   const level = normalizeNotificationDetailLevel(detailLevel);
   if (level === "low") return label;

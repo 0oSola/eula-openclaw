@@ -1,0 +1,26 @@
+{
+  "createdAt": "2026-06-15T10:13:43.767Z",
+  "webUrl": "http://127.0.0.1:3100",
+  "model": "imgToAction\\assets\\pmx\\优菈.pmx",
+  "renderPipeline": "genshin",
+  "fps": 30,
+  "captures": [
+    {
+      "testNo": 1,
+      "bone": "右腕",
+      "axis": "X",
+      "sign": "+",
+      "amount": 35,
+      "startFrame": 20,
+      "targetFrame": 32,
+      "holdFrame": 44,
+      "resetFrame": 56,
+      "note": "right upper arm",
+      "group": "upper_body",
+      "frameKind": "target",
+      "frame": 32,
+      "outputPath": "upper_body/001-右腕-X-plus-target-f0032.png",
+      "vmdPath": "imgToAction/calibration/upper_body/eula_axis_calibration_upper_body.vmd"
+    }
+  ]
+}

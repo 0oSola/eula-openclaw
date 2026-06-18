@@ -1,0 +1,20 @@
+[
+  {
+    "frame": 0,
+    "changed_channel_ratio": 0.00011472348813657407,
+    "mean_abs_channel_delta": 0.012654999156057098,
+    "max_abs_channel_delta": 228
+  },
+  {
+    "frame": 120,
+    "changed_channel_ratio": 0.005749549394772377,
+    "mean_abs_channel_delta": 0.1776810634283372,
+    "max_abs_channel_delta": 217
+  },
+  {
+    "frame": 292,
+    "changed_channel_ratio": 0.008188129943094136,
+    "mean_abs_channel_delta": 0.5108469268422068,
+    "max_abs_channel_delta": 228
+  }
+]

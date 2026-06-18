@@ -2,6 +2,7 @@ param(
   [int]$Port = 5174,
   [string]$ApiBaseUrl = "",
   [string]$WorkspacePath = "",
+  [switch]$ReuseExisting,
   [switch]$ForceNew,
   [switch]$NoDebugEvents
 )
@@ -9,8 +10,13 @@ param(
 $ErrorActionPreference = "Stop"
 
 $petRoot = $PSScriptRoot
+$projectRoot = Split-Path -Parent $petRoot
 $logsDir = Join-Path $petRoot ".codex-pet\logs"
 New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+
+if ($ReuseExisting -and $ForceNew) {
+  throw "-ReuseExisting and -ForceNew cannot be used together."
+}
 
 function Get-NpmCommand {
   $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
@@ -38,6 +44,25 @@ function Wait-HttpReady([string]$url, [int]$timeoutSeconds = 30) {
   return $false
 }
 
+function Resolve-DefaultApiBaseUrl([string]$explicitApiBaseUrl) {
+  if ($explicitApiBaseUrl) { return $explicitApiBaseUrl }
+  if ($env:MMD_PET_API_BASE_URL) { return $env:MMD_PET_API_BASE_URL }
+
+  $devStackStatePath = Join-Path $projectRoot ".runtime\dev-stack.json"
+  if (Test-Path -LiteralPath $devStackStatePath) {
+    try {
+      $state = Get-Content -Path $devStackStatePath -Raw | ConvertFrom-Json
+      $stateApiUrl = [string]$state.api.url
+      if ($stateApiUrl -and (Test-HttpReady "$stateApiUrl/healthz")) {
+        return $stateApiUrl
+      }
+    } catch {
+    }
+  }
+
+  return "http://127.0.0.1:8000"
+}
+
 function Quote-PowerShellString([string]$value) {
   return "'" + $value.Replace("'", "''") + "'"
 }
@@ -53,24 +78,48 @@ function Start-HiddenPowerShell([string]$command, [string]$logPath) {
   ) -WorkingDirectory $petRoot -WindowStyle Hidden -PassThru
 }
 
-function Get-DesktopPetMainProcess {
+function Get-DesktopPetMainProcesses {
   Get-CimInstance Win32_Process |
     Where-Object {
       $_.Name -eq "electron.exe" -and
       $_.CommandLine -match 'desktop-pet\\node_modules\\electron\\dist\\electron\.exe" \.' -and
       $_.CommandLine -notmatch '--type='
-    } |
-    Select-Object -First 1
+    }
 }
 
-$existingPet = Get-DesktopPetMainProcess
+function Get-DesktopPetMainProcess {
+  Get-DesktopPetMainProcesses | Select-Object -First 1
+}
 
-if ($existingPet -and -not $ForceNew) {
+function Stop-DesktopPetMainProcesses([object[]]$processes) {
+  $stoppedIds = @()
+  foreach ($process in $processes) {
+    $processId = [int]$process.ProcessId
+    if ($processId -le 0) { continue }
+    Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    $stoppedIds += $processId
+  }
+  foreach ($processId in $stoppedIds) {
+    Wait-Process -Id $processId -Timeout 8 -ErrorAction SilentlyContinue
+  }
+  return $stoppedIds
+}
+
+$existingPets = @(Get-DesktopPetMainProcesses)
+$existingPet = $existingPets | Select-Object -First 1
+
+if ($existingPet -and $ReuseExisting) {
   Write-Output "status=already-running"
   Write-Output "electronPid=$($existingPet.ProcessId)"
   Write-Output "rendererUrl="
   Write-Output "logsDir=$logsDir"
   return
+}
+
+if ($existingPets.Count -gt 0 -and -not $ForceNew) {
+  Write-Output "status=restarting"
+  $stoppedElectronPids = @(Stop-DesktopPetMainProcesses $existingPets)
+  Write-Output "stoppedElectronPids=$($stoppedElectronPids -join ',')"
 }
 
 $npm = Get-NpmCommand
@@ -84,6 +133,7 @@ $rendererLog = Join-Path $logsDir "renderer.log"
 $electronOutLog = Join-Path $logsDir "electron.out.log"
 $electronErrLog = Join-Path $logsDir "electron.err.log"
 $debugEventsLog = Join-Path $petRoot "desktop-pet-debug-events.ndjson"
+$resolvedApiBaseUrl = Resolve-DefaultApiBaseUrl $ApiBaseUrl
 
 $rendererProcess = $null
 if (-not (Test-HttpReady $rendererUrl)) {
@@ -112,14 +162,15 @@ try {
     $env:MMD_PET_DEBUG_EVENTS = "1"
     $env:MMD_PET_DEBUG_EVENTS_LOG = $debugEventsLog
   }
-  if ($ApiBaseUrl) {
-    $env:MMD_PET_API_BASE_URL = $ApiBaseUrl
+  if ($resolvedApiBaseUrl) {
+    $env:MMD_PET_API_BASE_URL = $resolvedApiBaseUrl
   }
   if ($WorkspacePath) {
     $env:MMD_PET_WORKSPACE_PATH = $WorkspacePath
   }
 
-  $electronProcess = Start-Process -FilePath $electronExe -ArgumentList "." -WorkingDirectory $petRoot -WindowStyle Hidden -PassThru `
+  # Keep the Electron GUI visible; -WindowStyle Hidden can suppress the pet BrowserWindow.
+  $electronProcess = Start-Process -FilePath $electronExe -ArgumentList "." -WorkingDirectory $petRoot -PassThru `
     -RedirectStandardOutput $electronOutLog -RedirectStandardError $electronErrLog
 } finally {
   $env:MMD_PET_RENDERER_URL = $previousRendererUrl
@@ -131,6 +182,7 @@ try {
 
 Write-Output "status=started"
 Write-Output "rendererUrl=$rendererUrl"
+Write-Output "apiBaseUrl=$resolvedApiBaseUrl"
 Write-Output "rendererPid=$(if ($rendererProcess) { $rendererProcess.Id } else { '' })"
 Write-Output "electronPid=$($electronProcess.Id)"
 Write-Output "debugEventsLog=$(if ($NoDebugEvents) { '' } else { $debugEventsLog })"

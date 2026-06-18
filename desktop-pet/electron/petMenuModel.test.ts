@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { buildPetMenuModel, formatSessionMenuLabel, shortSessionId } from "./petMenuModel.js";
+import {
+  buildActiveWorkspaceSummaries,
+  buildPetMenuModel,
+  formatSessionMenuLabel,
+  shortSessionId,
+} from "./petMenuModel.js";
 
 describe("desktop pet menu model", () => {
   const defaultMenuOptions = {
@@ -51,6 +56,58 @@ describe("desktop pet menu model", () => {
     expect(shortSessionId("11111111-2222-3333-4444-555555555555")).toBe("11111111...55555555");
   });
 
+  it("groups active workspace summaries and ignores finished sessions", () => {
+    expect(
+      buildActiveWorkspaceSummaries([
+        {
+          pet_session_id: "pet-1",
+          codex_session_id: "codex-1",
+          display_title: "update login card",
+          workspace_path: "D:\\workspace\\MMD project",
+          last_status: "running",
+          last_seen_at: "2026-06-03T09:10:00+08:00",
+        },
+        {
+          pet_session_id: "pet-2",
+          codex_session_id: "codex-2",
+          first_prompt_preview: "fix approval flow",
+          workspace_path: "D:\\workspace\\MMD project",
+          last_status: "waiting_approval",
+          last_seen_at: "2026-06-03T09:15:00+08:00",
+        },
+        {
+          pet_session_id: "pet-3",
+          workspace_path: "D:\\workspace\\done project",
+          last_status: "completed",
+          last_seen_at: "2026-06-03T09:20:00+08:00",
+        },
+      ]),
+    ).toEqual([
+      {
+        workspacePath: "D:\\workspace\\MMD project",
+        activeSessionCount: 2,
+        lastStatus: "waiting_approval",
+        lastSeenAt: "2026-06-03T09:15:00+08:00",
+        activeTasks: [
+          {
+            petSessionId: "pet-2",
+            codexSessionId: "codex-2",
+            title: "fix approval flow",
+            status: "waiting_approval",
+            lastSeenAt: "2026-06-03T09:15:00+08:00",
+          },
+          {
+            petSessionId: "pet-1",
+            codexSessionId: "codex-1",
+            title: "update login card",
+            status: "running",
+            lastSeenAt: "2026-06-03T09:10:00+08:00",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("builds the expected top-level menu actions", () => {
     const model = buildPetMenuModel(defaultMenuOptions);
 
@@ -64,6 +121,7 @@ describe("desktop pet menu model", () => {
       "interaction-mode",
       "notification-detail",
       "menu-language",
+      "agent",
       "always-on-top",
       "focus-vscode",
       "sync-main-site",
@@ -72,6 +130,27 @@ describe("desktop pet menu model", () => {
     ]);
     expect(model.find((item) => item.id === "focus-vscode")?.label).toBe("Open VSCode Workspace");
     expect(model.find((item) => item.id === "send-prompt")?.label).toBe("Send Prompt...");
+  });
+
+  it("defaults the new-session label and agent submenu to Codex", () => {
+    const model = buildPetMenuModel(defaultMenuOptions);
+
+    expect(model.find((item) => item.id === "new-session")?.label).toBe("New Codex Session");
+    const agentItem = model.find((item) => item.id === "agent");
+    expect(agentItem?.label).toBe("Coding Agent");
+    expect(agentItem?.submenu).toEqual([
+      { id: "agent:codex", label: "Codex", type: "radio", checked: true, action: { type: "agent", agent: "codex" } },
+      { id: "agent:claude", label: "Claude", type: "radio", checked: false, action: { type: "agent", agent: "claude" } },
+    ]);
+  });
+
+  it("labels the new session and checks the agent submenu for the selected Claude agent", () => {
+    const model = buildPetMenuModel({ ...defaultMenuOptions, agent: "claude" });
+
+    expect(model.find((item) => item.id === "new-session")?.label).toBe("New Claude Session");
+    const agentSubmenu = model.find((item) => item.id === "agent")?.submenu;
+    expect(agentSubmenu?.find((item) => item.id === "agent:codex")?.checked).toBe(false);
+    expect(agentSubmenu?.find((item) => item.id === "agent:claude")?.checked).toBe(true);
   });
 
   it("shows the selected workspace and exposes a select workspace action", () => {
@@ -93,6 +172,99 @@ describe("desktop pet menu model", () => {
           id: "workspace:select",
           label: "Select Workspace...",
           action: { type: "select-workspace" },
+        },
+      ],
+    });
+  });
+
+  it("shows active workspaces and lets users switch from the workspace menu", () => {
+    const workspace = buildPetMenuModel({
+      ...defaultMenuOptions,
+      selectedWorkspacePath: "D:\\workspace\\MMD project",
+      activeWorkspaces: [
+        {
+          workspacePath: "D:\\workspace\\MMD project",
+          activeSessionCount: 2,
+          lastStatus: "waiting_approval",
+          lastSeenAt: "2026-06-03T09:15:00+08:00",
+          activeTasks: [
+            {
+              petSessionId: "pet-approval",
+              title: "approval unblock",
+              status: "waiting_approval",
+              lastSeenAt: "2026-06-03T09:15:00+08:00",
+            },
+            {
+              petSessionId: "pet-build",
+              title: "run desktop-pet check",
+              status: "running",
+              lastSeenAt: "2026-06-03T09:10:00+08:00",
+            },
+          ],
+        },
+        {
+          workspacePath: "D:\\workspace\\other project",
+          activeSessionCount: 1,
+          lastStatus: "command_running",
+          lastSeenAt: "2026-06-03T09:12:00+08:00",
+          activeTasks: [
+            {
+              petSessionId: "pet-other",
+              title: "ship menu grouping",
+              status: "command_running",
+              lastSeenAt: "2026-06-03T09:12:00+08:00",
+            },
+          ],
+        },
+      ],
+    }).find((item) => item.id === "workspace");
+
+    const activeWorkspaces = workspace?.submenu?.find((item) => item.id === "workspace:active");
+    expect(activeWorkspaces).toMatchObject({
+      id: "workspace:active",
+      label: "Active Workspaces",
+      enabled: true,
+    });
+    expect(activeWorkspaces?.submenu?.[0]).toMatchObject({
+      id: "workspace:active:D:\\workspace\\MMD project",
+      label: "MMD project - waiting approval - 2 active tasks",
+      enabled: true,
+      submenu: [
+        {
+          id: "workspace:active-current:D:\\workspace\\MMD project",
+          label: "Current workspace",
+          type: "radio",
+          checked: true,
+          enabled: false,
+        },
+        { id: "workspace:active-separator:D:\\workspace\\MMD project", type: "separator" },
+        {
+          id: "workspace:active-task:pet-approval",
+          label: "approval unblock - waiting approval",
+          action: { type: "focus-active-session", petSessionId: "pet-approval" },
+        },
+        {
+          id: "workspace:active-task:pet-build",
+          label: "run desktop-pet check - running",
+          action: { type: "focus-active-session", petSessionId: "pet-build" },
+        },
+      ],
+    });
+    expect(activeWorkspaces?.submenu?.[1]).toMatchObject({
+      id: "workspace:active:D:\\workspace\\other project",
+      label: "other project - running command",
+      enabled: true,
+      submenu: [
+        {
+          id: "workspace:active-switch:D:\\workspace\\other project",
+          label: "Switch to workspace",
+          action: { type: "switch-workspace", workspacePath: "D:\\workspace\\other project" },
+        },
+        { id: "workspace:active-separator:D:\\workspace\\other project", type: "separator" },
+        {
+          id: "workspace:active-task:pet-other",
+          label: "ship menu grouping - running command",
+          action: { type: "focus-active-session", petSessionId: "pet-other" },
         },
       ],
     });

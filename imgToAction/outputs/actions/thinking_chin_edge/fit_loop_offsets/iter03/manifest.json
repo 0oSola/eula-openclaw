@@ -1,0 +1,71 @@
+{
+  "createdAt": "2026-06-17T11:11:45.498Z",
+  "items": [
+    {
+      "id": "x014_y008_z006",
+      "offset": [
+        0.14,
+        0.08,
+        0.06
+      ],
+      "profile": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/profiles/model_profile.eula.x014_y008_z006.json",
+      "vmd": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/vmd/x014_y008_z006.vmd",
+      "run_dir": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/runs/x014_y008_z006"
+    },
+    {
+      "id": "x014_y008_z009",
+      "offset": [
+        0.14,
+        0.08,
+        0.09
+      ],
+      "profile": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/profiles/model_profile.eula.x014_y008_z009.json",
+      "vmd": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/vmd/x014_y008_z009.vmd",
+      "run_dir": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/runs/x014_y008_z009"
+    },
+    {
+      "id": "x012_y008_z009",
+      "offset": [
+        0.12,
+        0.08,
+        0.09
+      ],
+      "profile": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/profiles/model_profile.eula.x012_y008_z009.json",
+      "vmd": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/vmd/x012_y008_z009.vmd",
+      "run_dir": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/runs/x012_y008_z009"
+    },
+    {
+      "id": "x016_y008_z009",
+      "offset": [
+        0.16,
+        0.08,
+        0.09
+      ],
+      "profile": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/profiles/model_profile.eula.x016_y008_z009.json",
+      "vmd": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/vmd/x016_y008_z009.vmd",
+      "run_dir": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/runs/x016_y008_z009"
+    },
+    {
+      "id": "x014_y010_z009",
+      "offset": [
+        0.14,
+        0.1,
+        0.09
+      ],
+      "profile": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/profiles/model_profile.eula.x014_y010_z009.json",
+      "vmd": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/vmd/x014_y010_z009.vmd",
+      "run_dir": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/runs/x014_y010_z009"
+    },
+    {
+      "id": "x012_y010_z009",
+      "offset": [
+        0.12,
+        0.1,
+        0.09
+      ],
+      "profile": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/profiles/model_profile.eula.x012_y010_z009.json",
+      "vmd": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/vmd/x012_y010_z009.vmd",
+      "run_dir": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter03/runs/x012_y010_z009"
+    }
+  ]
+}

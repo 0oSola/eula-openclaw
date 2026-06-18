@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { describeCodexStatus, getCodexStatusPresentation } from "./codexStatus";
+import { buildCodexStatusCard, buildIdleCodexStatusCardFallback } from "./codexStatusCard";
 
 describe("desktop pet Codex status", () => {
   it("describes launch states with a readable workspace label", () => {
@@ -91,5 +92,110 @@ describe("desktop pet Codex status", () => {
       statusTone: "offline",
       shouldInterruptIdle: true,
     });
+  });
+
+  it("builds a focusable status card with at most three output lines", () => {
+    const card = buildCodexStatusCard(
+      {
+        state: "command_running",
+        workspacePath: "D:\\workspace\\MMD project",
+        sessionTitle: "Run tests",
+        lastOutput: "line one\nline two\nline three\nline four",
+      },
+      "medium",
+    );
+
+    expect(card).toEqual({
+      title: "Codex running command · Run tests",
+      outputLines: ["line one", "line two", "line three"],
+      focusable: true,
+      workspacePath: "D:\\workspace\\MMD project",
+    });
+  });
+
+  it("redacts sensitive output in the status card", () => {
+    const card = buildCodexStatusCard(
+      {
+        state: "running",
+        workspacePath: "D:\\workspace\\MMD project",
+        lastOutput: "token=ghp_super_secret_token\napi_key: sk-test1234567890",
+      },
+      "low",
+    );
+
+    expect(card?.outputLines.join("\n")).toContain("token=[redacted]");
+    expect(card?.outputLines.join("\n")).toContain("api_key: [redacted]");
+    expect(card?.outputLines.join("\n")).not.toContain("ghp_super_secret_token");
+    expect(card?.outputLines.join("\n")).not.toContain("sk-test1234567890");
+  });
+
+  it("filters Codex tool-run metadata from the status card output", () => {
+    const card = buildCodexStatusCard(
+      {
+        state: "running",
+        workspacePath: "D:\\workspace\\MMD project",
+        lastOutput: "Exit code: 0\nWall time: 4.1 seconds\nTotal output lines: 547\nActual command output",
+      },
+      "low",
+    );
+
+    expect(card?.outputLines).toEqual(["Actual command output"]);
+  });
+
+  it("shows the completed workspace and keeps it focusable", () => {
+    const card = buildCodexStatusCard(
+      {
+        state: "completed",
+        workspacePath: "D:\\workspace\\Other project",
+        sessionTitle: "Run release checks",
+        lastOutput: "All release checks passed",
+      },
+      "low",
+    );
+
+    expect(card).toEqual({
+      title: "Codex completed - Other project",
+      outputLines: ["Task: Run release checks", "All release checks passed"],
+      focusable: true,
+      workspacePath: "D:\\workspace\\Other project",
+    });
+  });
+
+  it("keeps an idle placeholder card visible after the MMD model is ready", () => {
+    expect(
+      buildIdleCodexStatusCardFallback({
+        hasSelectedModel: true,
+        loading: false,
+        loadError: null,
+      }),
+    ).toEqual({
+      title: "Codex idle",
+      outputLines: ["No active Codex output"],
+      focusable: false,
+    });
+  });
+
+  it("does not show the idle placeholder while the pet is loading or failing", () => {
+    expect(
+      buildIdleCodexStatusCardFallback({
+        hasSelectedModel: false,
+        loading: false,
+        loadError: null,
+      }),
+    ).toBeNull();
+    expect(
+      buildIdleCodexStatusCardFallback({
+        hasSelectedModel: true,
+        loading: true,
+        loadError: null,
+      }),
+    ).toBeNull();
+    expect(
+      buildIdleCodexStatusCardFallback({
+        hasSelectedModel: true,
+        loading: false,
+        loadError: "API unavailable",
+      }),
+    ).toBeNull();
   });
 });

@@ -1,0 +1,301 @@
+{
+  "items": [
+    {
+      "id": "x0_y0_z0",
+      "offset": [
+        -0.08,
+        -0.1,
+        0.0
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x0_y0_z0.vmd",
+      "score": 86.145,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x0_y0_z0"
+    },
+    {
+      "id": "x0_y0_z1",
+      "offset": [
+        -0.08,
+        -0.1,
+        0.06
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x0_y0_z1.vmd",
+      "score": 88.228,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x0_y0_z1"
+    },
+    {
+      "id": "x0_y0_z2",
+      "offset": [
+        -0.08,
+        -0.1,
+        0.12
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x0_y0_z2.vmd",
+      "score": 90.919,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x0_y0_z2"
+    },
+    {
+      "id": "x0_y1_z0",
+      "offset": [
+        -0.08,
+        -0.04,
+        0.0
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x0_y1_z0.vmd",
+      "score": 88.241,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x0_y1_z0"
+    },
+    {
+      "id": "x0_y1_z1",
+      "offset": [
+        -0.08,
+        -0.04,
+        0.06
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x0_y1_z1.vmd",
+      "score": 89.933,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x0_y1_z1"
+    },
+    {
+      "id": "x0_y1_z2",
+      "offset": [
+        -0.08,
+        -0.04,
+        0.12
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x0_y1_z2.vmd",
+      "score": 92.32,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x0_y1_z2"
+    },
+    {
+      "id": "x0_y2_z0",
+      "offset": [
+        -0.08,
+        0.02,
+        0.0
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x0_y2_z0.vmd",
+      "score": 90.939,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x0_y2_z0"
+    },
+    {
+      "id": "x0_y2_z1",
+      "offset": [
+        -0.08,
+        0.02,
+        0.06
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x0_y2_z1.vmd",
+      "score": 92.329,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x0_y2_z1"
+    },
+    {
+      "id": "x0_y2_z2",
+      "offset": [
+        -0.08,
+        0.02,
+        0.12
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x0_y2_z2.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x0_y2_z2"
+    },
+    {
+      "id": "x1_y0_z0",
+      "offset": [
+        0.0,
+        -0.1,
+        0.0
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x1_y0_z0.vmd",
+      "score": 89.523,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x1_y0_z0"
+    },
+    {
+      "id": "x1_y0_z1",
+      "offset": [
+        0.0,
+        -0.1,
+        0.06
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x1_y0_z1.vmd",
+      "score": 91.051,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x1_y0_z1"
+    },
+    {
+      "id": "x1_y0_z2",
+      "offset": [
+        0.0,
+        -0.1,
+        0.12
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x1_y0_z2.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x1_y0_z2"
+    },
+    {
+      "id": "x1_y1_z0",
+      "offset": [
+        0.0,
+        -0.04,
+        0.0
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x1_y1_z0.vmd",
+      "score": 91.061,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x1_y1_z0"
+    },
+    {
+      "id": "x1_y1_z1",
+      "offset": [
+        0.0,
+        -0.04,
+        0.06
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x1_y1_z1.vmd",
+      "score": 92.441,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x1_y1_z1"
+    },
+    {
+      "id": "x1_y1_z2",
+      "offset": [
+        0.0,
+        -0.04,
+        0.12
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x1_y1_z2.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x1_y1_z2"
+    },
+    {
+      "id": "x1_y2_z0",
+      "offset": [
+        0.0,
+        0.02,
+        0.0
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x1_y2_z0.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x1_y2_z0"
+    },
+    {
+      "id": "x1_y2_z1",
+      "offset": [
+        0.0,
+        0.02,
+        0.06
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x1_y2_z1.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x1_y2_z1"
+    },
+    {
+      "id": "x1_y2_z2",
+      "offset": [
+        0.0,
+        0.02,
+        0.12
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x1_y2_z2.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x1_y2_z2"
+    },
+    {
+      "id": "x2_y0_z0",
+      "offset": [
+        0.08,
+        -0.1,
+        0.0
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x2_y0_z0.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x2_y0_z0"
+    },
+    {
+      "id": "x2_y0_z1",
+      "offset": [
+        0.08,
+        -0.1,
+        0.06
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x2_y0_z1.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x2_y0_z1"
+    },
+    {
+      "id": "x2_y0_z2",
+      "offset": [
+        0.08,
+        -0.1,
+        0.12
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x2_y0_z2.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x2_y0_z2"
+    },
+    {
+      "id": "x2_y1_z0",
+      "offset": [
+        0.08,
+        -0.04,
+        0.0
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x2_y1_z0.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x2_y1_z0"
+    },
+    {
+      "id": "x2_y1_z1",
+      "offset": [
+        0.08,
+        -0.04,
+        0.06
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x2_y1_z1.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x2_y1_z1"
+    },
+    {
+      "id": "x2_y1_z2",
+      "offset": [
+        0.08,
+        -0.04,
+        0.12
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x2_y1_z2.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x2_y1_z2"
+    },
+    {
+      "id": "x2_y2_z0",
+      "offset": [
+        0.08,
+        0.02,
+        0.0
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x2_y2_z0.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x2_y2_z0"
+    },
+    {
+      "id": "x2_y2_z1",
+      "offset": [
+        0.08,
+        0.02,
+        0.06
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x2_y2_z1.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x2_y2_z1"
+    },
+    {
+      "id": "x2_y2_z2",
+      "offset": [
+        0.08,
+        0.02,
+        0.12
+      ],
+      "vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\vmd\\x2_y2_z2.vmd",
+      "score": 92.52,
+      "run_dir": "imgToAction\\outputs\\actions\\thinking_chin_edge\\fit_loop_offsets\\iter01\\runs\\x2_y2_z2"
+    }
+  ]
+}

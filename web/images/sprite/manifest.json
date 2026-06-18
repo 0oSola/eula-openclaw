@@ -1,0 +1,1410 @@
+[
+  {
+    "name": "bubble-large-left",
+    "category": "bubbles",
+    "file": "/images/sprite/bubbles__bubble-large-left.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 20,
+      "y": 82,
+      "width": 336,
+      "height": 170
+    },
+    "size": {
+      "width": 336,
+      "height": 170
+    }
+  },
+  {
+    "name": "bubble-small-right",
+    "category": "bubbles",
+    "file": "/images/sprite/bubbles__bubble-small-right.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 365,
+      "y": 82,
+      "width": 210,
+      "height": 136
+    },
+    "size": {
+      "width": 210,
+      "height": 136
+    }
+  },
+  {
+    "name": "bubble-medium-left",
+    "category": "bubbles",
+    "file": "/images/sprite/bubbles__bubble-medium-left.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 24,
+      "y": 318,
+      "width": 248,
+      "height": 132
+    },
+    "size": {
+      "width": 248,
+      "height": 132
+    }
+  },
+  {
+    "name": "bubble-medium-right-loading",
+    "category": "bubbles",
+    "file": "/images/sprite/bubbles__bubble-medium-right-loading.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 306,
+      "y": 318,
+      "width": 266,
+      "height": 136
+    },
+    "size": {
+      "width": 266,
+      "height": 136
+    }
+  },
+  {
+    "name": "bubble-notification",
+    "category": "bubbles",
+    "file": "/images/sprite/bubbles__bubble-notification.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 24,
+      "y": 520,
+      "width": 242,
+      "height": 94
+    },
+    "size": {
+      "width": 242,
+      "height": 94
+    }
+  },
+  {
+    "name": "bubble-error-retry",
+    "category": "bubbles",
+    "file": "/images/sprite/bubbles__bubble-error-retry.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 290,
+      "y": 520,
+      "width": 276,
+      "height": 94
+    },
+    "size": {
+      "width": 276,
+      "height": 94
+    }
+  },
+  {
+    "name": "card-next-steps",
+    "category": "cards",
+    "file": "/images/sprite/cards__card-next-steps.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 600,
+      "y": 40,
+      "width": 284,
+      "height": 206
+    },
+    "size": {
+      "width": 284,
+      "height": 206
+    }
+  },
+  {
+    "name": "card-memory",
+    "category": "cards",
+    "file": "/images/sprite/cards__card-memory.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 600,
+      "y": 254,
+      "width": 284,
+      "height": 214
+    },
+    "size": {
+      "width": 284,
+      "height": 214
+    }
+  },
+  {
+    "name": "card-trace",
+    "category": "cards",
+    "file": "/images/sprite/cards__card-trace.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 600,
+      "y": 484,
+      "width": 284,
+      "height": 224
+    },
+    "size": {
+      "width": 284,
+      "height": 224
+    }
+  },
+  {
+    "name": "bottom-toggle-tts",
+    "category": "bottom-bar",
+    "file": "/images/sprite/bottom-bar__bottom-toggle-tts.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 16,
+      "y": 780,
+      "width": 185,
+      "height": 76
+    },
+    "size": {
+      "width": 185,
+      "height": 76
+    }
+  },
+  {
+    "name": "bottom-voice-button",
+    "category": "bottom-bar",
+    "file": "/images/sprite/bottom-bar__bottom-voice-button.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 224,
+      "y": 790,
+      "width": 132,
+      "height": 56
+    },
+    "size": {
+      "width": 132,
+      "height": 56
+    }
+  },
+  {
+    "name": "bottom-input",
+    "category": "bottom-bar",
+    "file": "/images/sprite/bottom-bar__bottom-input.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 370,
+      "y": 786,
+      "width": 670,
+      "height": 66
+    },
+    "size": {
+      "width": 670,
+      "height": 66
+    }
+  },
+  {
+    "name": "button-send-primary",
+    "category": "buttons",
+    "file": "/images/sprite/buttons__button-send-primary.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1060,
+      "y": 786,
+      "width": 76,
+      "height": 68
+    },
+    "size": {
+      "width": 76,
+      "height": 68
+    }
+  },
+  {
+    "name": "button-mic",
+    "category": "buttons",
+    "file": "/images/sprite/buttons__button-mic.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1150,
+      "y": 786,
+      "width": 72,
+      "height": 68
+    },
+    "size": {
+      "width": 72,
+      "height": 68
+    }
+  },
+  {
+    "name": "button-settings-wide",
+    "category": "buttons",
+    "file": "/images/sprite/buttons__button-settings-wide.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1240,
+      "y": 786,
+      "width": 224,
+      "height": 68
+    },
+    "size": {
+      "width": 224,
+      "height": 68
+    }
+  },
+  {
+    "name": "icon-menu",
+    "category": "icons-main",
+    "file": "/images/sprite/icons-main__icon-menu.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 922,
+      "y": 66,
+      "width": 54,
+      "height": 54
+    },
+    "size": {
+      "width": 54,
+      "height": 54
+    }
+  },
+  {
+    "name": "icon-chat",
+    "category": "icons-main",
+    "file": "/images/sprite/icons-main__icon-chat.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1000,
+      "y": 66,
+      "width": 54,
+      "height": 54
+    },
+    "size": {
+      "width": 54,
+      "height": 54
+    }
+  },
+  {
+    "name": "icon-clipboard",
+    "category": "icons-main",
+    "file": "/images/sprite/icons-main__icon-clipboard.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1074,
+      "y": 66,
+      "width": 54,
+      "height": 54
+    },
+    "size": {
+      "width": 54,
+      "height": 54
+    }
+  },
+  {
+    "name": "icon-cube",
+    "category": "icons-main",
+    "file": "/images/sprite/icons-main__icon-cube.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1148,
+      "y": 66,
+      "width": 54,
+      "height": 54
+    },
+    "size": {
+      "width": 54,
+      "height": 54
+    }
+  },
+  {
+    "name": "icon-brain",
+    "category": "icons-main",
+    "file": "/images/sprite/icons-main__icon-brain.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1222,
+      "y": 66,
+      "width": 54,
+      "height": 54
+    },
+    "size": {
+      "width": 54,
+      "height": 54
+    }
+  },
+  {
+    "name": "icon-lightning",
+    "category": "icons-main",
+    "file": "/images/sprite/icons-main__icon-lightning.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1296,
+      "y": 66,
+      "width": 54,
+      "height": 54
+    },
+    "size": {
+      "width": 54,
+      "height": 54
+    }
+  },
+  {
+    "name": "icon-gear",
+    "category": "icons-main",
+    "file": "/images/sprite/icons-main__icon-gear.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1370,
+      "y": 66,
+      "width": 54,
+      "height": 54
+    },
+    "size": {
+      "width": 54,
+      "height": 54
+    }
+  },
+  {
+    "name": "icon-chevron-circle",
+    "category": "icons-main",
+    "file": "/images/sprite/icons-main__icon-chevron-circle.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1444,
+      "y": 66,
+      "width": 54,
+      "height": 54
+    },
+    "size": {
+      "width": 54,
+      "height": 54
+    }
+  },
+  {
+    "name": "action-send",
+    "category": "icons-action",
+    "file": "/images/sprite/icons-action__action-send.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 930,
+      "y": 238,
+      "width": 58,
+      "height": 50
+    },
+    "size": {
+      "width": 58,
+      "height": 50
+    }
+  },
+  {
+    "name": "action-mic",
+    "category": "icons-action",
+    "file": "/images/sprite/icons-action__action-mic.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1008,
+      "y": 228,
+      "width": 54,
+      "height": 58
+    },
+    "size": {
+      "width": 54,
+      "height": 58
+    }
+  },
+  {
+    "name": "action-sliders",
+    "category": "icons-action",
+    "file": "/images/sprite/icons-action__action-sliders.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1076,
+      "y": 230,
+      "width": 52,
+      "height": 52
+    },
+    "size": {
+      "width": 52,
+      "height": 52
+    }
+  },
+  {
+    "name": "action-waveform",
+    "category": "icons-action",
+    "file": "/images/sprite/icons-action__action-waveform.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1152,
+      "y": 230,
+      "width": 52,
+      "height": 52
+    },
+    "size": {
+      "width": 52,
+      "height": 52
+    }
+  },
+  {
+    "name": "action-expand",
+    "category": "icons-action",
+    "file": "/images/sprite/icons-action__action-expand.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1228,
+      "y": 230,
+      "width": 52,
+      "height": 52
+    },
+    "size": {
+      "width": 52,
+      "height": 52
+    }
+  },
+  {
+    "name": "action-close",
+    "category": "icons-action",
+    "file": "/images/sprite/icons-action__action-close.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1302,
+      "y": 230,
+      "width": 52,
+      "height": 52
+    },
+    "size": {
+      "width": 52,
+      "height": 52
+    }
+  },
+  {
+    "name": "action-refresh",
+    "category": "icons-action",
+    "file": "/images/sprite/icons-action__action-refresh.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1374,
+      "y": 230,
+      "width": 52,
+      "height": 52
+    },
+    "size": {
+      "width": 52,
+      "height": 52
+    }
+  },
+  {
+    "name": "action-chevron-down",
+    "category": "icons-action",
+    "file": "/images/sprite/icons-action__action-chevron-down.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1446,
+      "y": 230,
+      "width": 52,
+      "height": 52
+    },
+    "size": {
+      "width": 52,
+      "height": 52
+    }
+  },
+  {
+    "name": "status-green-dot",
+    "category": "status",
+    "file": "/images/sprite/status__status-green-dot.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 934,
+      "y": 166,
+      "width": 28,
+      "height": 28
+    },
+    "size": {
+      "width": 28,
+      "height": 28
+    }
+  },
+  {
+    "name": "status-cyan-spark",
+    "category": "status",
+    "file": "/images/sprite/status__status-cyan-spark.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1018,
+      "y": 166,
+      "width": 28,
+      "height": 28
+    },
+    "size": {
+      "width": 28,
+      "height": 28
+    }
+  },
+  {
+    "name": "status-green-dot-alt",
+    "category": "status",
+    "file": "/images/sprite/status__status-green-dot-alt.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1176,
+      "y": 166,
+      "width": 28,
+      "height": 28
+    },
+    "size": {
+      "width": 28,
+      "height": 28
+    }
+  },
+  {
+    "name": "status-gray-dot",
+    "category": "status",
+    "file": "/images/sprite/status__status-gray-dot.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1280,
+      "y": 166,
+      "width": 28,
+      "height": 28
+    },
+    "size": {
+      "width": 28,
+      "height": 28
+    }
+  },
+  {
+    "name": "status-red-dot",
+    "category": "status",
+    "file": "/images/sprite/status__status-red-dot.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1370,
+      "y": 166,
+      "width": 28,
+      "height": 28
+    },
+    "size": {
+      "width": 28,
+      "height": 28
+    }
+  },
+  {
+    "name": "status-loading-ring",
+    "category": "status",
+    "file": "/images/sprite/status__status-loading-ring.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1450,
+      "y": 156,
+      "width": 54,
+      "height": 54
+    },
+    "size": {
+      "width": 54,
+      "height": 54
+    }
+  },
+  {
+    "name": "emotion-happy",
+    "category": "emotions",
+    "file": "/images/sprite/emotions__emotion-happy.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 934,
+      "y": 354,
+      "width": 44,
+      "height": 44
+    },
+    "size": {
+      "width": 44,
+      "height": 44
+    }
+  },
+  {
+    "name": "emotion-thinking",
+    "category": "emotions",
+    "file": "/images/sprite/emotions__emotion-thinking.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1020,
+      "y": 354,
+      "width": 44,
+      "height": 44
+    },
+    "size": {
+      "width": 44,
+      "height": 44
+    }
+  },
+  {
+    "name": "emotion-neutral",
+    "category": "emotions",
+    "file": "/images/sprite/emotions__emotion-neutral.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1108,
+      "y": 354,
+      "width": 44,
+      "height": 44
+    },
+    "size": {
+      "width": 44,
+      "height": 44
+    }
+  },
+  {
+    "name": "emotion-surprised",
+    "category": "emotions",
+    "file": "/images/sprite/emotions__emotion-surprised.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1194,
+      "y": 354,
+      "width": 44,
+      "height": 44
+    },
+    "size": {
+      "width": 44,
+      "height": 44
+    }
+  },
+  {
+    "name": "emotion-sad",
+    "category": "emotions",
+    "file": "/images/sprite/emotions__emotion-sad.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1294,
+      "y": 354,
+      "width": 44,
+      "height": 44
+    },
+    "size": {
+      "width": 44,
+      "height": 44
+    }
+  },
+  {
+    "name": "emotion-angry",
+    "category": "emotions",
+    "file": "/images/sprite/emotions__emotion-angry.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1384,
+      "y": 354,
+      "width": 44,
+      "height": 44
+    },
+    "size": {
+      "width": 44,
+      "height": 44
+    }
+  },
+  {
+    "name": "motion-stand",
+    "category": "motions",
+    "file": "/images/sprite/motions__motion-stand.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 934,
+      "y": 428,
+      "width": 42,
+      "height": 48
+    },
+    "size": {
+      "width": 42,
+      "height": 48
+    }
+  },
+  {
+    "name": "motion-wave",
+    "category": "motions",
+    "file": "/images/sprite/motions__motion-wave.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1012,
+      "y": 428,
+      "width": 42,
+      "height": 48
+    },
+    "size": {
+      "width": 42,
+      "height": 48
+    }
+  },
+  {
+    "name": "motion-point",
+    "category": "motions",
+    "file": "/images/sprite/motions__motion-point.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1090,
+      "y": 428,
+      "width": 42,
+      "height": 48
+    },
+    "size": {
+      "width": 42,
+      "height": 48
+    }
+  },
+  {
+    "name": "motion-idle",
+    "category": "motions",
+    "file": "/images/sprite/motions__motion-idle.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1170,
+      "y": 428,
+      "width": 42,
+      "height": 48
+    },
+    "size": {
+      "width": 42,
+      "height": 48
+    }
+  },
+  {
+    "name": "motion-sit",
+    "category": "motions",
+    "file": "/images/sprite/motions__motion-sit.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1250,
+      "y": 428,
+      "width": 48,
+      "height": 48
+    },
+    "size": {
+      "width": 48,
+      "height": 48
+    }
+  },
+  {
+    "name": "motion-cheer",
+    "category": "motions",
+    "file": "/images/sprite/motions__motion-cheer.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1338,
+      "y": 428,
+      "width": 48,
+      "height": 48
+    },
+    "size": {
+      "width": 48,
+      "height": 48
+    }
+  },
+  {
+    "name": "motion-raise",
+    "category": "motions",
+    "file": "/images/sprite/motions__motion-raise.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1426,
+      "y": 428,
+      "width": 48,
+      "height": 48
+    },
+    "size": {
+      "width": 48,
+      "height": 48
+    }
+  },
+  {
+    "name": "util-book",
+    "category": "icons-utility",
+    "file": "/images/sprite/icons-utility__util-book.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 934,
+      "y": 522,
+      "width": 32,
+      "height": 32
+    },
+    "size": {
+      "width": 32,
+      "height": 32
+    }
+  },
+  {
+    "name": "util-bookmark",
+    "category": "icons-utility",
+    "file": "/images/sprite/icons-utility__util-bookmark.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 986,
+      "y": 522,
+      "width": 32,
+      "height": 32
+    },
+    "size": {
+      "width": 32,
+      "height": 32
+    }
+  },
+  {
+    "name": "util-star",
+    "category": "icons-utility",
+    "file": "/images/sprite/icons-utility__util-star.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1036,
+      "y": 522,
+      "width": 32,
+      "height": 32
+    },
+    "size": {
+      "width": 32,
+      "height": 32
+    }
+  },
+  {
+    "name": "util-pin",
+    "category": "icons-utility",
+    "file": "/images/sprite/icons-utility__util-pin.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1092,
+      "y": 522,
+      "width": 32,
+      "height": 32
+    },
+    "size": {
+      "width": 32,
+      "height": 32
+    }
+  },
+  {
+    "name": "util-folder",
+    "category": "icons-utility",
+    "file": "/images/sprite/icons-utility__util-folder.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1142,
+      "y": 522,
+      "width": 32,
+      "height": 32
+    },
+    "size": {
+      "width": 32,
+      "height": 32
+    }
+  },
+  {
+    "name": "util-download",
+    "category": "icons-utility",
+    "file": "/images/sprite/icons-utility__util-download.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1194,
+      "y": 522,
+      "width": 32,
+      "height": 32
+    },
+    "size": {
+      "width": 32,
+      "height": 32
+    }
+  },
+  {
+    "name": "util-upload",
+    "category": "icons-utility",
+    "file": "/images/sprite/icons-utility__util-upload.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1244,
+      "y": 522,
+      "width": 32,
+      "height": 32
+    },
+    "size": {
+      "width": 32,
+      "height": 32
+    }
+  },
+  {
+    "name": "util-link",
+    "category": "icons-utility",
+    "file": "/images/sprite/icons-utility__util-link.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1298,
+      "y": 522,
+      "width": 32,
+      "height": 32
+    },
+    "size": {
+      "width": 32,
+      "height": 32
+    }
+  },
+  {
+    "name": "util-trash",
+    "category": "icons-utility",
+    "file": "/images/sprite/icons-utility__util-trash.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1348,
+      "y": 522,
+      "width": 32,
+      "height": 32
+    },
+    "size": {
+      "width": 32,
+      "height": 32
+    }
+  },
+  {
+    "name": "util-calendar",
+    "category": "icons-utility",
+    "file": "/images/sprite/icons-utility__util-calendar.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1398,
+      "y": 522,
+      "width": 32,
+      "height": 32
+    },
+    "size": {
+      "width": 32,
+      "height": 32
+    }
+  },
+  {
+    "name": "util-bell",
+    "category": "icons-utility",
+    "file": "/images/sprite/icons-utility__util-bell.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1448,
+      "y": 522,
+      "width": 32,
+      "height": 32
+    },
+    "size": {
+      "width": 32,
+      "height": 32
+    }
+  },
+  {
+    "name": "util-flag",
+    "category": "icons-utility",
+    "file": "/images/sprite/icons-utility__util-flag.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1494,
+      "y": 522,
+      "width": 32,
+      "height": 32
+    },
+    "size": {
+      "width": 32,
+      "height": 32
+    }
+  },
+  {
+    "name": "avatar-model-01",
+    "category": "avatars",
+    "file": "/images/sprite/avatars__avatar-model-01.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 922,
+      "y": 616,
+      "width": 66,
+      "height": 66
+    },
+    "size": {
+      "width": 66,
+      "height": 66
+    }
+  },
+  {
+    "name": "avatar-model-02",
+    "category": "avatars",
+    "file": "/images/sprite/avatars__avatar-model-02.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1000,
+      "y": 616,
+      "width": 66,
+      "height": 66
+    },
+    "size": {
+      "width": 66,
+      "height": 66
+    }
+  },
+  {
+    "name": "avatar-model-03",
+    "category": "avatars",
+    "file": "/images/sprite/avatars__avatar-model-03.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1082,
+      "y": 616,
+      "width": 66,
+      "height": 66
+    },
+    "size": {
+      "width": 66,
+      "height": 66
+    }
+  },
+  {
+    "name": "avatar-model-04",
+    "category": "avatars",
+    "file": "/images/sprite/avatars__avatar-model-04.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1166,
+      "y": 616,
+      "width": 66,
+      "height": 66
+    },
+    "size": {
+      "width": 66,
+      "height": 66
+    }
+  },
+  {
+    "name": "avatar-model-05",
+    "category": "avatars",
+    "file": "/images/sprite/avatars__avatar-model-05.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1250,
+      "y": 616,
+      "width": 66,
+      "height": 66
+    },
+    "size": {
+      "width": 66,
+      "height": 66
+    }
+  },
+  {
+    "name": "avatar-model-06",
+    "category": "avatars",
+    "file": "/images/sprite/avatars__avatar-model-06.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1334,
+      "y": 616,
+      "width": 66,
+      "height": 66
+    },
+    "size": {
+      "width": 66,
+      "height": 66
+    }
+  },
+  {
+    "name": "avatar-model-07",
+    "category": "avatars",
+    "file": "/images/sprite/avatars__avatar-model-07.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1418,
+      "y": 616,
+      "width": 66,
+      "height": 66
+    },
+    "size": {
+      "width": 66,
+      "height": 66
+    }
+  },
+  {
+    "name": "control-toggle-on",
+    "category": "controls",
+    "file": "/images/sprite/controls__control-toggle-on.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 928,
+      "y": 718,
+      "width": 78,
+      "height": 30
+    },
+    "size": {
+      "width": 78,
+      "height": 30
+    }
+  },
+  {
+    "name": "control-toggle-off",
+    "category": "controls",
+    "file": "/images/sprite/controls__control-toggle-off.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1004,
+      "y": 718,
+      "width": 70,
+      "height": 30
+    },
+    "size": {
+      "width": 70,
+      "height": 30
+    }
+  },
+  {
+    "name": "control-slider",
+    "category": "controls",
+    "file": "/images/sprite/controls__control-slider.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1074,
+      "y": 718,
+      "width": 174,
+      "height": 30
+    },
+    "size": {
+      "width": 174,
+      "height": 30
+    }
+  },
+  {
+    "name": "control-radio-active",
+    "category": "controls",
+    "file": "/images/sprite/controls__control-radio-active.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1260,
+      "y": 716,
+      "width": 34,
+      "height": 34
+    },
+    "size": {
+      "width": 34,
+      "height": 34
+    }
+  },
+  {
+    "name": "control-radio",
+    "category": "controls",
+    "file": "/images/sprite/controls__control-radio.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1318,
+      "y": 716,
+      "width": 34,
+      "height": 34
+    },
+    "size": {
+      "width": 34,
+      "height": 34
+    }
+  },
+  {
+    "name": "control-check-active",
+    "category": "controls",
+    "file": "/images/sprite/controls__control-check-active.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1370,
+      "y": 716,
+      "width": 34,
+      "height": 34
+    },
+    "size": {
+      "width": 34,
+      "height": 34
+    }
+  },
+  {
+    "name": "control-check-small",
+    "category": "controls",
+    "file": "/images/sprite/controls__control-check-small.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1426,
+      "y": 716,
+      "width": 34,
+      "height": 34
+    },
+    "size": {
+      "width": 34,
+      "height": 34
+    }
+  },
+  {
+    "name": "decor-water-ring",
+    "category": "decor",
+    "file": "/images/sprite/decor__decor-water-ring.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 24,
+      "y": 890,
+      "width": 150,
+      "height": 80
+    },
+    "size": {
+      "width": 150,
+      "height": 80
+    }
+  },
+  {
+    "name": "decor-hud-ring",
+    "category": "decor",
+    "file": "/images/sprite/decor__decor-hud-ring.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 178,
+      "y": 850,
+      "width": 156,
+      "height": 150
+    },
+    "size": {
+      "width": 156,
+      "height": 150
+    }
+  },
+  {
+    "name": "decor-dotted-ring",
+    "category": "decor",
+    "file": "/images/sprite/decor__decor-dotted-ring.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 340,
+      "y": 852,
+      "width": 120,
+      "height": 120
+    },
+    "size": {
+      "width": 120,
+      "height": 120
+    }
+  },
+  {
+    "name": "decor-waveform",
+    "category": "decor",
+    "file": "/images/sprite/decor__decor-waveform.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 468,
+      "y": 892,
+      "width": 130,
+      "height": 50
+    },
+    "size": {
+      "width": 130,
+      "height": 50
+    }
+  },
+  {
+    "name": "decor-loading-dots",
+    "category": "decor",
+    "file": "/images/sprite/decor__decor-loading-dots.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 612,
+      "y": 882,
+      "width": 86,
+      "height": 86
+    },
+    "size": {
+      "width": 86,
+      "height": 86
+    }
+  },
+  {
+    "name": "decor-corner-frame",
+    "category": "decor",
+    "file": "/images/sprite/decor__decor-corner-frame.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 704,
+      "y": 856,
+      "width": 116,
+      "height": 116
+    },
+    "size": {
+      "width": 116,
+      "height": 116
+    }
+  },
+  {
+    "name": "decor-chip-arrow",
+    "category": "decor",
+    "file": "/images/sprite/decor__decor-chip-arrow.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 842,
+      "y": 864,
+      "width": 96,
+      "height": 36
+    },
+    "size": {
+      "width": 96,
+      "height": 36
+    }
+  },
+  {
+    "name": "decor-chip-brain",
+    "category": "decor",
+    "file": "/images/sprite/decor__decor-chip-brain.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 958,
+      "y": 864,
+      "width": 116,
+      "height": 36
+    },
+    "size": {
+      "width": 116,
+      "height": 36
+    }
+  },
+  {
+    "name": "decor-chip-person",
+    "category": "decor",
+    "file": "/images/sprite/decor__decor-chip-person.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1088,
+      "y": 864,
+      "width": 104,
+      "height": 36
+    },
+    "size": {
+      "width": 104,
+      "height": 36
+    }
+  },
+  {
+    "name": "decor-chip-wave",
+    "category": "decor",
+    "file": "/images/sprite/decor__decor-chip-wave.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1212,
+      "y": 864,
+      "width": 116,
+      "height": 36
+    },
+    "size": {
+      "width": 116,
+      "height": 36
+    }
+  },
+  {
+    "name": "decor-chip-mic",
+    "category": "decor",
+    "file": "/images/sprite/decor__decor-chip-mic.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1344,
+      "y": 864,
+      "width": 118,
+      "height": 36
+    },
+    "size": {
+      "width": 118,
+      "height": 36
+    }
+  },
+  {
+    "name": "decor-particles",
+    "category": "decor",
+    "file": "/images/sprite/decor__decor-particles.png",
+    "source": "/images/spite.png",
+    "box": {
+      "x": 1238,
+      "y": 910,
+      "width": 286,
+      "height": 100
+    },
+    "size": {
+      "width": 286,
+      "height": 100
+    }
+  }
+]

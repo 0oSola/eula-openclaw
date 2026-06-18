@@ -1,0 +1,25 @@
+{
+  "id": "eula",
+  "contacts": {
+    "right_wrist_to_chin_edge": {
+      "target_bone": "頭",
+      "target_space": "bone_local",
+      "target_offset": [
+        0.2,
+        0.08,
+        0.12
+      ],
+      "effector_bone": "右手首",
+      "chain": [
+        "右腕",
+        "右ひじ",
+        "右手首"
+      ],
+      "phase": {
+        "start": 0.35,
+        "full": 0.7,
+        "end": 1.0
+      }
+    }
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "model": "Eula signature reference",
+  "image_width": 1024,
+  "image_height": 1536,
+  "coordinate_system": "pixel_top_left",
+  "note": "Initial hand-labeled 2D landmarks for frame_60_front. Character right side appears on the left side of the image.",
+  "frames": {
+    "frame_60_front": {
+      "image": "assets/reference_images/frame_60_front.png",
+      "landmarks": {
+        "head": {
+          "x": 535,
+          "y": 172,
+          "weight": 0.9
+        },
+        "neck": {
+          "x": 527,
+          "y": 260,
+          "weight": 1.0
+        },
+        "right_shoulder": {
+          "x": 408,
+          "y": 312,
+          "weight": 1.0
+        },
+        "right_elbow": {
+          "x": 285,
+          "y": 372,
+          "weight": 1.1
+        },
+        "right_wrist": {
+          "x": 154,
+          "y": 270,
+          "weight": 1.5
+        },
+        "left_shoulder": {
+          "x": 625,
+          "y": 344,
+          "weight": 1.0
+        },
+        "left_elbow": {
+          "x": 705,
+          "y": 560,
+          "weight": 1.0
+        },
+        "left_wrist": {
+          "x": 810,
+          "y": 675,
+          "weight": 1.4
+        },
+        "pelvis": {
+          "x": 515,
+          "y": 645,
+          "weight": 1.0
+        },
+        "right_hip": {
+          "x": 455,
+          "y": 640,
+          "weight": 0.8
+        },
+        "left_hip": {
+          "x": 575,
+          "y": 640,
+          "weight": 0.8
+        },
+        "right_knee": {
+          "x": 425,
+          "y": 790,
+          "weight": 0.9
+        },
+        "right_ankle": {
+          "x": 225,
+          "y": 1375,
+          "weight": 1.2
+        },
+        "left_knee": {
+          "x": 600,
+          "y": 785,
+          "weight": 0.9
+        },
+        "left_ankle": {
+          "x": 585,
+          "y": 1370,
+          "weight": 1.2
+        }
+      }
+    }
+  },
+  "model_landmark_map": {
+    "head": ["頭"],
+    "neck": ["首"],
+    "right_shoulder": ["右肩"],
+    "right_elbow": ["右ひじ"],
+    "right_wrist": ["右手首"],
+    "left_shoulder": ["左肩"],
+    "left_elbow": ["左ひじ"],
+    "left_wrist": ["左手首"],
+    "pelvis": ["下半身"],
+    "right_hip": ["右足"],
+    "left_hip": ["左足"],
+    "right_knee": ["右ひざ"],
+    "right_ankle": ["右足首"],
+    "left_knee": ["左ひざ"],
+    "left_ankle": ["左足首"]
+  }
+}

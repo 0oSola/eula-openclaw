@@ -56,10 +56,46 @@ type RouteHandlerConfig<Route extends AppRouteHandlerRoutes = AppRouteHandlerRou
   type __Unused = __Check
 }
 
+// Validate ../../src/app/companion/tasks/page.tsx
+{
+  type __IsExpected<Specific extends AppPageConfig<"/companion/tasks">> = Specific
+  const handler = {} as typeof import("../../src/app/companion/tasks/page.js")
+  type __Check = __IsExpected<typeof handler>
+  // @ts-ignore
+  type __Unused = __Check
+}
+
+// Validate ../../src/app/mmd-calibration-render/page.tsx
+{
+  type __IsExpected<Specific extends AppPageConfig<"/mmd-calibration-render">> = Specific
+  const handler = {} as typeof import("../../src/app/mmd-calibration-render/page.js")
+  type __Check = __IsExpected<typeof handler>
+  // @ts-ignore
+  type __Unused = __Check
+}
+
 // Validate ../../src/app/page.tsx
 {
   type __IsExpected<Specific extends AppPageConfig<"/">> = Specific
   const handler = {} as typeof import("../../src/app/page.js")
+  type __Check = __IsExpected<typeof handler>
+  // @ts-ignore
+  type __Unused = __Check
+}
+
+// Validate ../../src/app/podcasts/page.tsx
+{
+  type __IsExpected<Specific extends AppPageConfig<"/podcasts">> = Specific
+  const handler = {} as typeof import("../../src/app/podcasts/page.js")
+  type __Check = __IsExpected<typeof handler>
+  // @ts-ignore
+  type __Unused = __Check
+}
+
+// Validate ../../src/app/status/page.tsx
+{
+  type __IsExpected<Specific extends AppPageConfig<"/status">> = Specific
+  const handler = {} as typeof import("../../src/app/status/page.js")
   type __Check = __IsExpected<typeof handler>
   // @ts-ignore
   type __Unused = __Check

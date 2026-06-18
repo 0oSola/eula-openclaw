@@ -76,7 +76,7 @@ def test_runtime_health_includes_codex_snapshot():
         worktree_path=None,
         branch_name=None,
         codex_thread_id="thread-health",
-        codex_version="codex-cli 0.135.0",
+        codex_version="codex-cli 0.137.0",
         transport="stdio",
         sandbox_mode="read-only",
         status="failed",
@@ -101,7 +101,7 @@ def test_runtime_health_includes_codex_snapshot():
     payload = response.json()
     assert payload["codex"]["enabled"] is True
     assert payload["codex"]["codex_bin"] == "codex-test"
-    assert payload["codex"]["codex_version"] == "codex-cli 0.135.0"
+    assert payload["codex"]["codex_version"] == "codex-cli 0.137.0"
     assert payload["codex"]["transport"] == "stdio"
     assert payload["codex"]["active_sessions"] == 0
     assert payload["codex"]["allowed_workspaces"] == ["mmd-companion"]

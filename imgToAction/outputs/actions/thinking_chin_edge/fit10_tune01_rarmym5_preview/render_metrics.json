@@ -1,0 +1,194 @@
+{
+  "createdAt": "2026-06-17T14:44:58.408Z",
+  "model": "MMD/优菈_by_原神_339146e6e418d79e85a515b26414c0b0/优菈.pmx",
+  "vmd": "imgToAction/outputs/vmd/eula_thinking_fit10_tune01_rarmym5.vmd",
+  "renderPipeline": "genshin",
+  "fps": 30,
+  "frames": [
+    60
+  ],
+  "landmarkRequests": [
+    {
+      "name": "right_wrist",
+      "bones": [
+        "右手首"
+      ]
+    },
+    {
+      "name": "chin",
+      "bones": [
+        "頭"
+      ]
+    },
+    {
+      "name": "left_wrist",
+      "bones": [
+        "左手首"
+      ]
+    },
+    {
+      "name": "waist",
+      "bones": [
+        "下半身",
+        "センター"
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "frame": 60,
+      "right_wrist_to_chin_screen": 38.50854840400235,
+      "left_wrist_to_waist_screen": 234.52735374703298,
+      "projected": {
+        "right_wrist": {
+          "x": 679.200879809109,
+          "y": 257.9447059897641,
+          "z": 0.9971860688738265
+        },
+        "chin": {
+          "x": 689.5955661401724,
+          "y": 220.86561759398236,
+          "z": 0.9973490787846849
+        },
+        "left_wrist": {
+          "x": 745.7493263630538,
+          "y": 347.2462301748574,
+          "z": 0.997092583699369
+        },
+        "waist": {
+          "x": 693.4652175625727,
+          "y": 575.8713635756394,
+          "z": 0.9972984122737902
+        }
+      },
+      "samples": {
+        "right_wrist": {
+          "x": 679.200879809109,
+          "y": 257.9447059897641,
+          "z": 0.9971860688738265,
+          "samples": [
+            {
+              "bone": "右手首",
+              "world": {
+                "x": -0.29772620964777585,
+                "y": 6.104252138089504,
+                "z": 1.8778571813957998
+              },
+              "projected": {
+                "x": 679.200879809109,
+                "y": 257.9447059897641,
+                "z": 0.9971860688738265
+              }
+            }
+          ]
+        },
+        "chin": {
+          "x": 689.5955661401724,
+          "y": 220.86561759398236,
+          "z": 0.9973490787846849,
+          "samples": [
+            {
+              "bone": "頭",
+              "world": {
+                "x": -0.044823841676738,
+                "y": 6.995593623794641,
+                "z": 0.13556198857280347
+              },
+              "projected": {
+                "x": 689.5955661401724,
+                "y": 220.86561759398236,
+                "z": 0.9973490787846849
+              }
+            }
+          ]
+        },
+        "left_wrist": {
+          "x": 745.7493263630538,
+          "y": 347.2462301748574,
+          "z": 0.997092583699369,
+          "samples": [
+            {
+              "bone": "左手首",
+              "world": {
+                "x": 0.7888440164567232,
+                "y": 4.475796843664549,
+                "z": 2.8900072408997284
+              },
+              "projected": {
+                "x": 745.7493263630538,
+                "y": 347.2462301748574,
+                "z": 0.997092583699369
+              }
+            }
+          ]
+        },
+        "waist": {
+          "x": 693.4652175625727,
+          "y": 575.8713635756394,
+          "z": 0.9972984122737902,
+          "samples": [
+            {
+              "bone": "下半身",
+              "world": {
+                "x": 9.859478499153783e-7,
+                "y": 2.4483590902070675,
+                "z": 1.4077157317768267
+              },
+              "projected": {
+                "x": 694.6548878793026,
+                "y": 472.71725025301515,
+                "z": 0.9972541572966408
+              }
+            },
+            {
+              "bone": "センター",
+              "world": {
+                "x": 8.584391006927206e-7,
+                "y": -1.1776104111664178,
+                "z": 0.6962906849773789
+              },
+              "projected": {
+                "x": 692.2755472458429,
+                "y": 679.0254768982636,
+                "z": 0.9973426672509397
+              }
+            }
+          ]
+        }
+      },
+      "missing": [],
+      "imageFile": "frame_060.png",
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit10_tune01_rarmym5_preview/frame_060.png"
+    }
+  ],
+  "summary": {
+    "hold_start_frame": 60,
+    "contact_pass_pixels": 50,
+    "right_wrist_to_chin_screen": {
+      "count": 1,
+      "min": 38.509,
+      "max": 38.509,
+      "avg": 38.509,
+      "final_hold_count": 1,
+      "final_hold_min": 38.509,
+      "final_hold_max": 38.509,
+      "final_hold_avg": 38.509
+    },
+    "left_wrist_to_waist_screen": {
+      "count": 1,
+      "min": 234.527,
+      "max": 234.527,
+      "avg": 234.527,
+      "final_hold_count": 1,
+      "final_hold_min": 234.527,
+      "final_hold_max": 234.527,
+      "final_hold_avg": 234.527
+    },
+    "quality_gates": {
+      "right_wrist_final_hold_under_threshold": true
+    }
+  },
+  "consoleMessages": [],
+  "sheet": "imgToAction/outputs/actions/thinking_chin_edge/fit10_tune01_rarmym5_preview/contact_sheet.png",
+  "sheetHtml": "imgToAction/outputs/actions/thinking_chin_edge/fit10_tune01_rarmym5_preview/contact-sheet.html"
+}

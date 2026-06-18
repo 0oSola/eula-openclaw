@@ -23,8 +23,41 @@ describe("Electron preload module format", () => {
     const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
 
     expect(preloadSource).toContain("vscode:");
+    expect(preloadSource).toContain("focus: (options");
     expect(preloadSource).toContain('"pet:vscode:focus"');
+    expect(preloadSource).toContain("ipcRenderer.invoke(\"pet:vscode:focus\", options)");
     expect(mainSource).toContain('"pet:vscode:focus"');
+    expect(mainSource).toContain("requestedWorkspacePath");
+  });
+
+  it("exposes active session focus through the protected preload bridge", () => {
+    const preloadSource = readFileSync(path.resolve(__dirname, "preload.cts"), "utf8");
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+
+    expect(preloadSource).toContain("focusActive: (petSessionId: string)");
+    expect(preloadSource).toContain('"pet:sessions:focus-active"');
+    expect(mainSource).toContain('"pet:sessions:focus-active"');
+  });
+
+  it("forwards renderer JavaScript errors to the main crash diagnostics log", () => {
+    const preloadSource = readFileSync(path.resolve(__dirname, "preload.cts"), "utf8");
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+
+    expect(preloadSource).toContain('"pet:renderer-error"');
+    expect(preloadSource).toContain('window.addEventListener("error"');
+    expect(preloadSource).toContain('window.addEventListener("unhandledrejection"');
+    expect(mainSource).toContain('ipcMain.on("pet:renderer-error"');
+  });
+
+  it("exposes Codex approval decisions through the protected preload bridge", () => {
+    const preloadSource = readFileSync(path.resolve(__dirname, "preload.cts"), "utf8");
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+
+    expect(preloadSource).toContain("approvals:");
+    expect(preloadSource).toContain('"pet:approval:decide"');
+    expect(preloadSource).toContain("decision: \"approve_once\" | \"deny\"");
+    expect(mainSource).toContain('"pet:approval:decide"');
+    expect(mainSource).toContain("decideCodexApprovalFromPet");
   });
 
   it("exposes API runtime retry and change events through the protected preload bridge", () => {

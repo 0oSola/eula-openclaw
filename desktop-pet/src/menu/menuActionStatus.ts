@@ -1,14 +1,18 @@
 type MenuAction =
   | { type: "select-workspace" }
+  | { type: "switch-workspace"; workspacePath: string }
   | { type: "workspace-selected"; workspacePath: string }
   | { type: "new-session" }
   | { type: "send-prompt" }
-  | { type: "prompt-sent" }
+  | { type: "prompt-sent"; source?: "app-server-relay" | "terminal" }
+  | { type: "approval-decided"; approvalId: string; decision: "approve_once" | "deny" }
   | { type: "restore-session"; petSessionId: string }
+  | { type: "focus-active-session"; petSessionId: string }
   | { type: "more-sessions"; sessions?: unknown[] }
   | { type: "interaction-mode"; mode: "window-drag" | "camera-adjust" }
   | { type: "notification-detail"; profile: "low" | "medium" | "high" }
   | { type: "menu-language"; language: "en" | "zh-CN" }
+  | { type: "agent"; agent: "codex" | "claude" }
   | { type: "always-on-top"; enabled: boolean }
   | { type: "focus-vscode" }
   | { type: "sync-main-site" };
@@ -32,10 +36,14 @@ export function describeMenuActionResult(action: MenuAction): string {
       return "Syncing from main site...";
     case "menu-language":
       return action.language === "zh-CN" ? "菜单语言：中文" : "Menu language: English";
+    case "agent":
+      return action.agent === "claude" ? "Coding agent: Claude" : "Coding agent: Codex";
     case "always-on-top":
       return action.enabled ? "Always on top enabled" : "Always on top disabled";
     case "select-workspace":
       return "Selecting Codex workspace...";
+    case "switch-workspace":
+      return `Switching workspace: ${workspaceLabel(action.workspacePath)}`;
     case "workspace-selected":
       return `Workspace selected: ${workspaceLabel(action.workspacePath)}`;
     case "new-session":
@@ -43,9 +51,13 @@ export function describeMenuActionResult(action: MenuAction): string {
     case "send-prompt":
       return "Preparing Codex prompt...";
     case "prompt-sent":
-      return "Prompt sent to VSCode terminal";
+      return action.source === "app-server-relay" ? "Prompt sent to Codex relay" : "Prompt sent to VSCode terminal";
+    case "approval-decided":
+      return action.decision === "approve_once" ? "Codex request approved" : "Codex request denied";
     case "restore-session":
       return "Opening VSCode workspace and resuming Codex...";
+    case "focus-active-session":
+      return "Opening existing task window...";
     case "more-sessions":
       return "Showing Codex sessions...";
     case "interaction-mode":

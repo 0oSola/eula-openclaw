@@ -1,0 +1,181 @@
+{
+  "created_at_utc": "2026-06-10T11:21:22.351422+00:00",
+  "package_name": "eula_pose_vmd_project_handoff",
+  "files": [
+    {
+      "path": "PROJECT_SPEC.md",
+      "size_bytes": 12155,
+      "sha256": "6d87103e29f7dab6e5bdc284c6e0e19448622f88ca23dce000a91233ae7110fb"
+    },
+    {
+      "path": "README.md",
+      "size_bytes": 914,
+      "sha256": "41cd203c49cdee62115e8c2e5e2532bed85db20f960c89617921df9196b4e3bf"
+    },
+    {
+      "path": "assets/pmx/优菈.pmx",
+      "size_bytes": 1327166,
+      "sha256": "733b271d45a057b7b6c4a56316341002c0fd741ef56043dfe15b8549da49a6b9"
+    },
+    {
+      "path": "assets/reference_images/frame_00_front.png",
+      "size_bytes": 1357929,
+      "sha256": "36ed56e8162faa0c2adbd53721707678d49f0132debf145e26367e294213919b"
+    },
+    {
+      "path": "assets/reference_images/frame_00_side.png",
+      "size_bytes": 1239494,
+      "sha256": "83450007947244cdef4ca3e4fea2367a9557e05fcf964ba9aafec23cec56195d"
+    },
+    {
+      "path": "assets/reference_images/frame_30_front.png",
+      "size_bytes": 1686231,
+      "sha256": "85945bfb7bea013ac1c71bb3cf13c3a0e72a8dcb4d4fb9d4ca3d861914ddfe98"
+    },
+    {
+      "path": "assets/reference_images/frame_30_side.png",
+      "size_bytes": 1587789,
+      "sha256": "28e244eafbea4143b7149256fcf7c975b9c3baa23fde257581dae9b0317472ef"
+    },
+    {
+      "path": "assets/reference_images/frame_60_front.png",
+      "size_bytes": 1773273,
+      "sha256": "1087de0298f5f340683d2c93bf56febbf8ca62bfdc7411fe201ccf6bdd8fbe60"
+    },
+    {
+      "path": "assets/reference_images/frame_60_side.png",
+      "size_bytes": 1681813,
+      "sha256": "7da505efd1f178ff166e3df3e23ab4bfbbcd935ba86f02a5300aaddc005934f9"
+    },
+    {
+      "path": "assets/reference_images/original_names/优雅的冰蓝幻想战士.png",
+      "size_bytes": 1587789,
+      "sha256": "28e244eafbea4143b7149256fcf7c975b9c3baa23fde257581dae9b0317472ef"
+    },
+    {
+      "path": "assets/reference_images/original_names/优雅的冷艳少女.png",
+      "size_bytes": 1686231,
+      "sha256": "85945bfb7bea013ac1c71bb3cf13c3a0e72a8dcb4d4fb9d4ca3d861914ddfe98"
+    },
+    {
+      "path": "assets/reference_images/original_names/优雅的幻想女战士.png",
+      "size_bytes": 1773273,
+      "sha256": "1087de0298f5f340683d2c93bf56febbf8ca62bfdc7411fe201ccf6bdd8fbe60"
+    },
+    {
+      "path": "assets/reference_images/original_names/冰蓝奇幻骑士女战士.png",
+      "size_bytes": 1239494,
+      "sha256": "83450007947244cdef4ca3e4fea2367a9557e05fcf964ba9aafec23cec56195d"
+    },
+    {
+      "path": "assets/reference_images/original_names/冰蓝羽翼骑士角色设计.png",
+      "size_bytes": 1357929,
+      "sha256": "36ed56e8162faa0c2adbd53721707678d49f0132debf145e26367e294213919b"
+    },
+    {
+      "path": "assets/reference_images/original_names/精致蓝色幻想人物设计.png",
+      "size_bytes": 1681813,
+      "sha256": "7da505efd1f178ff166e3df3e23ab4bfbbcd935ba86f02a5300aaddc005934f9"
+    },
+    {
+      "path": "calibration/ik_center/eula_axis_calibration_ik_center_position.vmd",
+      "size_bytes": 11174,
+      "sha256": "e3a9033f81d9196320438c2283ab21db08b818da6c81ebb8fbead91ad24a4c3f"
+    },
+    {
+      "path": "calibration/ik_center/eula_axis_calibration_ik_center_position_schedule.csv",
+      "size_bytes": 1484,
+      "sha256": "fab20032308c6c5dada2436f8732201876f3adbc26aa667990f9a760e53e2a60"
+    },
+    {
+      "path": "calibration/lower_body/eula_axis_calibration_lower_body_rotation.vmd",
+      "size_bytes": 16724,
+      "sha256": "b5abc0318410c63a4b94049f000b0b5d210fda0bdc491b91c7cee4206f8c15e7"
+    },
+    {
+      "path": "calibration/lower_body/eula_axis_calibration_lower_body_rotation_schedule.csv",
+      "size_bytes": 1844,
+      "sha256": "b5765ffb024b6ec9ee55a171d4089e92c578504382b666e48942a3fde2a2c7bd"
+    },
+    {
+      "path": "calibration/upper_body/eula_axis_calibration_guide.md",
+      "size_bytes": 1279,
+      "sha256": "74942cc897d5586ca3007da62858c188dc07d298750c7c21d1d950541bf3ca36"
+    },
+    {
+      "path": "calibration/upper_body/eula_axis_calibration_upper_body.vmd",
+      "size_bytes": 33374,
+      "sha256": "80df2bf9d7f99626ab521e7e8d2f7a36fb6613f3e9a7bcd96619e337d9e376b9"
+    },
+    {
+      "path": "calibration/upper_body/eula_axis_calibration_upper_body_schedule.csv",
+      "size_bytes": 3932,
+      "sha256": "8dbe6a5b02d6f7c5bfeca5b0db40f8bfbe2b5ba3b3c51fb9528801367486c145"
+    },
+    {
+      "path": "codex/AGENTS.md",
+      "size_bytes": 1874,
+      "sha256": "b0cf60652eddd5ba301bbeb05cfa2778689433c08dcb5b1c57c3573aebc892e0"
+    },
+    {
+      "path": "docs/PROJECT_SPEC.md",
+      "size_bytes": 12155,
+      "sha256": "6d87103e29f7dab6e5bdc284c6e0e19448622f88ca23dce000a91233ae7110fb"
+    },
+    {
+      "path": "reports/eula_bones.txt",
+      "size_bytes": 23440,
+      "sha256": "c3a5efc263e6a016e39e01295982f472dfd267bf515612201ce60bf464efa026"
+    },
+    {
+      "path": "samples/vmd/eula_stand_to_elegant_pose_test.vmd",
+      "size_bytes": 9065,
+      "sha256": "70cff2e695e4ca46da55fcb79b68566032ba11ff2db2b0ebcd2255c8f1791d70"
+    },
+    {
+      "path": "samples/vmd/eula_stand_to_elegant_pose_v2.vmd",
+      "size_bytes": 13838,
+      "sha256": "ac32b8a2e2e1a0eb264d207c61667743bf9dba921ef4524341e88b16d35a53d6"
+    },
+    {
+      "path": "samples/vmd/eula_stand_to_elegant_pose_v3.vmd",
+      "size_bytes": 13838,
+      "sha256": "1cab24f2711e6f14bc56e2af68f1774da754d1de6ef5dffb08d2ab6521ad25b6"
+    },
+    {
+      "path": "samples/vmd/eula_stand_to_signature_pose_final.vmd",
+      "size_bytes": 17279,
+      "sha256": "176a8ce4c729d51a75da9087d9b0f559b43f4f45189a4f9e88fd446302fa994c"
+    },
+    {
+      "path": "schemas/bone_axis_map.template.json",
+      "size_bytes": 1626,
+      "sha256": "1982faa7dc2d80474febadcd247812767fd1f5763df8544003bcf648aa90349e"
+    },
+    {
+      "path": "schemas/example_pose_nodes_eula_signature.json",
+      "size_bytes": 4266,
+      "sha256": "962852ecbb2680451971590776a252331b98e2711528f94da77464d99b03446a"
+    },
+    {
+      "path": "schemas/pose_node_schema.json",
+      "size_bytes": 1176,
+      "sha256": "313e4269abf6bcce21e6ba9bc2215bf19f5af74a14ff46873a8a41a76f579895"
+    },
+    {
+      "path": "screenshots/axis_calibration_preview.png",
+      "size_bytes": 438125,
+      "sha256": "33e9adf976c8062b84f832141fd0f3f60719dfc31dd0ff138e83c1cd0e2a114a"
+    },
+    {
+      "path": "screenshots/preview_v1_issue.png",
+      "size_bytes": 574216,
+      "sha256": "45b65576cc78e6d8a3c2c02725f44a5bcbd2121c3b2cfede66297838da66aaed"
+    },
+    {
+      "path": "screenshots/preview_v2_issue.png",
+      "size_bytes": 349740,
+      "sha256": "86fd30388162f1d136d35d0fe9a7f0308c06429d6ee398074045bd339237088a"
+    }
+  ]
+}

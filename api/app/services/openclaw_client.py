@@ -81,16 +81,27 @@ class OpenClawClient:
             backend_model = raw_model
         return payload_model, agent_id, backend_model
 
-    def _headers(self, session_id: str | None) -> dict[str, str]:
+    def _headers(
+        self,
+        session_id: str | None,
+        *,
+        agent_id_override: str | None = None,
+        channel_override: str | None = None,
+    ) -> dict[str, str]:
         _, agent_id, _ = self._resolve_request_target()
+        if agent_id_override is not None:
+            agent_id = agent_id_override.strip()
+        message_channel = self.message_channel
+        if channel_override is not None:
+            message_channel = channel_override.strip()
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
             headers["x-openclaw-scopes"] = self.OPERATOR_SCOPES
         if agent_id:
             headers["x-openclaw-agent-id"] = agent_id
-        if self.message_channel:
-            headers["x-openclaw-message-channel"] = self.message_channel
+        if message_channel:
+            headers["x-openclaw-message-channel"] = message_channel
         if session_id:
             headers["x-openclaw-session-key"] = session_id
         return headers
@@ -321,6 +332,72 @@ class OpenClawClient:
             if isinstance(error, OpenClawInvocationError):
                 raise
             raise OpenClawInvocationError(self._describe_exception(error)) from error
+
+    async def generate_codex_review(
+        self,
+        *,
+        user_id: str,
+        session_key: str,
+        evidence_pack: dict[str, Any],
+        agent_id: str,
+        channel: str,
+    ) -> str:
+        payload_model, _, _ = self._resolve_request_target()
+        headers = self._headers(
+            session_key,
+            agent_id_override=agent_id,
+            channel_override=channel,
+        )
+        prompt = (
+            "You are a Codex session review assistant. Only use the evidence_pack below. "
+            "Return exactly one JSON object and no Markdown. Do not invent facts. "
+            "If evidence is insufficient, use null only for object field values, empty arrays "
+            "for item lists, or lower confidence.\n"
+            "All user-facing text values MUST be Simplified Chinese. This includes title, summary, "
+            "goal, work_done, result, symptom, root_cause, fix, prevention, decision, description, "
+            "importance, review_status, suggested_next_action, and user-facing tags. "
+            "Keep JSON keys, enum values, file paths, commands, code identifiers, package names, "
+            "and quoted error excerpts unchanged.\n\n"
+            "Return JSON matching this shape:\n"
+            '{\n'
+            '  "schema_version": 1,\n'
+            '  "work_summary": {"title": string, "summary": string | null, "goal": string | null, '
+            '"work_done": [string], "result": string | null, "evidence_refs": [string], '
+            '"confidence": number | null},\n'
+            '  "pitfalls": [{"title": string, "summary": string | null, "symptom": string | null, '
+            '"root_cause": string | null, "fix": string | null, "prevention": string | null, '
+            '"severity": string | null, "tags": [string], "evidence_refs": [string], '
+            '"confidence": number | null}],\n'
+            '  "decisions": [{"title": string, "summary": string | null, "decision": string | null, '
+            '"result": string | null, "tags": [string], "evidence_refs": [string], '
+            '"confidence": number | null}],\n'
+            '  "followups": [{"title": string, "summary": string | null, "description": string | null, '
+            '"severity": string | null, "tags": [string], "evidence_refs": [string], '
+            '"confidence": number | null}],\n'
+            '  "blockers": [{"title": string, "summary": string | null, "description": string | null, '
+            '"severity": string | null, "tags": [string], "evidence_refs": [string], '
+            '"confidence": number | null}],\n'
+            '  "management": {"importance": string | null, "review_status": string | null, '
+            '"needs_human_review": boolean, "suggested_next_action": string | null, "tags": [string]}\n'
+            '}\n\n'
+            f"evidence_pack:\n{json.dumps(evidence_pack, ensure_ascii=False)}"
+        )
+        response = await self._post_with_retry(
+            "/v1/responses",
+            {
+                "model": payload_model,
+                "input": prompt,
+                "user": user_id,
+                "stream": False,
+            },
+            headers,
+        )
+        if not response.is_success:
+            raise OpenClawInvocationError(self._format_error(response))
+        text = self._extract_responses_text(response.json())
+        if not text:
+            raise OpenClawInvocationError("OpenClaw Codex review returned empty content.")
+        return text
 
     @staticmethod
     def _stream_error_message(event: dict[str, Any]) -> str:

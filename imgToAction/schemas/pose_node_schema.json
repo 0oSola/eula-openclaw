@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pose Node DSL",
+  "type": "object",
+  "required": [
+    "motion_name",
+    "fps",
+    "duration_frames",
+    "keyframes"
+  ],
+  "properties": {
+    "motion_name": {
+      "type": "string"
+    },
+    "fps": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "duration_frames": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "character": {
+      "type": "string"
+    },
+    "keyframes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "frame",
+          "pose"
+        ],
+        "properties": {
+          "frame": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pose": {
+            "type": "string"
+          },
+          "body": {
+            "type": "object"
+          },
+          "arms": {
+            "type": "object"
+          },
+          "legs": {
+            "type": "object"
+          },
+          "constraints": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "interpolation": {
+      "type": "object"
+    },
+    "constraints": {
+      "type": "object"
+    }
+  }
+}

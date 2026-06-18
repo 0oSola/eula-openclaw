@@ -13,11 +13,13 @@ from app.db.store import TraceStore
 from app.routes.assets import router as assets_router
 from app.routes.chat import router as chat_router
 from app.routes.codex_interactive import router as codex_interactive_router
+from app.routes.codex_review import router as codex_review_router
 from app.routes.config import router as config_router
 from app.routes.desktop_pet import router as desktop_pet_router
 from app.routes.health import router as health_router
 from app.routes.message_bridge import router as message_bridge_router
 from app.routes.message_service import router as message_service_router
+from app.routes.openclaw_tools import router as openclaw_tools_router
 from app.routes.podcasts import router as podcasts_router
 from app.routes.realtime_voice import router as realtime_voice_router
 from app.routes.trace import router as trace_router
@@ -26,9 +28,15 @@ from app.services.message_tts_reference import create_or_enqueue_message_tts_ref
 from app.services.message_tts_worker import run_message_tts_worker
 from app.services.codex_app_server_client import CodexAppServerClient
 from app.services.codex_interactive_provider import CodexInteractiveProvider, DeterministicCodexInteractiveProvider
+from app.services.codex_openclaw_review_sync import run_codex_review_sync_worker
 from app.services.codex_worktree_manager import CodexWorktreeManager
 from app.services.message_bridge import MessageBridgeService, OpenClawGatewayProvider
 from app.services.openclaw_client import OpenClawClient
+from app.services.openclaw_control_plane import (
+    OpenClawReviewControlPlaneClient,
+    run_codex_review_control_plane_worker,
+)
+from app.services.openkb_client import OpenKbClient
 from app.services.daily_podcast import DailyPodcastRefreshCooldown
 from app.services.realtime_voice import RealtimeVoiceChunkRegistry
 from app.services.voice_workflow_tts_client import VoiceWorkflowTtsClient
@@ -62,7 +70,24 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         timeout_seconds=settings.openclaw_timeout_seconds,
         origin=settings.openclaw_base_url,
     )
+    openclaw_control_plane_client = (
+        OpenClawReviewControlPlaneClient(
+            base_url=settings.codex_openclaw_control_plane_base_url,
+            token=settings.codex_openclaw_control_plane_token,
+            timeout_seconds=settings.openclaw_timeout_seconds,
+        )
+        if settings.codex_openclaw_control_plane_base_url
+        else None
+    )
     message_bridge_service = MessageBridgeService(store=trace_store, provider=message_bridge_provider)
+    openkb_client = (
+        OpenKbClient(
+            base_url=settings.openkb_base_url,
+            token=settings.openkb_token,
+        )
+        if settings.openkb_sync_enabled and settings.openkb_base_url
+        else None
+    )
     if overrides and overrides.get("codex_use_deterministic_provider"):
         codex_interactive_provider = DeterministicCodexInteractiveProvider()
     else:
@@ -84,6 +109,8 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         worker_task = None
         bridge_task = None
+        codex_review_task = None
+        codex_review_control_plane_task = None
         if settings.tts_service_enabled:
             worker_task = asyncio.create_task(run_message_tts_worker(app))
         should_start_bridge = (
@@ -95,6 +122,21 @@ def create_app(overrides: dict | None = None) -> FastAPI:
             bridge_task = asyncio.create_task(
                 app.state.message_bridge_service.run_forever(settings.admin_user_ids[0])
             )
+        should_start_codex_review_worker = (
+            settings.codex_openclaw_review_enabled
+            and bool(settings.openclaw_token)
+            and (overrides is None or bool(overrides.get("enable_codex_openclaw_review_worker")))
+        )
+        if should_start_codex_review_worker:
+            codex_review_task = asyncio.create_task(run_codex_review_sync_worker(app))
+        should_start_codex_review_control_plane_worker = (
+            settings.codex_openclaw_control_plane_enabled
+            and app.state.openclaw_control_plane_client is not None
+            and bool(settings.codex_openclaw_control_plane_token)
+            and (overrides is None or bool(overrides.get("enable_codex_openclaw_control_plane_worker")))
+        )
+        if should_start_codex_review_control_plane_worker:
+            codex_review_control_plane_task = asyncio.create_task(run_codex_review_control_plane_worker(app))
         try:
             yield
         finally:
@@ -106,11 +148,25 @@ def create_app(overrides: dict | None = None) -> FastAPI:
                 bridge_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await bridge_task
+            if codex_review_task is not None:
+                codex_review_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await codex_review_task
+            if codex_review_control_plane_task is not None:
+                codex_review_control_plane_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await codex_review_control_plane_task
             close_codex = getattr(app.state.codex_interactive_provider, "close_all_sessions", None)
             if close_codex is not None:
                 await close_codex()
         await app.state.tts_client.close()
         await app.state.openclaw_client.close()
+        control_plane_close = getattr(getattr(app.state, "openclaw_control_plane_client", None), "close", None)
+        if control_plane_close is not None:
+            await control_plane_close()
+        openkb_close = getattr(getattr(app.state, "openkb_client", None), "close", None)
+        if openkb_close is not None:
+            await openkb_close()
         await app.state.message_bridge_service.provider.close()
         app.state.trace_store.close()
 
@@ -168,6 +224,8 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.trace_store = trace_store
     app.state.openclaw_client = openclaw_client
+    app.state.openclaw_control_plane_client = openclaw_control_plane_client
+    app.state.openkb_client = openkb_client
     app.state.tts_client = tts_client
     app.state.message_bridge_service = message_bridge_service
     app.state.codex_interactive_provider = codex_interactive_provider
@@ -180,10 +238,13 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.state.realtime_voice_registry = RealtimeVoiceChunkRegistry()
     app.state.realtime_voice_queues = {}
     app.state.last_cleanup_check = datetime.now(UTC)
+    app.state.last_codex_review_control_plane_snapshot = None
 
     app.include_router(health_router)
     app.include_router(chat_router)
     app.include_router(codex_interactive_router)
+    app.include_router(codex_review_router)
+    app.include_router(openclaw_tools_router)
     app.include_router(message_bridge_router)
     app.include_router(message_service_router)
     app.include_router(podcasts_router)

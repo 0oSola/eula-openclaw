@@ -44,6 +44,19 @@ def _pet_session_payload(**overrides):
     return payload
 
 
+def test_desktop_pet_sessions_default_missing_workspace_to_review_workspace():
+    client = _client()
+
+    response = client.post(
+        "/desktop-pet/sessions",
+        json=_pet_session_payload(workspace_id=None),
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["workspace_id"] == "mmd-companion"
+
+
 def test_shared_config_round_trip():
     client = _client()
 
@@ -192,7 +205,7 @@ def test_desktop_pet_sessions_rejects_oversized_metadata_without_storing():
 
     response = client.post(
         "/desktop-pet/sessions",
-        json=_pet_session_payload(pet_session_id="pet-oversized", metadata={"blob": "x" * 4100}),
+        json=_pet_session_payload(pet_session_id="pet-oversized", metadata={"blob": "x" * 31000}),
         headers={"x-user-id": "admin-1"},
     )
 

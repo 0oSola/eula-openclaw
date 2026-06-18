@@ -7,7 +7,9 @@ import {
   buildPetStageClickInteraction,
   buildPetStageKey,
   pickSelectedModel,
+  resolvePetStageInteractionWithFallback,
   selectFavoriteVmdUrls,
+  shouldReplayCodexStatusMotionOnCompletion,
 } from "./petStageState";
 
 const models = [
@@ -242,6 +244,45 @@ describe("pet stage state", () => {
     });
   });
 
+  it("uses the current favorite idle loop when a Codex status action has no playable hit", () => {
+    const favoriteIdle = buildPetAutoplayIdleState(
+      [
+        {
+          is_favorite: true,
+          favorite_model_relative_path: "Eula/Eula.pmx",
+          asset_id: "idle",
+          url: "/assets/vmd/file/idle",
+          favorite_relative_path: "Eula/00_idle_loop/idle.vmd",
+          slot: "neutral",
+        },
+      ] as any,
+      "Eula/Eula.pmx",
+      (url) => `https://api.local${url}`,
+    );
+    const statusResolution = buildCodexStatusPetStageResolution({ motionIntent: "complete", shouldInterruptIdle: true });
+
+    expect(
+      resolvePetStageInteractionWithFallback(statusResolution.interaction, favoriteIdle.interaction),
+    ).toEqual({
+      interaction: favoriteIdle.interaction,
+      fallbackApplied: true,
+      reason: "unsupported-procedural-action",
+    });
+  });
+
+  it("does not apply procedural idle when a Codex status action has no playable fallback", () => {
+    const noFavoriteIdle = buildPetAutoplayIdleState([], "Eula/Eula.pmx");
+    const statusResolution = buildCodexStatusPetStageResolution({ motionIntent: "complete", shouldInterruptIdle: true });
+
+    expect(
+      resolvePetStageInteractionWithFallback(statusResolution.interaction, noFavoriteIdle.interaction),
+    ).toEqual({
+      interaction: null,
+      fallbackApplied: true,
+      reason: "no-playable-fallback",
+    });
+  });
+
   it("keeps click reactions ahead of Codex status motions", () => {
     expect(
       buildCodexStatusPetStageResolution(
@@ -253,5 +294,16 @@ describe("pet stage state", () => {
       shouldApply: false,
       blockedBy: "click-interaction-active",
     });
+  });
+
+  it("replays active Codex status motions instead of falling back to idle after one procedural cycle", () => {
+    expect(shouldReplayCodexStatusMotionOnCompletion("running")).toBe(true);
+    expect(shouldReplayCodexStatusMotionOnCompletion("command_running")).toBe(true);
+    expect(shouldReplayCodexStatusMotionOnCompletion("file_changed")).toBe(true);
+    expect(shouldReplayCodexStatusMotionOnCompletion("waiting_approval")).toBe(true);
+
+    expect(shouldReplayCodexStatusMotionOnCompletion("completed")).toBe(false);
+    expect(shouldReplayCodexStatusMotionOnCompletion("failed")).toBe(false);
+    expect(shouldReplayCodexStatusMotionOnCompletion("vscode-opened")).toBe(false);
   });
 });

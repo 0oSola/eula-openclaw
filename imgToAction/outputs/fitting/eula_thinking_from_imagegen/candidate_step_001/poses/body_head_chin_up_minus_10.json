@@ -1,0 +1,194 @@
+{
+  "motion_name": "eula_thinking_from_imagegen",
+  "fps": 30,
+  "duration_frames": 90,
+  "character": "Eula PMX",
+  "keyframes": [
+    {
+      "frame": 0,
+      "pose": "thinking_preparation_stand",
+      "body": {
+        "center": {
+          "shift_x": 0.0,
+          "shift_y": 0.0,
+          "shift_z": 0.0
+        },
+        "pelvis": {
+          "turn_y": 0.0,
+          "tilt_z": -1.0
+        },
+        "chest": {
+          "turn_y": 0.0,
+          "tilt_z": 1.0,
+          "lean_x": 0.0
+        },
+        "head": {
+          "turn_y": 0.0,
+          "chin_up": 0.0
+        }
+      },
+      "arms": {
+        "right_arm": {
+          "raise": 6,
+          "open_side": 8,
+          "forward": 0,
+          "elbow_bend": 6,
+          "wrist_pitch": 0,
+          "wrist_yaw": 0,
+          "wrist_roll": 0
+        },
+        "left_arm": {
+          "raise": 4,
+          "open_side": 10,
+          "forward": 0,
+          "elbow_bend": 5,
+          "wrist_pitch": 0,
+          "wrist_yaw": 0,
+          "wrist_roll": 0
+        }
+      },
+      "legs": {
+        "right_leg": {
+          "support_weight": 0.56,
+          "knee_bend": 0.8,
+          "foot_lock": true
+        },
+        "left_leg": {
+          "support_weight": 0.44,
+          "knee_bend": 0.5,
+          "foot_lock": true
+        }
+      }
+    },
+    {
+      "frame": 30,
+      "pose": "thinking_hand_lift_transition",
+      "body": {
+        "center": {
+          "shift_x": -0.035,
+          "shift_y": 0.0,
+          "shift_z": -0.005
+        },
+        "pelvis": {
+          "turn_y": 2.0,
+          "tilt_z": -3.0
+        },
+        "chest": {
+          "turn_y": -3.0,
+          "tilt_z": 2.0,
+          "lean_x": -1.0
+        },
+        "head": {
+          "turn_y": -2.5,
+          "chin_up": -1.5
+        }
+      },
+      "arms": {
+        "right_arm": {
+          "raise": 56,
+          "open_side": 26,
+          "forward": 34,
+          "elbow_bend": 58,
+          "wrist_pitch": -8,
+          "wrist_yaw": 12,
+          "wrist_roll": -6
+        },
+        "left_arm": {
+          "raise": 18,
+          "open_side": 24,
+          "forward": 18,
+          "elbow_bend": 34,
+          "wrist_pitch": 3,
+          "wrist_yaw": -8,
+          "wrist_roll": 6
+        }
+      },
+      "legs": {
+        "right_leg": {
+          "support_weight": 0.66,
+          "knee_bend": 1.2,
+          "foot_lock": true
+        },
+        "left_leg": {
+          "support_weight": 0.34,
+          "knee_bend": 1.4,
+          "foot_lock": true
+        }
+      }
+    },
+    {
+      "frame": 60,
+      "pose": "final_mature_thinking_pose",
+      "body": {
+        "center": {
+          "shift_x": -0.055,
+          "shift_y": 0.0,
+          "shift_z": -0.01
+        },
+        "pelvis": {
+          "turn_y": 3.0,
+          "tilt_z": -4.0
+        },
+        "chest": {
+          "turn_y": -4.5,
+          "tilt_z": 2.8,
+          "lean_x": -1.8
+        },
+        "head": {
+          "turn_y": -3.5,
+          "chin_up": -13.0
+        }
+      },
+      "arms": {
+        "right_arm": {
+          "raise": 72,
+          "open_side": 20,
+          "forward": 46,
+          "elbow_bend": 88,
+          "wrist_pitch": -12,
+          "wrist_yaw": 16,
+          "wrist_roll": -10,
+          "hand_style": "gloved_chin_touch"
+        },
+        "left_arm": {
+          "raise": 24,
+          "open_side": 28,
+          "forward": 26,
+          "elbow_bend": 52,
+          "wrist_pitch": 4,
+          "wrist_yaw": -10,
+          "wrist_roll": 8,
+          "hand_style": "soft_cross_under_elbow"
+        }
+      },
+      "legs": {
+        "right_leg": {
+          "support_weight": 0.72,
+          "knee_bend": 1.5,
+          "foot_lock": true
+        },
+        "left_leg": {
+          "support_weight": 0.28,
+          "knee_bend": 1.8,
+          "foot_lock": true
+        }
+      }
+    },
+    {
+      "frame": 90,
+      "pose": "hold_final_thinking_pose"
+    }
+  ],
+  "interpolation": {
+    "0_to_30": "ease_in_out",
+    "30_to_60": "ease_out",
+    "60_to_90": "hold"
+  },
+  "constraints": {
+    "keep_feet_on_ground": true,
+    "avoid_arm_body_intersection": true,
+    "preserve_character_silhouette": true,
+    "no_weapon": true,
+    "mature_thinking_gesture": true
+  }
+}

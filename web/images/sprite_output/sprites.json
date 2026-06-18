@@ -1,0 +1,32 @@
+{
+  "source": "sprite2.png",
+  "count": 1,
+  "sprites": [
+    {
+      "id": 0,
+      "file": "sprite_000.png",
+      "box_raw": {
+        "x": 0,
+        "y": 11,
+        "w": 1527,
+        "h": 986
+      },
+      "box_cropped": {
+        "x": 6,
+        "y": 17,
+        "w": 1515,
+        "h": 974
+      },
+      "trim_in_crop": {
+        "x": 0,
+        "y": 0,
+        "w": 1515,
+        "h": 974
+      },
+      "final_size": {
+        "w": 1515,
+        "h": 974
+      }
+    }
+  ]
+}

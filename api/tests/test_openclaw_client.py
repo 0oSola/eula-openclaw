@@ -236,6 +236,60 @@ def test_openclaw_stream_reply_raises_on_error_event():
         asyncio.run(run_case())
 
 
+def test_openclaw_codex_review_uses_review_agent_channel_and_session_key():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(
+            {
+                "path": request.url.path,
+                "headers": dict(request.headers),
+                "body": json.loads(request.content.decode("utf-8")),
+            }
+        )
+        return httpx.Response(status_code=200, json={"output_text": '{"schema_version":1}'})
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = OpenClawClient(
+                base_url="http://openclaw.local",
+                token="secret-token",
+                model="openclaw",
+                agent_id="main",
+                message_channel="feishu",
+                timeout_seconds=15,
+                http_client=http_client,
+            )
+            return await client.generate_codex_review(
+                user_id="admin-1",
+                session_key="codex-review:codex:review-session",
+                evidence_pack={"kind": "codex_review_evidence_pack", "evidence": []},
+                agent_id="codex-manager",
+                channel="codex-pet",
+            )
+
+    result = asyncio.run(run_case())
+
+    assert result == '{"schema_version":1}'
+    assert len(calls) == 1
+    request = calls[0]
+    assert request["path"].endswith("/v1/responses")
+    assert request["headers"]["authorization"] == "Bearer secret-token"
+    assert request["headers"]["x-openclaw-agent-id"] == "codex-manager"
+    assert request["headers"]["x-openclaw-message-channel"] == "codex-pet"
+    assert request["headers"]["x-openclaw-session-key"] == "codex-review:codex:review-session"
+    assert request["body"]["model"] == "openclaw"
+    assert request["body"]["stream"] is False
+    assert request["body"]["user"] == "admin-1"
+    assert "codex_review_evidence_pack" in request["body"]["input"]
+    assert "All user-facing text values MUST be Simplified Chinese" in request["body"]["input"]
+    assert "Keep JSON keys, enum values, file paths, commands, code identifiers" in request["body"]["input"]
+    assert '"work_summary": {"title": string, "summary": string | null' in request["body"]["input"]
+    assert '"pitfalls": [{"title": string' in request["body"]["input"]
+    assert '"management": {"importance": string | null' in request["body"]["input"]
+
+
 def test_openclaw_generates_speech_from_audio_speech_endpoint():
     calls = []
 

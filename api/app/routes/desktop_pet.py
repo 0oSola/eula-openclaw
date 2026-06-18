@@ -7,10 +7,12 @@ from fastapi import APIRouter, Header, HTTPException, Path, Request
 from pydantic import BaseModel, Field, field_validator
 
 from app.security import resolve_requester
+from app.services.codex_openclaw_review_sync import enqueue_codex_review_sync
 
 
 router = APIRouter(prefix="/desktop-pet", tags=["desktop-pet"])
-_DESKTOP_PET_METADATA_MAX_CHARS = 4000
+_DESKTOP_PET_METADATA_MAX_CHARS = 30000
+_CODEX_REVIEWABLE_STATUSES = {"completed", "failed", "waiting_approval", "file_changed"}
 
 
 class CompanionSharedConfigPayload(BaseModel):
@@ -42,7 +44,7 @@ class DesktopPetSessionPayload(BaseModel):
         except TypeError as error:
             raise ValueError("metadata must be JSON serializable") from error
         if len(metadata_json) > _DESKTOP_PET_METADATA_MAX_CHARS:
-            raise ValueError("metadata JSON must be at most 4000 characters")
+            raise ValueError(f"metadata JSON must be at most {_DESKTOP_PET_METADATA_MAX_CHARS} characters")
         return value
 
 
@@ -69,7 +71,17 @@ def upsert_pet_session(
 ):
     settings = request.app.state.settings
     resolve_requester(x_user_id, settings.admin_user_ids)
-    return request.app.state.trace_store.upsert_desktop_pet_session(**payload.model_dump())
+    session_payload = payload.model_dump()
+    if not session_payload.get("workspace_id"):
+        session_payload["workspace_id"] = settings.codex_openclaw_control_plane_workspace_id
+    session = request.app.state.trace_store.upsert_desktop_pet_session(**session_payload)
+    if (
+        settings.codex_openclaw_review_enabled
+        and settings.openclaw_token
+        and session.get("last_status") in _CODEX_REVIEWABLE_STATUSES
+    ):
+        enqueue_codex_review_sync(request.app.state.trace_store, session["pet_session_id"])
+    return session
 
 
 @router.delete("/sessions/{pet_session_id}")

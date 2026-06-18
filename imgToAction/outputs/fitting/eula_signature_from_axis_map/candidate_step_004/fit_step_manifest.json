@@ -1,0 +1,1514 @@
+{
+  "frame": 60,
+  "frame_key": "frame_60_front",
+  "align": "similarity",
+  "anchors": [
+    "neck",
+    "pelvis",
+    "right_ankle",
+    "left_ankle"
+  ],
+  "scored": true,
+  "best": {
+    "name": "legs_left_leg_knee_bend_plus_4",
+    "frame": 60,
+    "parameter": "legs.left_leg.knee_bend",
+    "delta": 4.0,
+    "value": 12.5,
+    "target_landmarks": [
+      "left_knee",
+      "left_ankle"
+    ],
+    "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\legs_left_leg_knee_bend_plus_4.json",
+    "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\legs_left_leg_knee_bend_plus_4.vmd",
+    "bone_frame_count": 60,
+    "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\legs_left_leg_knee_bend_plus_4.json",
+    "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\legs_left_leg_knee_bend_plus_4.json",
+    "weighted_rmse": 148.354011074373,
+    "worst": [
+      {
+        "name": "left_wrist",
+        "target": {
+          "x": 810.0,
+          "y": 675.0
+        },
+        "projected": {
+          "x": 972.8014414511631,
+          "y": 436.7602473692209
+        },
+        "dx": 162.8014414511631,
+        "dy": -238.2397526307791,
+        "distance": 288.5524026449118,
+        "weight": 1.4
+      },
+      {
+        "name": "left_knee",
+        "target": {
+          "x": 600.0,
+          "y": 785.0
+        },
+        "projected": {
+          "x": 500.6881985997693,
+          "y": 1058.0857303801845
+        },
+        "dx": -99.3118014002307,
+        "dy": 273.0857303801845,
+        "distance": 290.58329276583964,
+        "weight": 0.9
+      },
+      {
+        "name": "right_knee",
+        "target": {
+          "x": 425.0,
+          "y": 790.0
+        },
+        "projected": {
+          "x": 367.6674192486993,
+          "y": 1031.406746856967
+        },
+        "dx": -57.332580751300725,
+        "dy": 241.40674685696695,
+        "distance": 248.1214264098692,
+        "weight": 0.9
+      },
+      {
+        "name": "right_wrist",
+        "target": {
+          "x": 154.0,
+          "y": 270.0
+        },
+        "projected": {
+          "x": 25.67280165400672,
+          "y": 266.7032071769605
+        },
+        "dx": -128.32719834599328,
+        "dy": -3.296792823039482,
+        "distance": 128.36953952651675,
+        "weight": 1.5
+      },
+      {
+        "name": "left_elbow",
+        "target": {
+          "x": 705.0,
+          "y": 560.0
+        },
+        "projected": {
+          "x": 791.7224339970753,
+          "y": 434.43652546256783
+        },
+        "dx": 86.72243399707531,
+        "dy": -125.56347453743217,
+        "distance": 152.60067724715202,
+        "weight": 1.0
+      }
+    ]
+  },
+  "records": [
+    {
+      "name": "legs_left_leg_knee_bend_plus_4",
+      "frame": 60,
+      "parameter": "legs.left_leg.knee_bend",
+      "delta": 4.0,
+      "value": 12.5,
+      "target_landmarks": [
+        "left_knee",
+        "left_ankle"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\legs_left_leg_knee_bend_plus_4.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\legs_left_leg_knee_bend_plus_4.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\legs_left_leg_knee_bend_plus_4.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\legs_left_leg_knee_bend_plus_4.json",
+      "weighted_rmse": 148.354011074373,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 972.8014414511631,
+            "y": 436.7602473692209
+          },
+          "dx": 162.8014414511631,
+          "dy": -238.2397526307791,
+          "distance": 288.5524026449118,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 500.6881985997693,
+            "y": 1058.0857303801845
+          },
+          "dx": -99.3118014002307,
+          "dy": 273.0857303801845,
+          "distance": 290.58329276583964,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 367.6674192486993,
+            "y": 1031.406746856967
+          },
+          "dx": -57.332580751300725,
+          "dy": 241.40674685696695,
+          "distance": 248.1214264098692,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 25.67280165400672,
+            "y": 266.7032071769605
+          },
+          "dx": -128.32719834599328,
+          "dy": -3.296792823039482,
+          "distance": 128.36953952651675,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 791.7224339970753,
+            "y": 434.43652546256783
+          },
+          "dx": 86.72243399707531,
+          "dy": -125.56347453743217,
+          "distance": 152.60067724715202,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "arms_left_arm_open_side_minus_12",
+      "frame": 60,
+      "parameter": "arms.left_arm.open_side",
+      "delta": -12.0,
+      "value": 11.0,
+      "target_landmarks": [
+        "left_elbow",
+        "left_wrist"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\arms_left_arm_open_side_minus_12.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\arms_left_arm_open_side_minus_12.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\arms_left_arm_open_side_minus_12.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\arms_left_arm_open_side_minus_12.json",
+      "weighted_rmse": 148.42539777374407,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 969.936796538342,
+            "y": 439.2243003625731
+          },
+          "dx": 159.93679653834204,
+          "dy": -235.7756996374269,
+          "distance": 284.9034212263257,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 509.0729750033437,
+            "y": 1057.7873707605584
+          },
+          "dx": -90.92702499665631,
+          "dy": 272.78737076055836,
+          "distance": 287.54247255179695,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 375.8382982498117,
+            "y": 1032.755928937021
+          },
+          "dx": -49.161701750188286,
+          "dy": 242.75592893702105,
+          "distance": 247.68389926083302,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 24.789572190003128,
+            "y": 272.8744682318188
+          },
+          "dx": -129.21042780999687,
+          "dy": 2.8744682318188097,
+          "distance": 129.24239715533813,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 789.3991774708,
+            "y": 435.2695904350297
+          },
+          "dx": 84.39917747080005,
+          "dy": -124.73040956497027,
+          "distance": 150.60178029489833,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "arms_left_arm_backward_plus_12",
+      "frame": 60,
+      "parameter": "arms.left_arm.backward",
+      "delta": 12.0,
+      "value": 24.0,
+      "target_landmarks": [
+        "left_elbow",
+        "left_wrist"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\arms_left_arm_backward_plus_12.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\arms_left_arm_backward_plus_12.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\arms_left_arm_backward_plus_12.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\arms_left_arm_backward_plus_12.json",
+      "weighted_rmse": 149.53674920845947,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 949.1653941519686,
+            "y": 420.43396035880403
+          },
+          "dx": 139.1653941519686,
+          "dy": -254.56603964119597,
+          "distance": 290.12217334784276,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 509.0729750033437,
+            "y": 1057.7873707605584
+          },
+          "dx": -90.92702499665631,
+          "dy": 272.78737076055836,
+          "distance": 287.54247255179695,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 375.8382982498117,
+            "y": 1032.755928937021
+          },
+          "dx": -49.161701750188286,
+          "dy": 242.75592893702105,
+          "distance": 247.68389926083302,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 24.789572190003128,
+            "y": 272.8744682318188
+          },
+          "dx": -129.21042780999687,
+          "dy": 2.8744682318188097,
+          "distance": 129.24239715533813,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 780.0454206638789,
+            "y": 425.6619675524074
+          },
+          "dx": 75.04542066387887,
+          "dy": -134.33803244759258,
+          "distance": 153.878270475428,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "baseline",
+      "frame": 60,
+      "parameter": null,
+      "delta": 0.0,
+      "target_landmarks": [],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\baseline.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\baseline.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\baseline.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\baseline.json",
+      "weighted_rmse": 150.21580161386106,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 973.1980648242244,
+            "y": 431.2175164431753
+          },
+          "dx": 163.1980648242244,
+          "dy": -243.78248355682467,
+          "distance": 293.36582563670436,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 509.0729750033437,
+            "y": 1057.7873707605584
+          },
+          "dx": -90.92702499665631,
+          "dy": 272.78737076055836,
+          "distance": 287.54247255179695,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 375.8382982498117,
+            "y": 1032.755928937021
+          },
+          "dx": -49.161701750188286,
+          "dy": 242.75592893702105,
+          "distance": 247.68389926083302,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 24.789572190003128,
+            "y": 272.8744682318188
+          },
+          "dx": -129.21042780999687,
+          "dy": 2.8744682318188097,
+          "distance": 129.24239715533813,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 792.2431754782684,
+            "y": 431.10793607224707
+          },
+          "dx": 87.24317547826843,
+          "dy": -128.89206392775293,
+          "distance": 155.64233296596362,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "body_head_turn_y_minus_8",
+      "frame": 60,
+      "parameter": "body.head.turn_y",
+      "delta": -8.0,
+      "value": -14.0,
+      "target_landmarks": [
+        "head",
+        "neck"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\body_head_turn_y_minus_8.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\body_head_turn_y_minus_8.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\body_head_turn_y_minus_8.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\body_head_turn_y_minus_8.json",
+      "weighted_rmse": 150.21580161386106,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 973.1980648242244,
+            "y": 431.2175164431753
+          },
+          "dx": 163.1980648242244,
+          "dy": -243.78248355682467,
+          "distance": 293.36582563670436,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 509.0729750033437,
+            "y": 1057.7873707605584
+          },
+          "dx": -90.92702499665631,
+          "dy": 272.78737076055836,
+          "distance": 287.54247255179695,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 375.8382982498117,
+            "y": 1032.755928937021
+          },
+          "dx": -49.161701750188286,
+          "dy": 242.75592893702105,
+          "distance": 247.68389926083302,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 24.789572190003128,
+            "y": 272.8744682318188
+          },
+          "dx": -129.21042780999687,
+          "dy": 2.8744682318188097,
+          "distance": 129.24239715533813,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 792.2431754782684,
+            "y": 431.10793607224707
+          },
+          "dx": 87.24317547826843,
+          "dy": -128.89206392775293,
+          "distance": 155.64233296596362,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "body_head_turn_y_plus_8",
+      "frame": 60,
+      "parameter": "body.head.turn_y",
+      "delta": 8.0,
+      "value": 2.0,
+      "target_landmarks": [
+        "head",
+        "neck"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\body_head_turn_y_plus_8.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\body_head_turn_y_plus_8.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\body_head_turn_y_plus_8.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\body_head_turn_y_plus_8.json",
+      "weighted_rmse": 150.21580161386106,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 973.1980648242244,
+            "y": 431.2175164431753
+          },
+          "dx": 163.1980648242244,
+          "dy": -243.78248355682467,
+          "distance": 293.36582563670436,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 509.0729750033437,
+            "y": 1057.7873707605584
+          },
+          "dx": -90.92702499665631,
+          "dy": 272.78737076055836,
+          "distance": 287.54247255179695,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 375.8382982498117,
+            "y": 1032.755928937021
+          },
+          "dx": -49.161701750188286,
+          "dy": 242.75592893702105,
+          "distance": 247.68389926083302,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 24.789572190003128,
+            "y": 272.8744682318188
+          },
+          "dx": -129.21042780999687,
+          "dy": 2.8744682318188097,
+          "distance": 129.24239715533813,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 792.2431754782684,
+            "y": 431.10793607224707
+          },
+          "dx": 87.24317547826843,
+          "dy": -128.89206392775293,
+          "distance": 155.64233296596362,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "legs_right_leg_knee_bend_minus_4",
+      "frame": 60,
+      "parameter": "legs.right_leg.knee_bend",
+      "delta": -4.0,
+      "value": 0.0,
+      "target_landmarks": [
+        "right_knee",
+        "right_ankle"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\legs_right_leg_knee_bend_minus_4.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\legs_right_leg_knee_bend_minus_4.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\legs_right_leg_knee_bend_minus_4.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\legs_right_leg_knee_bend_minus_4.json",
+      "weighted_rmse": 150.2398393724615,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 972.9887646736732,
+            "y": 433.5456910730413
+          },
+          "dx": 162.98876467367324,
+          "dy": -241.45430892695867,
+          "distance": 291.31687336857993,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 505.873033142316,
+            "y": 1057.5495474655047
+          },
+          "dx": -94.12696685768401,
+          "dy": 272.5495474655047,
+          "distance": 288.3455248716008,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 372.8126877211273,
+            "y": 1031.8555488715992
+          },
+          "dx": -52.187312278872696,
+          "dy": 241.85554887159924,
+          "distance": 247.42195149758865,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 25.72121636592925,
+            "y": 270.47917439105834
+          },
+          "dx": -128.27878363407075,
+          "dy": 0.47917439105833637,
+          "distance": 128.27967858836325,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 792.0998287254441,
+            "y": 432.52400061655055
+          },
+          "dx": 87.09982872544413,
+          "dy": -127.47599938344945,
+          "distance": 154.39077233698555,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "arms_right_arm_raise_minus_12",
+      "frame": 60,
+      "parameter": "arms.right_arm.raise",
+      "delta": -12.0,
+      "value": 53.0,
+      "target_landmarks": [
+        "right_elbow",
+        "right_wrist"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\arms_right_arm_raise_minus_12.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\arms_right_arm_raise_minus_12.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\arms_right_arm_raise_minus_12.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\arms_right_arm_raise_minus_12.json",
+      "weighted_rmse": 150.259539143277,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 973.1980648242244,
+            "y": 431.2175164431753
+          },
+          "dx": 163.1980648242244,
+          "dy": -243.78248355682467,
+          "distance": 293.36582563670436,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 509.0729750033437,
+            "y": 1057.7873707605584
+          },
+          "dx": -90.92702499665631,
+          "dy": 272.78737076055836,
+          "distance": 287.54247255179695,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 375.8382982498117,
+            "y": 1032.755928937021
+          },
+          "dx": -49.161701750188286,
+          "dy": 242.75592893702105,
+          "distance": 247.68389926083302,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 24.40687311122457,
+            "y": 291.3487452534961
+          },
+          "dx": -129.59312688877543,
+          "dy": 21.348745253496077,
+          "distance": 131.33981673776205,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 792.2431754782684,
+            "y": 431.10793607224707
+          },
+          "dx": 87.24317547826843,
+          "dy": -128.89206392775293,
+          "distance": 155.64233296596362,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "arms_right_arm_open_side_minus_12",
+      "frame": 60,
+      "parameter": "arms.right_arm.open_side",
+      "delta": -12.0,
+      "value": 30.0,
+      "target_landmarks": [
+        "right_elbow",
+        "right_wrist"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\arms_right_arm_open_side_minus_12.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\arms_right_arm_open_side_minus_12.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\arms_right_arm_open_side_minus_12.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\arms_right_arm_open_side_minus_12.json",
+      "weighted_rmse": 150.259539143277,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 973.1980648242244,
+            "y": 431.2175164431753
+          },
+          "dx": 163.1980648242244,
+          "dy": -243.78248355682467,
+          "distance": 293.36582563670436,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 509.0729750033437,
+            "y": 1057.7873707605584
+          },
+          "dx": -90.92702499665631,
+          "dy": 272.78737076055836,
+          "distance": 287.54247255179695,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 375.8382982498117,
+            "y": 1032.755928937021
+          },
+          "dx": -49.161701750188286,
+          "dy": 242.75592893702105,
+          "distance": 247.68389926083302,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 24.40687311122457,
+            "y": 291.3487452534961
+          },
+          "dx": -129.59312688877543,
+          "dy": 21.348745253496077,
+          "distance": 131.33981673776205,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 792.2431754782684,
+            "y": 431.10793607224707
+          },
+          "dx": 87.24317547826843,
+          "dy": -128.89206392775293,
+          "distance": 155.64233296596362,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "legs_right_leg_knee_bend_plus_4",
+      "frame": 60,
+      "parameter": "legs.right_leg.knee_bend",
+      "delta": 4.0,
+      "value": 5.5,
+      "target_landmarks": [
+        "right_knee",
+        "right_ankle"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\legs_right_leg_knee_bend_plus_4.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\legs_right_leg_knee_bend_plus_4.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\legs_right_leg_knee_bend_plus_4.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\legs_right_leg_knee_bend_plus_4.json",
+      "weighted_rmse": 150.3508164762735,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 973.5726786292862,
+            "y": 425.2128670254201
+          },
+          "dx": 163.5726786292862,
+          "dy": -249.7871329745799,
+          "distance": 298.5793579496416,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 517.5909894814047,
+            "y": 1058.5539907684913
+          },
+          "dx": -82.40901051859532,
+          "dy": 273.5539907684913,
+          "distance": 285.69744640094666,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 383.9153756308689,
+            "y": 1035.310280483066
+          },
+          "dx": -41.08462436913112,
+          "dy": 245.31028048306598,
+          "distance": 248.72691866831204,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 22.294487427465867,
+            "y": 279.6105945895191
+          },
+          "dx": -131.70551257253413,
+          "dy": 9.61059458951911,
+          "distance": 132.05569116989255,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 792.4784694178611,
+            "y": 427.5571359802253
+          },
+          "dx": 87.4784694178611,
+          "dy": -132.44286401977467,
+          "distance": 158.72490302864318,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "arms_right_arm_raise_plus_12",
+      "frame": 60,
+      "parameter": "arms.right_arm.raise",
+      "delta": 12.0,
+      "value": 77.0,
+      "target_landmarks": [
+        "right_elbow",
+        "right_wrist"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\arms_right_arm_raise_plus_12.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\arms_right_arm_raise_plus_12.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\arms_right_arm_raise_plus_12.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\arms_right_arm_raise_plus_12.json",
+      "weighted_rmse": 150.35978597853926,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 973.1980648242244,
+            "y": 431.2175164431753
+          },
+          "dx": 163.1980648242244,
+          "dy": -243.78248355682467,
+          "distance": 293.36582563670436,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 509.0729750033437,
+            "y": 1057.7873707605584
+          },
+          "dx": -90.92702499665631,
+          "dy": 272.78737076055836,
+          "distance": 287.54247255179695,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 375.8382982498117,
+            "y": 1032.755928937021
+          },
+          "dx": -49.161701750188286,
+          "dy": 242.75592893702105,
+          "distance": 247.68389926083302,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 25.997312679420816,
+            "y": 254.41410650631883
+          },
+          "dx": -128.00268732057918,
+          "dy": -15.58589349368117,
+          "distance": 128.9480827204745,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 792.2431754782684,
+            "y": 431.10793607224707
+          },
+          "dx": 87.24317547826843,
+          "dy": -128.89206392775293,
+          "distance": 155.64233296596362,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "arms_right_arm_open_side_plus_12",
+      "frame": 60,
+      "parameter": "arms.right_arm.open_side",
+      "delta": 12.0,
+      "value": 54.0,
+      "target_landmarks": [
+        "right_elbow",
+        "right_wrist"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\arms_right_arm_open_side_plus_12.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\arms_right_arm_open_side_plus_12.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\arms_right_arm_open_side_plus_12.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\arms_right_arm_open_side_plus_12.json",
+      "weighted_rmse": 150.35978597853926,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 973.1980648242244,
+            "y": 431.2175164431753
+          },
+          "dx": 163.1980648242244,
+          "dy": -243.78248355682467,
+          "distance": 293.36582563670436,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 509.0729750033437,
+            "y": 1057.7873707605584
+          },
+          "dx": -90.92702499665631,
+          "dy": 272.78737076055836,
+          "distance": 287.54247255179695,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 375.8382982498117,
+            "y": 1032.755928937021
+          },
+          "dx": -49.161701750188286,
+          "dy": 242.75592893702105,
+          "distance": 247.68389926083302,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 25.997312679420816,
+            "y": 254.41410650631883
+          },
+          "dx": -128.00268732057918,
+          "dy": -15.58589349368117,
+          "distance": 128.9480827204745,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 792.2431754782684,
+            "y": 431.10793607224707
+          },
+          "dx": 87.24317547826843,
+          "dy": -128.89206392775293,
+          "distance": 155.64233296596362,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "arms_left_arm_backward_minus_12",
+      "frame": 60,
+      "parameter": "arms.left_arm.backward",
+      "delta": -12.0,
+      "value": 0.0,
+      "target_landmarks": [
+        "left_elbow",
+        "left_wrist"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\arms_left_arm_backward_minus_12.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\arms_left_arm_backward_minus_12.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\arms_left_arm_backward_minus_12.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\arms_left_arm_backward_minus_12.json",
+      "weighted_rmse": 150.4438878978989,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 991.0031064801884,
+            "y": 442.77059776960664
+          },
+          "dx": 181.00310648018842,
+          "dy": -232.22940223039336,
+          "distance": 294.43610481013405,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 509.0729750033437,
+            "y": 1057.7873707605584
+          },
+          "dx": -90.92702499665631,
+          "dy": 272.78737076055836,
+          "distance": 287.54247255179695,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 375.8382982498117,
+            "y": 1032.755928937021
+          },
+          "dx": -49.161701750188286,
+          "dy": 242.75592893702105,
+          "distance": 247.68389926083302,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 24.789572190003128,
+            "y": 272.8744682318188
+          },
+          "dx": -129.21042780999687,
+          "dy": 2.8744682318188097,
+          "distance": 129.24239715533813,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 801.2600471148797,
+            "y": 436.8966660621435
+          },
+          "dx": 96.26004711487974,
+          "dy": -123.10333393785652,
+          "distance": 156.27036666359456,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "arms_left_arm_open_side_plus_12",
+      "frame": 60,
+      "parameter": "arms.left_arm.open_side",
+      "delta": 12.0,
+      "value": 35.0,
+      "target_landmarks": [
+        "left_elbow",
+        "left_wrist"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\arms_left_arm_open_side_plus_12.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\arms_left_arm_open_side_plus_12.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\arms_left_arm_open_side_plus_12.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\arms_left_arm_open_side_plus_12.json",
+      "weighted_rmse": 152.03430386248675,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 976.3107680586642,
+            "y": 423.149998948831
+          },
+          "dx": 166.31076805866417,
+          "dy": -251.850001051169,
+          "distance": 301.8073799656606,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 509.0729750033437,
+            "y": 1057.7873707605584
+          },
+          "dx": -90.92702499665631,
+          "dy": 272.78737076055836,
+          "distance": 287.54247255179695,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 375.8382982498117,
+            "y": 1032.755928937021
+          },
+          "dx": -49.161701750188286,
+          "dy": 242.75592893702105,
+          "distance": 247.68389926083302,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 24.789572190003128,
+            "y": 272.8744682318188
+          },
+          "dx": -129.21042780999687,
+          "dy": 2.8744682318188097,
+          "distance": 129.24239715533813,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 795.0127609185646,
+            "y": 426.89190803357667
+          },
+          "dx": 90.0127609185646,
+          "dy": -133.10809196642333,
+          "distance": 160.68621992916655,
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "legs_left_leg_knee_bend_minus_4",
+      "frame": 60,
+      "parameter": "legs.left_leg.knee_bend",
+      "delta": -4.0,
+      "value": 4.5,
+      "target_landmarks": [
+        "left_knee",
+        "left_ankle"
+      ],
+      "pose_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\poses\\legs_left_leg_knee_bend_minus_4.json",
+      "vmd_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\vmd\\legs_left_leg_knee_bend_minus_4.vmd",
+      "bone_frame_count": 60,
+      "landmarks_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\landmarks\\legs_left_leg_knee_bend_minus_4.json",
+      "report_path": "D:\\workspace\\MMD project\\imgToAction\\outputs\\fitting\\eula_signature_from_axis_map\\candidate_step_004\\reports\\legs_left_leg_knee_bend_minus_4.json",
+      "weighted_rmse": 152.28086907407342,
+      "worst": [
+        {
+          "name": "left_wrist",
+          "target": {
+            "x": 810.0,
+            "y": 675.0
+          },
+          "projected": {
+            "x": 973.5602738385896,
+            "y": 426.1217568382442
+          },
+          "dx": 163.56027383858964,
+          "dy": -248.8782431617558,
+          "distance": 297.81259727794674,
+          "weight": 1.4
+        },
+        {
+          "name": "left_knee",
+          "target": {
+            "x": 600.0,
+            "y": 785.0
+          },
+          "projected": {
+            "x": 517.3922477674023,
+            "y": 1057.7332808301953
+          },
+          "dx": -82.6077522325977,
+          "dy": 272.7332808301953,
+          "distance": 284.9692671172182,
+          "weight": 0.9
+        },
+        {
+          "name": "right_knee",
+          "target": {
+            "x": 425.0,
+            "y": 790.0
+          },
+          "projected": {
+            "x": 383.9730185028268,
+            "y": 1034.329130838821
+          },
+          "dx": -41.02698149717321,
+          "dy": 244.3291308388209,
+          "distance": 247.74974750183512,
+          "weight": 0.9
+        },
+        {
+          "name": "right_wrist",
+          "target": {
+            "x": 154.0,
+            "y": 270.0
+          },
+          "projected": {
+            "x": 24.077109607657974,
+            "y": 279.34488196528093
+          },
+          "dx": -129.92289039234203,
+          "dy": 9.344881965280933,
+          "distance": 130.25852857623394,
+          "weight": 1.5
+        },
+        {
+          "name": "left_elbow",
+          "target": {
+            "x": 705.0,
+            "y": 560.0
+          },
+          "projected": {
+            "x": 792.7630286117683,
+            "y": 428.1925407506353
+          },
+          "dx": 87.76302861176828,
+          "dy": -131.80745924936468,
+          "distance": 158.3526302430212,
+          "weight": 1.0
+        }
+      ]
+    }
+  ]
+}

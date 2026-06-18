@@ -1,0 +1,210 @@
+[
+  {
+    "id": "core_elbowzm15",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30,
+        "z": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_elbowzm15/direct_pose.json"
+  },
+  {
+    "id": "core_elbowzm30",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30,
+        "z": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_elbowzm30/direct_pose.json"
+  },
+  {
+    "id": "core_shzm15",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_shzm15/direct_pose.json"
+  },
+  {
+    "id": "core_shzm30",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "z": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_shzm30/direct_pose.json"
+  },
+  {
+    "id": "core_shxm15",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "x": -15
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_shxm15/direct_pose.json"
+  },
+  {
+    "id": "core_shxm30",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左肩": {
+        "x": -30
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_shxm30/direct_pose.json"
+  },
+  {
+    "id": "core_wristxm45",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左手首": {
+        "x": -45
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_wristxm45/direct_pose.json"
+  },
+  {
+    "id": "core_wristxp45",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左手首": {
+        "x": 45
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_wristxp45/direct_pose.json"
+  },
+  {
+    "id": "core_wristym45",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左手首": {
+        "y": -45
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_wristym45/direct_pose.json"
+  },
+  {
+    "id": "core_wristyp45",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左手首": {
+        "y": 45
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_wristyp45/direct_pose.json"
+  },
+  {
+    "id": "core_wristzm45",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左手首": {
+        "z": -45
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_wristzm45/direct_pose.json"
+  },
+  {
+    "id": "core_wristzp45",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30
+      },
+      "左手首": {
+        "z": 45
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_wristzp45/direct_pose.json"
+  },
+  {
+    "id": "core_elbowzm15_wristzp45",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30,
+        "z": -15
+      },
+      "左手首": {
+        "z": 45
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_elbowzm15_wristzp45/direct_pose.json"
+  },
+  {
+    "id": "core_elbowzm15_wristym45",
+    "deltas": {
+      "左腕": {
+        "x": -60
+      },
+      "左ひじ": {
+        "y": -30,
+        "z": -15
+      },
+      "左手首": {
+        "y": -45
+      }
+    },
+    "directPose": "imgToAction/outputs/fitting/eula_thinking_left_combo02/core_elbowzm15_wristym45/direct_pose.json"
+  }
+]

@@ -1732,6 +1732,151 @@ test("renderFrame accelerates active VMD clips without applying procedural pose 
   assert.deepEqual(resetCalls, ["reset"]);
 });
 
+test("seekVmdFrame pins the current VMD action to an exact frame", () => {
+  const calls = [];
+  const model = {
+    updateMatrixWorld(force) {
+      calls.push(["model", "updateMatrixWorld", force]);
+    },
+  };
+  const clip = { name: "axis-calibration", duration: 4 };
+  const action = {
+    enabled: false,
+    paused: false,
+    time: 0,
+    play() {
+      calls.push(["action", "play"]);
+      return this;
+    },
+  };
+  const mixer = {
+    setTime(value) {
+      calls.push(["mixer", "setTime", value, { actionPaused: action.paused }]);
+    },
+  };
+  const runtime = makeRuntime({
+    model,
+    currentClip: clip,
+    currentVmdAction: action,
+    helper: {
+      objects: {
+        get(target) {
+          if (target === model) return { mixer };
+          return null;
+        },
+      },
+      update(delta) {
+        calls.push(["helper", "update", delta]);
+      },
+    },
+    renderScene() {
+      calls.push(["runtime", "renderScene"]);
+    },
+  });
+
+  assert.equal(runtime.seekVmdFrame(45, 30), true);
+  assert.equal(action.enabled, true);
+  assert.equal(action.paused, true);
+  assert.equal(action.time, 1.5);
+  assert.deepEqual(calls, [
+    ["action", "play"],
+    ["mixer", "setTime", 1.5, { actionPaused: false }],
+    ["helper", "update", 0],
+    ["model", "updateMatrixWorld", true],
+    ["runtime", "renderScene"],
+  ]);
+});
+
+test("seekVmdFrame samples VMD bone tracks directly in calibration mode", () => {
+  const bone = {
+    name: "Arm",
+    position: new THREE.Vector3(),
+    quaternion: new THREE.Quaternion(),
+    scale: new THREE.Vector3(1, 1, 1),
+  };
+  const targetQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI / 4, 0));
+  const clip = {
+    tracks: [
+      new THREE.QuaternionKeyframeTrack(".bones[Arm].quaternion", [0, 1], [
+        0,
+        0,
+        0,
+        1,
+        targetQuaternion.x,
+        targetQuaternion.y,
+        targetQuaternion.z,
+        targetQuaternion.w,
+      ]),
+    ],
+  };
+  const runtime = makeRuntime({
+    calibrationCaptureMode: true,
+    model: {
+      skeleton: { bones: [bone] },
+      updateMatrixWorld() {},
+    },
+    currentClip: clip,
+    currentVmdAction: {
+      enabled: false,
+      paused: false,
+      time: 0,
+      play() {
+        return this;
+      },
+    },
+    helper: {
+      objects: {
+        get() {
+          return { mixer: { setTime() {} } };
+        },
+      },
+      update() {},
+    },
+  });
+
+  assert.equal(runtime.seekVmdFrame(30, 30), true);
+  assert.ok(Math.abs(bone.quaternion.y - targetQuaternion.y) < 0.00001);
+  assert.ok(Math.abs(bone.quaternion.w - targetQuaternion.w) < 0.00001);
+});
+
+test("calibration capture mode freezes VMD playback without procedural overlays", () => {
+  const calls = [];
+  const runtime = makeRuntime({
+    currentClip: { name: "axis-calibration", duration: 2 },
+    currentVmdPlaybackRate: 1.25,
+    clock: { getDelta: () => 0.2 },
+    helper: {
+      update(delta) {
+        calls.push(["helper", delta]);
+      },
+    },
+    controls: { update() { calls.push(["controls"]); } },
+    updateVmdLoop() {
+      calls.push(["loop"]);
+    },
+    updateBonePose() {
+      calls.push(["pose"]);
+    },
+    updateMorph() {
+      calls.push(["morph"]);
+    },
+    renderScene() {
+      calls.push(["render"]);
+    },
+  });
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = () => 0;
+
+  try {
+    runtime.setCalibrationCaptureMode(true);
+    runtime.renderFrame();
+  } finally {
+    globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+  }
+
+  assert.deepEqual(calls, [["controls"], ["render"]]);
+});
+
 test("playVmd crossfades into the next VMD when mixer actions are available", async () => {
   const helperCalls = [];
   const actionCalls = [];

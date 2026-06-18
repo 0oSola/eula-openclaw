@@ -87,7 +87,7 @@ describe("desktop pet settings store", () => {
       menuLanguage: "zh-CN",
       notificationProfile: "high",
       alwaysOnTop: false,
-      windowBounds: { x: 104, y: 208, width: 320, height: 420 },
+      windowBounds: { x: 104, y: 208, width: 360, height: 420 },
     });
   });
 
@@ -115,7 +115,7 @@ describe("desktop pet settings store", () => {
         menuLanguage: "fr",
         notificationProfile: "verbose",
         alwaysOnTop: "yes",
-        windowBounds: { x: "left", y: 10, width: 320, height: 420 },
+        windowBounds: { x: "left", y: 10, width: 360, height: 420 },
       }),
     });
 
@@ -135,7 +135,7 @@ describe("desktop pet settings store", () => {
         menuLanguage: "zh-CN",
         notificationProfile: "low",
         alwaysOnTop: false,
-        windowBounds: { x: 12, y: 34, width: 320, height: 420 },
+        windowBounds: { x: 12, y: 34, width: 360, height: 420 },
       }),
     });
 
@@ -150,7 +150,7 @@ describe("desktop pet settings store", () => {
       menuLanguage: "zh-CN",
       notificationProfile: "low",
       alwaysOnTop: false,
-      windowBounds: { x: 12, y: 34, width: 320, height: 420 },
+      windowBounds: { x: 12, y: 34, width: 360, height: 420 },
     });
     expect(JSON.parse(memory.files.get("C:\\Users\\KSG\\AppData\\Roaming\\mmd-codex-desktop-pet\\pet-settings.json") ?? "{}")).toEqual(settings);
   });
@@ -178,7 +178,7 @@ describe("desktop pet settings store", () => {
       menuLanguage: "en",
       notificationProfile: "high",
       alwaysOnTop: false,
-      windowBounds: { x: 450, y: 260, width: 320, height: 420 },
+      windowBounds: { x: 450, y: 260, width: 360, height: 420 },
     });
   });
 

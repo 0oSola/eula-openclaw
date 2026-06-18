@@ -2,9 +2,16 @@ import type { PetInteractionMode } from "./interactionMode.js";
 
 export const NOTIFICATION_PROFILES = ["low", "medium", "high"] as const;
 export const MENU_LANGUAGES = ["en", "zh-CN"] as const;
+export const PET_AGENTS = ["codex", "claude"] as const;
 
 export type NotificationProfile = (typeof NOTIFICATION_PROFILES)[number];
 export type MenuLanguage = (typeof MENU_LANGUAGES)[number];
+export type PetAgent = (typeof PET_AGENTS)[number];
+
+export const PET_AGENT_LABELS: Record<PetAgent, string> = {
+  codex: "Codex",
+  claude: "Claude",
+};
 
 export type PetMenuSession = {
   pet_session_id?: string;
@@ -27,15 +34,18 @@ export type PetMenuSession = {
 
 export type PetMenuAction =
   | { type: "select-workspace" }
+  | { type: "switch-workspace"; workspacePath: string }
   | { type: "workspace-selected"; workspacePath: string }
   | { type: "new-session" }
   | { type: "send-prompt" }
   | { type: "prompt-sent" }
   | { type: "restore-session"; petSessionId: string }
+  | { type: "focus-active-session"; petSessionId: string }
   | { type: "more-sessions"; sessions?: PetMenuSession[] }
   | { type: "interaction-mode"; mode: PetInteractionMode }
   | { type: "notification-detail"; profile: NotificationProfile }
   | { type: "menu-language"; language: MenuLanguage }
+  | { type: "agent"; agent: PetAgent }
   | { type: "always-on-top"; enabled: boolean }
   | { type: "focus-vscode" }
   | { type: "sync-main-site" }
@@ -49,6 +59,24 @@ export type PetMenuItemModel = {
   enabled?: boolean;
   action?: PetMenuAction;
   submenu?: PetMenuItemModel[];
+};
+
+const ACTIVE_SESSION_STATUSES = new Set(["starting", "running", "command_running", "file_changed", "waiting_approval"]);
+
+export type PetMenuActiveTask = {
+  petSessionId: string;
+  codexSessionId?: string | null;
+  title: string;
+  status?: string | null;
+  lastSeenAt?: string | null;
+};
+
+export type PetMenuActiveWorkspace = {
+  workspacePath: string;
+  activeSessionCount: number;
+  lastStatus?: string | null;
+  lastSeenAt?: string | null;
+  activeTasks?: PetMenuActiveTask[];
 };
 
 const STATUS_LABELS: Record<MenuLanguage, Record<string, string>> = {
@@ -96,6 +124,11 @@ const MENU_LABELS: Record<
     sendPrompt: string;
     workspace: string;
     currentWorkspace: string;
+    activeWorkspaces: string;
+    noActiveWorkspaces: string;
+    currentWorkspaceGroup: string;
+    switchToWorkspace: string;
+    noActiveTasks: string;
     selectWorkspace: string;
     recentSessions: string;
     noRecentSessions: string;
@@ -105,19 +138,27 @@ const MENU_LABELS: Record<
     adjustCamera: string;
     notificationDetail: string;
     menuLanguage: string;
+    agentMenu: string;
     alwaysOnTop: string;
     focusVscode: string;
     syncMainSite: string;
     close: string;
     continuePrefix: string;
     unknownStatus: string;
+    activeTaskSingular: string;
+    activeTaskPlural: string;
   }
 > = {
   en: {
-    newSession: "New Codex Session",
+    newSession: "New {agent} Session",
     sendPrompt: "Send Prompt...",
     workspace: "Workspace",
     currentWorkspace: "Current",
+    activeWorkspaces: "Active Workspaces",
+    noActiveWorkspaces: "No active workspaces",
+    currentWorkspaceGroup: "Current workspace",
+    switchToWorkspace: "Switch to workspace",
+    noActiveTasks: "No active tasks",
     selectWorkspace: "Select Workspace...",
     recentSessions: "Recent Sessions",
     noRecentSessions: "No recent sessions",
@@ -127,18 +168,26 @@ const MENU_LABELS: Record<
     adjustCamera: "Adjust Camera",
     notificationDetail: "Notification Detail",
     menuLanguage: "Language / 语言",
+    agentMenu: "Coding Agent",
     alwaysOnTop: "Always on Top",
     focusVscode: "Open VSCode Workspace",
     syncMainSite: "Sync from Main Site",
     close: "Close",
     continuePrefix: "Continue",
     unknownStatus: "unknown",
+    activeTaskSingular: "active task",
+    activeTaskPlural: "active tasks",
   },
   "zh-CN": {
-    newSession: "新建 Codex 会话",
+    newSession: "新建 {agent} 会话",
     sendPrompt: "发送 Prompt...",
     workspace: "工作区",
     currentWorkspace: "当前",
+    activeWorkspaces: "\u6d3b\u8dc3\u5de5\u4f5c\u533a",
+    noActiveWorkspaces: "\u6682\u65e0\u6d3b\u8dc3\u5de5\u4f5c\u533a",
+    currentWorkspaceGroup: "\u5f53\u524d\u5de5\u4f5c\u533a",
+    switchToWorkspace: "\u5207\u6362\u5230\u8be5\u5de5\u4f5c\u533a",
+    noActiveTasks: "\u6682\u65e0\u6d3b\u8dc3\u4efb\u52a1",
     selectWorkspace: "选择工作区...",
     recentSessions: "最近会话",
     noRecentSessions: "暂无最近会话",
@@ -148,12 +197,15 @@ const MENU_LABELS: Record<
     adjustCamera: "调整相机",
     notificationDetail: "提醒精度",
     menuLanguage: "Language / 语言",
+    agentMenu: "编程助手",
     alwaysOnTop: "固定在顶部",
     focusVscode: "打开 VSCode 工作区",
     syncMainSite: "从主站同步",
     close: "关闭",
     continuePrefix: "继续",
     unknownStatus: "未知",
+    activeTaskSingular: "\u4e2a\u6d3b\u8dc3\u4efb\u52a1",
+    activeTaskPlural: "\u4e2a\u6d3b\u8dc3\u4efb\u52a1",
   },
 };
 
@@ -215,14 +267,160 @@ function workspaceName(workspacePath: string | undefined): string {
   return parts.at(-1) || "workspace";
 }
 
+function workspaceIdentityKey(workspacePath: string | undefined): string {
+  return (workspacePath || "").trim().replace(/[\\/]+/g, "\\").toLowerCase();
+}
+
+function sessionSeenAt(session: PetMenuSession): string | null {
+  return session.last_seen_at || session.updated_at || null;
+}
+
+function sessionRestoreKey(session: PetMenuSession): string {
+  return compactText(session.pet_session_id) || compactText(session.codex_session_id);
+}
+
+function sessionTaskTitle(session: PetMenuSession): string {
+  const rawTitle = compactText(session.display_title) || compactText(session.first_prompt_preview) || "Codex session";
+  return truncateText(redactSensitiveText(rawTitle), 64);
+}
+
+function seenAtMs(value: string | null | undefined): number {
+  const timestamp = Date.parse(value || "");
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function formatActiveWorkspaceMenuLabel(
+  workspace: PetMenuActiveWorkspace,
+  language: MenuLanguage,
+): string {
+  const labels = MENU_LABELS[language];
+  const statusKey = String(workspace.lastStatus || "");
+  const status = STATUS_LABELS[language][statusKey] || statusKey || labels.unknownStatus;
+  if (workspace.activeSessionCount <= 1) {
+    return `${workspaceName(workspace.workspacePath)} - ${status}`;
+  }
+  const taskLabel =
+    workspace.activeSessionCount === 1 ? labels.activeTaskSingular : labels.activeTaskPlural;
+  return `${workspaceName(workspace.workspacePath)} - ${status} - ${workspace.activeSessionCount} ${taskLabel}`;
+}
+
+function formatActiveTaskMenuLabel(task: PetMenuActiveTask, language: MenuLanguage): string {
+  const labels = MENU_LABELS[language];
+  const statusKey = String(task.status || "");
+  const status = STATUS_LABELS[language][statusKey] || statusKey || labels.unknownStatus;
+  return `${task.title} - ${status}`;
+}
+
+function buildActiveTaskMenuItem(task: PetMenuActiveTask, language: MenuLanguage): PetMenuItemModel {
+  return {
+    id: `workspace:active-task:${task.petSessionId}`,
+    label: formatActiveTaskMenuLabel(task, language),
+    action: { type: "focus-active-session", petSessionId: task.petSessionId },
+  };
+}
+
+function buildActiveWorkspaceGroupSubmenu(
+  workspace: PetMenuActiveWorkspace,
+  isSelected: boolean,
+  language: MenuLanguage,
+): PetMenuItemModel[] {
+  const labels = MENU_LABELS[language];
+  const tasks = (workspace.activeTasks ?? []).slice(0, 10);
+  const workspaceControl: PetMenuItemModel = isSelected
+    ? {
+        id: `workspace:active-current:${workspace.workspacePath}`,
+        label: labels.currentWorkspaceGroup,
+        type: "radio",
+        checked: true,
+        enabled: false,
+      }
+    : {
+        id: `workspace:active-switch:${workspace.workspacePath}`,
+        label: labels.switchToWorkspace,
+        action: { type: "switch-workspace", workspacePath: workspace.workspacePath },
+      };
+
+  if (tasks.length === 0) {
+    return [
+      workspaceControl,
+      {
+        id: `workspace:active-empty:${workspace.workspacePath}`,
+        label: labels.noActiveTasks,
+        enabled: false,
+      },
+    ];
+  }
+
+  return [
+    workspaceControl,
+    { id: `workspace:active-separator:${workspace.workspacePath}`, type: "separator" },
+    ...tasks.map((task) => buildActiveTaskMenuItem(task, language)),
+  ];
+}
+
+export function buildActiveWorkspaceSummaries(sessions: PetMenuSession[]): PetMenuActiveWorkspace[] {
+  const byWorkspace = new Map<string, PetMenuActiveWorkspace>();
+  for (const session of sessions) {
+    const workspacePath = compactText(session.workspace_path);
+    const lastStatus = compactText(session.last_status);
+    if (!workspacePath || !ACTIVE_SESSION_STATUSES.has(lastStatus)) continue;
+    const petSessionId = sessionRestoreKey(session);
+    if (!petSessionId) continue;
+
+    const key = workspaceIdentityKey(workspacePath);
+    const lastSeenAt = sessionSeenAt(session);
+    const task: PetMenuActiveTask = {
+      petSessionId,
+      codexSessionId: compactText(session.codex_session_id) || undefined,
+      title: sessionTaskTitle(session),
+      status: lastStatus,
+      lastSeenAt,
+    };
+    const current = byWorkspace.get(key);
+    if (!current) {
+      byWorkspace.set(key, {
+        workspacePath,
+        activeSessionCount: 1,
+        lastStatus,
+        lastSeenAt,
+        activeTasks: [task],
+      });
+      continue;
+    }
+
+    current.activeTasks = [...(current.activeTasks ?? []), task];
+    current.activeSessionCount = current.activeTasks.length;
+    if (seenAtMs(lastSeenAt) >= seenAtMs(current.lastSeenAt)) {
+      current.workspacePath = workspacePath;
+      current.lastStatus = lastStatus;
+      current.lastSeenAt = lastSeenAt;
+    }
+  }
+
+  return Array.from(byWorkspace.values())
+    .map((workspace) => ({
+      ...workspace,
+      activeTasks: [...(workspace.activeTasks ?? [])].sort(
+        (left, right) => seenAtMs(right.lastSeenAt) - seenAtMs(left.lastSeenAt),
+      ),
+    }))
+    .sort((left, right) => seenAtMs(right.lastSeenAt) - seenAtMs(left.lastSeenAt));
+}
+
+export function normalizePetAgent(value: unknown): PetAgent {
+  return PET_AGENTS.includes(value as PetAgent) ? (value as PetAgent) : "codex";
+}
+
 export function buildPetMenuModel(options: {
   interactionMode: PetInteractionMode;
   notificationProfile: NotificationProfile;
   menuLanguage: MenuLanguage;
   sessions: PetMenuSession[];
+  activeWorkspaces?: PetMenuActiveWorkspace[];
   apiAvailable: boolean;
   alwaysOnTop?: boolean;
   selectedWorkspacePath?: string;
+  agent?: PetAgent;
   now?: Date;
 }): PetMenuItemModel[] {
   const now = options.now ?? new Date();
@@ -230,28 +428,51 @@ export function buildPetMenuModel(options: {
   const labels = MENU_LABELS[language];
   const recentSessions = options.sessions.slice(0, 10);
   const alwaysOnTop = options.alwaysOnTop ?? true;
+  const agent = normalizePetAgent(options.agent);
+  const newSessionLabel = labels.newSession.replace("{agent}", PET_AGENT_LABELS[agent]);
   const currentWorkspaceLabel =
     language === "zh-CN"
       ? `${labels.currentWorkspace}：${workspaceName(options.selectedWorkspacePath)}`
       : `${labels.currentWorkspace}: ${workspaceName(options.selectedWorkspacePath)}`;
+  const selectedWorkspaceKey = workspaceIdentityKey(options.selectedWorkspacePath);
+  const activeWorkspaces = options.activeWorkspaces ?? [];
+  const activeWorkspaceSubmenu: PetMenuItemModel = {
+    id: "workspace:active",
+    label: labels.activeWorkspaces,
+    enabled: activeWorkspaces.length > 0,
+    submenu:
+      activeWorkspaces.length > 0
+        ? activeWorkspaces.slice(0, 10).map((workspace) => {
+            const isSelected = workspaceIdentityKey(workspace.workspacePath) === selectedWorkspaceKey;
+            return {
+              id: `workspace:active:${workspace.workspacePath}`,
+              label: formatActiveWorkspaceMenuLabel(workspace, language),
+              enabled: true,
+              submenu: buildActiveWorkspaceGroupSubmenu(workspace, isSelected, language),
+            };
+          })
+        : [{ id: "workspace:active:none", label: labels.noActiveWorkspaces, enabled: false }],
+  };
+  const workspaceSubmenu: PetMenuItemModel[] = [
+    {
+      id: "workspace:current",
+      label: currentWorkspaceLabel,
+      enabled: false,
+    },
+    ...(options.activeWorkspaces === undefined ? [] : [activeWorkspaceSubmenu]),
+    {
+      id: "workspace:select",
+      label: labels.selectWorkspace,
+      action: { type: "select-workspace" },
+    },
+  ];
   return [
     {
       id: "workspace",
       label: labels.workspace,
-      submenu: [
-        {
-          id: "workspace:current",
-          label: currentWorkspaceLabel,
-          enabled: false,
-        },
-        {
-          id: "workspace:select",
-          label: labels.selectWorkspace,
-          action: { type: "select-workspace" },
-        },
-      ],
+      submenu: workspaceSubmenu,
     },
-    { id: "new-session", label: labels.newSession, action: { type: "new-session" } },
+    { id: "new-session", label: newSessionLabel, action: { type: "new-session" } },
     { id: "send-prompt", label: labels.sendPrompt, action: { type: "send-prompt" } },
     {
       id: "recent-sessions",
@@ -318,6 +539,17 @@ export function buildPetMenuModel(options: {
           action: { type: "menu-language", language: "zh-CN" },
         },
       ],
+    },
+    {
+      id: "agent",
+      label: labels.agentMenu,
+      submenu: PET_AGENTS.map((agentOption) => ({
+        id: `agent:${agentOption}`,
+        label: PET_AGENT_LABELS[agentOption],
+        type: "radio",
+        checked: agent === agentOption,
+        action: { type: "agent", agent: agentOption },
+      })),
     },
     {
       id: "always-on-top",

@@ -54,6 +54,180 @@ _DESKTOP_PET_FIRST_PROMPT_PREVIEW_MAX_LENGTH = 240
 _DESKTOP_PET_LAST_SUMMARY_MAX_LENGTH = 1000
 
 
+def _compact_text(value: Any, *, limit: int | None = None) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if limit is not None:
+        return text[:limit]
+    return text
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for item in value:
+        text = _compact_text(item)
+        if text:
+            items.append(text)
+    return items
+
+
+def _first_nonempty_text(*values: Any, limit: int | None = None) -> str:
+    for value in values:
+        text = _compact_text(value, limit=limit)
+        if text:
+            return text
+    return ""
+
+
+def _knowledge_steps_from_text(value: Any) -> list[str]:
+    text = _compact_text(value)
+    return [text] if text else []
+
+
+def _knowledge_step_records(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for raw in value:
+        if isinstance(raw, dict):
+            item = {
+                "order": raw.get("order"),
+                "instruction": _compact_text(raw.get("instruction")),
+                "commands": _string_list(raw.get("commands")),
+                "file_refs": _string_list(raw.get("file_refs")),
+                "evidence_refs": _string_list(raw.get("evidence_refs")),
+            }
+            if item["instruction"]:
+                items.append(item)
+        else:
+            text = _compact_text(raw)
+            if text:
+                items.append({"order": len(items) + 1, "instruction": text, "commands": [], "file_refs": [], "evidence_refs": []})
+    return items
+
+
+def _knowledge_verification_records(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for raw in value:
+        if isinstance(raw, dict):
+            item = {
+                "order": raw.get("order"),
+                "instruction": _compact_text(raw.get("instruction")),
+                "commands": _string_list(raw.get("commands")),
+                "expected_signal": _compact_text(raw.get("expected_signal")),
+                "evidence_refs": _string_list(raw.get("evidence_refs")),
+            }
+            if item["instruction"]:
+                items.append(item)
+        else:
+            text = _compact_text(raw)
+            if text:
+                items.append(
+                    {
+                        "order": len(items) + 1,
+                        "instruction": text,
+                        "commands": [],
+                        "expected_signal": "",
+                        "evidence_refs": [],
+                    }
+                )
+    return items
+
+
+def _build_codex_review_memory_details(
+    review: dict[str, Any],
+    *,
+    override_problem: str | None = None,
+) -> dict[str, Any]:
+    details = review.get("details") if isinstance(review.get("details"), dict) else {}
+    explicit_override_problem = _compact_text(override_problem)
+    original_summary = _compact_text(review.get("summary"))
+    use_override_problem = bool(explicit_override_problem and explicit_override_problem != original_summary)
+    problem = _first_nonempty_text(
+        explicit_override_problem if use_override_problem else None,
+        details.get("problem"),
+        details.get("symptom"),
+        review.get("summary"),
+    )
+    root_cause = _first_nonempty_text(details.get("root_cause"), details.get("cause"))
+    steps = _knowledge_steps_from_text(_first_nonempty_text(details.get("fix"), details.get("decision"), details.get("result")))
+    verification = _knowledge_steps_from_text(_first_nonempty_text(details.get("prevention"), details.get("guardrail")))
+    if not steps:
+        steps = ["Turn the accepted review item into an explicit procedure before exporting it."]
+    if not verification:
+        verification = ["Verify the procedure against the attached evidence before publishing it."]
+    memory_type = _compact_text(review.get("item_type")) or "memory"
+    return {
+        "knowledge_kind": memory_type,
+        "problem": problem,
+        "root_cause": root_cause,
+        "steps": steps,
+        "verification": verification,
+        "when_to_use": f"Use when handling accepted {memory_type} review items.",
+        "source_summary": explicit_override_problem if use_override_problem else original_summary,
+    }
+
+
+def _render_codex_review_memory_body(title: str, details: dict[str, Any]) -> str:
+    lines: list[str] = []
+    problem = _compact_text(details.get("problem"))
+    if problem:
+        lines.extend(["## Problem", "", problem, ""])
+    root_cause = _compact_text(details.get("root_cause"))
+    if root_cause:
+        lines.extend(["## Root Cause", "", root_cause, ""])
+    when_to_use = _compact_text(details.get("when_to_use"))
+    if when_to_use:
+        lines.extend(["## When To Use", "", when_to_use, ""])
+    prerequisites = _string_list(details.get("prerequisites"))
+    if prerequisites:
+        lines.extend(["## Prerequisites", ""])
+        lines.extend(f"- {item}" for item in prerequisites)
+        lines.append("")
+    steps = _knowledge_step_records(details.get("steps"))
+    if steps:
+        lines.extend(["## Steps", ""])
+        for step in steps:
+            lines.append(f"{int(step.get('order') or 1)}. {step['instruction']}")
+            for command in step.get("commands") or []:
+                lines.append(f"   - Command: `{command}`")
+            for file_ref in step.get("file_refs") or []:
+                lines.append(f"   - File: `{file_ref}`")
+            for evidence_ref in step.get("evidence_refs") or []:
+                lines.append(f"   - Evidence: `{evidence_ref}`")
+        lines.append("")
+    verification = _knowledge_verification_records(details.get("verification"))
+    if verification:
+        lines.extend(["## Verification", ""])
+        for step in verification:
+            lines.append(f"{int(step.get('order') or 1)}. {step['instruction']}")
+            for command in step.get("commands") or []:
+                lines.append(f"   - Command: `{command}`")
+            expected_signal = _compact_text(step.get("expected_signal"))
+            if expected_signal:
+                lines.append(f"   - Expected signal: {expected_signal}")
+            for evidence_ref in step.get("evidence_refs") or []:
+                lines.append(f"   - Evidence: `{evidence_ref}`")
+        lines.append("")
+    cautions = _string_list(details.get("cautions"))
+    if cautions:
+        lines.extend(["## Cautions", ""])
+        lines.extend(f"- {item}" for item in cautions)
+        lines.append("")
+    open_questions = _string_list(details.get("open_questions"))
+    if open_questions:
+        lines.extend(["## Open Questions", ""])
+        lines.extend(f"- {item}" for item in open_questions)
+        lines.append("")
+    source_summary = _compact_text(details.get("source_summary"))
+    if source_summary:
+        lines.extend(["## Source Summary", "", source_summary, ""])
+    return "\n".join(lines).strip() + "\n"
+
+
 class TraceStore:
     def __init__(self, db_path: Path, ndjson_dir: Path):
         self.db_path = Path(db_path)
@@ -403,6 +577,90 @@ class TraceStore:
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 FOREIGN KEY (codex_session_id) REFERENCES codex_interactive_sessions(id)
             );
+
+            CREATE TABLE IF NOT EXISTS codex_openclaw_sync_outbox (
+                id TEXT PRIMARY KEY,
+                pet_session_id TEXT NOT NULL,
+                codex_session_id TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                last_error TEXT,
+                openclaw_session_key TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                sent_at TEXT,
+                UNIQUE(pet_session_id, payload_hash)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_codex_openclaw_sync_outbox_pending
+            ON codex_openclaw_sync_outbox(status, next_attempt_at, created_at);
+
+            CREATE TABLE IF NOT EXISTS codex_review_items (
+                id TEXT PRIMARY KEY,
+                pet_session_id TEXT NOT NULL,
+                codex_session_id TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                severity TEXT,
+                status TEXT NOT NULL,
+                source TEXT NOT NULL,
+                source_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                reviewed_at TEXT,
+                UNIQUE(pet_session_id, item_type, source_hash)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_codex_review_items_pet_session
+            ON codex_review_items(pet_session_id, status, item_type, created_at);
+
+            CREATE TABLE IF NOT EXISTS codex_review_memory (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                source_review_item_id TEXT NOT NULL UNIQUE,
+                pet_session_id TEXT NOT NULL,
+                codex_session_id TEXT NOT NULL,
+                memory_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+                source_hash TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                confirmed_by TEXT NOT NULL,
+                confirmed_at TEXT NOT NULL,
+                current_version INTEGER NOT NULL DEFAULT 1,
+                export_status TEXT NOT NULL,
+                openkb_document_id TEXT,
+                export_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_codex_review_memory_workspace_status
+            ON codex_review_memory(workspace_id, export_status, memory_type, created_at);
+
+            CREATE TABLE IF NOT EXISTS codex_review_memory_versions (
+                id TEXT PRIMARY KEY,
+                memory_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                edited_by TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(memory_id, version)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_codex_review_memory_versions_memory
+            ON codex_review_memory_versions(memory_id, version);
             """
         )
         self._migrate_companion_shared_config_render_pipeline_check()
@@ -429,6 +687,22 @@ class TraceStore:
             existing_columns,
             "favorite_model_relative_path",
             "ALTER TABLE asset_registry ADD COLUMN favorite_model_relative_path TEXT",
+        )
+        memory_columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(codex_review_memory)").fetchall()
+        }
+        self._add_column_if_missing(
+            memory_columns,
+            "details_json",
+            "ALTER TABLE codex_review_memory ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'",
+        )
+        memory_version_columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(codex_review_memory_versions)").fetchall()
+        }
+        self._add_column_if_missing(
+            memory_version_columns,
+            "details_json",
+            "ALTER TABLE codex_review_memory_versions ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'",
         )
         message_columns = {
             row["name"] for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
@@ -957,6 +1231,625 @@ class TraceStore:
         for artifact in artifacts:
             artifact["metadata"] = self._json_loads(artifact.get("metadata_json"), {})
         return artifacts
+
+    def _codex_openclaw_outbox_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["payload"] = self._json_loads(item.pop("payload_json", None), {})
+        return item
+
+    def enqueue_codex_openclaw_sync(
+        self,
+        *,
+        pet_session_id: str,
+        codex_session_id: str,
+        payload_hash: str,
+        payload: dict[str, Any],
+        openclaw_session_key: str,
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        outbox_id = f"codex_openclaw_sync_{uuid4().hex}"
+        self._conn.execute(
+            """
+            INSERT INTO codex_openclaw_sync_outbox (
+                id, pet_session_id, codex_session_id, payload_hash, payload_json,
+                status, attempt_count, next_attempt_at, last_error,
+                openclaw_session_key, created_at, updated_at, sent_at
+            ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?, ?, ?, NULL)
+            ON CONFLICT(pet_session_id, payload_hash) DO UPDATE SET
+                updated_at = codex_openclaw_sync_outbox.updated_at
+            """,
+            (
+                outbox_id,
+                pet_session_id,
+                codex_session_id,
+                payload_hash,
+                json.dumps(payload, ensure_ascii=False),
+                now,
+                openclaw_session_key,
+                now,
+                now,
+            ),
+        )
+        self._conn.commit()
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_openclaw_sync_outbox
+            WHERE pet_session_id = ? AND payload_hash = ?
+            """,
+            (pet_session_id, payload_hash),
+        ).fetchone()
+        return self._codex_openclaw_outbox_row(row) or {}
+
+    def get_codex_openclaw_sync_outbox(self, outbox_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM codex_openclaw_sync_outbox WHERE id = ?",
+            (outbox_id,),
+        ).fetchone()
+        return self._codex_openclaw_outbox_row(row)
+
+    def claim_next_codex_openclaw_sync(self, *, now_iso: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_openclaw_sync_outbox
+            WHERE status = 'pending'
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (now_iso,),
+        ).fetchone()
+        if row is None:
+            return None
+        item = self._codex_openclaw_outbox_row(row)
+        if item is None:
+            return None
+        self._conn.execute(
+            """
+            UPDATE codex_openclaw_sync_outbox
+            SET status = 'sending',
+                attempt_count = attempt_count + 1,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now_iso, item["id"]),
+        )
+        self._conn.commit()
+        return self.get_codex_openclaw_sync_outbox(item["id"])
+
+    def mark_codex_openclaw_sync_sent(self, outbox_id: str) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE codex_openclaw_sync_outbox
+            SET status = 'sent',
+                last_error = NULL,
+                sent_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now, now, outbox_id),
+        )
+        self._conn.commit()
+        return self.get_codex_openclaw_sync_outbox(outbox_id)
+
+    def mark_codex_openclaw_sync_failed(self, outbox_id: str, *, last_error: str) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE codex_openclaw_sync_outbox
+            SET status = 'failed',
+                last_error = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (last_error, now, outbox_id),
+        )
+        self._conn.commit()
+        return self.get_codex_openclaw_sync_outbox(outbox_id)
+
+    def create_codex_review_item(
+        self,
+        *,
+        item_id: str,
+        pet_session_id: str,
+        codex_session_id: str,
+        item_type: str,
+        title: str,
+        summary: str | None,
+        details: dict[str, Any] | None,
+        tags: list[str] | None,
+        severity: str | None,
+        status: str,
+        source: str,
+        source_hash: str,
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO codex_review_items (
+                id, pet_session_id, codex_session_id, item_type, title,
+                summary, details_json, tags_json, severity, status, source,
+                source_hash, created_at, updated_at, reviewed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            ON CONFLICT(pet_session_id, item_type, source_hash) DO UPDATE SET
+                title = excluded.title,
+                summary = excluded.summary,
+                details_json = excluded.details_json,
+                tags_json = excluded.tags_json,
+                severity = excluded.severity,
+                status = excluded.status,
+                source = excluded.source,
+                updated_at = excluded.updated_at
+            """,
+            (
+                item_id,
+                pet_session_id,
+                codex_session_id,
+                item_type,
+                title,
+                summary,
+                json.dumps(details or {}, ensure_ascii=False),
+                json.dumps(tags or [], ensure_ascii=False),
+                severity,
+                status,
+                source,
+                source_hash,
+                now,
+                now,
+            ),
+        )
+        self._conn.commit()
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_review_items
+            WHERE pet_session_id = ? AND item_type = ? AND source_hash = ?
+            """,
+            (pet_session_id, item_type, source_hash),
+        ).fetchone()
+        return self._codex_review_item_row(row) or {}
+
+    def _codex_review_item_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["details"] = self._json_loads(item.pop("details_json", None), {})
+        tags = self._json_loads(item.pop("tags_json", None), [])
+        item["tags"] = tags if isinstance(tags, list) else []
+        return item
+
+    def list_codex_review_items(
+        self,
+        *,
+        pet_session_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if pet_session_id is not None:
+            clauses.append("pet_session_id = ?")
+            params.append(pet_session_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        try:
+            bounded_limit = max(1, min(int(limit), 100))
+        except (TypeError, ValueError, OverflowError):
+            bounded_limit = 50
+        rows = self._conn.execute(
+            f"""
+            SELECT *
+            FROM codex_review_items
+            {where}
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            """,
+            (*params, bounded_limit),
+        ).fetchall()
+        return [self._codex_review_item_row(row) for row in rows if row is not None]
+
+    def get_codex_review_item(self, item_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM codex_review_items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        return self._codex_review_item_row(row)
+
+    def update_codex_review_item_status(
+        self,
+        item_id: str,
+        *,
+        status: str,
+        details_patch: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        item = self.get_codex_review_item(item_id)
+        if item is None:
+            return None
+        now = _utc_now_iso()
+        details = dict(item.get("details") or {})
+        if details_patch:
+            details.update(details_patch)
+        self._conn.execute(
+            """
+            UPDATE codex_review_items
+            SET status = ?,
+                details_json = ?,
+                reviewed_at = COALESCE(reviewed_at, ?),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (status, json.dumps(details, ensure_ascii=False), now, now, item_id),
+        )
+        self._conn.commit()
+        return self.get_codex_review_item(item_id)
+
+    @staticmethod
+    def _codex_review_priority(item: dict[str, Any]) -> int:
+        item_type = str(item.get("item_type") or "")
+        severity = str(item.get("severity") or "").lower()
+        if item_type == "blocker":
+            return 100
+        if item_type == "pitfall" and severity == "high":
+            return 90
+        if item_type == "pitfall" and severity == "medium":
+            return 80
+        if item_type == "pitfall":
+            return 75
+        if item_type == "decision":
+            return 70
+        if item_type == "followup":
+            return 60
+        return 40
+
+    def list_codex_review_drafts(
+        self,
+        *,
+        workspace_id: str | None = None,
+        limit: int = 20,
+        now_iso: str | None = None,
+        include_unscoped: bool = False,
+    ) -> list[dict[str, Any]]:
+        try:
+            bounded_limit = max(1, min(int(limit), 100))
+        except (TypeError, ValueError, OverflowError):
+            bounded_limit = 20
+        rows = self._conn.execute(
+            """
+            SELECT ri.*, dps.workspace_id AS review_workspace_id
+            FROM codex_review_items ri
+            LEFT JOIN desktop_pet_sessions dps ON dps.pet_session_id = ri.pet_session_id
+            WHERE ri.status IN ('draft', 'snoozed')
+            ORDER BY ri.created_at ASC, ri.id ASC
+            """
+        ).fetchall()
+        now = _parse_iso_datetime(now_iso or _utc_now_iso()) or datetime.now(UTC)
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = self._codex_review_item_row(row)
+            if item is None:
+                continue
+            item["workspace_id"] = item.pop("review_workspace_id", None)
+            item_workspace_id = item.get("workspace_id")
+            if workspace_id is not None and item_workspace_id != workspace_id:
+                if include_unscoped and item_workspace_id is None:
+                    item["workspace_id"] = workspace_id
+                else:
+                    continue
+            if item.get("status") == "snoozed":
+                snooze_until = _parse_iso_datetime((item.get("details") or {}).get("snooze_until"))
+                if snooze_until is not None and snooze_until > now:
+                    continue
+            item["priority_score"] = self._codex_review_priority(item)
+            items.append(item)
+        items.sort(key=lambda item: (-int(item["priority_score"]), str(item.get("created_at") or ""), str(item["id"])))
+        return items[:bounded_limit]
+
+    def get_codex_review_daily_summary(
+        self,
+        *,
+        review_date: str,
+        workspace_id: str | None = None,
+        include_unscoped: bool = False,
+    ) -> dict[str, Any]:
+        drafts = self.list_codex_review_drafts(
+            workspace_id=workspace_id,
+            limit=100,
+            include_unscoped=include_unscoped,
+        )
+        high_priority_count = sum(1 for item in drafts if int(item.get("priority_score") or 0) >= 80)
+        clauses = [
+            "substr(COALESCE(ri.reviewed_at, ''), 1, 10) = ?",
+            "ri.status IN ('accepted', 'edited_accepted', 'ignored', 'snoozed')",
+        ]
+        params: list[Any] = [review_date]
+        if workspace_id is not None:
+            clauses.append("dps.workspace_id = ?")
+            params.append(workspace_id)
+        rows = self._conn.execute(
+            f"""
+            SELECT ri.status, COUNT(*) AS count
+            FROM codex_review_items ri
+            LEFT JOIN desktop_pet_sessions dps ON dps.pet_session_id = ri.pet_session_id
+            WHERE {' AND '.join(clauses)}
+            GROUP BY ri.status
+            """,
+            params,
+        ).fetchall()
+        counts = {str(row["status"]): int(row["count"]) for row in rows}
+        accepted_today = counts.get("accepted", 0) + counts.get("edited_accepted", 0)
+        draft_count = len(drafts)
+        return {
+            "date": review_date,
+            "workspace_id": workspace_id,
+            "draft_count": draft_count,
+            "high_priority_count": high_priority_count,
+            "accepted_today": accepted_today,
+            "ignored_today": counts.get("ignored", 0),
+            "snoozed_today": counts.get("snoozed", 0),
+            "recommended_batch_size": min(3, draft_count),
+        }
+
+    def _codex_review_memory_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["details"] = self._json_loads(item.pop("details_json", None), {})
+        tags = self._json_loads(item.pop("tags_json", None), [])
+        evidence_refs = self._json_loads(item.pop("evidence_refs_json", None), [])
+        item["tags"] = tags if isinstance(tags, list) else []
+        item["evidence_refs"] = evidence_refs if isinstance(evidence_refs, list) else []
+        return item
+
+    def _codex_review_memory_version_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["details"] = self._json_loads(item.pop("details_json", None), {})
+        return item
+
+    def create_codex_review_memory_from_item(
+        self,
+        *,
+        review_item_id: str,
+        title: str,
+        body: str | None,
+        memory_draft: dict[str, Any] | None = None,
+        confirmed_by: str,
+        created_by: str | None = None,
+        default_workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        existing = self._conn.execute(
+            "SELECT * FROM codex_review_memory WHERE source_review_item_id = ?",
+            (review_item_id,),
+        ).fetchone()
+        if existing is not None:
+            return self._codex_review_memory_row(existing) or {}
+        review = self.get_codex_review_item(review_item_id)
+        if review is None:
+            raise ValueError(f"codex review item not found: {review_item_id}")
+        pet_session = self.get_desktop_pet_session(str(review["pet_session_id"]))
+        workspace_id = str((pet_session or {}).get("workspace_id") or default_workspace_id or "unknown")
+        review_details = review.get("details") or {}
+        evidence_refs = review_details.get("evidence_refs") if isinstance(review_details, dict) else []
+        if not isinstance(evidence_refs, list):
+            evidence_refs = []
+        now = _utc_now_iso()
+        memory_id = f"codex_review_memory_{uuid4().hex}"
+        memory_title = str(title or review.get("title") or review.get("item_type") or "Codex review memory")[:240]
+        if isinstance(memory_draft, dict):
+            memory_details = dict(memory_draft)
+        else:
+            memory_details = _build_codex_review_memory_details(
+                review,
+                override_problem=body if body is not None else None,
+            )
+        memory_body = _render_codex_review_memory_body(memory_title, memory_details)
+        self._conn.execute(
+            """
+            INSERT INTO codex_review_memory (
+                id, workspace_id, source_review_item_id, pet_session_id, codex_session_id,
+                memory_type, title, body, details_json, tags_json, evidence_refs_json, source_hash,
+                created_by, confirmed_by, confirmed_at, current_version, export_status,
+                openkb_document_id, export_error, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', NULL, NULL, ?, ?)
+            """,
+            (
+                memory_id,
+                workspace_id,
+                review_item_id,
+                review["pet_session_id"],
+                review["codex_session_id"],
+                review["item_type"],
+                memory_title,
+                memory_body,
+                json.dumps(memory_details, ensure_ascii=False),
+                json.dumps(review.get("tags") or [], ensure_ascii=False),
+                json.dumps(evidence_refs, ensure_ascii=False),
+                review["source_hash"],
+                created_by or confirmed_by,
+                confirmed_by,
+                now,
+                now,
+                now,
+            ),
+        )
+        self._conn.execute(
+            """
+            INSERT INTO codex_review_memory_versions (
+                id, memory_id, version, title, body, details_json, edited_by, created_at
+            ) VALUES (?, ?, 1, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"codex_review_memory_version_{uuid4().hex}",
+                memory_id,
+                memory_title,
+                memory_body,
+                json.dumps(memory_details, ensure_ascii=False),
+                confirmed_by,
+                now,
+            ),
+        )
+        self._conn.commit()
+        return self.get_codex_review_memory(memory_id) or {}
+
+    def get_codex_review_memory(self, memory_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM codex_review_memory WHERE id = ?",
+            (memory_id,),
+        ).fetchone()
+        return self._codex_review_memory_row(row)
+
+    def get_codex_review_memory_by_review_item(self, review_item_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM codex_review_memory WHERE source_review_item_id = ?",
+            (review_item_id,),
+        ).fetchone()
+        return self._codex_review_memory_row(row)
+
+    def list_codex_review_memory(
+        self,
+        *,
+        workspace_id: str | None = None,
+        export_status: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+        if export_status is not None:
+            clauses.append("export_status = ?")
+            params.append(export_status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        try:
+            bounded_limit = max(1, min(int(limit), 100))
+        except (TypeError, ValueError, OverflowError):
+            bounded_limit = 50
+        rows = self._conn.execute(
+            f"""
+            SELECT *
+            FROM codex_review_memory
+            {where}
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            """,
+            (*params, bounded_limit),
+        ).fetchall()
+        return [self._codex_review_memory_row(row) for row in rows if row is not None]
+
+    def append_codex_review_memory_version(
+        self,
+        memory_id: str,
+        *,
+        title: str,
+        body: str,
+        details: dict[str, Any] | None = None,
+        edited_by: str,
+    ) -> dict[str, Any]:
+        memory = self.get_codex_review_memory(memory_id)
+        if memory is None:
+            raise ValueError(f"codex review memory not found: {memory_id}")
+        next_version = int(memory.get("current_version") or 1) + 1
+        now = _utc_now_iso()
+        next_details = details if isinstance(details, dict) else dict(memory.get("details") or {})
+        self._conn.execute(
+            """
+            INSERT INTO codex_review_memory_versions (
+                id, memory_id, version, title, body, details_json, edited_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"codex_review_memory_version_{uuid4().hex}",
+                memory_id,
+                next_version,
+                title,
+                body,
+                json.dumps(next_details, ensure_ascii=False),
+                edited_by,
+                now,
+            ),
+        )
+        self._conn.execute(
+            """
+            UPDATE codex_review_memory
+            SET title = ?,
+                body = ?,
+                details_json = ?,
+                current_version = ?,
+                export_status = 'pending',
+                export_error = NULL,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (title, body, json.dumps(next_details, ensure_ascii=False), next_version, now, memory_id),
+        )
+        self._conn.commit()
+        return self.get_codex_review_memory(memory_id) or {}
+
+    def list_codex_review_memory_versions(self, memory_id: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_review_memory_versions
+            WHERE memory_id = ?
+            ORDER BY version ASC
+            """,
+            (memory_id,),
+        ).fetchall()
+        return [self._codex_review_memory_version_row(row) for row in rows if row is not None]
+
+    def mark_codex_review_memory_exported(self, memory_id: str, *, document_id: str) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE codex_review_memory
+            SET export_status = 'synced',
+                openkb_document_id = ?,
+                export_error = NULL,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (document_id, now, memory_id),
+        )
+        self._conn.commit()
+        return self.get_codex_review_memory(memory_id)
+
+    def mark_codex_review_memory_export_submitted(self, memory_id: str) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE codex_review_memory
+            SET export_status = 'submitted',
+                export_error = NULL,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now, memory_id),
+        )
+        self._conn.commit()
+        return self.get_codex_review_memory(memory_id)
+
+    def mark_codex_review_memory_export_failed(self, memory_id: str, *, error: str) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE codex_review_memory
+            SET export_status = 'export_failed',
+                export_error = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (error, now, memory_id),
+        )
+        self._conn.commit()
+        return self.get_codex_review_memory(memory_id)
 
     def resolve_account(self, external_user_id: str) -> dict[str, Any]:
         external_user_id = external_user_id.strip()

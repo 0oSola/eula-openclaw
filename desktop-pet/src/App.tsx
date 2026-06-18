@@ -10,6 +10,8 @@ import {
 import type { CompanionSharedConfig, MmdCameraSnapshot, MmdModelAsset, RenderPipeline, VmdAsset } from "@/lib/types";
 
 import { getCodexStatusPresentation, type CodexStatus } from "./codex/codexStatus";
+import { buildCodexCompletionNotice } from "./codex/completionNotice";
+import { buildCodexStatusCard, buildIdleCodexStatusCardFallback } from "./codex/codexStatusCard";
 import { buildApprovalFallback } from "./codex/approvalFallback";
 import { formatCodexStatusNotification } from "./codex/notificationDetail";
 import {
@@ -33,6 +35,8 @@ import {
   buildPetStageKey,
   pickSelectedModel,
   resetPetStageInteractionState,
+  resolvePetStageInteractionWithFallback,
+  shouldReplayCodexStatusMotionOnCompletion,
 } from "./mmd/petStageState";
 import { shouldStartPetWindowDrag, shouldStopPetWindowDragPropagation } from "./window/petWindowEvents";
 
@@ -67,17 +71,22 @@ type ApiRuntimeStatus = {
   };
   error?: string;
 };
+type DesktopPetAgent = "codex" | "claude";
 type DesktopPetMenuAction =
   | { type: "select-workspace" }
+  | { type: "switch-workspace"; workspacePath: string }
   | { type: "workspace-selected"; workspacePath: string }
   | { type: "new-session" }
   | { type: "send-prompt" }
-  | { type: "prompt-sent" }
+  | { type: "prompt-sent"; source?: "app-server-relay" | "terminal" }
+  | { type: "approval-decided"; approvalId: string; decision: "approve_once" | "deny" }
   | { type: "restore-session"; petSessionId: string }
+  | { type: "focus-active-session"; petSessionId: string }
   | { type: "more-sessions"; sessions?: DesktopPetSession[] }
   | { type: "interaction-mode"; mode: PetInteractionMode }
   | { type: "notification-detail"; profile: NotificationProfile }
   | { type: "menu-language"; language: MenuLanguage }
+  | { type: "agent"; agent: DesktopPetAgent }
   | { type: "always-on-top"; enabled: boolean }
   | { type: "focus-vscode" }
   | { type: "sync-main-site" };
@@ -123,9 +132,13 @@ export function App() {
   const [interactionMode, setInteractionMode] = useState<PetInteractionMode>("window-drag");
   const [notificationProfile, setNotificationProfile] = useState<NotificationProfile>("medium");
   const [codexStatus, setCodexStatus] = useState<CodexStatus | null>(null);
+  const [dismissedCompletionNoticeKey, setDismissedCompletionNoticeKey] = useState<string | null>(null);
+  const [agent, setAgent] = useState<DesktopPetAgent>("codex");
+  const [commandCopied, setCommandCopied] = useState(false);
   const [menuStatus, setMenuStatus] = useState<string | null>(null);
   const [stageReloadRevision, setStageReloadRevision] = useState(0);
   const [petCameraRevision, setPetCameraRevision] = useState(0);
+  const [codexStatusMotionReplayRevision, setCodexStatusMotionReplayRevision] = useState(0);
   const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
   const [sessionPanelQuery, setSessionPanelQuery] = useState("");
   const [sessionPanelSessions, setSessionPanelSessions] = useState<DesktopPetSession[]>([]);
@@ -175,6 +188,14 @@ export function App() {
     return window.desktopPet?.codexStatus?.onChanged((status) => setCodexStatus(status));
   }, []);
 
+  useEffect(() => {
+    window.desktopPet?.agent
+      ?.get()
+      .then((value) => setAgent(value))
+      .catch(() => {});
+    return window.desktopPet?.agent?.onChanged((value) => setAgent(value));
+  }, []);
+
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl, userId: DEFAULT_USER_ID }), [apiBaseUrl]);
   const selectedModel = pickSelectedModel(models, sharedConfig.selected_model_path);
   const renderPipeline: RenderPipeline = sharedConfig.render_pipeline || "classic";
@@ -197,7 +218,27 @@ export function App() {
         : resetPetStageInteractionState(),
     [api, selectedModel, vmdAssets],
   );
+  const agentLabel = agent === "claude" ? "Claude" : "Codex";
   const codexStatusPresentation = useMemo(() => getCodexStatusPresentation(codexStatus), [codexStatus]);
+  const codexStatusCard = useMemo(
+    () => buildCodexStatusCard(codexStatus, notificationProfile, agentLabel),
+    [agentLabel, codexStatus, notificationProfile],
+  );
+  const idleCodexStatusCard = useMemo(
+    () =>
+      buildIdleCodexStatusCardFallback({
+        hasSelectedModel: Boolean(selectedModel),
+        loading,
+        loadError,
+        agentLabel,
+      }),
+    [agentLabel, loadError, loading, selectedModel],
+  );
+  const visibleCodexStatusCard = codexStatusCard ?? idleCodexStatusCard;
+  const completionNotice = useMemo(
+    () => buildCodexCompletionNotice(codexStatus, dismissedCompletionNoticeKey, agentLabel),
+    [agentLabel, codexStatus, dismissedCompletionNoticeKey],
+  );
   const codexStatusResolution = useMemo(
     () =>
       buildCodexStatusPetStageResolution(codexStatusPresentation, {
@@ -205,7 +246,20 @@ export function App() {
       }),
     [codexStatusPresentation, stageInteractionState.source],
   );
-  const codexStatusInteraction = codexStatusResolution.shouldApply ? codexStatusResolution.interaction : null;
+  const codexStatusInteraction = useMemo(() => {
+    if (!codexStatusResolution.shouldApply) return null;
+    const fallbackResult = resolvePetStageInteractionWithFallback(
+      codexStatusResolution.interaction,
+      petAutoplayIdleState.interaction,
+    );
+    if (!fallbackResult.interaction) return null;
+    return { ...fallbackResult.interaction };
+  }, [
+    codexStatusMotionReplayRevision,
+    codexStatusResolution.interaction,
+    codexStatusResolution.shouldApply,
+    petAutoplayIdleState.interaction,
+  ]);
   const interaction =
     stageInteractionState.source === "stage-click"
       ? stageInteractionState.interaction
@@ -392,12 +446,127 @@ export function App() {
       .finally(() => setApiRuntimeRetrying(false));
   }, [loadPetState]);
 
+  const showVscodeFocusSuccess = useCallback(() => {
+    setMenuStatus("VSCode workspace open");
+    window.setTimeout(() => setMenuStatus(null), 1800);
+  }, []);
+
+  const focusActiveSessionFromPanel = useCallback(
+    (petSessionId: string) => {
+      setSessionPanelOpen(false);
+      setMenuStatus("Opening existing task window...");
+      const focusRequest = window.desktopPet?.sessions?.focusActive(petSessionId);
+      if (!focusRequest) {
+        setMenuStatus("Open active task unavailable");
+        window.setTimeout(() => setMenuStatus(null), 2800);
+        return;
+      }
+      focusRequest
+        .then(() => showVscodeFocusSuccess())
+        .catch((error: Error) => {
+          setMenuStatus(`Open active task failed: ${error.message}`);
+          window.setTimeout(() => setMenuStatus(null), 4200);
+        });
+    },
+    [showVscodeFocusSuccess],
+  );
+
   const focusVscodeForApproval = useCallback(() => {
     setMenuStatus("Opening VSCode workspace...");
-    window.desktopPet?.vscode?.focus?.().catch((error: Error) => {
-      setMenuStatus(`Open VSCode failed: ${error.message}`);
-      window.setTimeout(() => setMenuStatus(null), 4200);
-    });
+    const focusRequest = window.desktopPet?.vscode?.focus?.({ workspacePath: codexStatus?.workspacePath });
+    if (!focusRequest) {
+      setMenuStatus("Open VSCode unavailable");
+      window.setTimeout(() => setMenuStatus(null), 2800);
+      return;
+    }
+    focusRequest
+      .then(showVscodeFocusSuccess)
+      .catch((error: Error) => {
+        setMenuStatus(`Open VSCode failed: ${error.message}`);
+        window.setTimeout(() => setMenuStatus(null), 4200);
+      });
+  }, [codexStatus?.workspacePath, showVscodeFocusSuccess]);
+
+  const decideApprovalFromStatus = useCallback(
+    ({ decision }: { decision: "approve_once" | "deny" }) => {
+      const approval = codexStatus?.pendingApprovals?.find((item) => item.id);
+      const codexSessionId = codexStatus?.codexSessionId;
+      if (!approval || !codexSessionId) {
+        setMenuStatus("Approval id unavailable");
+        window.setTimeout(() => setMenuStatus(null), 2400);
+        return;
+      }
+      setMenuStatus(decision === "approve_once" ? "Approving Codex request..." : "Denying Codex request...");
+      const decisionRequest = window.desktopPet?.approvals?.decide({
+        codexSessionId,
+        approvalId: approval.id,
+        decision,
+      });
+      if (!decisionRequest) {
+        setMenuStatus("Approval unavailable");
+        window.setTimeout(() => setMenuStatus(null), 2800);
+        return;
+      }
+      decisionRequest
+        .then(() => {
+          setMenuStatus(decision === "approve_once" ? "Codex request approved" : "Codex request denied");
+          window.setTimeout(() => setMenuStatus(null), 2200);
+        })
+        .catch((error: Error) => {
+          setMenuStatus(`Approval failed: ${error.message}`);
+          window.setTimeout(() => setMenuStatus(null), 4200);
+        });
+    },
+    [codexStatus?.codexSessionId, codexStatus?.pendingApprovals],
+  );
+
+  const focusVscodeForStatus = useCallback(() => {
+    if (!codexStatus?.workspacePath) return;
+    setMenuStatus("Opening VSCode workspace...");
+    const focusRequest = window.desktopPet?.vscode?.focus?.({ workspacePath: codexStatus?.workspacePath });
+    if (!focusRequest) {
+      setMenuStatus("Open VSCode unavailable");
+      window.setTimeout(() => setMenuStatus(null), 2800);
+      return;
+    }
+    focusRequest
+      .then(showVscodeFocusSuccess)
+      .catch((error: Error) => {
+        setMenuStatus(`Open VSCode failed: ${error.message}`);
+        window.setTimeout(() => setMenuStatus(null), 4200);
+      });
+  }, [codexStatus?.workspacePath, showVscodeFocusSuccess]);
+
+  const focusWorkspaceFromCompletionNotice = useCallback(() => {
+    if (!completionNotice?.workspacePath) return;
+    setMenuStatus("Opening VSCode workspace...");
+    const focusRequest = window.desktopPet?.vscode?.focus?.({ workspacePath: completionNotice.workspacePath });
+    if (!focusRequest) {
+      setMenuStatus("Open VSCode unavailable");
+      window.setTimeout(() => setMenuStatus(null), 2800);
+      return;
+    }
+    focusRequest
+      .then(showVscodeFocusSuccess)
+      .catch((error: Error) => {
+        setMenuStatus(`Open VSCode failed: ${error.message}`);
+        window.setTimeout(() => setMenuStatus(null), 4200);
+      });
+  }, [completionNotice?.workspacePath, showVscodeFocusSuccess]);
+
+  const copyCommandFromStatus = useCallback((commandLine: string) => {
+    const command = commandLine.trim();
+    if (!command) return;
+    const write = window.desktopPet?.clipboard?.writeText?.(command);
+    Promise.resolve(write)
+      .then(() => {
+        setCommandCopied(true);
+        window.setTimeout(() => setCommandCopied(false), 2000);
+      })
+      .catch((error: Error) => {
+        setMenuStatus(`Copy failed: ${error.message}`);
+        window.setTimeout(() => setMenuStatus(null), 4200);
+      });
   }, []);
 
   const handlePetStageCharacterClick = useCallback(
@@ -439,6 +608,21 @@ export function App() {
     setStageInteractionState(petAutoplayIdleState);
   }, [petAutoplayIdleState]);
 
+  const handleStageInteractionComplete = useCallback(() => {
+    if (stageInteractionState.source === "stage-click") {
+      recoverPetStageInteraction();
+      return;
+    }
+    if (
+      codexStatusResolution.shouldApply &&
+      shouldReplayCodexStatusMotionOnCompletion(codexStatus?.state)
+    ) {
+      setCodexStatusMotionReplayRevision((revision) => revision + 1);
+      return;
+    }
+    recoverPetStageInteraction();
+  }, [codexStatus?.state, codexStatusResolution.shouldApply, recoverPetStageInteraction, stageInteractionState.source]);
+
   useEffect(() => {
     function handleContextMenu(event: MouseEvent) {
       event.preventDefault();
@@ -447,7 +631,8 @@ export function App() {
     }
 
     function handlePointerDown(event: PointerEvent) {
-      if (event.target instanceof Element && event.target.closest(".pet-panel, .pet-status-action")) return;
+      if (event.target instanceof Element && event.target.closest(".pet-panel, .pet-status-action, .pet-completion-bubble")) return;
+      if (event.target instanceof Element && event.target.closest(".pet-status-main")) return;
       if (interactionMode === "window-drag" && event.button === 0) {
         stageClickCandidateRef.current = {
           pointerId: event.pointerId,
@@ -539,20 +724,24 @@ export function App() {
     };
   }, [handlePetStageCharacterClick, interactionMode]);
 
-  const codexStatusText = formatCodexStatusNotification(codexStatus, notificationProfile);
+  const codexStatusText = codexStatusCard?.title ?? formatCodexStatusNotification(codexStatus, notificationProfile);
   const approvalFallback = buildApprovalFallback(codexStatus, notificationProfile);
   const showApiRetry = Boolean(loadError) && !approvalFallback;
   const statusText =
     menuStatus ||
     approvalFallback?.message ||
     codexStatusText ||
+    idleCodexStatusCard?.title ||
     (loadError
       ? describeApiRuntimeStatus(apiRuntimeStatus)
       : loading
         ? "Loading MMD"
-        : !selectedModel
+          : !selectedModel
           ? `No MMD model · ${notificationProfile}`
           : null);
+  const statusOutputLines = !menuStatus && visibleCodexStatusCard ? visibleCodexStatusCard.outputLines : [];
+  const canFocusStatus = Boolean(codexStatusCard?.focusable && !showApiRetry);
+  const statusCommandLine = !menuStatus ? visibleCodexStatusCard?.commandLine?.trim() : undefined;
 
   return (
     <main
@@ -578,12 +767,34 @@ export function App() {
             enableCharacterClickCapture={interactionMode !== "camera-adjust"}
             onCharacterClick={handlePetStageCharacterClick}
             clickRipples={stageClickRipples}
-            onInteractionComplete={recoverPetStageInteraction}
+            onInteractionComplete={handleStageInteractionComplete}
             onInteractionError={recoverPetStageInteraction}
             onModelChange={() => {}}
           />
         ) : null}
       </div>
+      {completionNotice && !sessionPanelOpen && !promptPanelOpen ? (
+        <section className="pet-completion-bubble" role="status" aria-live="polite">
+          <button
+            type="button"
+            className="pet-completion-main"
+            title={completionNotice.workspacePath}
+            onClick={focusWorkspaceFromCompletionNotice}
+          >
+            <span className="pet-completion-title">{completionNotice.title}</span>
+            <span className="pet-completion-workspace">{completionNotice.workspaceLabel}</span>
+            {completionNotice.taskLabel ? <span className="pet-completion-task">{completionNotice.taskLabel}</span> : null}
+          </button>
+          <button
+            type="button"
+            className="pet-completion-dismiss"
+            aria-label="Close completed task"
+            onClick={() => setDismissedCompletionNoticeKey(completionNotice.key)}
+          >
+            x
+          </button>
+        </section>
+      ) : null}
       {sessionPanelOpen ? (
         <section className="pet-panel pet-session-panel" aria-label="Codex sessions">
           <div className="pet-session-panel-header">
@@ -611,7 +822,7 @@ export function App() {
                   key={item.petSessionId}
                   type="button"
                   className="pet-session-row"
-                  onClick={() => restoreSessionFromPanel(item.petSessionId)}
+                  onClick={() => item.isActive ? focusActiveSessionFromPanel(item.petSessionId) : restoreSessionFromPanel(item.petSessionId)}
                 >
                   <span className="pet-session-title">{item.title}</span>
                   <span className="pet-session-detail-grid" aria-label={item.subtitle}>
@@ -676,10 +887,66 @@ export function App() {
         </section>
       ) : null}
       {statusText ? (
-        <div className="pet-status" role="status">
-          <span className="pet-status-dot" />
-          <span>{statusText}</span>
-          {approvalFallback ? (
+        <div
+          className="pet-status"
+          role="status"
+          data-status-tone={codexStatusPresentation.statusTone}
+          data-codex-card={visibleCodexStatusCard && !menuStatus ? "true" : "false"}
+          title={statusText}
+        >
+          {canFocusStatus ? (
+            <button
+              type="button"
+              className="pet-status-main"
+              onClick={focusVscodeForStatus}
+            >
+              <span className="pet-status-dot" />
+              <span className="pet-status-content">
+                <span className="pet-status-title">{statusText}</span>
+                {statusOutputLines.length > 0 ? (
+                  <span className="pet-status-output">
+                    {statusOutputLines.map((line, index) => (
+                      <span key={`${index}-${line}`}>{line}</span>
+                    ))}
+                  </span>
+                ) : null}
+              </span>
+            </button>
+          ) : (
+            <span className="pet-status-main pet-status-main-static">
+              <span className="pet-status-dot" />
+              <span className="pet-status-content">
+                <span className="pet-status-title">{statusText}</span>
+                {statusOutputLines.length > 0 ? (
+                  <span className="pet-status-output">
+                    {statusOutputLines.map((line, index) => (
+                      <span key={`${index}-${line}`}>{line}</span>
+                    ))}
+                  </span>
+                ) : null}
+              </span>
+            </span>
+          )}
+          {approvalFallback?.canApprove ? (
+            <>
+              <button
+                type="button"
+                className="pet-status-action"
+                onClick={() => decideApprovalFromStatus({ decision: "approve_once" })}
+              >
+                {approvalFallback.primaryAction.label}
+              </button>
+              {approvalFallback.secondaryAction ? (
+                <button
+                  type="button"
+                  className="pet-status-action pet-status-action-secondary"
+                  onClick={() => decideApprovalFromStatus({ decision: "deny" })}
+                >
+                  {approvalFallback.secondaryAction.label}
+                </button>
+              ) : null}
+            </>
+          ) : approvalFallback ? (
             <button
               type="button"
               className="pet-status-action"
@@ -695,6 +962,15 @@ export function App() {
               onClick={retryApiRuntime}
             >
               Retry
+            </button>
+          ) : statusCommandLine ? (
+            <button
+              type="button"
+              className="pet-status-action"
+              onClick={() => copyCommandFromStatus(statusCommandLine)}
+              title={statusCommandLine}
+            >
+              {commandCopied ? "Copied" : "Copy command"}
             </button>
           ) : null}
         </div>

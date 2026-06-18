@@ -748,6 +748,103 @@ export function clipAnimatesBone(clip, bone) {
   return clip.tracks.some((track) => `${track?.name || ""}`.includes(`bones[${boneName}]`));
 }
 
+function parseBoneTrackName(trackName) {
+  const match = /^\.?bones\[([^\]]+)]\.(position|quaternion|scale)$/.exec(`${trackName || ""}`);
+  if (!match) return null;
+  return { boneName: match[1], property: match[2] };
+}
+
+function sampleTrackValue(track, seconds) {
+  const times = track?.times;
+  const values = track?.values;
+  if (!times?.length || !values?.length) return null;
+  const valueSize =
+    typeof track.getValueSize === "function" ? track.getValueSize() : Math.max(1, values.length / times.length);
+  const result = new Array(valueSize).fill(0);
+  const epsilon = 1e-4;
+
+  let rightIndex = 0;
+  while (rightIndex < times.length && times[rightIndex] < seconds - epsilon) rightIndex += 1;
+
+  if (rightIndex <= 0) {
+    for (let offset = 0; offset < valueSize; offset += 1) result[offset] = values[offset];
+    return result;
+  }
+  if (rightIndex >= times.length) {
+    const start = (times.length - 1) * valueSize;
+    for (let offset = 0; offset < valueSize; offset += 1) result[offset] = values[start + offset];
+    return result;
+  }
+
+  const rightTime = times[rightIndex];
+  const rightStart = rightIndex * valueSize;
+  if (Math.abs(rightTime - seconds) <= epsilon) {
+    for (let offset = 0; offset < valueSize; offset += 1) result[offset] = values[rightStart + offset];
+    return result;
+  }
+
+  const leftIndex = rightIndex - 1;
+  const leftTime = times[leftIndex];
+  const leftStart = leftIndex * valueSize;
+  const span = Math.max(epsilon, rightTime - leftTime);
+  const alpha = THREE.MathUtils.clamp((seconds - leftTime) / span, 0, 1);
+
+  if (valueSize === 4) {
+    const left = new THREE.Quaternion(
+      values[leftStart],
+      values[leftStart + 1],
+      values[leftStart + 2],
+      values[leftStart + 3],
+    );
+    const right = new THREE.Quaternion(
+      values[rightStart],
+      values[rightStart + 1],
+      values[rightStart + 2],
+      values[rightStart + 3],
+    );
+    const sampled = new THREE.Quaternion().slerpQuaternions(left, right, alpha).normalize();
+    return [sampled.x, sampled.y, sampled.z, sampled.w];
+  }
+
+  for (let offset = 0; offset < valueSize; offset += 1) {
+    result[offset] = THREE.MathUtils.lerp(values[leftStart + offset], values[rightStart + offset], alpha);
+  }
+  return result;
+}
+
+function applyClipBoneTracksAtTime(model, clip, seconds) {
+  const bones = model?.skeleton?.bones;
+  if (!Array.isArray(bones) || !clip?.tracks?.length) return false;
+  const boneByName = new Map(bones.map((bone) => [bone.name, bone]));
+  let applied = false;
+
+  for (const track of clip.tracks) {
+    const parsed = parseBoneTrackName(track?.name);
+    if (!parsed) continue;
+    const bone = boneByName.get(parsed.boneName);
+    if (!bone) continue;
+    const value = sampleTrackValue(track, seconds);
+    if (!value) continue;
+
+    if (parsed.property === "quaternion" && value.length >= 4) {
+      bone.quaternion.set(value[0], value[1], value[2], value[3]).normalize();
+      applied = true;
+    } else if (parsed.property === "position" && value.length >= 3) {
+      bone.position.set(value[0], value[1], value[2]);
+      applied = true;
+    } else if (parsed.property === "scale" && value.length >= 3) {
+      bone.scale.set(value[0], value[1], value[2]);
+      applied = true;
+    }
+  }
+
+  if (applied) {
+    model.updateMatrixWorld?.(true);
+    model.skeleton?.update?.();
+  }
+  return applied;
+}
+
 export function resetBonesNotAnimatedByClip(baseBoneTransforms = [], clip) {
   for (const entry of baseBoneTransforms || []) {
     const bone = entry?.bone;
@@ -1477,6 +1574,7 @@ export class MMDCompanionRuntime {
     this.pendingVmdActionCleanups = [];
     this.isLoadingVmd = false;
     this.vmdLoadToken = 0;
+    this.calibrationCaptureMode = false;
     this.currentAction = null;
     this.currentSequence = null;
     this.activeEmotion = "neutral";
@@ -2384,6 +2482,52 @@ export class MMDCompanionRuntime {
     return mixer.clipAction?.(clip, this.model) || null;
   }
 
+  setCalibrationCaptureMode(enabled) {
+    this.calibrationCaptureMode = Boolean(enabled);
+    if (this.calibrationCaptureMode) {
+      this.currentVmdLoopUrls = [];
+      this.currentVmdStandbyUrl = "";
+      this.currentVmdLoopGapMs = 0;
+      this.setSpeaking(false);
+    } else if (this.currentVmdAction) {
+      this.currentVmdAction.paused = false;
+    }
+  }
+
+  seekVmdFrame(frame, fps = 30) {
+    if (!this.currentClip || !this.model) return false;
+    const frameNumber = Math.max(0, Number(frame) || 0);
+    const frameRate = Math.max(1, Number(fps) || 30);
+    const seconds = frameNumber / frameRate;
+    const action = this.currentVmdAction || this.getVmdAction(this.currentClip, { create: true });
+    const mixer = this.getCurrentVmdMixer();
+
+    if (action) {
+      action.enabled = true;
+      action.paused = false;
+      action.time = seconds;
+      action.play?.();
+      this.currentVmdAction = action;
+    }
+    if (this.calibrationCaptureMode) {
+      applyClipBoneTracksAtTime(this.model, this.currentClip, seconds);
+    } else {
+      mixer?.setTime?.(seconds);
+      this.helper?.update?.(0);
+    }
+    if (action && !this.calibrationCaptureMode) {
+      action.time = seconds;
+      action.paused = true;
+    }
+    if (this.currentClip) {
+      this.stabilizeVmdAnchorBones();
+      this.resetBonesNotAnimatedByClip(this.currentClip);
+      if (this.currentVmdLockLowerBody) this.resetLowerBodyBonesToBase();
+    }
+    this.renderScene?.();
+    return true;
+  }
+
   scheduleVmdActionCleanup(clip, action, nowMs = performance.now()) {
     if (!clip || !action) return;
     this.pendingVmdActionCleanups = this.pendingVmdActionCleanups
@@ -2890,16 +3034,22 @@ export class MMDCompanionRuntime {
     requestAnimationFrame(() => this.renderFrame());
     const delta = this.clock.getDelta();
     const nowMs = performance.now();
-    this.updateVmdLoop(nowMs);
-    const helperDelta = this.currentClip ? delta * this.currentVmdPlaybackRate : delta;
-    this.helper.update(helperDelta);
+    if (!this.calibrationCaptureMode) {
+      this.updateVmdLoop(nowMs);
+    }
+    if (!this.calibrationCaptureMode) {
+      const helperDelta = this.currentClip ? delta * this.currentVmdPlaybackRate : delta;
+      this.helper.update(helperDelta);
+    }
     if (this.currentClip) {
       this.stabilizeVmdAnchorBones();
       this.resetBonesNotAnimatedByClip(this.currentClip);
       if (this.currentVmdLockLowerBody) this.resetLowerBodyBonesToBase();
     }
-    this.updateBonePose(delta, nowMs);
-    this.updateMorph(delta, nowMs);
+    if (!this.calibrationCaptureMode) {
+      this.updateBonePose(delta, nowMs);
+      this.updateMorph(delta, nowMs);
+    }
     this.flushExpiredVmdActionCleanups(nowMs);
     this.controls?.update();
     this.renderScene();

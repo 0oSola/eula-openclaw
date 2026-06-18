@@ -1,0 +1,217 @@
+{
+  "top": [
+    {
+      "id": "x2_y0_z0",
+      "offset": [
+        0.2,
+        0.02,
+        0.12
+      ],
+      "avg": 42.084720463400814,
+      "final": 17.209472302269205,
+      "score": 92.52
+    },
+    {
+      "id": "x1_y1_z0",
+      "offset": [
+        0.14,
+        0.08,
+        0.12
+      ],
+      "avg": 42.492399012164825,
+      "final": 20.86455464581783,
+      "score": 92.52
+    },
+    {
+      "id": "x0_y0_z1",
+      "offset": [
+        0.08,
+        0.02,
+        0.18
+      ],
+      "avg": 43.425613132761896,
+      "final": 12.77765234834759,
+      "score": 92.52
+    },
+    {
+      "id": "x1_y0_z1",
+      "offset": [
+        0.14,
+        0.02,
+        0.18
+      ],
+      "avg": 50.035192532580076,
+      "final": 18.83542732614978,
+      "score": 92.52
+    },
+    {
+      "id": "x0_y1_z1",
+      "offset": [
+        0.08,
+        0.08,
+        0.18
+      ],
+      "avg": 50.74344121279242,
+      "final": 21.262322243624634,
+      "score": 92.52
+    },
+    {
+      "id": "x0_y2_z0",
+      "offset": [
+        0.08,
+        0.14,
+        0.12
+      ],
+      "avg": 52.76934253098604,
+      "final": 38.08390929425464,
+      "score": 92.52
+    }
+  ],
+  "captures": [
+    {
+      "id": "x2_y0_z0",
+      "offset": [
+        0.2,
+        0.02,
+        0.12
+      ],
+      "avg": 42.084720463400814,
+      "final": 17.209472302269205,
+      "frame": 120,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/x2_y0_z0_frame_120.png"
+    },
+    {
+      "id": "x2_y0_z0",
+      "offset": [
+        0.2,
+        0.02,
+        0.12
+      ],
+      "avg": 42.084720463400814,
+      "final": 17.209472302269205,
+      "frame": 292,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/x2_y0_z0_frame_292.png"
+    },
+    {
+      "id": "x1_y1_z0",
+      "offset": [
+        0.14,
+        0.08,
+        0.12
+      ],
+      "avg": 42.492399012164825,
+      "final": 20.86455464581783,
+      "frame": 120,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/x1_y1_z0_frame_120.png"
+    },
+    {
+      "id": "x1_y1_z0",
+      "offset": [
+        0.14,
+        0.08,
+        0.12
+      ],
+      "avg": 42.492399012164825,
+      "final": 20.86455464581783,
+      "frame": 292,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/x1_y1_z0_frame_292.png"
+    },
+    {
+      "id": "x0_y0_z1",
+      "offset": [
+        0.08,
+        0.02,
+        0.18
+      ],
+      "avg": 43.425613132761896,
+      "final": 12.77765234834759,
+      "frame": 120,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/x0_y0_z1_frame_120.png"
+    },
+    {
+      "id": "x0_y0_z1",
+      "offset": [
+        0.08,
+        0.02,
+        0.18
+      ],
+      "avg": 43.425613132761896,
+      "final": 12.77765234834759,
+      "frame": 292,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/x0_y0_z1_frame_292.png"
+    },
+    {
+      "id": "x1_y0_z1",
+      "offset": [
+        0.14,
+        0.02,
+        0.18
+      ],
+      "avg": 50.035192532580076,
+      "final": 18.83542732614978,
+      "frame": 120,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/x1_y0_z1_frame_120.png"
+    },
+    {
+      "id": "x1_y0_z1",
+      "offset": [
+        0.14,
+        0.02,
+        0.18
+      ],
+      "avg": 50.035192532580076,
+      "final": 18.83542732614978,
+      "frame": 292,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/x1_y0_z1_frame_292.png"
+    },
+    {
+      "id": "x0_y1_z1",
+      "offset": [
+        0.08,
+        0.08,
+        0.18
+      ],
+      "avg": 50.74344121279242,
+      "final": 21.262322243624634,
+      "frame": 120,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/x0_y1_z1_frame_120.png"
+    },
+    {
+      "id": "x0_y1_z1",
+      "offset": [
+        0.08,
+        0.08,
+        0.18
+      ],
+      "avg": 50.74344121279242,
+      "final": 21.262322243624634,
+      "frame": 292,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/x0_y1_z1_frame_292.png"
+    },
+    {
+      "id": "x0_y2_z0",
+      "offset": [
+        0.08,
+        0.14,
+        0.12
+      ],
+      "avg": 52.76934253098604,
+      "final": 38.08390929425464,
+      "frame": 120,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/x0_y2_z0_frame_120.png"
+    },
+    {
+      "id": "x0_y2_z0",
+      "offset": [
+        0.08,
+        0.14,
+        0.12
+      ],
+      "avg": 52.76934253098604,
+      "final": 38.08390929425464,
+      "frame": 292,
+      "imagePath": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/x0_y2_z0_frame_292.png"
+    }
+  ],
+  "sheet": "imgToAction/outputs/actions/thinking_chin_edge/fit_loop_offsets/iter02/top_screens/top6_sheet.png"
+}

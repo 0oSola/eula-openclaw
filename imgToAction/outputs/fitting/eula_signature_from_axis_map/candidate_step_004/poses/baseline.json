@@ -1,0 +1,199 @@
+{
+  "motion_name": "eula_stand_to_signature_pose",
+  "fps": 30,
+  "duration_frames": 90,
+  "character": "Eula PMX",
+  "keyframes": [
+    {
+      "frame": 0,
+      "pose": "natural_stand",
+      "body": {
+        "center": {
+          "shift_x": 0.0,
+          "shift_y": 0.0,
+          "shift_z": 0.0
+        },
+        "pelvis": {
+          "turn_y": 0.0,
+          "tilt_z": 0.0
+        },
+        "chest": {
+          "turn_y": 0.0,
+          "tilt_z": 0.0,
+          "lean_x": 0.0
+        },
+        "head": {
+          "turn_y": 0.0,
+          "chin_up": 0.0
+        }
+      },
+      "arms": {
+        "right_arm": {
+          "raise": 0,
+          "open_side": 8,
+          "forward": 0,
+          "elbow_bend": 4,
+          "wrist_pitch": 0,
+          "wrist_yaw": 0,
+          "wrist_roll": 0
+        },
+        "left_arm": {
+          "raise": 0,
+          "open_side": 8,
+          "backward": 0,
+          "elbow_bend": 4,
+          "wrist_pitch": 0,
+          "wrist_yaw": 0,
+          "wrist_roll": 0
+        }
+      },
+      "legs": {
+        "right_leg": {
+          "support_weight": 0.5,
+          "knee_bend": 0,
+          "foot_lock": true
+        },
+        "left_leg": {
+          "support_weight": 0.5,
+          "knee_bend": 0,
+          "foot_lock": true
+        }
+      }
+    },
+    {
+      "frame": 40,
+      "pose": "transition",
+      "body": {
+        "center": {
+          "shift_x": -0.07,
+          "shift_y": 0.0,
+          "shift_z": -0.01
+        },
+        "pelvis": {
+          "turn_y": 3,
+          "tilt_z": -4
+        },
+        "chest": {
+          "turn_y": -4,
+          "tilt_z": 3,
+          "lean_x": -1.5
+        },
+        "head": {
+          "turn_y": -4.5,
+          "chin_up": 1.5
+        }
+      },
+      "arms": {
+        "right_arm": {
+          "raise": 48,
+          "open_side": 30,
+          "forward": 14,
+          "elbow_bend": 10,
+          "wrist_pitch": -5,
+          "wrist_yaw": 10,
+          "wrist_roll": -8
+        },
+        "left_arm": {
+          "raise": 10,
+          "open_side": 28,
+          "backward": 8,
+          "elbow_bend": 7,
+          "wrist_pitch": 3,
+          "wrist_yaw": -6,
+          "wrist_roll": 6
+        }
+      },
+      "legs": {
+        "right_leg": {
+          "support_weight": 0.75,
+          "knee_bend": 1.2,
+          "foot_lock": true
+        },
+        "left_leg": {
+          "support_weight": 0.25,
+          "step_x": 0.15,
+          "step_z": -0.05,
+          "knee_bend": 3,
+          "toe_out": -10,
+          "toe_point": true
+        }
+      }
+    },
+    {
+      "frame": 60,
+      "pose": "final_signature_elegant_pose",
+      "body": {
+        "center": {
+          "shift_x": -0.115,
+          "shift_y": 0.0,
+          "shift_z": -0.015
+        },
+        "pelvis": {
+          "turn_y": 4,
+          "tilt_z": -6
+        },
+        "chest": {
+          "turn_y": -6,
+          "tilt_z": 3.5,
+          "lean_x": -2
+        },
+        "head": {
+          "turn_y": -6,
+          "chin_up": 2
+        }
+      },
+      "arms": {
+        "right_arm": {
+          "raise": 65,
+          "open_side": 42,
+          "forward": 18,
+          "elbow_bend": 14,
+          "wrist_pitch": -7,
+          "wrist_yaw": 14,
+          "wrist_roll": -10,
+          "hand_style": "refined_open"
+        },
+        "left_arm": {
+          "raise": 12,
+          "open_side": 23.0,
+          "backward": 12,
+          "elbow_bend": 10,
+          "wrist_pitch": 4,
+          "wrist_yaw": -8,
+          "wrist_roll": 8,
+          "hand_style": "relaxed_extended"
+        }
+      },
+      "legs": {
+        "right_leg": {
+          "support_weight": 0.85,
+          "knee_bend": 1.5,
+          "foot_lock": true
+        },
+        "left_leg": {
+          "support_weight": 0.15,
+          "step_x": 0.22,
+          "step_z": -0.08,
+          "knee_bend": 8.5,
+          "toe_out": -18,
+          "toe_point": true
+        }
+      }
+    },
+    {
+      "frame": 90,
+      "pose": "hold_final"
+    }
+  ],
+  "interpolation": {
+    "0_to_40": "ease_in_out",
+    "40_to_60": "ease_out",
+    "60_to_90": "hold"
+  },
+  "constraints": {
+    "keep_feet_on_ground": true,
+    "avoid_arm_body_intersection": true,
+    "preserve_character_silhouette": true,
+    "no_weapon": true
+  }
+}

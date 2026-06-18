@@ -1,0 +1,78 @@
+{
+  "candidate_id": "candidate_002_seed_drift",
+  "source_npy": "D:\\workspace\\MMD project\\imgToAction\\outputs\\actions\\thinking_chin_edge\\smoke_input\\seed_drift.npy",
+  "score": 87.57,
+  "blocking": false,
+  "components": {
+    "contact_score": 100.0,
+    "elbow_score": 100.0,
+    "head_score": 100.0,
+    "left_arm_support_score": 100.0,
+    "stable_stance_score": 0.0,
+    "smoothness_score": 95.703,
+    "hand_preset_score": 100.0
+  },
+  "violations": [],
+  "warnings": [],
+  "constraint_report": {
+    "contact": "right_wrist_to_chin_edge",
+    "applied": true,
+    "violations": []
+  },
+  "outputs": {
+    "skeleton": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_002_seed_drift\\skeleton.json",
+    "final_skeleton": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_002_seed_drift\\final_skeleton.json",
+    "draft_vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_002_seed_drift\\draft.vmd",
+    "final_candidate_vmd": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_002_seed_drift\\final_candidate.vmd"
+  },
+  "vmd_summary": {
+    "path": "imgToAction\\outputs\\actions\\thinking_chin_edge\\run_smoke\\candidates\\candidate_002_seed_drift\\final_candidate.vmd",
+    "header": "Vocaloid Motion Data 0002",
+    "model_name": "Eula",
+    "bone_frame_count": 144,
+    "max_frame": 4,
+    "bone_names": [
+      "センター",
+      "下半身",
+      "上半身",
+      "上半身2",
+      "首",
+      "頭",
+      "右肩",
+      "右腕",
+      "右ひじ",
+      "右手首",
+      "左肩",
+      "左腕",
+      "左ひじ",
+      "左手首",
+      "右足",
+      "右ひざ",
+      "右足首",
+      "左足",
+      "左ひざ",
+      "左足首",
+      "右親指０",
+      "右親指１",
+      "右人指１",
+      "右人指２",
+      "右中指１",
+      "右中指２",
+      "右薬指１",
+      "右薬指２",
+      "右小指１",
+      "右小指２",
+      "左親指０",
+      "左親指１",
+      "左人指１",
+      "左中指１",
+      "左薬指１",
+      "左小指１"
+    ]
+  },
+  "frame_counts": {
+    "skeleton": 4,
+    "draft_bone_frames": 80,
+    "final_bone_frames": 144
+  }
+}
