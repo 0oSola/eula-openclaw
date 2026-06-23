@@ -10,8 +10,10 @@ game assets, textures, motion packs, voice clips, music, screenshots, or other
 media placed in this directory.
 
 Before publishing, redistributing, or sharing any files under `MMD/`, verify
-the original asset terms. Several common MMD model and motion packages prohibit
-redistribution, commercial use, extraction of parts, or use outside MMD.
+the original asset terms. Unless an asset license explicitly says otherwise,
+treat local demo assets as non-commercial and non-redistributable. Several
+common MMD model and motion packages prohibit redistribution, commercial use,
+extraction of parts, or use outside MMD.
 
 Recommended local layout:
 

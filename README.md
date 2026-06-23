@@ -11,11 +11,19 @@ Browser-based MMD virtual companion with OpenClaw agent integration, trace loggi
 - `docs/plans/`: implementation planning docs; 实施计划文档
 - `docs/architecture/trace-contract.md`: trace event contract; trace 事件协议文档
 
+## Screenshots
+
+The screenshots below show the interface with local MMD demo assets after the model has fully rendered. The referenced MMD character/model assets are treated as non-commercial, non-redistributable local demo materials; these screenshots do not grant commercial use, redistribution, or reuse rights for the underlying assets.
+
+![MMD companion desktop interface](docs/assets/screenshots/companion-desktop.png)
+
+![MMD companion advanced model and VMD controls](docs/assets/screenshots/companion-advanced.png)
+
 ## License / Asset Policy
 
 Source code and project documentation are licensed under the MIT License. See `LICENSE`.
 
-The MIT license does not cover third-party MMD models, textures, toon files, SPA/SPH files, VMD motion packs, voice clips, music, screenshots, or other media placed under `MMD/`. `MMD/` is a local runtime asset directory. Before publishing or sharing any assets there, verify the original author or game publisher terms; many MMD packages prohibit redistribution, commercial use, extraction of parts, or use outside MMD.
+The MIT license does not cover third-party MMD models, textures, toon files, SPA/SPH files, VMD motion packs, voice clips, music, screenshots, or other media placed under `MMD/`. `MMD/` is a local runtime asset directory. Local MMD assets used for demos should be treated as non-commercial and non-redistributable unless their original license explicitly says otherwise. Before publishing or sharing any assets there, verify the original author or game publisher terms; many MMD packages prohibit redistribution, commercial use, extraction of parts, or use outside MMD.
 
 This repository should stay publishable without bundled third-party character/model/audio assets. Add your own legally usable local assets under `MMD/`, or point `MMD_ROOT_DIR` at another local directory.
 
