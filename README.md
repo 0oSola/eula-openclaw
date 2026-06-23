@@ -1,4 +1,6 @@
-# MMD Virtual Companion Monorepo
+# OpenClaw MMD Companion
+
+A reference implementation for OpenClaw-powered interactive MMD companion applications.
 
 Browser-based MMD virtual companion with OpenClaw agent integration, trace logging, VMD interaction mapping, and API proxy.
 基于浏览器的 MMD 虚拟陪伴项目，包含 OpenClaw 对话、交互映射和全链路 trace 日志。

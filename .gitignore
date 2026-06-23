@@ -1,7 +1,10 @@
 node_modules
 dist
 .next/
+.next-codex-dev-web/
 test-results/
+tmp/
+output/imagegen/
 desktop-pet/dist-electron
 .DS_Store
 *.log
@@ -12,8 +15,12 @@ desktop-pet/dist-electron
 web/node_modules
 web/.next
 web/.next-codex-dev
+web/.next-codex-dev-web
 web/.next-codex-build
 web/.next-codex-test
+web/tmp/
+web/output/
+docs/screenshot/
 #api/data
 #api/api/data
 api/tests_runtime
