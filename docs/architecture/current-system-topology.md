@@ -1,6 +1,6 @@
 ﻿# 当前系统拓扑与架构蓝图
 
-更新时间：2026-06-18
+更新时间：2026-06-23
 
 本文用于两类场景：
 
@@ -43,7 +43,7 @@ Browser / Next.js UI
 | Codex Review Memory / OpenClaw Wiki | FastAPI review APIs/outbound worker + OpenClaw `memory-wiki` | 用户确认 draft 后把候选摘要转成结构化、可执行的长期 knowledge memory；FastAPI 主动把确认后的 Obsidian 页面 payload 推给 OpenClaw | 本项目内；OpenClaw wiki 发布在 OpenClaw 侧执行 | `codex_review_memory`、`codex_review_memory_versions`、OpenClaw review run 状态 |
 | SQLite | `api/data/sqlite/trace.db` | 会话、消息、TTS、Bridge、trace、资源索引 | 本地数据 | API 查询和测试 |
 | NDJSON logs | `api/data/logs/*.ndjson` | trace 双写日志 | 本地数据 | 直接查日志 |
-| MMD assets | `MMD_ROOT_DIR=./MMD` | PMX/PMD 模型、贴图、VMD 动作资源 | 本地文件 | `GET /assets/mmd/models` |
+| MMD assets | `MMD_ROOT_DIR=./MMD` | PMX/PMD 模型、贴图、VMD 动作资源；开源仓库只保留 `MMD/README.md`，第三方模型、贴图、动作、音频作为本地未跟踪资源放置 | 本地文件 | `GET /assets/mmd/models` |
 
 ## 3. 当前关键配置
 

@@ -1,15 +1,23 @@
 # MMD Virtual Companion Monorepo
 
-Browser-based MMD virtual companion with OpenClaw chat, interaction mapping, and full trace logging.  
+Browser-based MMD virtual companion with OpenClaw agent integration, trace logging, VMD interaction mapping, and API proxy.
 基于浏览器的 MMD 虚拟陪伴项目，包含 OpenClaw 对话、交互映射和全链路 trace 日志。
 
 ## Repository Layout / 仓库结构
 
 - `web/`: Next.js + TypeScript frontend; Next.js + TypeScript 前端
 - `api/`: FastAPI backend proxy and trace gateway; FastAPI 后端代理与 trace 网关
-- `MMD/`: local PMX and texture assets; 本地 PMX 与贴图资源
+- `MMD/`: local runtime-only PMX/PMD, texture, VMD, and audio assets; third-party assets are not redistributed by this repository
 - `docs/plans/`: implementation planning docs; 实施计划文档
 - `docs/architecture/trace-contract.md`: trace event contract; trace 事件协议文档
+
+## License / Asset Policy
+
+Source code and project documentation are licensed under the MIT License. See `LICENSE`.
+
+The MIT license does not cover third-party MMD models, textures, toon files, SPA/SPH files, VMD motion packs, voice clips, music, screenshots, or other media placed under `MMD/`. `MMD/` is a local runtime asset directory. Before publishing or sharing any assets there, verify the original author or game publisher terms; many MMD packages prohibit redistribution, commercial use, extraction of parts, or use outside MMD.
+
+This repository should stay publishable without bundled third-party character/model/audio assets. Add your own legally usable local assets under `MMD/`, or point `MMD_ROOT_DIR` at another local directory.
 
 ## Core Features / 核心功能
 
