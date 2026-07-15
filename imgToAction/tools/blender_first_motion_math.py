@@ -32,6 +32,17 @@ WRIST_SWING_HARD_MAX_DEG = 55.0
 FOREARM_TWIST_COMFORT_MAX_DEG = 45.0
 FOREARM_TWIST_HARD_MAX_DEG = 80.0
 
+WRIST_TWIST_COMFORT_MAX_DEG = 20.0
+WRIST_TWIST_HARD_MAX_DEG = 40.0
+SIGNED_ELBOW_FLEX_MIN_DEG = -150.0
+SIGNED_ELBOW_FLEX_MAX_DEG = -5.0
+CONTACT_COMFORT_DISTANCE = 0.008
+CONTACT_SCALE = 0.02
+CLEARANCE_COMFORT_DISTANCE = 0.004
+CONTINUITY_COMFORT_DISTANCE = 0.025
+CONTINUITY_HARD_DISTANCE = 0.12
+HARD_REJECTION_PENALTY = 1_000_000.0
+
 CONTINUITY_FLIP_PENALTY = 10.0
 
 
@@ -73,6 +84,15 @@ class AnatomyScore:
     total_penalty: float
     component_penalties: dict[str, float]
     measurements: dict[str, float]
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class StaticCandidateScore:
+    valid: bool
+    total_score: float
+    component_penalties: dict[str, float]
+    measurements: dict[str, float | int | bool]
     reasons: tuple[str, ...]
 
 
@@ -420,6 +440,130 @@ def score_anatomy(
             "elbow_angle_deg": elbow,
             "wrist_swing_deg": wrist,
             "forearm_twist_deg": twist,
+        },
+        reasons=tuple(reasons),
+    )
+
+
+def score_static_candidate(
+    *,
+    elbow_angle_deg: float,
+    signed_elbow_flex_deg: float,
+    pole_side: float,
+    wrist_swing_deg: float,
+    wrist_twist_deg: float,
+    forearm_twist_deg: float,
+    contact_error: float,
+    head_penetration_depth: float,
+    torso_penetration_count: int,
+    minimum_clearance: float,
+    continuity_distance: float,
+    matrices_finite: bool,
+) -> StaticCandidateScore:
+    """Rank a static arm candidate and reject non-negotiable failures."""
+
+    numeric_values = {
+        "elbow_angle_deg": float(elbow_angle_deg),
+        "signed_elbow_flex_deg": float(signed_elbow_flex_deg),
+        "pole_side": float(pole_side),
+        "wrist_swing_deg": float(wrist_swing_deg),
+        "wrist_twist_deg": float(wrist_twist_deg),
+        "forearm_twist_deg": float(forearm_twist_deg),
+        "contact_error": float(contact_error),
+        "head_penetration_depth": float(head_penetration_depth),
+        "minimum_clearance": float(minimum_clearance),
+        "continuity_distance": float(continuity_distance),
+    }
+    non_finite_measurements = tuple(
+        name for name, value in numeric_values.items() if not math.isfinite(value)
+    )
+    if non_finite_measurements:
+        matrices_finite = False
+        numeric_values = {
+            name: value if math.isfinite(value) else 0.0
+            for name, value in numeric_values.items()
+        }
+
+    anatomy = score_anatomy(
+        numeric_values["elbow_angle_deg"],
+        numeric_values["wrist_swing_deg"],
+        numeric_values["forearm_twist_deg"],
+    )
+    penalties = dict(anatomy.component_penalties)
+    penalties["wrist_twist"] = _absolute_penalty(
+        numeric_values["wrist_twist_deg"],
+        WRIST_TWIST_COMFORT_MAX_DEG,
+        WRIST_TWIST_HARD_MAX_DEG,
+    )
+    penalties["contact"] = (
+        max(0.0, numeric_values["contact_error"] - CONTACT_COMFORT_DISTANCE)
+        / CONTACT_SCALE
+    ) ** 2
+    penalties["clearance"] = (
+        max(0.0, CLEARANCE_COMFORT_DISTANCE - numeric_values["minimum_clearance"])
+        / CLEARANCE_COMFORT_DISTANCE
+    ) ** 2
+    penalties["continuity"] = (
+        max(0.0, numeric_values["continuity_distance"] - CONTINUITY_COMFORT_DISTANCE)
+        / max(EPSILON, CONTINUITY_HARD_DISTANCE - CONTINUITY_COMFORT_DISTANCE)
+    ) ** 2
+
+    reasons = list(anatomy.reasons)
+    if non_finite_measurements:
+        reasons.append(
+            "Candidate contains non-finite measurements: "
+            + ", ".join(non_finite_measurements)
+        )
+    valid = anatomy.valid
+    signed_flex = numeric_values["signed_elbow_flex_deg"]
+    if not SIGNED_ELBOW_FLEX_MIN_DEG <= signed_flex <= SIGNED_ELBOW_FLEX_MAX_DEG:
+        valid = False
+        reasons.append(
+            f"Signed elbow flex must remain within {SIGNED_ELBOW_FLEX_MIN_DEG:g} to "
+            f"{SIGNED_ELBOW_FLEX_MAX_DEG:g} degrees"
+        )
+    if numeric_values["pole_side"] <= EPSILON:
+        valid = False
+        reasons.append("Elbow is not on the pole-facing side")
+    if abs(numeric_values["wrist_twist_deg"]) > WRIST_TWIST_HARD_MAX_DEG:
+        valid = False
+        reasons.append(f"Wrist twist exceeds the +/-{WRIST_TWIST_HARD_MAX_DEG:.0f} degree hard limit")
+    elif penalties["wrist_twist"] > 0.0:
+        reasons.append(
+            f"Wrist twist is outside the +/-{WRIST_TWIST_COMFORT_MAX_DEG:.0f} degree comfort range"
+        )
+    if numeric_values["head_penetration_depth"] > EPSILON:
+        valid = False
+        reasons.append("Palm/head penetration is present")
+    if int(torso_penetration_count) > 0 or numeric_values["minimum_clearance"] < -EPSILON:
+        valid = False
+        reasons.append("Right hand or forearm penetrates non-adjacent torso geometry")
+    if numeric_values["continuity_distance"] > CONTINUITY_HARD_DISTANCE:
+        valid = False
+        reasons.append(
+            f"Candidate discontinuity exceeds {CONTINUITY_HARD_DISTANCE:g} Blender units"
+        )
+    if not matrices_finite:
+        valid = False
+        reasons.append("Candidate contains non-finite matrices or measurements")
+
+    weighted_score = (
+        penalties["elbow"] * 2.0
+        + penalties["wrist_swing"] * 4.0
+        + penalties["forearm_twist"] * 1.5
+        + penalties["wrist_twist"] * 2.5
+        + penalties["contact"] * 5.0
+        + penalties["clearance"] * 3.0
+        + penalties["continuity"] * 4.0
+    )
+    return StaticCandidateScore(
+        valid=valid,
+        total_score=weighted_score + (0.0 if valid else HARD_REJECTION_PENALTY),
+        component_penalties=penalties,
+        measurements={
+            **numeric_values,
+            "torso_penetration_count": int(torso_penetration_count),
+            "matrices_finite": bool(matrices_finite),
         },
         reasons=tuple(reasons),
     )

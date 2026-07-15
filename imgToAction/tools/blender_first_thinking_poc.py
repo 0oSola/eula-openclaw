@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import importlib.util
+import itertools
+import json
 import math
 from pathlib import Path
 import sys
@@ -11,12 +14,15 @@ from typing import Sequence
 
 try:
     import bpy  # type: ignore
-    from mathutils import Matrix, Quaternion, Vector  # type: ignore
+    from mathutils import Euler, Matrix, Quaternion, Vector  # type: ignore
+    from mathutils.bvhtree import BVHTree  # type: ignore
 except ImportError:
     bpy = None
+    Euler = None
     Matrix = None
     Quaternion = None
     Vector = None
+    BVHTree = None
 
 
 ARMATURE_NAME = "优菈_arm"
@@ -142,33 +148,123 @@ PALM_OFF_AXIS_MAX_DEG = 1.0
 
 SAVE_VERSION_OVERRIDE = 0
 
+PMX_CHIN_SURFACE = (0.0, 18.44, -0.50)
+PMX_TO_BLENDER_SCALE = 0.08
+CANDIDATE_VIEWS = ("front", "left", "right", "back")
+STATIC_RENDER_COUNT = 6
+STATIC_METRICS_NAME = "static_pose_metrics.json"
+STATIC_CANDIDATE_DIRECTORY = "candidates"
+STATIC_CAMERA_NAME = "POC Static Full Body Camera"
+
+CONTACT_VERTEX_GROUPS = (
+    "右親指０",
+    "右親指１",
+    "右親指２",
+    "右人指１",
+    "右人指２",
+    "右人指３",
+)
+EVIDENCE_VERTEX_GROUPS = (
+    "右手首",
+    "右親指０",
+    "右親指１",
+    "右親指２",
+    "右人指１",
+    "右人指２",
+    "右人指３",
+    "右中指１",
+    "右薬指１",
+    "右小指１",
+)
+RIGHT_HAND_VERTEX_GROUPS = (
+    "右手首",
+    "右親指０",
+    "右親指１",
+    "右親指２",
+    "右親指先",
+    "右人指１",
+    "右人指２",
+    "右人指３",
+    "右人指先",
+    "右中指１",
+    "右中指２",
+    "右中指３",
+    "右中指先",
+    "右薬指１",
+    "右薬指２",
+    "右薬指３",
+    "右薬指先",
+    "右小指１",
+    "右小指２",
+    "右小指３",
+    "右小指先",
+)
+PALM_VERTEX_GROUPS = ("右手首",)
+RIGHT_FOREARM_VERTEX_GROUPS = (
+    "右ひじ",
+    "右手捩",
+    "右手捩1",
+    "右手捩2",
+    "右手捩3",
+)
+ADJACENT_RIGHT_ARM_VERTEX_GROUPS = (
+    "右肩",
+    "右肩C",
+    "右腕",
+    "右腕捩",
+    "右腕捩1",
+    "右腕捩2",
+    "右腕捩3",
+    *RIGHT_FOREARM_VERTEX_GROUPS,
+    *RIGHT_HAND_VERTEX_GROUPS,
+)
+HEAD_VERTEX_GROUPS = ("頭", "首")
+TORSO_VERTEX_GROUPS = ("上半身", "上半身2", "上半身3", "首", "下半身")
+MIN_GROUP_WEIGHT = 1e-4
+MESH_PENETRATION_TOLERANCE = 5e-5
+CONTACT_ALIGNMENT_GAIN = 0.5
+FULL_BODY_MARGIN = 1.18
+RENDER_RESOLUTION = 768
+
+
+@dataclass(frozen=True)
+class StaticCandidate:
+    candidate_id: str
+    hand_offset: tuple[float, float, float]
+    palm_euler_deg: tuple[float, float, float]
+    pole_offset: float
+    twist_influences: tuple[float, float, float]
+
 
 @dataclass(frozen=True)
 class PocConfig:
     source_blend: Path
-    vmd: Path
+    vmd: Path | None
     output_blend: Path
     output_dir: Path
     frame_start: int
     frame_end: int
     setup_only: bool
+    solve_static: bool
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-blend", type=Path, required=True)
-    parser.add_argument("--vmd", type=Path, required=True)
+    parser.add_argument("--vmd", type=Path)
     parser.add_argument("--output-blend", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--frame-start", type=int, default=0)
     parser.add_argument("--frame-end", type=int, default=240)
-    parser.add_argument("--setup-only", action="store_true")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--setup-only", action="store_true")
+    mode.add_argument("--solve-static", action="store_true")
     return parser
 
 
 def _validated_config(namespace: argparse.Namespace) -> PocConfig:
     source_blend = namespace.source_blend.resolve()
-    vmd = namespace.vmd.resolve()
+    vmd = namespace.vmd.resolve() if namespace.vmd is not None else None
     output_blend = namespace.output_blend.resolve()
     output_dir = namespace.output_dir.resolve()
 
@@ -176,14 +272,19 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         raise ValueError(f"Source blend does not exist: {source_blend}")
     if source_blend.suffix.lower() != ".blend":
         raise ValueError(f"Source blend must use the .blend extension: {source_blend}")
-    if not vmd.is_file():
-        raise ValueError(f"Reference VMD does not exist: {vmd}")
-    if vmd.suffix.lower() != ".vmd":
-        raise ValueError(f"Reference VMD must use the .vmd extension: {vmd}")
+    if namespace.setup_only:
+        if vmd is None or not vmd.is_file():
+            raise ValueError(f"Reference VMD does not exist: {vmd}")
+        if vmd.suffix.lower() != ".vmd":
+            raise ValueError(f"Reference VMD must use the .vmd extension: {vmd}")
     if output_blend.name != OUTPUT_BLEND_NAME:
         raise ValueError(f"Output blend must be named {OUTPUT_BLEND_NAME}")
     if output_dir.name != OUTPUT_DIRECTORY_NAME:
         raise ValueError(f"Output directory must be named {OUTPUT_DIRECTORY_NAME}")
+    if namespace.solve_static and (
+        source_blend.name != OUTPUT_BLEND_NAME or not _same_path(source_blend, output_blend)
+    ):
+        raise ValueError("Solve-static must open and save the same existing POC blend")
     if namespace.frame_start < 0 or namespace.frame_end < namespace.frame_start:
         raise ValueError("Frame range must be a valid non-negative interval")
 
@@ -195,6 +296,7 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         frame_start=namespace.frame_start,
         frame_end=namespace.frame_end,
         setup_only=namespace.setup_only,
+        solve_static=namespace.solve_static,
     )
 
 
@@ -203,6 +305,63 @@ def parse_blender_args(argv: Sequence[str] | None = None) -> PocConfig:
     if "--" not in arguments:
         raise ValueError("POC arguments must appear after Blender's -- separator")
     return _validated_config(_parser().parse_args(arguments[arguments.index("--") + 1 :]))
+
+
+def pmx_point_to_blender_rest(point: Sequence[float]) -> tuple[float, float, float]:
+    if len(point) != 3:
+        raise ValueError("PMX point must have three components")
+    x, y, z = (float(value) for value in point)
+    if not all(math.isfinite(value) for value in (x, y, z)):
+        raise ValueError("PMX point must be finite")
+    return (x * PMX_TO_BLENDER_SCALE, z * PMX_TO_BLENDER_SCALE, y * PMX_TO_BLENDER_SCALE)
+
+
+def static_candidate_grid() -> tuple[StaticCandidate, ...]:
+    hand_offsets = (
+        (0.0, 0.0, 0.0),
+        (-0.012, 0.006, -0.006),
+        (0.012, -0.006, 0.006),
+    )
+    palm_orientations = (
+        (0.0, 0.0, 0.0),
+        (-12.0, 16.0, -8.0),
+        (10.0, -12.0, 8.0),
+    )
+    pole_offsets = (-0.08, 0.0, 0.08)
+    twist_allocations = (
+        (0.25, 0.50, 0.25),
+        (0.35, 0.50, 0.15),
+        (0.20, 0.60, 0.20),
+    )
+    combinations = itertools.product(
+        hand_offsets,
+        palm_orientations,
+        pole_offsets,
+        twist_allocations,
+    )
+    return tuple(
+        StaticCandidate(
+            candidate_id=f"candidate_{index:03d}",
+            hand_offset=hand_offset,
+            palm_euler_deg=palm_euler_deg,
+            pole_offset=pole_offset,
+            twist_influences=twist_influences,
+        )
+        for index, (hand_offset, palm_euler_deg, pole_offset, twist_influences) in enumerate(
+            combinations,
+            1,
+        )
+    )
+
+
+def candidate_render_names(count: int = STATIC_RENDER_COUNT) -> tuple[str, ...]:
+    if count < 0:
+        raise ValueError("Candidate render count cannot be negative")
+    return tuple(
+        f"candidate_{candidate_index:03d}/{view}.png"
+        for candidate_index in range(1, count + 1)
+        for view in CANDIDATE_VIEWS
+    )
 
 
 def signed_elbow_flex_is_valid(flex_degrees: float) -> bool:
@@ -215,7 +374,14 @@ def blender_backup_path(output_blend: Path) -> Path:
 
 
 def _require_blender() -> None:
-    if bpy is None or Matrix is None or Quaternion is None or Vector is None:
+    if (
+        bpy is None
+        or Euler is None
+        or Matrix is None
+        or Quaternion is None
+        or Vector is None
+        or BVHTree is None
+    ):
         raise RuntimeError("This operation must run inside Blender")
 
 
@@ -328,6 +494,14 @@ def _pose_head_world(armature, bone_name: str):
     return _world_point(armature, armature.pose.bones[bone_name].head)
 
 
+def _calibrated_chin_points(armature):
+    rest_point = Vector(pmx_point_to_blender_rest(PMX_CHIN_SURFACE))
+    head_rest = armature.data.bones["頭"].matrix_local
+    head_local = head_rest.inverted() @ rest_point
+    world_point = armature.matrix_world @ armature.pose.bones["頭"].matrix @ head_local
+    return rest_point, head_local, world_point
+
+
 def _create_control(collection, name: str, location, display_type: str, size: float):
     old = bpy.data.objects.get(name)
     if old is not None:
@@ -374,7 +548,7 @@ def _create_controls(armature):
         "chin": _create_control(
             collection,
             CONTROL_NAMES["chin"],
-            _pose_head_world(armature, "頭") + (armature.matrix_world.to_3x3() @ Vector((0.0, -0.08, -0.18))),
+            _calibrated_chin_points(armature)[2],
             "SPHERE",
             0.05,
         ),
@@ -916,6 +1090,599 @@ def _save_setup_blend(output_blend: Path) -> None:
         raise RuntimeError(f"Blender created an unexpected backup artifact: {backup_path}")
 
 
+def _load_motion_math():
+    module_name = "blender_first_motion_math"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    tool_path = Path(__file__).with_name(f"{module_name}.py")
+    spec = importlib.util.spec_from_file_location(module_name, tool_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load motion math module: {tool_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _existing_controls():
+    controls = {key: bpy.data.objects.get(name) for key, name in CONTROL_NAMES.items()}
+    missing = [CONTROL_NAMES[key] for key, control in controls.items() if control is None]
+    if missing:
+        raise RuntimeError(f"Existing POC blend is missing controls: {', '.join(missing)}")
+    return controls
+
+
+def _validate_existing_poc(armature, controls) -> None:
+    action = armature.animation_data.action if armature.animation_data else None
+    if action is None or action.name != REFERENCE_ACTION_NAME:
+        raise RuntimeError(f"Existing POC blend must use action {REFERENCE_ACTION_NAME}")
+    if tuple(float(value) for value in action.frame_range) != EXPECTED_ACTION_RANGE:
+        raise RuntimeError("Existing POC reference action range must remain 0-240")
+    for name in PROXY_BONE_NAMES:
+        bone = armature.data.bones.get(name)
+        if bone is None or bone.use_deform:
+            raise RuntimeError(f"Existing POC blend has an invalid proxy bone: {name}")
+    expected = (
+        (PROXY_BONE_NAMES[1], CONSTRAINT_NAMES["ik"]),
+        (PROXY_BONE_NAMES[2], CONSTRAINT_NAMES["palm_proxy"]),
+        ("右腕", CONSTRAINT_NAMES["upper"]),
+        ("右ひじ", CONSTRAINT_NAMES["elbow"]),
+        ("右腕捩", CONSTRAINT_NAMES["upper_twist"]),
+        ("右手捩", CONSTRAINT_NAMES["hand_twist"]),
+        ("右手首", CONSTRAINT_NAMES["wrist"]),
+    )
+    missing_constraints = [
+        constraint_name
+        for bone_name, constraint_name in expected
+        if armature.pose.bones[bone_name].constraints.get(constraint_name) is None
+    ]
+    if missing_constraints:
+        raise RuntimeError(
+            f"Existing POC blend is missing constraints: {', '.join(missing_constraints)}"
+        )
+    if controls["palm"].parent is None or controls["palm"].parent.name != PALM_SPACE_NAME:
+        raise RuntimeError("Existing POC palm control is not in its calibrated local space")
+
+
+def _group_indices(mesh, names: Sequence[str]) -> set[int]:
+    missing = [name for name in names if mesh.vertex_groups.get(name) is None]
+    if missing:
+        raise RuntimeError(f"Mesh is missing required vertex groups: {', '.join(missing)}")
+    return {mesh.vertex_groups[name].index for name in names}
+
+
+def _vertices_for_groups(mesh, group_indices: set[int]) -> set[int]:
+    return {
+        vertex.index
+        for vertex in mesh.data.vertices
+        if any(
+            membership.group in group_indices and membership.weight > MIN_GROUP_WEIGHT
+            for membership in vertex.groups
+        )
+    }
+
+
+def polygon_belongs_to_region(
+    polygon_vertices: Sequence[int],
+    included: set[int],
+    excluded: set[int],
+) -> bool:
+    vertices = tuple(int(vertex) for vertex in polygon_vertices)
+    return bool(vertices) and all(vertex in included for vertex in vertices) and not any(
+        vertex in excluded for vertex in vertices
+    )
+
+
+def _polygons_touching(mesh, included: set[int], excluded: set[int] | None = None):
+    excluded = excluded or set()
+    return tuple(
+        tuple(polygon.vertices)
+        for polygon in mesh.data.polygons
+        if polygon_belongs_to_region(polygon.vertices, included, excluded)
+    )
+
+
+def _mesh_geometry_sets(mesh):
+    contact = _vertices_for_groups(mesh, _group_indices(mesh, CONTACT_VERTEX_GROUPS))
+    hand = _vertices_for_groups(mesh, _group_indices(mesh, RIGHT_HAND_VERTEX_GROUPS))
+    palm = _vertices_for_groups(mesh, _group_indices(mesh, PALM_VERTEX_GROUPS))
+    forearm = _vertices_for_groups(mesh, _group_indices(mesh, RIGHT_FOREARM_VERTEX_GROUPS))
+    head = _vertices_for_groups(mesh, _group_indices(mesh, HEAD_VERTEX_GROUPS))
+    torso = _vertices_for_groups(mesh, _group_indices(mesh, TORSO_VERTEX_GROUPS))
+    adjacent = _vertices_for_groups(
+        mesh,
+        _group_indices(mesh, ADJACENT_RIGHT_ARM_VERTEX_GROUPS),
+    )
+    moving = hand | forearm
+    return {
+        "contact_vertices": contact,
+        "hand_vertices": hand,
+        "moving_vertices": moving,
+        "palm_faces": _polygons_touching(mesh, palm),
+        "moving_faces": _polygons_touching(mesh, moving),
+        "head_faces": _polygons_touching(mesh, head),
+        "torso_faces": _polygons_touching(mesh, torso, adjacent),
+        "group_counts": {
+            name: len(
+                _vertices_for_groups(mesh, _group_indices(mesh, (name,)))
+            )
+            for name in EVIDENCE_VERTEX_GROUPS
+        },
+    }
+
+
+def _evaluated_world_vertices(mesh):
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    evaluated = mesh.evaluated_get(depsgraph)
+    evaluated_mesh = evaluated.to_mesh()
+    try:
+        if len(evaluated_mesh.vertices) != len(mesh.data.vertices):
+            raise RuntimeError("Evaluated mesh topology changed; vertex-group evidence is invalid")
+        return tuple(evaluated.matrix_world @ vertex.co for vertex in evaluated_mesh.vertices)
+    finally:
+        evaluated.to_mesh_clear()
+
+
+def _bvh(vertices, polygons):
+    if not polygons:
+        raise RuntimeError("Cannot build collision evidence from an empty polygon set")
+    return BVHTree.FromPolygons(vertices, polygons, all_triangles=False)
+
+
+def _nearest_surface_evidence(points, tree):
+    minimum_distance = math.inf
+    maximum_penetration = 0.0
+    for point in points:
+        nearest = tree.find_nearest(point)
+        if nearest is None:
+            continue
+        location, normal, _index, distance = nearest
+        minimum_distance = min(minimum_distance, float(distance))
+        signed_distance = (point - location).dot(normal)
+        if signed_distance < -MESH_PENETRATION_TOLERANCE:
+            maximum_penetration = max(maximum_penetration, -float(signed_distance))
+    return minimum_distance, maximum_penetration
+
+
+def _mesh_evidence(mesh, geometry, chin_world):
+    vertices = _evaluated_world_vertices(mesh)
+    contact_error = min((vertices[index] - chin_world).length for index in geometry["contact_vertices"])
+    head_tree = _bvh(vertices, geometry["head_faces"])
+    torso_tree = _bvh(vertices, geometry["torso_faces"])
+    palm_tree = _bvh(vertices, geometry["palm_faces"])
+    moving_tree = _bvh(vertices, geometry["moving_faces"])
+    _head_clearance, head_penetration = _nearest_surface_evidence(
+        (vertices[index] for index in geometry["hand_vertices"]),
+        head_tree,
+    )
+    head_intersections = len(palm_tree.overlap(head_tree))
+    if head_intersections:
+        head_penetration = max(head_penetration, MESH_PENETRATION_TOLERANCE * 2.0)
+    else:
+        head_penetration = 0.0
+    minimum_clearance, _torso_signed_penetration = _nearest_surface_evidence(
+        (vertices[index] for index in geometry["moving_vertices"]),
+        torso_tree,
+    )
+    torso_intersections = len(moving_tree.overlap(torso_tree))
+    return {
+        "contact_error": float(contact_error),
+        "head_penetration_depth": float(head_penetration),
+        "head_intersection_count": int(head_intersections),
+        "torso_penetration_count": int(torso_intersections),
+        "minimum_clearance": float(minimum_clearance),
+    }, vertices
+
+
+def _refresh_frame(frame: int = VALIDATION_FRAME) -> None:
+    scene = bpy.context.scene
+    scene.frame_set(frame - 1)
+    scene.frame_set(frame)
+    bpy.context.view_layer.update()
+
+
+def _capture_pose_state(armature, frame: int):
+    bpy.context.scene.frame_set(frame)
+    bpy.context.view_layer.update()
+    return {
+        "elbow": _pose_head_world(armature, "右ひじ").copy(),
+        "wrist": _pose_head_world(armature, "右手首").copy(),
+        "local_rotations": {
+            name: _evaluated_local_rotation(armature, name).copy()
+            for name in ("右腕捩", "右手捩", "右手首")
+        },
+    }
+
+
+def _reset_static_controls_to_v16(armature, controls):
+    armature["POC_enabled"] = 0.0
+    controls["palm"].matrix_basis = Matrix.Identity(4)
+    armature.update_tag()
+    _refresh_frame()
+    shoulder = _pose_head_world(armature, "右腕")
+    elbow = _pose_head_world(armature, "右ひじ")
+    wrist = _pose_head_world(armature, "右手首")
+    reach_axis = wrist - shoulder
+    elbow_radial = elbow - shoulder - reach_axis * (
+        (elbow - shoulder).dot(reach_axis) / reach_axis.length_squared
+    )
+    if elbow_radial.length < 1e-6:
+        elbow_radial = armature.matrix_world.to_3x3() @ Vector((0.0, -1.0, 0.0))
+    controls["hand"].location = wrist
+    controls["pole"].location = elbow + elbow_radial.normalized() * 0.5
+    _refresh_frame()
+
+
+def _apply_static_candidate(armature, controls, candidate, base_hand, base_pole, pole_axis):
+    controls["hand"].location = base_hand + Vector(candidate.hand_offset)
+    controls["pole"].location = base_pole + pole_axis * candidate.pole_offset
+    controls["palm"].rotation_mode = "XYZ"
+    controls["palm"].rotation_euler = Euler(
+        tuple(math.radians(value) for value in candidate.palm_euler_deg),
+        "XYZ",
+    )
+    upper_twist, hand_twist, wrist = candidate.twist_influences
+    armature["POC_upper_twist_influence"] = upper_twist
+    armature["POC_hand_twist_influence"] = hand_twist
+    armature["POC_wrist_influence"] = wrist
+    armature["POC_enabled"] = 1.0
+    armature.update_tag()
+    _refresh_frame()
+
+
+def _candidate_measurements(armature, mesh, controls, geometry, candidate, previous):
+    root = _pose_head_world(armature, PROXY_BONE_NAMES[0])
+    elbow = _pose_head_world(armature, PROXY_BONE_NAMES[1])
+    end = _pose_head_world(armature, PROXY_BONE_NAMES[2])
+    elbow_angle = math.degrees((root - elbow).angle(end - elbow))
+    signed_flex, off_axis_flex = _signed_proxy_elbow_flex(armature)
+    pole_side = _proxy_elbow_pole_side(armature, controls["pole"])
+    upper_twist, upper_swing, _upper_total = _local_y_twist_response(
+        previous["local_rotations"]["右腕捩"],
+        _evaluated_local_rotation(armature, "右腕捩"),
+    )
+    hand_twist, hand_swing, _hand_total = _local_y_twist_response(
+        previous["local_rotations"]["右手捩"],
+        _evaluated_local_rotation(armature, "右手捩"),
+    )
+    wrist_twist, wrist_swing, _wrist_total = _local_y_twist_response(
+        previous["local_rotations"]["右手首"],
+        _evaluated_local_rotation(armature, "右手首"),
+    )
+    chin_rest, chin_local, chin_world = _calibrated_chin_points(armature)
+    controls["chin"].location = chin_world
+    mesh_metrics, vertices = _mesh_evidence(mesh, geometry, chin_world)
+    continuity = max(
+        (_pose_head_world(armature, "右ひじ") - previous["elbow"]).length,
+        (_pose_head_world(armature, "右手首") - previous["wrist"]).length,
+    )
+    relevant_matrices = (
+        armature.matrix_world,
+        *(armature.pose.bones[name].matrix for name in (*PROXY_BONE_NAMES, "右腕", "右ひじ", "右手首")),
+        *(control.matrix_world for control in controls.values()),
+    )
+    measurements = {
+        "elbow_angle_deg": elbow_angle,
+        "signed_elbow_flex_deg": signed_flex,
+        "elbow_off_axis_deg": off_axis_flex,
+        "pole_side": pole_side,
+        "wrist_swing_deg": wrist_swing,
+        "wrist_twist_deg": wrist_twist,
+        "forearm_twist_deg": upper_twist + hand_twist,
+        "upper_twist_deg": upper_twist,
+        "hand_twist_deg": hand_twist,
+        "upper_twist_swing_deg": upper_swing,
+        "hand_twist_swing_deg": hand_swing,
+        "continuity_distance": continuity,
+        "matrices_finite": all(_finite_matrix(matrix) for matrix in relevant_matrices),
+        "hand_target_world": tuple(float(value) for value in controls["hand"].location),
+        "pole_target_world": tuple(float(value) for value in controls["pole"].location),
+        "palm_local_euler_deg": tuple(
+            math.degrees(float(value)) for value in controls["palm"].rotation_euler
+        ),
+        "twist_influences": (
+            float(armature["POC_upper_twist_influence"]),
+            float(armature["POC_hand_twist_influence"]),
+            float(armature["POC_wrist_influence"]),
+        ),
+        **mesh_metrics,
+        "chin_rest": tuple(float(value) for value in chin_rest),
+        "chin_head_local": tuple(float(value) for value in chin_local),
+        "chin_world": tuple(float(value) for value in chin_world),
+    }
+    return measurements, vertices
+
+
+def _candidate_record(candidate, measurements, score):
+    reasons = list(score.reasons)
+    if measurements["elbow_off_axis_deg"] > ELBOW_OFF_AXIS_MAX_DEG:
+        reasons.append(
+            f"Proxy elbow left the local-{ELBOW_HINGE_AXIS} hinge by "
+            f"{measurements['elbow_off_axis_deg']:.6f} degrees"
+        )
+    valid = score.valid and measurements["elbow_off_axis_deg"] <= ELBOW_OFF_AXIS_MAX_DEG
+    if not valid:
+        verdict = "FAIL"
+    elif reasons or any(value > 0.0 for value in score.component_penalties.values()):
+        verdict = "WARN"
+    else:
+        verdict = "PASS"
+    return {
+        "source_candidate_id": candidate.candidate_id,
+        "parameters": {
+            "hand_offset": candidate.hand_offset,
+            "palm_euler_deg": candidate.palm_euler_deg,
+            "pole_offset": candidate.pole_offset,
+            "twist_influences": candidate.twist_influences,
+        },
+        "valid": valid,
+        "verdict": verdict,
+        "reasons": reasons,
+        "score": float(score.total_score),
+        "component_penalties": score.component_penalties,
+        "metrics": measurements,
+    }
+
+
+def _rank_key(item):
+    _candidate, record = item
+    return (
+        not record["valid"],
+        record["score"],
+        record["source_candidate_id"],
+    )
+
+
+def _full_body_camera(scene, all_vertices):
+    minimum = Vector((
+        min(vertex.x for vertex in all_vertices),
+        min(vertex.y for vertex in all_vertices),
+        min(vertex.z for vertex in all_vertices),
+    ))
+    maximum = Vector((
+        max(vertex.x for vertex in all_vertices),
+        max(vertex.y for vertex in all_vertices),
+        max(vertex.z for vertex in all_vertices),
+    ))
+    center = (minimum + maximum) * 0.5
+    extents = maximum - minimum
+    ortho_scale = max(extents.x, extents.y, extents.z) * FULL_BODY_MARGIN
+    distance = max(extents) * 3.0 + 2.0
+    old = bpy.data.objects.get(STATIC_CAMERA_NAME)
+    if old is not None:
+        bpy.data.objects.remove(old, do_unlink=True)
+    camera_data = bpy.data.cameras.new(STATIC_CAMERA_NAME)
+    camera = bpy.data.objects.new(STATIC_CAMERA_NAME, camera_data)
+    scene.collection.objects.link(camera)
+    camera_data.type = "ORTHO"
+    camera_data.ortho_scale = ortho_scale
+    scene.camera = camera
+    return camera, center, distance, ortho_scale, minimum, maximum
+
+
+def _render_candidates(config, armature, controls, ranked, base_hand, base_pole, pole_axis, vertices_by_candidate):
+    scene = bpy.context.scene
+    candidate_root = config.output_dir / STATIC_CANDIDATE_DIRECTORY
+    candidate_root.mkdir(parents=True, exist_ok=True)
+    combined_vertices = tuple(
+        vertex
+        for candidate, _record in ranked[:STATIC_RENDER_COUNT]
+        for vertex in vertices_by_candidate[candidate.candidate_id]
+    )
+    camera, center, distance, ortho_scale, bbox_min, bbox_max = _full_body_camera(
+        scene,
+        combined_vertices,
+    )
+    scene.render.resolution_x = RENDER_RESOLUTION
+    scene.render.resolution_y = RENDER_RESOLUTION
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    view_directions = {
+        "front": Vector((0.0, -1.0, 0.0)),
+        "left": Vector((1.0, 0.0, 0.0)),
+        "right": Vector((-1.0, 0.0, 0.0)),
+        "back": Vector((0.0, 1.0, 0.0)),
+    }
+    rendered = []
+    for rank, (candidate, record) in enumerate(ranked[:STATIC_RENDER_COUNT], 1):
+        _apply_static_candidate(armature, controls, candidate, base_hand, base_pole, pole_axis)
+        directory = candidate_root / f"candidate_{rank:03d}"
+        directory.mkdir(parents=True, exist_ok=True)
+        record["rank"] = rank
+        record["render_directory"] = str(directory)
+        record["renders"] = {}
+        for view, direction in view_directions.items():
+            camera.location = center + direction * distance
+            camera.rotation_euler = (center - camera.location).to_track_quat("-Z", "Y").to_euler()
+            output = directory / f"{view}.png"
+            scene.render.filepath = str(output)
+            bpy.ops.render.render(write_still=True)
+            record["renders"][view] = str(output)
+            rendered.append(str(output))
+    return {
+        "camera_name": camera.name,
+        "ortho_scale": float(ortho_scale),
+        "center": tuple(float(value) for value in center),
+        "bbox_min": tuple(float(value) for value in bbox_min),
+        "bbox_max": tuple(float(value) for value in bbox_max),
+        "resolution": (RENDER_RESOLUTION, RENDER_RESOLUTION),
+        "view_semantics": {
+            "front": "camera at -Y",
+            "left": "character-left view, camera at +X",
+            "right": "character-right view, camera at -X",
+            "back": "camera at +Y",
+        },
+        "rendered_files": rendered,
+    }
+
+
+def solve_static(config: PocConfig) -> None:
+    _require_blender()
+    if not config.solve_static:
+        raise ValueError("Static solver requires --solve-static")
+    current_blend = Path(bpy.data.filepath)
+    if not current_blend or not _same_path(current_blend, config.source_blend):
+        raise RuntimeError(f"Blender must open the existing POC blend: {config.source_blend}")
+    armature, mesh = _validate_scene_objects()
+    controls = _existing_controls()
+    _validate_existing_poc(armature, controls)
+    math_module = _load_motion_math()
+    geometry = _mesh_geometry_sets(mesh)
+    scene = bpy.context.scene
+    scene.frame_set(VALIDATION_FRAME)
+    _reset_static_controls_to_v16(armature, controls)
+    previous = _capture_pose_state(armature, VALIDATION_FRAME - 1)
+    scene.frame_set(VALIDATION_FRAME)
+    bpy.context.view_layer.update()
+    chin_rest, chin_local, chin_world = _calibrated_chin_points(armature)
+    controls["chin"].location = chin_world
+    baseline_vertices = _evaluated_world_vertices(mesh)
+    baseline_mesh_metrics, _baseline_mesh_vertices = _mesh_evidence(mesh, geometry, chin_world)
+    contact_anchor = min(
+        (baseline_vertices[index] for index in geometry["contact_vertices"]),
+        key=lambda point: (point - chin_world).length,
+    )
+    base_hand = controls["hand"].location.copy() + (chin_world - contact_anchor) * CONTACT_ALIGNMENT_GAIN
+    base_pole = controls["pole"].location.copy()
+    pole_axis = armature.matrix_world.to_3x3() @ Vector((0.0, 1.0, 0.0))
+    pole_axis.normalize()
+    print(
+        "POC_STATIC_BASELINE",
+        {
+            "chin": tuple(chin_world),
+            "contact_anchor": tuple(contact_anchor),
+            "contact_delta": tuple(chin_world - contact_anchor),
+            "hand_control": tuple(controls["hand"].location),
+            "base_hand": tuple(base_hand),
+            "wrist": tuple(_pose_head_world(armature, "右手首")),
+            "mesh_metrics": baseline_mesh_metrics,
+            "face_counts": {
+                key: len(geometry[key])
+                for key in ("palm_faces", "moving_faces", "head_faces", "torso_faces")
+            },
+        },
+    )
+
+    evaluated = []
+    vertices_by_candidate = {}
+    for candidate in static_candidate_grid():
+        _apply_static_candidate(armature, controls, candidate, base_hand, base_pole, pole_axis)
+        measurements, vertices = _candidate_measurements(
+            armature,
+            mesh,
+            controls,
+            geometry,
+            candidate,
+            previous,
+        )
+        score = math_module.score_static_candidate(
+            elbow_angle_deg=measurements["elbow_angle_deg"],
+            signed_elbow_flex_deg=measurements["signed_elbow_flex_deg"],
+            pole_side=measurements["pole_side"],
+            wrist_swing_deg=measurements["wrist_swing_deg"],
+            wrist_twist_deg=measurements["wrist_twist_deg"],
+            forearm_twist_deg=measurements["forearm_twist_deg"],
+            contact_error=measurements["contact_error"],
+            head_penetration_depth=measurements["head_penetration_depth"],
+            torso_penetration_count=measurements["torso_penetration_count"],
+            minimum_clearance=measurements["minimum_clearance"],
+            continuity_distance=measurements["continuity_distance"],
+            matrices_finite=measurements["matrices_finite"],
+        )
+        record = _candidate_record(candidate, measurements, score)
+        evaluated.append((candidate, record))
+        vertices_by_candidate[candidate.candidate_id] = vertices
+
+    ranked = sorted(evaluated, key=_rank_key)
+    valid = [item for item in ranked if item[1]["valid"]]
+    if len(valid) < STATIC_RENDER_COUNT:
+        rejection_counts = {}
+        for _candidate, record in ranked:
+            for reason in record["reasons"]:
+                rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+        print("POC_STATIC_REJECTION_COUNTS", rejection_counts)
+        print(
+            "POC_STATIC_TOP_REJECTED",
+            [
+                {
+                    "candidate": record["source_candidate_id"],
+                    "reasons": record["reasons"],
+                    "metrics": record["metrics"],
+                }
+                for _candidate, record in ranked[:3]
+            ],
+        )
+        raise RuntimeError(
+            f"Static solver found only {len(valid)} valid candidates; at least {STATIC_RENDER_COUNT} are required"
+        )
+    ranked = valid + [item for item in ranked if not item[1]["valid"]]
+    render_evidence = _render_candidates(
+        config,
+        armature,
+        controls,
+        ranked,
+        base_hand,
+        base_pole,
+        pole_axis,
+        vertices_by_candidate,
+    )
+    selected_candidate, selected_record = ranked[0]
+    _apply_static_candidate(
+        armature,
+        controls,
+        selected_candidate,
+        base_hand,
+        base_pole,
+        pole_axis,
+    )
+    armature["POC_selected_static_candidate"] = selected_candidate.candidate_id
+    armature["POC_selected_static_score"] = selected_record["score"]
+    armature["POC_chin_head_local"] = tuple(float(value) for value in chin_local)
+    armature["POC_chin_rest"] = tuple(float(value) for value in chin_rest)
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    metrics = {
+        "mode": "solve-static",
+        "frame": VALIDATION_FRAME,
+        "source_blend": str(config.source_blend),
+        "output_blend": str(config.output_blend),
+        "candidate_count": len(evaluated),
+        "valid_count": len(valid),
+        "rejected_count": len(evaluated) - len(valid),
+        "rendered_count": STATIC_RENDER_COUNT,
+        "selected_source_candidate_id": selected_candidate.candidate_id,
+        "selected_rank": 1,
+        "chin_calibration": {
+            "pmx_surface": PMX_CHIN_SURFACE,
+            "rest_blender": tuple(float(value) for value in chin_rest),
+            "head_local": tuple(float(value) for value in chin_local),
+            "world_frame_150": tuple(float(value) for value in chin_world),
+        },
+        "contact_vertex_group_counts": geometry["group_counts"],
+        "baseline_contact_anchor": tuple(float(value) for value in contact_anchor),
+        "base_hand_target": tuple(float(value) for value in base_hand),
+        "render_evidence": render_evidence,
+        "candidates": [record for _candidate, record in ranked],
+    }
+    metrics_path = config.output_dir / STATIC_METRICS_NAME
+    metrics_path.write_text(
+        json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    _save_setup_blend(config.output_blend)
+    print(
+        "POC_STATIC_SOLVED",
+        {
+            "evaluated": len(evaluated),
+            "rejected": len(evaluated) - len(valid),
+            "rendered": STATIC_RENDER_COUNT,
+            "selected": selected_candidate.candidate_id,
+            "score": selected_record["score"],
+            "metrics": str(metrics_path),
+        },
+    )
+
+
 def build_setup(config: PocConfig) -> None:
     _require_blender()
     if not config.setup_only:
@@ -942,7 +1709,12 @@ def build_setup(config: PocConfig) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     config = parse_blender_args(argv)
-    build_setup(config)
+    if config.setup_only:
+        build_setup(config)
+    elif config.solve_static:
+        solve_static(config)
+    else:
+        raise ValueError("No POC mode selected")
     return 0
 
 

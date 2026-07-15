@@ -232,3 +232,95 @@ def test_soft_penalties_increase_toward_hard_limits():
     assert near_limit.component_penalties["forearm_twist"] > comfortable.component_penalties["forearm_twist"]
     assert near_limit.total_penalty > comfortable.total_penalty
     assert any("comfort" in reason for reason in near_limit.reasons)
+
+
+def candidate_score(tool, **overrides):
+    measurements = {
+        "elbow_angle_deg": 78.0,
+        "signed_elbow_flex_deg": -102.0,
+        "pole_side": 0.12,
+        "wrist_swing_deg": 12.0,
+        "wrist_twist_deg": 8.0,
+        "forearm_twist_deg": 32.0,
+        "contact_error": 0.006,
+        "head_penetration_depth": 0.0,
+        "torso_penetration_count": 0,
+        "minimum_clearance": 0.004,
+        "continuity_distance": 0.015,
+        "matrices_finite": True,
+    }
+    measurements.update(overrides)
+    return tool.score_static_candidate(**measurements)
+
+
+def test_neutral_wrist_outranks_folded_wrist_candidate():
+    tool = load_tool()
+
+    neutral = candidate_score(tool, wrist_swing_deg=10.0)
+    folded = candidate_score(tool, wrist_swing_deg=48.0)
+
+    assert neutral.valid is True
+    assert folded.valid is True
+    assert neutral.total_score < folded.total_score
+    assert folded.component_penalties["wrist_swing"] > neutral.component_penalties["wrist_swing"]
+
+
+def test_pole_facing_elbow_outranks_and_rejects_flipped_elbow():
+    tool = load_tool()
+
+    pole_facing = candidate_score(tool, pole_side=0.08)
+    flipped = candidate_score(tool, pole_side=-0.01)
+
+    assert pole_facing.valid is True
+    assert flipped.valid is False
+    assert math.isfinite(flipped.total_score)
+    assert pole_facing.total_score < flipped.total_score
+    assert any("pole-facing" in reason for reason in flipped.reasons)
+
+
+def test_lower_jaw_contact_outranks_distant_contact():
+    tool = load_tool()
+
+    lower_jaw = candidate_score(tool, contact_error=0.004)
+    distant = candidate_score(tool, contact_error=0.045)
+
+    assert lower_jaw.valid is True
+    assert distant.valid is True
+    assert lower_jaw.total_score < distant.total_score
+    assert distant.component_penalties["contact"] > lower_jaw.component_penalties["contact"]
+
+
+def test_nonpenetrating_candidate_outranks_and_rejects_face_penetration():
+    tool = load_tool()
+
+    clear = candidate_score(tool, head_penetration_depth=0.0)
+    penetrating = candidate_score(tool, head_penetration_depth=0.003)
+
+    assert clear.valid is True
+    assert penetrating.valid is False
+    assert math.isfinite(penetrating.total_score)
+    assert clear.total_score < penetrating.total_score
+    assert any("head penetration" in reason for reason in penetrating.reasons)
+
+
+def test_continuous_candidate_outranks_and_rejects_large_discontinuity():
+    tool = load_tool()
+
+    continuous = candidate_score(tool, continuity_distance=0.01)
+    discontinuous = candidate_score(tool, continuity_distance=0.25)
+
+    assert continuous.valid is True
+    assert discontinuous.valid is False
+    assert continuous.total_score < discontinuous.total_score
+    assert any("discontinuity" in reason for reason in discontinuous.reasons)
+
+
+def test_nonfinite_candidate_measurement_is_rejected_without_raising():
+    tool = load_tool()
+
+    result = candidate_score(tool, contact_error=math.nan)
+
+    assert result.valid is False
+    assert math.isfinite(result.total_score)
+    assert result.measurements["contact_error"] == 0.0
+    assert any("non-finite" in reason for reason in result.reasons)

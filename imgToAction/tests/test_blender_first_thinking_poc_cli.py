@@ -55,6 +55,27 @@ def valid_cli(tmp_path):
     ]
 
 
+def valid_solve_cli(tmp_path):
+    poc_blend = tmp_path / "eula_elegant_thinking_blender_first_poc.blend"
+    poc_blend.touch()
+    output_dir = tmp_path / "blender_first_thinking_poc"
+    return [
+        "blender.exe",
+        "--background",
+        str(poc_blend),
+        "--python",
+        str(TOOL_PATH),
+        "--",
+        "--source-blend",
+        str(poc_blend),
+        "--output-blend",
+        str(poc_blend),
+        "--output-dir",
+        str(output_dir),
+        "--solve-static",
+    ]
+
+
 def test_module_loads_without_blender_python():
     tool = load_tool()
 
@@ -163,6 +184,88 @@ def test_parse_blender_arguments_after_separator_with_deterministic_defaults(cli
     assert config.frame_start == 0
     assert config.frame_end == 240
     assert config.setup_only is True
+    assert config.solve_static is False
+
+
+def test_solve_static_reuses_existing_poc_blend_without_vmd(cli_tmp_path):
+    tool = load_tool()
+
+    config = tool.parse_blender_args(valid_solve_cli(cli_tmp_path))
+
+    assert config.source_blend == config.output_blend
+    assert config.source_blend.name == tool.OUTPUT_BLEND_NAME
+    assert config.vmd is None
+    assert config.setup_only is False
+    assert config.solve_static is True
+
+
+def test_setup_and_solve_modes_are_mutually_exclusive(cli_tmp_path):
+    tool = load_tool()
+    argv = valid_solve_cli(cli_tmp_path)
+    argv.append("--setup-only")
+
+    with pytest.raises(SystemExit):
+        tool.parse_blender_args(argv)
+
+
+def test_solve_static_requires_opening_and_saving_the_same_poc_blend(cli_tmp_path):
+    tool = load_tool()
+    argv = valid_solve_cli(cli_tmp_path)
+    other = cli_tmp_path / "other" / tool.OUTPUT_BLEND_NAME
+    argv[argv.index("--output-blend") + 1] = str(other)
+
+    with pytest.raises(ValueError, match="same existing POC blend"):
+        tool.parse_blender_args(argv)
+
+
+def test_pmx_chin_surface_converts_to_verified_blender_rest_point():
+    tool = load_tool()
+
+    assert tool.PMX_CHIN_SURFACE == (0.0, 18.44, -0.50)
+    assert tool.pmx_point_to_blender_rest(tool.PMX_CHIN_SURFACE) == pytest.approx(
+        (0.0, -0.04, 1.4752)
+    )
+
+
+def test_static_candidate_grid_is_deterministic_bounded_and_complete():
+    tool = load_tool()
+
+    first = tool.static_candidate_grid()
+    second = tool.static_candidate_grid()
+
+    assert first == second
+    assert len(first) == 81
+    assert len({candidate.candidate_id for candidate in first}) == len(first)
+    assert all(candidate.candidate_id == f"candidate_{index:03d}" for index, candidate in enumerate(first, 1))
+    assert all(max(abs(value) for value in candidate.hand_offset) <= 0.025 for candidate in first)
+    assert all(max(abs(value) for value in candidate.palm_euler_deg) <= 20.0 for candidate in first)
+    assert all(abs(candidate.pole_offset) <= 0.12 for candidate in first)
+    assert all(sum(candidate.twist_influences) == pytest.approx(1.0) for candidate in first)
+
+
+def test_candidate_render_names_cover_top_six_full_body_views():
+    tool = load_tool()
+
+    names = tool.candidate_render_names(6)
+
+    assert len(names) == 24
+    assert names[0] == "candidate_001/front.png"
+    assert names[-1] == "candidate_006/back.png"
+
+
+def test_collision_face_classification_rejects_partial_and_adjacent_faces():
+    tool = load_tool()
+
+    assert tool.polygon_belongs_to_region((1, 2, 3), {1, 2, 3}, set()) is True
+    assert tool.polygon_belongs_to_region((1, 2, 4), {1, 2, 3}, set()) is False
+    assert tool.polygon_belongs_to_region((1, 2, 3), {1, 2, 3}, {3}) is False
+
+
+def test_contact_alignment_uses_bounded_response_gain():
+    tool = load_tool()
+
+    assert 0.0 < tool.CONTACT_ALIGNMENT_GAIN < 1.0
+    assert tool.CONTACT_ALIGNMENT_GAIN == pytest.approx(0.5)
 
 
 def test_parse_blender_arguments_requires_separator(cli_tmp_path):
