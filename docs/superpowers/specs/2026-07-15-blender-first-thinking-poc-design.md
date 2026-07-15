@@ -9,9 +9,9 @@ The proof of concept is successful only when the Blender-first result is visibly
 ## Scope
 
 - Use the existing Eula PMX, source BVH timing, and v16 motion as the A/B baseline.
-- Correct only the right shoulder-to-hand chain for the feasibility sample.
+- Correct the right shoulder-to-hand chain first, then allow bounded shoulder-girdle, upper-chest, neck, and head compensation when the PMX sleeve thickness makes an arm-only solution geometrically impossible.
 - Build a stable pose at frame 150 and a short transition covering frames 90-170.
-- Preserve the existing left hand, lower body, global timing, and overall motion intent.
+- Preserve the existing left hand, pelvis, lower body, global timing, and overall motion intent.
 - Do not overwrite v16 and do not export a new VMD before visual approval.
 
 ## Motion Intent
@@ -38,6 +38,13 @@ The Blender scene becomes an active solving layer rather than a diagnostic-only 
 5. Apply hard anatomical limits and softer comfort-zone penalties.
 6. Validate the evaluated PMX mesh around the hand, face, forearm, sleeve, chest, and neck.
 7. Bake only after the Blender preview passes user review.
+
+The bounded upper-body compensation limits are:
+
+- `上半身2` rotation: at most 4 degrees from the v16 baseline.
+- Right shoulder-girdle compensation: at most 3 degrees from the v16 baseline.
+- Combined neck/head compensation toward the hand: at most 5 degrees from the v16 baseline.
+- Pelvis, left arm, and lower body remain unchanged.
 
 Blender native IK, pole, local rotation limits, and tracking constraints provide the control rig. Python supplies coupled anatomical checks, swing-twist evaluation, comfort-zone scoring, reproducible scene construction, measurements, and rendering.
 
@@ -100,4 +107,3 @@ Deferred until user approval:
 - Exporting a test VMD.
 - Building the complete frame 0-240 v17 motion.
 - Generalizing calibration to additional PMX models.
-
