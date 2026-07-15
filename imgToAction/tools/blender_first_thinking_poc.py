@@ -308,8 +308,6 @@ ORIENTATION_GALLERY_MAX_RENDER_COUNT = 18
 ORIENTATION_GALLERY_CLOSEUP_SCALE = 0.52
 ORIENTATION_GALLERY_CONTACT_SHEET_COLUMNS = 5
 ORIENTATION_GALLERY_CONTACT_SHEET_TILE = 256
-ORIENTATION_GALLERY_OUTWARD_CLEARANCE = 0.025
-ORIENTATION_GALLERY_FORWARD_CLEARANCE = 0.060
 PROTECTED_LOCAL_BONES = (
     "下半身",
     "左肩",
@@ -413,6 +411,7 @@ class PocConfig:
     run_id: str | None
     overwrite_run: bool
     source_candidate_id: str | None
+    source_static_metrics: Path | None
     run_metrics_path: Path | None
 
 
@@ -764,27 +763,31 @@ def dual_contact_refinement_grid() -> tuple[DualContactRefinement, ...]:
 def orientation_gallery_variants() -> tuple[OrientationGalleryVariant, ...]:
     targets = semi_closed_finger_targets()
     distribution = (0.35, 0.50, 0.15)
-    specs = []
-    for angle in (-30.0, -15.0):
-        angle_key = f"m{abs(int(angle)):02d}"
+    specs = [
+        ("semi_closed_axial", -30.0, 0.0, -6.0, "base", "base", "semi_closed_axial", "palm"),
+        ("semi_closed_axial", -15.0, 0.0, -6.0, "base", "base", "semi_closed_axial", "palm"),
+        ("semi_closed_axial", 0.0, 0.0, 0.0, "base", "base", "semi_closed_axial", "palm"),
+    ]
+    for swing, tilt in ((-4.0, -6.0), (4.0, -6.0), (0.0, -10.0), (0.0, -2.0)):
         specs.append((
-            "semi_closed_axial", angle, 0.0, 0.0, "base", "base",
-            "semi_closed_axial", "palm",
+            "palm_tilt", -15.0, swing, tilt, "base", "base",
+            "palm_m15", "palm",
         ))
-        for swing, tilt in ((-6.0, 0.0), (6.0, 0.0), (0.0, -6.0), (0.0, 6.0)):
-            specs.append((
-                "palm_tilt", angle, swing, tilt, "base", "base",
-                f"palm_{angle_key}", "palm",
-            ))
+    for swing, tilt in ((-4.0, 0.0), (4.0, 0.0), (0.0, -6.0), (0.0, -3.0), (0.0, 3.0)):
+        specs.append((
+            "palm_tilt", 0.0, swing, tilt, "base", "base",
+            "palm_00", "palm",
+        ))
+    for angle, tilt, key in ((-15.0, -10.0, "m15"), (0.0, -6.0, "00")):
         for thumb in ("thumb_support", "thumb_opposed"):
             specs.append((
-                "thumb_opposition", angle, 0.0, 0.0, thumb, "base",
-                f"thumb_{angle_key}", "thumb",
+                "thumb_opposition", angle, 0.0, tilt, thumb, "base",
+                f"thumb_{key}", "thumb",
             ))
         for index_pose in ("index_high", "index_long"):
             specs.append((
-                "index_alignment", angle, 0.0, 0.0, "base", index_pose,
-                f"index_{angle_key}", "index",
+                "index_alignment", angle, 0.0, tilt, "base", index_pose,
+                f"index_{key}", "index",
             ))
 
     variants = []
@@ -843,15 +846,15 @@ def semi_closed_finger_targets() -> dict[str, dict[str, tuple[float, float, floa
     variants = {"base": dict(relaxed)}
     variants["thumb_support"] = {
         **relaxed,
-        "右親指０": (-24.0, 10.0, 8.0),
-        "右親指１": (-32.0, 8.0, 5.0),
-        "右親指２": (-20.0, 4.0, 2.0),
-    }
-    variants["thumb_opposed"] = {
-        **relaxed,
         "右親指０": (-36.0, 20.0, 12.0),
         "右親指１": (-46.0, 16.0, 8.0),
         "右親指２": (-30.0, 8.0, 4.0),
+    }
+    variants["thumb_opposed"] = {
+        **relaxed,
+        "右親指０": (-42.0, 24.0, 14.0),
+        "右親指１": (-52.0, 20.0, 10.0),
+        "右親指２": (-36.0, 12.0, 6.0),
     }
     variants["index_high"] = {
         **relaxed,
@@ -933,6 +936,60 @@ def orientation_gallery_pose_uniqueness_reasons(records) -> tuple[str, ...]:
             ) < 1.0:
                 reasons.append(f"{group_name} palm variants are pose-identical")
     return tuple(dict.fromkeys(reasons))
+
+
+def gallery_source_reference(stored_metrics, source_candidate_id: str):
+    candidate_record = next(
+        (
+            record for record in stored_metrics.get("candidates", ())
+            if record.get("source_candidate_id") == source_candidate_id
+        ),
+        None,
+    )
+    seed_metrics = (
+        stored_metrics.get("semantic_finger_search", {})
+        .get("seed_metrics", {})
+        .get(source_candidate_id)
+    )
+    if candidate_record is None or seed_metrics is None:
+        raise ValueError(
+            f"Gallery source candidate {source_candidate_id!r} is missing from stored metrics"
+        )
+    return _candidate_from_record(candidate_record), seed_metrics
+
+
+def gallery_arm_state_reproduction_reasons(expected, actual) -> tuple[str, ...]:
+    reasons = []
+    vector_tolerances = {
+        "hand_target_world": 1e-5,
+        "wrist_world": 1e-5,
+    }
+    scalar_tolerances = {
+        "elbow_angle_deg": 1e-3,
+        "pole_side": 1e-4,
+    }
+    for key, tolerance in vector_tolerances.items():
+        if key not in expected or key not in actual:
+            reasons.append(f"Source reproduction is missing {key}")
+        elif _point_distance(expected[key], actual[key]) > tolerance:
+            reasons.append(f"Source {key} drift exceeds {tolerance:g}")
+    for key, tolerance in scalar_tolerances.items():
+        if key not in expected or key not in actual:
+            reasons.append(f"Source reproduction is missing {key}")
+        elif abs(float(expected[key]) - float(actual[key])) > tolerance:
+            reasons.append(f"Source {key} drift exceeds {tolerance:g}")
+    return tuple(reasons)
+
+
+def gallery_source_reproduction_reasons(expected, actual) -> tuple[str, ...]:
+    reasons = list(gallery_arm_state_reproduction_reasons(expected, actual))
+    key = "surface_contact_distance"
+    tolerance = 1e-5
+    if key not in expected or key not in actual:
+        reasons.append(f"Source reproduction is missing {key}")
+    elif abs(float(expected[key]) - float(actual[key])) > tolerance:
+        reasons.append(f"Source {key} drift exceeds {tolerance:g}")
+    return tuple(reasons)
 
 
 def orientation_gallery_rejection_reasons(metrics) -> tuple[str, ...]:
@@ -1042,6 +1099,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id")
     parser.add_argument("--overwrite-run", action="store_true")
     parser.add_argument("--source-candidate-id")
+    parser.add_argument("--source-static-metrics", type=Path)
     return parser
 
 
@@ -1075,6 +1133,11 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
     vmd = namespace.vmd.resolve() if namespace.vmd is not None else None
     output_blend = namespace.output_blend.resolve()
     output_dir = namespace.output_dir.resolve()
+    source_static_metrics = (
+        namespace.source_static_metrics.resolve()
+        if namespace.source_static_metrics is not None
+        else None
+    )
 
     if not source_blend.is_file():
         raise ValueError(f"Source blend does not exist: {source_blend}")
@@ -1118,8 +1181,19 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
             raise ValueError("Select-static requires a reviewed source candidate ID")
         if run_metrics_path is None or not run_metrics_path.is_file():
             raise ValueError(f"Select-static run metrics do not exist: {run_metrics_path}")
-    elif namespace.source_candidate_id is not None:
-        raise ValueError("A source candidate ID is only valid with --select-static")
+    elif namespace.orientation_gallery:
+        if not namespace.source_candidate_id or not SOURCE_CANDIDATE_PATTERN.fullmatch(
+            namespace.source_candidate_id
+        ):
+            raise ValueError("Orientation gallery requires a source candidate ID")
+        if source_static_metrics is None or not source_static_metrics.is_file():
+            raise ValueError(
+                f"Orientation gallery source metrics do not exist: {source_static_metrics}"
+            )
+    elif namespace.source_candidate_id is not None or source_static_metrics is not None:
+        raise ValueError(
+            "Source candidate and source static metrics are only valid with static selection or gallery"
+        )
 
     return PocConfig(
         source_blend=source_blend,
@@ -1136,6 +1210,7 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         run_id=namespace.run_id,
         overwrite_run=namespace.overwrite_run,
         source_candidate_id=namespace.source_candidate_id,
+        source_static_metrics=source_static_metrics,
         run_metrics_path=run_metrics_path,
     )
 
@@ -4394,30 +4469,13 @@ def _stage_c_update(math_module, record, collision_metrics):
     record["selection_reasons"] = list(selection_reasons)
 
 
-def _orientation_gallery_baseline(candidate_by_id):
-    base_candidate = candidate_by_id["candidate_764"]
-    palm_refinement = finger_palm_refinements()[5]
-    candidate = _finger_refined_candidate(
-        base_candidate, palm_refinement, "candidate_764_orientation_gallery"
-    )
-    compensation = finger_search_compensations()[1]
+def _orientation_gallery_baseline(source_candidate):
+    compensation = UpperBodyCompensation(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     preset = FingerPosePreset(
         name="semi_closed_base",
         joint_targets_deg=semi_closed_finger_targets()["base"],
     )
-    return candidate, compensation, preset
-
-
-def _right_arm_outward_local(armature):
-    shoulder = _pose_head_world(armature, "右腕")
-    wrist = _pose_head_world(armature, "右手首")
-    model_up = (armature.matrix_world.to_3x3() @ Vector((0.0, 0.0, 1.0))).normalized()
-    outward = wrist - shoulder
-    outward -= model_up * outward.dot(model_up)
-    if outward.length <= 1e-8:
-        raise RuntimeError("Cannot derive right-arm outward direction from shoulder-wrist chain")
-    outward.normalize()
-    return (armature.matrix_world.to_3x3().inverted() @ outward).normalized()
+    return source_candidate, compensation, preset
 
 
 def _gallery_candidate(base_candidate, variant):
@@ -4446,16 +4504,6 @@ def _apply_orientation_gallery_variant(
             armature, controls, candidate, compensation, preset, context
         )
     )
-    controls["hand"].location += (
-        Vector(context["orientation_gallery_outward_local"])
-        * ORIENTATION_GALLERY_OUTWARD_CLEARANCE
-    )
-    controls["hand"].location += (
-        Vector(context["orientation_gallery_forward_local"])
-        * ORIENTATION_GALLERY_FORWARD_CLEARANCE
-    )
-    armature.update_tag()
-    _refresh_frame()
     palm = controls["palm"]
     base_quaternion = palm.rotation_euler.to_quaternion().normalized()
     wrist_influence = float(variant.twist_distribution[2])
@@ -4494,14 +4542,6 @@ def _apply_orientation_gallery_variant(
         "palm_final_quaternion": tuple(float(value) for value in palm.rotation_quaternion),
         "palm_swing_control_deg": swing_control_degrees,
         "palm_tilt_control_deg": tilt_control_degrees,
-        "outward_clearance_local": tuple(
-            float(value) * ORIENTATION_GALLERY_OUTWARD_CLEARANCE
-            for value in context["orientation_gallery_outward_local"]
-        ),
-        "forward_clearance_local": tuple(
-            float(value) * ORIENTATION_GALLERY_FORWARD_CLEARANCE
-            for value in context["orientation_gallery_forward_local"]
-        ),
     }
 
 
@@ -4718,8 +4758,15 @@ def _render_orientation_gallery(output_dir, armature, mesh, controls, states, co
 
 def orientation_gallery(config: PocConfig) -> None:
     _require_blender()
-    if not config.orientation_gallery or config.run_id is None:
-        raise ValueError("Orientation gallery requires --orientation-gallery and --run-id")
+    if (
+        not config.orientation_gallery
+        or config.run_id is None
+        or config.source_candidate_id is None
+        or config.source_static_metrics is None
+    ):
+        raise ValueError(
+            "Orientation gallery requires its mode, run ID, source candidate, and source metrics"
+        )
     current_blend = Path(bpy.data.filepath)
     if not current_blend or not _same_path(current_blend, config.source_blend):
         raise RuntimeError(f"Blender must open the existing POC blend: {config.source_blend}")
@@ -4742,20 +4789,44 @@ def orientation_gallery(config: PocConfig) -> None:
         armature, mesh, controls, geometry, math_module,
         compensation_controls, finger_controls,
     )
-    candidates = {candidate.candidate_id: candidate for candidate in static_candidate_grid()}
-    base_candidate, compensation, base_preset = _orientation_gallery_baseline(candidates)
+    stored_source = json.loads(config.source_static_metrics.read_text(encoding="utf-8"))
+    source_candidate, stored_source_metrics = gallery_source_reference(
+        stored_source, config.source_candidate_id
+    )
+    base_candidate, compensation, base_preset = _orientation_gallery_baseline(
+        source_candidate
+    )
     context["orientation_gallery_base_candidate"] = base_candidate
     context["orientation_gallery_compensation"] = compensation
-    context["orientation_gallery_outward_local"] = tuple(
-        float(value) for value in _right_arm_outward_local(armature)
+    _set_compensation_identity(compensation_controls)
+    _set_finger_identity(finger_controls)
+    _apply_context_candidate(armature, controls, source_candidate, context)
+    source_surface = _current_chin_surface(mesh, armature, context["chin_surface"])
+    source_actual = _anatomy_measurements(
+        armature, controls, context["previous"], source_surface["chin_world"]
     )
-    context["orientation_gallery_forward_local"] = tuple(
-        float(value)
-        for value in (
-            armature.matrix_world.to_3x3().inverted()
-            @ (armature.matrix_world.to_3x3() @ Vector((0.0, -1.0, 0.0))).normalized()
-        ).normalized()
+    source_actual.update(_surface_contact_evidence_bvh(mesh, geometry, source_surface))
+    source_actual["wrist_world"] = tuple(
+        float(value) for value in _pose_head_world(armature, "右手首")
     )
+    source_expected = {
+        key: stored_source_metrics[key]
+        for key in (
+            "hand_target_world",
+            "elbow_angle_deg",
+            "pole_side",
+            "surface_contact_distance",
+        )
+    }
+    source_expected["wrist_world"] = source_actual["wrist_world"]
+    source_reproduction_reasons = gallery_source_reproduction_reasons(
+        source_expected, source_actual
+    )
+    if source_reproduction_reasons:
+        raise RuntimeError(
+            "Orientation gallery source candidate failed reconstruction: "
+            + "; ".join(source_reproduction_reasons)
+        )
     variants = orientation_gallery_variants()
     evaluated = []
     valid_states = []
@@ -4780,6 +4851,9 @@ def orientation_gallery(config: PocConfig) -> None:
                 source: evidence["distance"] for source, evidence in tip_surface.items()
             }
             metrics["fingertip_world"] = fingertips
+            metrics["wrist_world"] = tuple(
+                float(value) for value in _pose_head_world(armature, "右手首")
+            )
             collision_metrics, vertices = _full_collision_evidence(
                 mesh, geometry, context["invariant_collision"]
             )
@@ -4787,6 +4861,9 @@ def orientation_gallery(config: PocConfig) -> None:
             protected_current = _current_protected_pose_hashes(armature)
             protected_reasons = compare_protected_pose_hashes(
                 context["protected_pose_hashes"], protected_current
+            )
+            arm_reproduction_reasons = gallery_arm_state_reproduction_reasons(
+                source_actual, metrics
             )
             reasons = tuple(dict.fromkeys((
                 *orientation_gallery_rejection_reasons(metrics),
@@ -4810,6 +4887,7 @@ def orientation_gallery(config: PocConfig) -> None:
                 "index_variant": variant.index_variant,
                 "comparison_group": variant.comparison_group,
                 "comparison_dimension": variant.comparison_dimension,
+                "arm_state_drift_reasons": list(arm_reproduction_reasons),
                 "finger_absolute_targets_deg": variant.finger_targets_deg,
                 "finger_absolute_solution": applied["finger_solution"],
                 "evaluated_finger_quaternions": evaluated_finger_quaternions,
@@ -4832,8 +4910,6 @@ def orientation_gallery(config: PocConfig) -> None:
                     evaluated_finger_quaternions,
                     fingertips,
                 ),
-                "outward_clearance_local": applied["outward_clearance_local"],
-                "forward_clearance_local": applied["forward_clearance_local"],
                 "compensation_angles_deg": applied["compensation_angles_deg"],
                 "metrics": metrics,
                 "protected_pose_hashes": protected_current,
@@ -4847,7 +4923,8 @@ def orientation_gallery(config: PocConfig) -> None:
                 "Orientation gallery contains pose-identical labeled variants: "
                 + "; ".join(uniqueness_reasons)
             )
-        if not ORIENTATION_GALLERY_MIN_RENDER_COUNT <= len(valid_states) <= ORIENTATION_GALLERY_MAX_RENDER_COUNT:
+        all_valid_states = valid_states
+        if len(all_valid_states) < ORIENTATION_GALLERY_MIN_RENDER_COUNT:
             print("POC_ORIENTATION_GALLERY_REJECTIONS", [
                 {
                     "source_id": record["source_id"],
@@ -4862,8 +4939,9 @@ def orientation_gallery(config: PocConfig) -> None:
             ])
             raise RuntimeError(
                 "Orientation gallery requires 12-18 collision-free hard-limit variants; "
-                f"got {len(valid_states)}"
+                f"got {len(all_valid_states)}"
             )
+        valid_states = all_valid_states[:ORIENTATION_GALLERY_MAX_RENDER_COUNT]
         render_evidence = _render_orientation_gallery(
             paths.temporary, armature, mesh, controls, valid_states, context
         )
@@ -4892,10 +4970,30 @@ def orientation_gallery(config: PocConfig) -> None:
                 "frame": VALIDATION_FRAME,
                 "source_blend": str(config.source_blend),
                 "output_blend_unchanged": str(config.output_blend),
-                "baseline_source_id": "candidate_764__finger_p05_s03_c01",
+                "source_static_metrics": str(config.source_static_metrics),
+                "baseline_source_id": config.source_candidate_id,
                 "baseline": {
-                    "arm_candidate_id": "candidate_764",
-                    "palm_refinement_deg": finger_palm_refinements()[5],
+                    "arm_candidate_id": config.source_candidate_id,
+                    "stored_parameters": {
+                        "alignment_factor": source_candidate.alignment_factor,
+                        "hand_offset": source_candidate.hand_offset,
+                        "palm_euler_deg": source_candidate.palm_euler_deg,
+                        "pole_offset": source_candidate.pole_offset,
+                        "pole_offset_3d": source_candidate.pole_offset_3d,
+                        "twist_influences": source_candidate.twist_influences,
+                    },
+                    "expected_metrics": source_expected,
+                    "reconstructed_metrics": {
+                        key: source_actual[key]
+                        for key in (
+                            "hand_target_world",
+                            "wrist_world",
+                            "elbow_angle_deg",
+                            "pole_side",
+                            "surface_contact_distance",
+                        )
+                    },
+                    "reproduction_reasons": [],
                     "finger_preset": base_preset.name,
                     "compensation": {
                         "neck_toward_deg": compensation.neck_toward_deg,
@@ -4903,8 +5001,10 @@ def orientation_gallery(config: PocConfig) -> None:
                     },
                 },
                 "raw_variant_count": len(variants),
-                "valid_variant_count": len(valid_states),
-                "rejected_variant_count": len(variants) - len(valid_states),
+                "valid_variant_count": len(all_valid_states),
+                "rendered_variant_count": len(valid_states),
+                "rejected_variant_count": len(variants) - len(all_valid_states),
+                "valid_not_rendered_count": len(all_valid_states) - len(valid_states),
                 "duration_seconds": time.perf_counter() - started,
                 "render_evidence": render_evidence,
                 "variant_table": evaluated,
@@ -4926,7 +5026,7 @@ def orientation_gallery(config: PocConfig) -> None:
         print("POC_ORIENTATION_GALLERY_COMPLETE", {
             "run_id": config.run_id,
             "evaluated": len(variants),
-            "rejected": len(variants) - len(valid_states),
+            "rejected": len(variants) - len(all_valid_states),
             "rendered": len(valid_states),
             "contact_sheet": str(paths.final / render_evidence["contact_sheet"]),
             "metrics": str(paths.metrics),

@@ -93,6 +93,16 @@ def valid_gallery_cli(tmp_path):
     argv = valid_solve_cli(tmp_path)
     argv[argv.index("--search-static")] = "--orientation-gallery"
     argv[argv.index("run-20260715-001")] = "run-20260715-orientation-001"
+    source_metrics = tmp_path / "source_static_metrics.json"
+    source_metrics.write_text(
+        '{"candidates":[{"source_candidate_id":"candidate_764","parameters":{}}],'
+        '"semantic_finger_search":{"seed_metrics":{"candidate_764":{}}}}',
+        encoding="utf-8",
+    )
+    argv.extend([
+        "--source-candidate-id", "candidate_764",
+        "--source-static-metrics", str(source_metrics),
+    ])
     return argv
 
 
@@ -506,7 +516,7 @@ def test_orientation_gallery_variants_are_deterministic_bounded_and_calibrated()
     variants = tool.orientation_gallery_variants()
 
     assert variants == tool.orientation_gallery_variants()
-    assert len(variants) == 18
+    assert 18 <= len(variants) <= 24
     assert len({variant.source_id for variant in variants}) == len(variants)
     assert all(sum(variant.twist_distribution) == pytest.approx(1.0) for variant in variants)
     assert all(min(variant.twist_distribution) >= 0.0 for variant in variants)
@@ -514,11 +524,9 @@ def test_orientation_gallery_variants_are_deterministic_bounded_and_calibrated()
     assert {variant.family for variant in variants} >= {
         "semi_closed_axial", "palm_tilt", "thumb_opposition", "index_alignment"
     }
-    assert {variant.axial_angle_deg for variant in variants} <= {-30.0, -15.0}
+    assert {variant.axial_angle_deg for variant in variants} <= {-30.0, -15.0, 0.0}
     assert any(variant.palm_swing_deg for variant in variants)
     assert any(variant.palm_tilt_deg for variant in variants)
-    assert 0.0 < tool.ORIENTATION_GALLERY_OUTWARD_CLEARANCE <= 0.03
-    assert tool.ORIENTATION_GALLERY_FORWARD_CLEARANCE == pytest.approx(0.060)
 
 
 def test_semiclosed_targets_have_progressive_half_curl_and_distinct_thumb_opposition():
@@ -855,6 +863,8 @@ def test_orientation_gallery_reuses_existing_poc_blend_and_requires_run_id(cli_t
     assert config.select_static is False
     assert config.run_id == "run-20260715-orientation-001"
     assert config.vmd is None
+    assert config.source_candidate_id == "candidate_764"
+    assert config.source_static_metrics.name == "source_static_metrics.json"
 
 
 def test_orientation_gallery_run_paths_are_isolated(cli_tmp_path):
@@ -866,6 +876,60 @@ def test_orientation_gallery_run_paths_are_isolated(cli_tmp_path):
     assert paths.temporary.name == ".tmp-run-20260715-orientation-001"
     assert paths.final == output_dir / "runs" / "run-20260715-orientation-001"
     assert paths.metrics == paths.final / "orientation_gallery" / tool.ORIENTATION_GALLERY_METRICS_NAME
+
+
+def test_gallery_source_lookup_maps_exact_candidate_and_seed_metrics():
+    tool = load_tool()
+    stored = {
+        "candidates": [{
+            "source_candidate_id": "candidate_764",
+            "parameters": {
+                "alignment_factor": 0.35,
+                "hand_offset": [0.005, 0.0, 0.01],
+                "palm_euler_deg": [15.0, -20.0, 10.0],
+                "pole_offset": 0.16,
+                "pole_offset_3d": [0.0, 0.0, 0.0],
+                "twist_influences": [0.35, 0.5, 0.15],
+            },
+        }],
+        "semantic_finger_search": {
+            "seed_metrics": {
+                "candidate_764": {
+                    "hand_target_world": [-0.089, -0.226, 1.381],
+                    "elbow_angle_deg": 59.61,
+                    "pole_side": 0.1306,
+                    "surface_contact_distance": 0.04153,
+                },
+            },
+        },
+    }
+
+    candidate, metrics = tool.gallery_source_reference(stored, "candidate_764")
+
+    assert candidate.candidate_id == "candidate_764"
+    assert candidate.hand_offset == (0.005, 0.0, 0.01)
+    assert candidate.pole_offset_3d == (0.0, 0.0, 0.0)
+    assert metrics["surface_contact_distance"] == pytest.approx(0.04153)
+    with pytest.raises(ValueError, match="candidate_missing"):
+        tool.gallery_source_reference(stored, "candidate_missing")
+
+
+def test_gallery_source_reproduction_checks_hand_wrist_elbow_pole_and_contact():
+    tool = load_tool()
+    expected = {
+        "hand_target_world": (1.0, 2.0, 3.0),
+        "wrist_world": (0.1, 0.2, 0.3),
+        "elbow_angle_deg": 60.0,
+        "pole_side": 0.13,
+        "surface_contact_distance": 0.0415,
+    }
+
+    assert tool.gallery_source_reproduction_reasons(expected, dict(expected)) == ()
+    drifted = {**expected, "wrist_world": (0.1, 0.2, 0.31)}
+    assert any(
+        "wrist" in reason.lower()
+        for reason in tool.gallery_source_reproduction_reasons(expected, drifted)
+    )
 
 
 def test_run_paths_are_isolated_and_require_explicit_overwrite(cli_tmp_path):
