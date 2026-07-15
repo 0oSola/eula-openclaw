@@ -476,6 +476,36 @@ def test_finger_reach_diagnostic_reports_geometry_shortfall():
     assert diagnostic["distance_shortfall"] == pytest.approx(0.0051)
 
 
+def test_dual_contact_requires_independent_index_and_thumb_surface_support():
+    tool = load_tool()
+    band = tool.derive_dual_contact_band(mesh_resolution=0.015, index_warning_distance=0.030)
+    valid = {
+        "contact_distance_by_source": {"index": 0.025, "thumb": 0.040},
+        "contact_patch_by_source": {"index": 3, "thumb": 2},
+        "thumb_support_patch_count": 2,
+    }
+
+    assert band.thumb_warning_distance == pytest.approx(0.045)
+    assert tool.dual_contact_reasons(valid, band) == ()
+    assert any("thumb" in reason.lower() for reason in tool.dual_contact_reasons(
+        {**valid, "contact_distance_by_source": {"index": 0.025, "thumb": 0.060}}, band
+    ))
+    assert any("index" in reason.lower() for reason in tool.dual_contact_reasons(
+        {**valid, "contact_patch_by_source": {"index": 0, "thumb": 2}}, band
+    ))
+
+
+def test_combined_dual_contact_refinement_is_bounded_by_head_and_finger_limits():
+    tool = load_tool()
+    refinements = tool.dual_contact_refinement_grid()
+
+    assert 100 <= len(refinements) <= 400
+    assert refinements == tool.dual_contact_refinement_grid()
+    assert all(item.neck_toward_deg + item.head_toward_deg <= 5.0 for item in refinements)
+    assert all(max(abs(value) for delta in item.thumb_deltas_deg.values() for value in delta) <= 40.0 for item in refinements)
+    assert all(max(abs(value) for value in item.palm_refinement_deg) <= 3.0 for item in refinements)
+
+
 def test_behavior_diagnostics_have_nonzero_bounded_thresholds():
     tool = load_tool()
 

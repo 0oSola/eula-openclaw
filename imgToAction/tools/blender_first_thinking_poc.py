@@ -219,7 +219,7 @@ STAGE_B_SURVIVOR_LIMIT = 48
 STAGE_C_SURVIVOR_LIMIT = 48
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 SOURCE_CANDIDATE_PATTERN = re.compile(
-    r"^(?:candidate_[0-9]+|pole3d_[0-9]+)(?:__comp_[0-9]{3}|__finger_p[0-9]{2}_s[0-9]{2}_c[0-9]{2})?$"
+    r"^(?:candidate_[0-9]+|pole3d_[0-9]+)(?:__comp_[0-9]{3}|__finger_p[0-9]{2}_s[0-9]{2}_c[0-9]{2}(?:__dual_[0-9]{2}_[0-9]{3})?)?$"
 )
 
 CONTACT_VERTEX_GROUPS = (
@@ -352,6 +352,23 @@ class UpperBodyCompensation:
 class FingerPosePreset:
     name: str
     joint_deltas_deg: dict[str, tuple[float, float, float]]
+
+
+@dataclass(frozen=True)
+class DualContactBand:
+    mesh_resolution: float
+    index_warning_distance: float
+    thumb_target_distance: float
+    thumb_warning_distance: float
+    derivation: str
+
+
+@dataclass(frozen=True)
+class DualContactRefinement:
+    neck_toward_deg: float
+    head_toward_deg: float
+    thumb_deltas_deg: dict[str, tuple[float, float, float]]
+    palm_refinement_deg: tuple[float, float, float]
 
 
 @dataclass(frozen=True)
@@ -610,6 +627,68 @@ def finger_reach_diagnostic(records, *, warning_distance: float) -> dict[str, ob
             if insufficient else "Failure is not solely attributable to bounded finger reach"
         ),
     }
+
+
+def derive_dual_contact_band(
+    *, mesh_resolution: float, index_warning_distance: float
+) -> DualContactBand:
+    resolution = float(mesh_resolution)
+    index_warning = float(index_warning_distance)
+    if resolution <= 0.0 or index_warning <= 0.0:
+        raise ValueError("Dual-contact geometry scales must be positive")
+    return DualContactBand(
+        mesh_resolution=resolution,
+        index_warning_distance=index_warning,
+        thumb_target_distance=index_warning,
+        thumb_warning_distance=index_warning + resolution,
+        derivation=(
+            "thumb support permits one additional median lower-chin triangle edge "
+            "behind the index contact warning surface"
+        ),
+    )
+
+
+def dual_contact_reasons(metrics, band: DualContactBand) -> tuple[str, ...]:
+    distances = metrics["contact_distance_by_source"]
+    patches = metrics["contact_patch_by_source"]
+    reasons = []
+    if float(distances["index"]) > band.index_warning_distance:
+        reasons.append("Index contact exceeds the lower-chin warning distance")
+    if int(patches["index"]) <= 0:
+        reasons.append("Index lower-jaw contact patch is empty")
+    if float(distances["thumb"]) > band.thumb_warning_distance:
+        reasons.append("Thumb underside support exceeds its geometry-derived warning distance")
+    if int(metrics.get("thumb_support_patch_count", 0)) <= 0:
+        reasons.append("Thumb underside support patch is empty")
+    return tuple(reasons)
+
+
+def dual_contact_refinement_grid() -> tuple[DualContactRefinement, ...]:
+    base = next(
+        preset for preset in semantic_finger_presets()
+        if preset.name == "support_thumb_low"
+    ).joint_deltas_deg
+    thumb_variants = (
+        {name: base[name] for name in ("右親指０", "右親指１", "右親指２")},
+        {"右親指０": (10.0, -12.0, -5.0), "右親指１": (13.0, -5.0, 0.0), "右親指２": (8.0, 0.0, 0.0)},
+        {"右親指０": (10.0, -10.0, -5.0), "右親指１": (-10.0, -5.0, 0.0), "右親指２": (8.0, 0.0, 0.0)},
+        {"右親指０": (10.0, -10.0, -5.0), "右親指１": (-20.0, -5.0, 0.0), "右親指２": (8.0, 0.0, 0.0)},
+        {"右親指０": (10.0, -10.0, -5.0), "右親指１": (13.0, -5.0, 0.0), "右親指２": (-10.0, 0.0, 0.0)},
+        {"右親指０": (10.0, -10.0, -5.0), "右親指１": (13.0, -5.0, 0.0), "右親指２": (-20.0, 0.0, 0.0)},
+        {"右親指０": (10.0, -12.0, -5.0), "右親指１": (-20.0, -5.0, 0.0), "右親指２": (-20.0, 0.0, 0.0)},
+    )
+    head_neck = ((1.5, 1.5), (2.0, 3.0), (2.5, 2.5), (1.5, 3.5))
+    palm = (
+        (0.0, 0.0, 0.0), (-3.0, 0.0, 0.0), (3.0, 0.0, 0.0),
+        (0.0, -3.0, 0.0), (0.0, 3.0, 0.0),
+        (0.0, 0.0, -3.0), (0.0, 0.0, 3.0),
+    )
+    return tuple(
+        DualContactRefinement(neck, head, thumb, palm_delta)
+        for (neck, head), thumb, palm_delta in itertools.product(
+            head_neck, thumb_variants, palm
+        )
+    )
 
 
 def compensated_source_id(arm_source_id: str, compensation_index: int) -> str:
@@ -2881,6 +2960,29 @@ def _surface_contact_evidence_bvh(mesh, geometry, chin_surface):
         )
         for source in groups
     }
+    nearest_by_source = {}
+    for source in groups:
+        nearest_sample = min(
+            (sample for sample in samples if sample[1] == source),
+            key=lambda sample: (sample[0], sample[2]),
+        )
+        nearest_by_source[source] = {
+            "distance": nearest_sample[0],
+            "vertex_index": nearest_sample[2],
+            "hand_world": tuple(float(value) for value in nearest_sample[3]),
+            "chin_surface_world": tuple(float(value) for value in nearest_sample[4]),
+            "signed_distance": nearest_sample[5],
+            "triangle_index": nearest_sample[6],
+        }
+    dual_band = derive_dual_contact_band(
+        mesh_resolution=band.mesh_resolution,
+        index_warning_distance=band.warning_distance,
+    )
+    thumb_support_patch_count = sum(
+        distance <= dual_band.thumb_warning_distance
+        for distance, source, *_rest in samples
+        if source == "thumb"
+    )
     return {
         "surface_contact_distance": best[0],
         "contact_error": best[0],
@@ -2895,6 +2997,15 @@ def _surface_contact_evidence_bvh(mesh, geometry, chin_surface):
         "contact_patch_count": sum(patch_by_source.values()),
         "contact_patch_by_source": patch_by_source,
         "contact_distance_by_source": distance_by_source,
+        "contact_nearest_by_source": nearest_by_source,
+        "thumb_support_patch_count": thumb_support_patch_count,
+        "dual_contact_band": {
+            "mesh_resolution": dual_band.mesh_resolution,
+            "index_warning_distance": dual_band.index_warning_distance,
+            "thumb_target_distance": dual_band.thumb_target_distance,
+            "thumb_warning_distance": dual_band.thumb_warning_distance,
+            "derivation": dual_band.derivation,
+        },
         "thumb_index_contact_patch_count": patch_by_source["thumb"] + patch_by_source["index"],
         "contact_sample_count": len(samples),
     }
@@ -3313,6 +3424,62 @@ def _render_diagnostic_candidate(output_dir, armature, controls, candidate, cont
             "bbox_max": tuple(float(value) for value in bbox_max),
         },
         "collision_overlay": "not_requested_optional",
+    }
+
+
+def _render_semantic_diagnostic(
+    output_dir, armature, mesh, controls, candidate, compensation, preset, context
+):
+    scene = bpy.context.scene
+    _apply_semantic_finger_state(
+        armature, controls, candidate, compensation, preset, context
+    )
+    vertices = _evaluated_world_vertices(mesh)
+    camera, center, distance, ortho_scale, bbox_min, bbox_max = _full_body_camera(
+        scene, vertices
+    )
+    scene.render.resolution_x = RENDER_RESOLUTION
+    scene.render.resolution_y = RENDER_RESOLUTION
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    directory = Path(output_dir) / "diagnostics" / candidate.candidate_id
+    directory.mkdir(parents=True, exist_ok=True)
+    view_directions = {
+        "front": Vector((0, -1, 0)), "left": Vector((1, 0, 0)),
+        "right": Vector((-1, 0, 0)), "back": Vector((0, 1, 0)),
+    }
+    renders = {}
+    for view, direction in view_directions.items():
+        camera.data.ortho_scale = ortho_scale
+        camera.location = center + direction * distance
+        camera.rotation_euler = (center - camera.location).to_track_quat("-Z", "Y").to_euler()
+        output = directory / f"{view}.png"
+        scene.render.filepath = str(output)
+        bpy.ops.render.render(write_still=True)
+        renders[view] = str(Path("diagnostics") / candidate.candidate_id / f"{view}.png")
+    fingertips = _finger_tip_positions(armature)
+    close_center = (
+        Vector(fingertips["index"])
+        + Vector(fingertips["thumb"])
+        + Vector(_calibrated_chin_points(armature)[2])
+    ) / 3.0
+    camera.data.ortho_scale = 0.52
+    camera.location = close_center + Vector((0, -1, 0)) * 2.0
+    camera.rotation_euler = (close_center - camera.location).to_track_quat("-Z", "Y").to_euler()
+    close_output = directory / "upper_body_hand.png"
+    scene.render.filepath = str(close_output)
+    bpy.ops.render.render(write_still=True)
+    renders["upper_body_hand"] = str(
+        Path("diagnostics") / candidate.candidate_id / "upper_body_hand.png"
+    )
+    return {
+        "renders": renders,
+        "full_body_ortho_scale": float(ortho_scale),
+        "closeup_ortho_scale": 0.52,
+        "full_body_center": tuple(float(value) for value in center),
+        "closeup_center": tuple(float(value) for value in close_center),
+        "bbox_min": tuple(float(value) for value in bbox_min),
+        "bbox_max": tuple(float(value) for value in bbox_max),
     }
 
 
@@ -4173,7 +4340,157 @@ def search_static(config: PocConfig) -> None:
             warning_distance=context["chin_surface"]["band"].warning_distance,
         )
 
-        if len(stage_g_valid) < STATIC_RENDER_COUNT:
+        exact_best_id = "candidate_779__finger_p01_s02_c01"
+        exact_best_state, exact_best_record = next(
+            item for item in stage_g_valid
+            if item[1]["source_candidate_id"] == exact_best_id
+        )
+        exact_best_record["diagnostic_render_evidence"] = _render_semantic_diagnostic(
+            paths.temporary,
+            armature,
+            mesh,
+            controls,
+            *exact_best_state,
+            context,
+        )
+
+        started = time.perf_counter()
+        dual_band = derive_dual_contact_band(
+            mesh_resolution=context["chin_surface"]["band"].mesh_resolution,
+            index_warning_distance=context["chin_surface"]["band"].warning_distance,
+        )
+        dual_seed_items = sorted(
+            (
+                item for item in stage_g_valid
+                if item[1]["metrics"]["head_collision_count"] == 0
+                and item[1]["metrics"]["torso_penetration_count"] == 0
+            ),
+            key=_finger_rank_key,
+        )[:2]
+        dual_refinements = dual_contact_refinement_grid()
+        stage_h_evaluated = []
+        for seed_index, ((seed_candidate, _seed_compensation, seed_preset), seed_record) in enumerate(dual_seed_items):
+            for refinement_index, refinement in enumerate(dual_refinements):
+                source_id = (
+                    f"{seed_record['source_candidate_id']}__dual_"
+                    f"{seed_index:02d}_{refinement_index:03d}"
+                )
+                candidate = _finger_refined_candidate(
+                    seed_candidate, refinement.palm_refinement_deg, source_id
+                )
+                merged_deltas = dict(seed_preset.joint_deltas_deg)
+                merged_deltas.update(refinement.thumb_deltas_deg)
+                preset = FingerPosePreset(
+                    name=f"{seed_preset.name}_dual", joint_deltas_deg=merged_deltas
+                )
+                compensation = UpperBodyCompensation(
+                    0.0, 0.0, 0.0, 0.0,
+                    refinement.neck_toward_deg,
+                    refinement.head_toward_deg,
+                )
+                (
+                    compensation_quaternions,
+                    compensation_angles,
+                    finger_quaternions,
+                    finger_angles,
+                ) = _apply_semantic_finger_state(
+                    armature, controls, candidate, compensation, preset, context
+                )
+                current_surface = _current_chin_surface(
+                    mesh, armature, context["chin_surface"]
+                )
+                measurements = _anatomy_measurements(
+                    armature, controls, context["previous"], current_surface["chin_world"]
+                )
+                surface_metrics = _surface_contact_evidence_bvh(
+                    mesh, geometry, current_surface
+                )
+                seed_collision = {
+                    key: seed_record["metrics"].get(key)
+                    for key in (
+                        "surface_contact_distance", "thumb_index_contact_patch_count",
+                        "head_collision_count", "torso_penetration_count", "minimum_clearance",
+                    )
+                }
+                record = _stage_f_record(
+                    math_module, candidate, seed_record["arm_source_candidate_id"],
+                    refinement.palm_refinement_deg, preset, compensation,
+                    compensation_quaternions, compensation_angles,
+                    finger_quaternions, finger_angles, measurements,
+                    surface_metrics, seed_collision, context,
+                )
+                record["source_semantic_candidate_id"] = seed_record["source_candidate_id"]
+                record["parameters"]["dual_contact_refinement"] = {
+                    "neck_toward_deg": refinement.neck_toward_deg,
+                    "head_toward_deg": refinement.head_toward_deg,
+                    "thumb_deltas_deg": refinement.thumb_deltas_deg,
+                    "palm_refinement_deg": refinement.palm_refinement_deg,
+                }
+                record["dual_contact_reasons"] = list(
+                    dual_contact_reasons(record["metrics"], dual_band)
+                )
+                record["stage"] = "H"
+                stage_h_evaluated.append(((candidate, compensation, preset), record))
+        stage_h_valid = sorted(
+            (item for item in stage_h_evaluated if item[1]["valid"]),
+            key=lambda item: (
+                len(item[1]["dual_contact_reasons"]),
+                max(
+                    item[1]["metrics"]["contact_distance_by_source"]["index"] / dual_band.index_warning_distance,
+                    item[1]["metrics"]["contact_distance_by_source"]["thumb"] / dual_band.thumb_warning_distance,
+                ),
+                *_finger_rank_key(item),
+            ),
+        )[:36]
+        stage_metrics["H"] = {
+            "seed_count": len(dual_seed_items),
+            "grid_count_per_seed": len(dual_refinements),
+            "input_count": len(stage_h_evaluated),
+            "survivor_count": len(stage_h_valid),
+            "rejected_count": len(stage_h_evaluated) - len(stage_h_valid),
+            "duration_seconds": time.perf_counter() - started,
+        }
+        print("POC_STATIC_STAGE_H", stage_metrics["H"])
+
+        started = time.perf_counter()
+        dual_vertices = {}
+        for (candidate, compensation, preset), record in stage_h_valid:
+            _apply_semantic_finger_state(
+                armature, controls, candidate, compensation, preset, context
+            )
+            collision_metrics, vertices = _full_collision_evidence(
+                mesh, geometry, context["invariant_collision"]
+            )
+            _stage_g_update(
+                math_module, record, collision_metrics,
+                context["chin_surface"]["band"].warning_distance,
+            )
+            combined_reasons = dual_contact_reasons(record["metrics"], dual_band)
+            record["dual_contact_reasons"] = list(combined_reasons)
+            if combined_reasons:
+                record["selection_eligible"] = False
+                record["selection_reasons"] = list(dict.fromkeys([
+                    *record.get("selection_reasons", []), *combined_reasons,
+                ]))
+            record["stage"] = "I"
+            dual_vertices[record["source_candidate_id"]] = vertices
+        stage_i_valid = sorted(
+            (item for item in stage_h_valid if item[1]["valid"]),
+            key=lambda item: (
+                not item[1].get("selection_eligible", False),
+                len(item[1]["dual_contact_reasons"]),
+                *_finger_rank_key(item),
+            ),
+        )
+        stage_metrics["I"] = {
+            "input_count": len(stage_h_valid),
+            "survivor_count": len(stage_i_valid),
+            "rejected_count": len(stage_h_valid) - len(stage_i_valid),
+            "duration_seconds": time.perf_counter() - started,
+        }
+        print("POC_STATIC_STAGE_I", stage_metrics["I"])
+
+        if len(stage_i_valid) < STATIC_RENDER_COUNT:
             print("POC_STATIC_STAGE_C_REJECTIONS", [
                 {
                     "candidate": record["source_candidate_id"],
@@ -4188,14 +4505,14 @@ def search_static(config: PocConfig) -> None:
                 for _candidate, record in stage_c_input
             ])
         eligible_count = sum(
-            record.get("selection_eligible", False) for _state, record in stage_g_valid
+            record.get("selection_eligible", False) for _state, record in stage_i_valid
         )
         policy = static_search_policy(
-            collision_clear_count=len(stage_g_valid),
+            collision_clear_count=len(stage_i_valid),
             selection_eligible_count=eligible_count,
         )
         eligible_ranked = [
-            item for item in stage_g_valid if item[1].get("selection_eligible", False)
+            item for item in stage_i_valid if item[1].get("selection_eligible", False)
         ]
         render_ranked = eligible_ranked[: int(policy["ranked_render_count"])]
         render_evidence = (
@@ -4205,7 +4522,7 @@ def search_static(config: PocConfig) -> None:
                 controls,
                 render_ranked,
                 context,
-                finger_vertices,
+                dual_vertices,
             )
             if render_ranked
             else {"rendered_files": [], "reason": "No selection-eligible collision-clear candidate set"}
@@ -4232,10 +4549,14 @@ def search_static(config: PocConfig) -> None:
             "frame": VALIDATION_FRAME,
             "source_blend": str(config.source_blend),
             "output_blend_unchanged": str(config.output_blend),
-            "candidate_count": len(candidates) + len(stage_d_evaluated) + len(stage_f_evaluated),
+            "candidate_count": (
+                len(candidates) + len(stage_d_evaluated)
+                + len(stage_f_evaluated) + len(stage_h_evaluated)
+            ),
             "arm_candidate_count": len(candidates),
             "compensation_candidate_count": len(stage_d_evaluated),
             "semantic_finger_candidate_count": len(stage_f_evaluated),
+            "dual_contact_candidate_count": len(stage_h_evaluated),
             "rendered_count": len(rendered_records),
             "selection_eligible_count": eligible_count,
             "stage_metrics": stage_metrics,
@@ -4301,12 +4622,27 @@ def search_static(config: PocConfig) -> None:
                     for source_id, record in finger_seed_records.items()
                 },
             },
+            "dual_contact_search": {
+                "band": {
+                    "mesh_resolution": dual_band.mesh_resolution,
+                    "index_warning_distance": dual_band.index_warning_distance,
+                    "thumb_target_distance": dual_band.thumb_target_distance,
+                    "thumb_warning_distance": dual_band.thumb_warning_distance,
+                    "derivation": dual_band.derivation,
+                },
+                "seed_source_ids": [
+                    record["source_candidate_id"] for _state, record in dual_seed_items
+                ],
+                "exact_best_diagnostic_source_id": exact_best_id,
+                "exact_best_diagnostic": exact_best_record["diagnostic_render_evidence"],
+            },
             "render_evidence": render_evidence,
             "diagnostics": diagnostic_records,
             "ranked_candidates": rendered_records,
             "candidates": [record for _candidate, record in evaluated],
             "compensation_candidates": [record for _state, record in stage_d_evaluated],
             "semantic_finger_candidates": [record for _state, record in stage_f_evaluated],
+            "dual_contact_candidates": [record for _state, record in stage_h_evaluated],
         }
         temporary_metrics = paths.temporary / STATIC_METRICS_NAME
         temporary_metrics.write_text(
@@ -4322,7 +4658,10 @@ def search_static(config: PocConfig) -> None:
         paths.temporary.rename(paths.final)
         print("POC_STATIC_SEARCH_COMPLETE", {
             "run_id": config.run_id,
-            "evaluated": len(candidates) + len(stage_d_evaluated) + len(stage_f_evaluated),
+            "evaluated": (
+                len(candidates) + len(stage_d_evaluated)
+                + len(stage_f_evaluated) + len(stage_h_evaluated)
+            ),
             "rendered": len(rendered_records),
             "metrics": str(paths.metrics),
             "selection_status": policy["selection_status"],
@@ -4342,8 +4681,11 @@ def select_static(config: PocConfig) -> None:
         raise RuntimeError(f"Blender must open the existing POC blend: {config.source_blend}")
     stored_run = json.loads(config.run_metrics_path.read_text(encoding="utf-8"))
     selectable_records = stored_run.get(
-        "semantic_finger_candidates",
-        stored_run.get("compensation_candidates", stored_run["candidates"]),
+        "dual_contact_candidates",
+        stored_run.get(
+            "semantic_finger_candidates",
+            stored_run.get("compensation_candidates", stored_run["candidates"]),
+        ),
     )
     stored_record = next(
         (
@@ -4355,7 +4697,7 @@ def select_static(config: PocConfig) -> None:
     )
     if (
         stored_record is None
-        or stored_record.get("stage") not in ("C", "E", "G")
+        or stored_record.get("stage") not in ("C", "E", "G", "I")
         or not stored_record.get("valid")
         or not stored_record.get("selection_eligible")
     ):
@@ -4376,10 +4718,10 @@ def select_static(config: PocConfig) -> None:
     )
     candidate = _candidate_from_record(stored_record)
     _apply_context_candidate(armature, controls, candidate, context)
-    if stored_record.get("stage") in ("E", "G"):
+    if stored_record.get("stage") in ("E", "G", "I"):
         compensation = _compensation_from_record(stored_record)
         _apply_upper_body_compensation(armature, context, compensation)
-        if stored_record.get("stage") == "G":
+        if stored_record.get("stage") in ("G", "I"):
             _apply_finger_preset(
                 armature, context, _finger_preset_from_record(stored_record)
             )
