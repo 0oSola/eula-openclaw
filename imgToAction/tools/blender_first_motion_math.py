@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Iterable
+from typing import Iterable, Mapping
 
 
 Vector = tuple[float, float, float]
@@ -172,6 +172,91 @@ def normalize(value: Iterable[float]) -> Vector:
     if magnitude <= EPSILON:
         raise ValueError("Cannot normalize a zero-length vector")
     return vector_scale(vector, 1.0 / magnitude)
+
+
+def required_surface_push(
+    *,
+    point: Iterable[float],
+    surface_point: Iterable[float],
+    outward_normal: Iterable[float],
+    safety_margin: float,
+) -> Vector:
+    """Return the smallest normal displacement that clears a surface margin."""
+
+    normal = normalize(outward_normal)
+    margin = float(safety_margin)
+    if not math.isfinite(margin) or margin < 0.0:
+        raise ValueError("Safety margin must be finite and non-negative")
+    signed_clearance = dot(vector_subtract(point, surface_point), normal)
+    missing_clearance = margin - signed_clearance
+    if missing_clearance <= 0.0:
+        return (0.0, 0.0, 0.0)
+    return vector_scale(normal, missing_clearance)
+
+
+def smooth_corrective_displacements(
+    *,
+    adjacency: Mapping[int, Iterable[int]],
+    allowed_vertices: Iterable[int],
+    core_displacements: Mapping[int, Iterable[float]],
+    propagation_rings: int,
+    iterations: int = 60,
+) -> dict[int, Vector]:
+    """Diffuse fixed corrective deltas while pinning the outer topology ring."""
+
+    allowed = {int(index) for index in allowed_vertices}
+    core = {
+        int(index): _vector(displacement)
+        for index, displacement in core_displacements.items()
+    }
+    if not core:
+        return {}
+    if not set(core).issubset(allowed):
+        raise ValueError("Corrective core must be contained by allowed vertices")
+    rings = int(propagation_rings)
+    if rings < 1:
+        raise ValueError("Propagation rings must be at least one")
+    relaxation_steps = int(iterations)
+    if relaxation_steps < 1:
+        raise ValueError("Iterations must be at least one")
+
+    distance = {index: 0 for index in core}
+    frontier = set(core)
+    for ring in range(1, rings + 1):
+        next_frontier = {
+            int(neighbor)
+            for index in frontier
+            for neighbor in adjacency.get(index, ())
+            if int(neighbor) in allowed and int(neighbor) not in distance
+        }
+        for index in next_frontier:
+            distance[index] = ring
+        frontier = next_frontier
+        if not frontier:
+            break
+
+    active = set(distance)
+    boundary = {index for index, ring in distance.items() if ring == rings}
+    zero = (0.0, 0.0, 0.0)
+    field = {index: core.get(index, zero) for index in active}
+    fixed = set(core) | boundary
+    for _ in range(relaxation_steps):
+        updated = dict(field)
+        for index in active - fixed:
+            neighbors = [
+                int(neighbor)
+                for neighbor in adjacency.get(index, ())
+                if int(neighbor) in active
+            ]
+            if not neighbors:
+                continue
+            count = float(len(neighbors))
+            updated[index] = tuple(
+                sum(field[neighbor][axis] for neighbor in neighbors) / count
+                for axis in range(3)
+            )
+        field = updated
+    return field
 
 
 def closest_point_on_triangle(

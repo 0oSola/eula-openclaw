@@ -432,6 +432,10 @@ class ChinSupportRefinement:
     head_toward_deg: float
     palm_refinement_deg: tuple[float, float, float]
     thumb_refinement_deg: tuple[float, float, float]
+    upper_chest_turn_deg: float = 0.0
+    upper_chest_lean_deg: float = 0.0
+    shoulder_retract_deg: float = 0.0
+    shoulder_elevate_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -949,16 +953,19 @@ def chin_support_semantic_reasons(
 def chin_support_refinement_grid() -> tuple[ChinSupportRefinement, ...]:
     hand_offsets = (
         (0.0, 0.0, 0.0),
-        (-0.002, 0.0, 0.0),
-        (0.002, 0.0, 0.0),
-        (-0.004, 0.0, 0.0),
         (0.004, 0.0, 0.0),
-        (0.0, -0.002, 0.0),
-        (0.0, 0.002, 0.0),
-        (0.0, 0.0, -0.002),
-        (0.0, 0.0, 0.002),
+        (0.0, 0.035, 0.0),
+        (0.0, 0.045, 0.0),
+        (0.0, 0.050, 0.0),
+        (0.0, 0.055, 0.0),
+        (0.0, 0.060, 0.0),
+        (0.004, 0.050, 0.0),
+        (0.0, 0.050, 0.004),
     )
-    head_neck = ((0.0, 0.0), (1.5, 2.0), (2.0, 3.0))
+    compensations = (
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        (0.0, -2.0, 1.5, 0.0, 2.0, 2.5),
+    )
     palm = (
         (0.0, 0.0, 0.0),
         (2.0, 0.0, -2.0),
@@ -966,9 +973,19 @@ def chin_support_refinement_grid() -> tuple[ChinSupportRefinement, ...]:
     )
     thumb = ((0.0, 0.0, 0.0), (-4.0, 3.0, 2.0))
     return tuple(
-        ChinSupportRefinement(offset, neck, head, palm_delta, thumb_delta)
-        for offset, (neck, head), palm_delta, thumb_delta in itertools.product(
-            hand_offsets, head_neck, palm, thumb
+        ChinSupportRefinement(
+            offset,
+            compensation[4],
+            compensation[5],
+            palm_delta,
+            thumb_delta,
+            compensation[0],
+            compensation[1],
+            compensation[2],
+            compensation[3],
+        )
+        for offset, compensation, palm_delta, thumb_delta in itertools.product(
+            hand_offsets, compensations, palm, thumb
         )
     )
 
@@ -1223,6 +1240,27 @@ def gallery_source_reference(stored_metrics, source_candidate_id: str):
             f"Gallery source candidate {source_candidate_id!r} is missing from stored metrics"
         )
     return _candidate_from_record(candidate_record), seed_metrics
+
+
+def chin_support_source_reference(stored_metrics, source_candidate_id: str):
+    """Resolve either a semantic-arm seed or a persisted compensated arm."""
+
+    compensated = next(
+        (
+            record
+            for record in stored_metrics.get("compensation_candidates", ())
+            if record.get("source_candidate_id") == source_candidate_id
+        ),
+        None,
+    )
+    if compensated is not None:
+        return (
+            _candidate_from_record(compensated),
+            _compensation_from_record(compensated),
+            compensated["metrics"],
+        )
+    candidate, metrics = gallery_source_reference(stored_metrics, source_candidate_id)
+    return candidate, UpperBodyCompensation(0.0, 0.0, 0.0, 0.0, 0.0, 0.0), metrics
 
 
 def collision_severity_source_records(stored_metrics):
@@ -5892,7 +5930,10 @@ def _g14_refined_state(base_candidate, base_variant, refinement, index):
         finger_targets_deg=targets,
     )
     compensation = UpperBodyCompensation(
-        0.0, 0.0, 0.0, 0.0,
+        refinement.upper_chest_turn_deg,
+        refinement.upper_chest_lean_deg,
+        refinement.shoulder_retract_deg,
+        refinement.shoulder_elevate_deg,
         refinement.neck_toward_deg,
         refinement.head_toward_deg,
     )
@@ -6372,6 +6413,10 @@ def chin_support_refinement(config: PocConfig) -> None:
                 "semantic_reasons": list(semantic_reasons),
                 "parameters": {
                     "hand_target_offset": refinement.hand_target_offset,
+                    "upper_chest_turn_deg": refinement.upper_chest_turn_deg,
+                    "upper_chest_lean_deg": refinement.upper_chest_lean_deg,
+                    "shoulder_retract_deg": refinement.shoulder_retract_deg,
+                    "shoulder_elevate_deg": refinement.shoulder_elevate_deg,
                     "neck_toward_deg": refinement.neck_toward_deg,
                     "head_toward_deg": refinement.head_toward_deg,
                     "palm_refinement_deg": refinement.palm_refinement_deg,

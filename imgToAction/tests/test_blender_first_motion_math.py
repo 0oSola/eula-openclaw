@@ -160,6 +160,82 @@ def test_projection_and_signed_angle_use_tuple_vectors():
     assert tool.signed_angle((1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, 1.0)) == pytest.approx(-90.0)
 
 
+def test_surface_push_moves_penetrating_point_past_safety_margin():
+    tool = load_tool()
+
+    displacement = tool.required_surface_push(
+        point=(-0.2, 0.0, 0.0),
+        surface_point=(0.0, 0.0, 0.0),
+        outward_normal=(1.0, 0.0, 0.0),
+        safety_margin=0.05,
+    )
+
+    assert displacement == pytest.approx((0.25, 0.0, 0.0))
+
+
+def test_surface_push_is_zero_when_point_already_has_clearance():
+    tool = load_tool()
+
+    displacement = tool.required_surface_push(
+        point=(0.08, 0.0, 0.0),
+        surface_point=(0.0, 0.0, 0.0),
+        outward_normal=(1.0, 0.0, 0.0),
+        safety_margin=0.05,
+    )
+
+    assert displacement == pytest.approx((0.0, 0.0, 0.0))
+
+
+def test_corrective_field_diffuses_from_core_and_pins_outer_boundary():
+    tool = load_tool()
+    adjacency = {
+        0: {1},
+        1: {0, 2},
+        2: {1, 3},
+        3: {2, 4},
+        4: {3},
+    }
+
+    field = tool.smooth_corrective_displacements(
+        adjacency=adjacency,
+        allowed_vertices={0, 1, 2, 3, 4},
+        core_displacements={2: (1.0, 0.0, 0.0)},
+        propagation_rings=2,
+        iterations=80,
+    )
+
+    assert set(field) == {0, 1, 2, 3, 4}
+    assert field[0] == pytest.approx((0.0, 0.0, 0.0))
+    assert field[1] == pytest.approx((0.5, 0.0, 0.0), abs=1e-4)
+    assert field[2] == pytest.approx((1.0, 0.0, 0.0))
+    assert field[3] == pytest.approx((0.5, 0.0, 0.0), abs=1e-4)
+    assert field[4] == pytest.approx((0.0, 0.0, 0.0))
+
+
+def test_corrective_field_never_crosses_outside_allowed_sleeve_vertices():
+    tool = load_tool()
+    adjacency = {
+        0: {1},
+        1: {0, 2, 5},
+        2: {1, 3},
+        3: {2, 4},
+        4: {3},
+        5: {1},
+    }
+
+    field = tool.smooth_corrective_displacements(
+        adjacency=adjacency,
+        allowed_vertices={0, 1, 2, 3, 4},
+        core_displacements={2: (0.0, 1.0, 0.0)},
+        propagation_rings=2,
+        iterations=20,
+    )
+
+    assert 5 not in field
+    assert field[0] == pytest.approx((0.0, 0.0, 0.0))
+    assert field[4] == pytest.approx((0.0, 0.0, 0.0))
+
+
 def test_continuity_score_prefers_nearby_same_side_candidate():
     tool = load_tool()
     previous = (0.5, 0.0, 0.8)

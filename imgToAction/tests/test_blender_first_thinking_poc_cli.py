@@ -175,6 +175,29 @@ def test_sleeve_corrective_constraints_are_local_before_deltas():
     )
 
 
+def test_chin_support_grid_reaches_measured_positive_y_contact_gap():
+    tool = load_tool()
+
+    offsets = {
+        refinement.hand_target_offset
+        for refinement in tool.chin_support_refinement_grid()
+    }
+
+    assert (0.0, 0.035, 0.0) in offsets
+    assert (0.0, 0.05, 0.0) in offsets
+    assert max(offset[1] for offset in offsets) == pytest.approx(0.06)
+    assert all(abs(offset[0]) <= 0.006 for offset in offsets)
+    assert all(abs(offset[2]) <= 0.006 for offset in offsets)
+    assert any(
+        refinement.hand_target_offset[1] >= 0.05
+        and refinement.upper_chest_lean_deg == pytest.approx(-2.0)
+        and refinement.shoulder_retract_deg == pytest.approx(1.5)
+        and refinement.neck_toward_deg == pytest.approx(2.0)
+        and refinement.head_toward_deg == pytest.approx(2.5)
+        for refinement in tool.chin_support_refinement_grid()
+    )
+
+
 def test_proxy_elbow_uses_calibrated_one_direction_local_z_hinge():
     tool = load_tool()
 
@@ -1108,10 +1131,11 @@ def test_g14_chin_support_refinement_grid_is_small_bounded_and_deterministic():
 
     assert refinements == tool.chin_support_refinement_grid()
     assert 24 <= len(refinements) <= 180
-    assert all(max(abs(value) for value in item.hand_target_offset) <= 0.004 for item in refinements)
-    assert any(max(abs(value) for value in item.hand_target_offset) == pytest.approx(0.004) for item in refinements)
+    assert all(abs(item.hand_target_offset[0]) <= 0.004 for item in refinements)
+    assert all(-0.004 <= item.hand_target_offset[2] <= 0.004 for item in refinements)
+    assert max(item.hand_target_offset[1] for item in refinements) == pytest.approx(0.06)
     assert all(item.neck_toward_deg + item.head_toward_deg <= 5.0 for item in refinements)
-    assert any(item.neck_toward_deg + item.head_toward_deg == pytest.approx(5.0) for item in refinements)
+    assert any(item.neck_toward_deg + item.head_toward_deg == pytest.approx(4.5) for item in refinements)
     assert all(max(abs(value) for value in item.palm_refinement_deg) <= 4.0 for item in refinements)
     assert all(max(abs(value) for value in item.thumb_refinement_deg) <= 6.0 for item in refinements)
 
@@ -1202,6 +1226,41 @@ def test_gallery_source_reproduction_checks_hand_wrist_elbow_pole_and_contact():
         for reason in tool.gallery_source_reproduction_reasons(expected, drifted)
     )
 
+
+def test_chin_support_source_reference_reads_compensated_arm_record():
+    tool = load_tool()
+    stored = {
+        "compensation_candidates": [{
+            "source_candidate_id": "pole3d_0227__comp_065",
+            "parameters": {
+                "alignment_factor": 0.65,
+                "hand_offset": [0.025, 0.0, -0.015],
+                "palm_euler_deg": [20.0, -25.0, 12.0],
+                "pole_offset": 0.0,
+                "pole_offset_3d": [0.16, 0.16, 0.0],
+                "twist_influences": [0.35, 0.5, 0.15],
+                "compensation": {
+                    "upper_chest_turn_deg": 0.0,
+                    "upper_chest_lean_deg": -2.0,
+                    "shoulder_retract_deg": 1.5,
+                    "shoulder_elevate_deg": 0.0,
+                    "neck_toward_deg": 2.0,
+                    "head_toward_deg": 2.5,
+                },
+            },
+            "metrics": {"elbow_angle_deg": 55.553, "surface_contact_distance": 0.029175},
+        }],
+    }
+
+    candidate, compensation, metrics = tool.chin_support_source_reference(
+        stored, "pole3d_0227__comp_065"
+    )
+
+    assert candidate.candidate_id == "pole3d_0227__comp_065"
+    assert candidate.pole_offset_3d == (0.16, 0.16, 0.0)
+    assert compensation.upper_chest_lean_deg == pytest.approx(-2.0)
+    assert compensation.shoulder_retract_deg == pytest.approx(1.5)
+    assert metrics["surface_contact_distance"] == pytest.approx(0.029175)
 
 def test_run_paths_are_isolated_and_require_explicit_overwrite(cli_tmp_path):
     tool = load_tool()
