@@ -24,12 +24,18 @@ REFERENCE_ACTION_NAME = "POC_v16_reference"
 OUTPUT_BLEND_NAME = "eula_elegant_thinking_blender_first_poc.blend"
 OUTPUT_DIRECTORY_NAME = "blender_first_thinking_poc"
 CONTROL_COLLECTION_NAME = "POC_controls"
+PALM_SPACE_NAME = "POC_手掌_SPACE"
 
 PROXY_BONE_NAMES = (
     "POC_右腕_CTRL",
     "POC_右ひじ_CTRL",
     "POC_右手_CTRL",
 )
+PROXY_SOURCE_BONES = {
+    PROXY_BONE_NAMES[0]: "右腕",
+    PROXY_BONE_NAMES[1]: "右ひじ",
+    PROXY_BONE_NAMES[2]: "右手首",
+}
 CONTROL_NAMES = {
     "hand": "POC_右手_TARGET",
     "pole": "POC_右ひじ_POLE",
@@ -38,11 +44,56 @@ CONTROL_NAMES = {
 }
 CONSTRAINT_NAMES = {
     "ik": "POC_右腕_IK",
+    "palm_proxy": "POC_手掌_DELTA",
     "upper": "POC_右腕_COPY_ROTATION",
     "elbow": "POC_右ひじ_COPY_ROTATION",
     "upper_twist": "POC_右腕捩_AXIAL",
     "hand_twist": "POC_右手捩_AXIAL",
     "wrist": "POC_右手首_ORIENTATION",
+}
+CONSTRAINT_SPECS = {
+    "palm_proxy": {
+        "owner_bone": PROXY_BONE_NAMES[2],
+        "target_control": CONTROL_NAMES["palm"],
+        "owner_space": "LOCAL",
+        "target_space": "LOCAL",
+        "mix_mode": "REPLACE",
+    },
+    "upper": {
+        "owner_bone": "右腕",
+        "target_bone": PROXY_BONE_NAMES[0],
+        "constraint_type": "CHILD_OF",
+        "rotation_axes": "XYZ",
+        "calibrate_inverse": True,
+    },
+    "elbow": {
+        "owner_bone": "右ひじ",
+        "target_bone": PROXY_BONE_NAMES[1],
+        "constraint_type": "CHILD_OF",
+        "rotation_axes": "XYZ",
+        "calibrate_inverse": True,
+    },
+    "upper_twist": {
+        "owner_bone": "右腕捩",
+        "target_bone": PROXY_BONE_NAMES[2],
+        "constraint_type": "CHILD_OF",
+        "rotation_axes": "Y",
+        "calibrate_inverse": True,
+    },
+    "hand_twist": {
+        "owner_bone": "右手捩",
+        "target_bone": PROXY_BONE_NAMES[2],
+        "constraint_type": "CHILD_OF",
+        "rotation_axes": "Y",
+        "calibrate_inverse": True,
+    },
+    "wrist": {
+        "owner_bone": "右手首",
+        "target_bone": PROXY_BONE_NAMES[2],
+        "constraint_type": "CHILD_OF",
+        "rotation_axes": "XYZ",
+        "calibrate_inverse": True,
+    },
 }
 
 REQUIRED_BONES = (
@@ -58,6 +109,9 @@ REQUIRED_BONES = (
 EXPECTED_ACTION_RANGE = (0.0, 240.0)
 VALIDATION_FRAME = 150
 LENGTH_TOLERANCE = 1e-5
+ROLL_TOLERANCE = 1e-6
+ENABLED_DELTA_LIMIT_DEG = 10.0
+BASELINE_RESTORE_TOLERANCE_DEG = 1e-4
 
 
 @dataclass(frozen=True)
@@ -182,38 +236,46 @@ def _import_reference_action(config: PocConfig, armature):
 
 
 def _create_proxy_chain(armature) -> None:
-    source = armature.data.bones
-    geometry = {
-        PROXY_BONE_NAMES[0]: (source["右腕"].head_local.copy(), source["右ひじ"].head_local.copy()),
-        PROXY_BONE_NAMES[1]: (source["右ひじ"].head_local.copy(), source["右手首"].head_local.copy()),
-        PROXY_BONE_NAMES[2]: (source["右手首"].head_local.copy(), source["右手首"].tail_local.copy()),
-    }
-
     _select_armature(armature)
     bpy.ops.object.mode_set(mode="EDIT")
     edit_bones = armature.data.edit_bones
+    geometry = {
+        proxy_name: (
+            edit_bones[source_name].head.copy(),
+            edit_bones[source_name].tail.copy(),
+            float(edit_bones[source_name].roll),
+        )
+        for proxy_name, source_name in PROXY_SOURCE_BONES.items()
+    }
     for name in PROXY_BONE_NAMES:
         existing = edit_bones.get(name)
         if existing is not None:
             edit_bones.remove(existing)
 
     upper = edit_bones.new(PROXY_BONE_NAMES[0])
-    upper.head, upper.tail = geometry[PROXY_BONE_NAMES[0]]
+    upper.head, upper.tail, upper.roll = geometry[PROXY_BONE_NAMES[0]]
     upper.parent = edit_bones["右肩C"]
     upper.use_connect = False
     upper.use_deform = False
 
     forearm = edit_bones.new(PROXY_BONE_NAMES[1])
-    forearm.head, forearm.tail = geometry[PROXY_BONE_NAMES[1]]
+    forearm.head, forearm.tail, forearm.roll = geometry[PROXY_BONE_NAMES[1]]
     forearm.parent = upper
     forearm.use_connect = True
     forearm.use_deform = False
 
     hand = edit_bones.new(PROXY_BONE_NAMES[2])
-    hand.head, hand.tail = geometry[PROXY_BONE_NAMES[2]]
+    hand.head, hand.tail, hand.roll = geometry[PROXY_BONE_NAMES[2]]
     hand.parent = forearm
     hand.use_connect = True
     hand.use_deform = False
+    for proxy_name, source_name in PROXY_SOURCE_BONES.items():
+        roll_delta = abs(edit_bones[proxy_name].roll - edit_bones[source_name].roll)
+        if roll_delta > ROLL_TOLERANCE:
+            raise RuntimeError(
+                f"Proxy roll mismatch for {proxy_name}: {edit_bones[proxy_name].roll} vs "
+                f"{edit_bones[source_name].roll}"
+            )
     bpy.ops.object.mode_set(mode="POSE")
     armature.pose.bones[PROXY_BONE_NAMES[0]].ik_stretch = 0.0
     armature.pose.bones[PROXY_BONE_NAMES[1]].ik_stretch = 0.0
@@ -258,6 +320,15 @@ def _create_controls(armature):
         elbow_radial = armature.matrix_world.to_3x3() @ Vector((0.0, -1.0, 0.0))
     pole_location = elbow + elbow_radial.normalized() * 0.5
 
+    palm_space = _create_control(
+        collection,
+        PALM_SPACE_NAME,
+        wrist,
+        "PLAIN_AXES",
+        0.08,
+    )
+    palm_space.matrix_world = armature.matrix_world @ armature.pose.bones["右手首"].matrix
+
     controls = {
         "hand": _create_control(collection, CONTROL_NAMES["hand"], wrist, "SPHERE", 0.08),
         "pole": _create_control(collection, CONTROL_NAMES["pole"], pole_location, "CUBE", 0.08),
@@ -270,7 +341,9 @@ def _create_controls(armature):
             0.05,
         ),
     }
-    controls["palm"].matrix_world = armature.matrix_world @ armature.pose.bones["右手首"].matrix
+    controls["palm"].parent = palm_space
+    controls["palm"].matrix_parent_inverse = Matrix.Identity(4)
+    controls["palm"].matrix_basis = Matrix.Identity(4)
     return controls
 
 
@@ -288,24 +361,70 @@ def _add_influence_driver(constraint, armature, property_name: str) -> None:
     driver.expression = "enabled * weight"
 
 
-def _new_copy_rotation(armature, bone_name: str, name: str, target, *, subtarget: str = "", axial: bool = False):
-    pose_bone = armature.pose.bones[bone_name]
+def _new_copy_rotation(armature, name: str, target, spec, *, axial: bool = False):
+    pose_bone = armature.pose.bones[spec["owner_bone"]]
     old = pose_bone.constraints.get(name)
     if old is not None:
         pose_bone.constraints.remove(old)
     constraint = pose_bone.constraints.new("COPY_ROTATION")
     constraint.name = name
     constraint.target = target
-    constraint.subtarget = subtarget
-    constraint.owner_space = "LOCAL"
-    constraint.target_space = "LOCAL"
-    constraint.mix_mode = "REPLACE"
+    constraint.subtarget = spec.get("target_bone", "")
+    constraint.owner_space = spec["owner_space"]
+    constraint.target_space = spec["target_space"]
+    constraint.mix_mode = spec["mix_mode"]
     if axial:
         constraint.use_x = False
         constraint.use_y = True
         constraint.use_z = False
     constraint.influence = 0.0
     return constraint
+
+
+def _new_child_of_rotation(armature, name: str, spec):
+    pose_bone = armature.pose.bones[spec["owner_bone"]]
+    old = pose_bone.constraints.get(name)
+    if old is not None:
+        pose_bone.constraints.remove(old)
+    constraint = pose_bone.constraints.new(spec["constraint_type"])
+    constraint.name = name
+    constraint.target = armature
+    constraint.subtarget = spec["target_bone"]
+    constraint.use_location_x = False
+    constraint.use_location_y = False
+    constraint.use_location_z = False
+    constraint.use_scale_x = False
+    constraint.use_scale_y = False
+    constraint.use_scale_z = False
+    axes = spec["rotation_axes"]
+    constraint.use_rotation_x = "X" in axes
+    constraint.use_rotation_y = "Y" in axes
+    constraint.use_rotation_z = "Z" in axes
+
+    constraint.influence = 1.0
+    _select_armature(armature)
+    bpy.ops.object.mode_set(mode="POSE")
+    armature.data.bones.active = armature.data.bones[spec["owner_bone"]]
+    bpy.context.view_layer.update()
+    result = bpy.ops.constraint.childof_set_inverse(constraint=name, owner="BONE")
+    if "FINISHED" not in result:
+        raise RuntimeError(f"Failed to calibrate inverse matrix for {name}: {sorted(result)}")
+    constraint.influence = 0.0
+    return constraint
+
+
+def _proxy_elbow_pole_side(armature, pole_control) -> float:
+    root = _pose_head_world(armature, PROXY_BONE_NAMES[0])
+    elbow = _pose_head_world(armature, PROXY_BONE_NAMES[1])
+    end = _pose_head_world(armature, PROXY_BONE_NAMES[2])
+    axis = end - root
+    if axis.length_squared <= 1e-12:
+        raise RuntimeError("Proxy chain has a zero-length shoulder-to-wrist axis")
+    elbow_offset = elbow - root - axis * ((elbow - root).dot(axis) / axis.length_squared)
+    pole_offset = pole_control.location - root - axis * (
+        (pole_control.location - root).dot(axis) / axis.length_squared
+    )
+    return elbow_offset.dot(pole_offset)
 
 
 def _create_constraints(armature, controls) -> None:
@@ -320,6 +439,24 @@ def _create_constraints(armature, controls) -> None:
     ik.chain_count = 2
     ik.use_tail = True
     ik.use_stretch = False
+    bpy.context.scene.frame_set(VALIDATION_FRAME - 1)
+    bpy.context.scene.frame_set(VALIDATION_FRAME)
+    bpy.context.view_layer.update()
+    if _proxy_elbow_pole_side(armature, controls["pole"]) <= 0.0:
+        ik.pole_angle = math.pi
+        bpy.context.scene.frame_set(VALIDATION_FRAME - 1)
+        bpy.context.scene.frame_set(VALIDATION_FRAME)
+        bpy.context.view_layer.update()
+    if _proxy_elbow_pole_side(armature, controls["pole"]) <= 0.0:
+        raise RuntimeError("Unable to align the proxy IK elbow with its pole target")
+
+    palm_proxy = _new_copy_rotation(
+        armature,
+        CONSTRAINT_NAMES["palm_proxy"],
+        controls["palm"],
+        CONSTRAINT_SPECS["palm_proxy"],
+    )
+    palm_proxy.influence = 1.0
 
     properties = {
         "POC_enabled": 0.0,
@@ -335,61 +472,70 @@ def _create_constraints(armature, controls) -> None:
 
     driven = (
         (
-            _new_copy_rotation(
+            _new_child_of_rotation(
                 armature,
-                "右腕",
                 CONSTRAINT_NAMES["upper"],
-                armature,
-                subtarget=PROXY_BONE_NAMES[0],
+                CONSTRAINT_SPECS["upper"],
             ),
             "POC_upper_arm_influence",
         ),
         (
-            _new_copy_rotation(
+            _new_child_of_rotation(
                 armature,
-                "右ひじ",
                 CONSTRAINT_NAMES["elbow"],
-                armature,
-                subtarget=PROXY_BONE_NAMES[1],
+                CONSTRAINT_SPECS["elbow"],
             ),
             "POC_elbow_influence",
         ),
         (
-            _new_copy_rotation(
+            _new_child_of_rotation(
                 armature,
-                "右腕捩",
                 CONSTRAINT_NAMES["upper_twist"],
-                controls["palm"],
-                axial=True,
+                CONSTRAINT_SPECS["upper_twist"],
             ),
             "POC_upper_twist_influence",
         ),
         (
-            _new_copy_rotation(
+            _new_child_of_rotation(
                 armature,
-                "右手捩",
                 CONSTRAINT_NAMES["hand_twist"],
-                controls["palm"],
-                axial=True,
+                CONSTRAINT_SPECS["hand_twist"],
             ),
             "POC_hand_twist_influence",
         ),
         (
-            _new_copy_rotation(
+            _new_child_of_rotation(
                 armature,
-                "右手首",
                 CONSTRAINT_NAMES["wrist"],
-                controls["palm"],
+                CONSTRAINT_SPECS["wrist"],
             ),
             "POC_wrist_influence",
         ),
     )
     for constraint, property_name in driven:
         _add_influence_driver(constraint, armature, property_name)
+    bpy.ops.object.mode_set(mode="OBJECT")
 
 
 def _finite_matrix(matrix) -> bool:
     return all(math.isfinite(value) for row in matrix for value in row)
+
+
+def _world_rotation(armature, bone_name: str):
+    return (armature.matrix_world @ armature.pose.bones[bone_name].matrix).to_quaternion()
+
+
+def _rotation_delta_degrees(before, after) -> float:
+    degrees = math.degrees(before.rotation_difference(after).angle)
+    return min(degrees, abs(360.0 - degrees))
+
+
+def _set_poc_enabled(armature, scene, enabled: bool) -> None:
+    armature["POC_enabled"] = 1.0 if enabled else 0.0
+    armature.update_tag()
+    scene.frame_set(VALIDATION_FRAME - 1)
+    scene.frame_set(VALIDATION_FRAME)
+    bpy.context.view_layer.update()
 
 
 def _validate_setup(armature, action, controls) -> None:
@@ -422,30 +568,95 @@ def _validate_setup(armature, action, controls) -> None:
     root = _pose_head_world(armature, PROXY_BONE_NAMES[0])
     elbow = _pose_head_world(armature, PROXY_BONE_NAMES[1])
     end = _pose_head_world(armature, PROXY_BONE_NAMES[2])
-    axis = end - root
-    elbow_offset = elbow - root - axis * ((elbow - root).dot(axis) / axis.length_squared)
-    pole_offset = controls["pole"].location - root - axis * ((controls["pole"].location - root).dot(axis) / axis.length_squared)
-    if elbow_offset.dot(pole_offset) <= 0.0:
+    if _proxy_elbow_pole_side(armature, controls["pole"]) <= 0.0:
         raise RuntimeError("Proxy elbow is not on the pole-facing side")
     bend = math.degrees((root - elbow).angle(end - elbow))
     if not math.isfinite(bend) or bend <= 0.0 or bend >= 180.0:
         raise RuntimeError(f"Proxy elbow bend is invalid: {bend}")
 
     expected_targets = {
-        CONSTRAINT_NAMES["ik"]: (PROXY_BONE_NAMES[1], controls["hand"], controls["pole"]),
-        CONSTRAINT_NAMES["upper"]: ("右腕", armature, None),
-        CONSTRAINT_NAMES["elbow"]: ("右ひじ", armature, None),
-        CONSTRAINT_NAMES["upper_twist"]: ("右腕捩", controls["palm"], None),
-        CONSTRAINT_NAMES["hand_twist"]: ("右手捩", controls["palm"], None),
-        CONSTRAINT_NAMES["wrist"]: ("右手首", controls["palm"], None),
+        CONSTRAINT_NAMES["ik"]: (PROXY_BONE_NAMES[1], controls["hand"], "", controls["pole"]),
+        CONSTRAINT_NAMES["palm_proxy"]: (
+            PROXY_BONE_NAMES[2],
+            controls["palm"],
+            "",
+            None,
+        ),
+        CONSTRAINT_NAMES["upper"]: (
+            CONSTRAINT_SPECS["upper"]["owner_bone"],
+            armature,
+            CONSTRAINT_SPECS["upper"]["target_bone"],
+            None,
+        ),
+        CONSTRAINT_NAMES["elbow"]: (
+            CONSTRAINT_SPECS["elbow"]["owner_bone"],
+            armature,
+            CONSTRAINT_SPECS["elbow"]["target_bone"],
+            None,
+        ),
+        CONSTRAINT_NAMES["upper_twist"]: (
+            CONSTRAINT_SPECS["upper_twist"]["owner_bone"],
+            armature,
+            CONSTRAINT_SPECS["upper_twist"]["target_bone"],
+            None,
+        ),
+        CONSTRAINT_NAMES["hand_twist"]: (
+            CONSTRAINT_SPECS["hand_twist"]["owner_bone"],
+            armature,
+            CONSTRAINT_SPECS["hand_twist"]["target_bone"],
+            None,
+        ),
+        CONSTRAINT_NAMES["wrist"]: (
+            CONSTRAINT_SPECS["wrist"]["owner_bone"],
+            armature,
+            CONSTRAINT_SPECS["wrist"]["target_bone"],
+            None,
+        ),
     }
-    for constraint_name, (bone_name, target, pole_target) in expected_targets.items():
+    for constraint_name, (bone_name, target, subtarget, pole_target) in expected_targets.items():
         constraint = armature.pose.bones[bone_name].constraints.get(constraint_name)
         if constraint is None or constraint.target != target:
             raise RuntimeError(f"Missing or mistargeted constraint: {constraint_name}")
+        if constraint.subtarget != subtarget:
+            raise RuntimeError(
+                f"Constraint {constraint_name} must target subtarget {subtarget!r}, "
+                f"got {constraint.subtarget!r}"
+            )
         if pole_target is not None and constraint.pole_target != pole_target:
             raise RuntimeError(f"Missing or mistargeted pole target: {constraint_name}")
-        if constraint_name != CONSTRAINT_NAMES["ik"] and constraint.influence != 0.0:
+        expected_type = (
+            "IK"
+            if constraint_name == CONSTRAINT_NAMES["ik"]
+            else "COPY_ROTATION"
+            if constraint_name == CONSTRAINT_NAMES["palm_proxy"]
+            else "CHILD_OF"
+        )
+        if constraint.type != expected_type:
+            raise RuntimeError(
+                f"Constraint {constraint_name} must use {expected_type}, got {constraint.type}"
+            )
+        if constraint.type == "CHILD_OF" and not _finite_matrix(constraint.inverse_matrix):
+            raise RuntimeError(f"Constraint inverse matrix is not finite: {constraint_name}")
+        if constraint.type == "CHILD_OF":
+            spec_key = next(
+                key for key, configured_name in CONSTRAINT_NAMES.items() if configured_name == constraint_name
+            )
+            expected_axes = CONSTRAINT_SPECS[spec_key]["rotation_axes"]
+            actual_axes = "".join(
+                axis
+                for axis, enabled in (
+                    ("X", constraint.use_rotation_x),
+                    ("Y", constraint.use_rotation_y),
+                    ("Z", constraint.use_rotation_z),
+                )
+                if enabled
+            )
+            if actual_axes != expected_axes:
+                raise RuntimeError(
+                    f"Constraint {constraint_name} rotation axes must be {expected_axes}, "
+                    f"got {actual_axes}"
+                )
+        if constraint_name not in (CONSTRAINT_NAMES["ik"], CONSTRAINT_NAMES["palm_proxy"]) and constraint.influence != 0.0:
             raise RuntimeError(f"Baseline POC constraint must be disabled: {constraint_name}")
 
     for name, control in controls.items():
@@ -453,6 +664,44 @@ def _validate_setup(armature, action, controls) -> None:
             raise RuntimeError(f"Invalid control object: {CONTROL_NAMES[name]}")
         if any(value <= 0.0 or not math.isfinite(value) for value in control.scale):
             raise RuntimeError(f"Invalid control scale: {control.name}")
+
+    palm_control = controls["palm"]
+    if palm_control.parent is None or palm_control.parent.name != PALM_SPACE_NAME:
+        raise RuntimeError(f"Palm control must be parented to {PALM_SPACE_NAME}")
+    if any(abs(value) > 1e-8 for value in palm_control.rotation_euler):
+        raise RuntimeError("Palm control must have zero local rotation in the baseline setup")
+    palm_constraint = armature.pose.bones[PROXY_BONE_NAMES[2]].constraints[
+        CONSTRAINT_NAMES["palm_proxy"]
+    ]
+    palm_spec = CONSTRAINT_SPECS["palm_proxy"]
+    if (
+        palm_constraint.owner_space != palm_spec["owner_space"]
+        or palm_constraint.target_space != palm_spec["target_space"]
+        or palm_constraint.mix_mode != palm_spec["mix_mode"]
+    ):
+        raise RuntimeError("Palm delta constraint uses incompatible rotation spaces")
+
+    diagnostic_bones = ("右腕", "右ひじ", "右手首")
+    disabled_rotations = {name: _world_rotation(armature, name) for name in diagnostic_bones}
+    _set_poc_enabled(armature, scene, True)
+    enabled_rotations = {name: _world_rotation(armature, name) for name in diagnostic_bones}
+    enabled_deltas = {
+        name: _rotation_delta_degrees(disabled_rotations[name], enabled_rotations[name])
+        for name in diagnostic_bones
+    }
+    print("POC_ENABLED_DELTAS_DEG", enabled_deltas)
+    excessive = {name: delta for name, delta in enabled_deltas.items() if delta >= ENABLED_DELTA_LIMIT_DEG}
+    if excessive:
+        raise RuntimeError(f"Enabled POC chain has discontinuous baseline rotations: {excessive}")
+
+    _set_poc_enabled(armature, scene, False)
+    restored_rotations = {name: _world_rotation(armature, name) for name in diagnostic_bones}
+    restore_deltas = {
+        name: _rotation_delta_degrees(disabled_rotations[name], restored_rotations[name])
+        for name in diagnostic_bones
+    }
+    if any(delta > BASELINE_RESTORE_TOLERANCE_DEG for delta in restore_deltas.values()):
+        raise RuntimeError(f"Disabled POC chain did not restore the v16 baseline: {restore_deltas}")
 
 
 def build_setup(config: PocConfig) -> None:

@@ -62,6 +62,59 @@ def test_module_loads_without_blender_python():
     assert tool.REFERENCE_ACTION_NAME == "POC_v16_reference"
 
 
+def test_proxy_bones_preserve_matching_source_rest_orientation():
+    tool = load_tool()
+
+    assert tool.PROXY_SOURCE_BONES == {
+        "POC_右腕_CTRL": "右腕",
+        "POC_右ひじ_CTRL": "右ひじ",
+        "POC_右手_CTRL": "右手首",
+    }
+
+
+def test_deform_constraints_use_inverse_calibrated_proxy_subtargets():
+    tool = load_tool()
+
+    assert tool.CONSTRAINT_SPECS["upper"] == {
+        "owner_bone": "右腕",
+        "target_bone": "POC_右腕_CTRL",
+        "constraint_type": "CHILD_OF",
+        "rotation_axes": "XYZ",
+        "calibrate_inverse": True,
+    }
+    assert tool.CONSTRAINT_SPECS["elbow"] == {
+        "owner_bone": "右ひじ",
+        "target_bone": "POC_右ひじ_CTRL",
+        "constraint_type": "CHILD_OF",
+        "rotation_axes": "XYZ",
+        "calibrate_inverse": True,
+    }
+    for key in ("upper_twist", "hand_twist"):
+        spec = tool.CONSTRAINT_SPECS[key]
+        assert spec["target_bone"] == "POC_右手_CTRL"
+        assert spec["constraint_type"] == "CHILD_OF"
+        assert spec["rotation_axes"] == "Y"
+        assert spec["calibrate_inverse"] is True
+    assert tool.CONSTRAINT_SPECS["wrist"]["target_bone"] == "POC_右手_CTRL"
+    assert tool.CONSTRAINT_SPECS["wrist"]["constraint_type"] == "CHILD_OF"
+    assert tool.CONSTRAINT_SPECS["wrist"]["rotation_axes"] == "XYZ"
+    assert tool.CONSTRAINT_SPECS["wrist"]["calibrate_inverse"] is True
+
+
+def test_palm_control_drives_proxy_hand_as_a_local_delta():
+    tool = load_tool()
+
+    assert tool.PALM_SPACE_NAME == "POC_手掌_SPACE"
+    assert tool.CONSTRAINT_SPECS["palm_proxy"] == {
+        "owner_bone": "POC_右手_CTRL",
+        "target_control": "POC_手掌_ORIENTATION",
+        "owner_space": "LOCAL",
+        "target_space": "LOCAL",
+        "mix_mode": "REPLACE",
+    }
+    assert 0.0 < tool.ENABLED_DELTA_LIMIT_DEG <= 10.0
+
+
 def test_parse_blender_arguments_after_separator_with_deterministic_defaults(cli_tmp_path):
     tool = load_tool()
 
