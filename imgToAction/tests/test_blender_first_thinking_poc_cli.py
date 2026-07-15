@@ -126,6 +126,15 @@ def valid_chin_support_cli(tmp_path):
     return argv
 
 
+def valid_collision_severity_cli(tmp_path):
+    argv = valid_gallery_cli(tmp_path)
+    argv[argv.index("--orientation-gallery")] = "--collision-severity-diagnostic"
+    argv[argv.index("run-20260715-orientation-001")] = "run-20260715-collision-severity-001"
+    source_id_index = argv.index("--source-candidate-id")
+    del argv[source_id_index:source_id_index + 2]
+    return argv
+
+
 def test_module_loads_without_blender_python():
     tool = load_tool()
 
@@ -910,6 +919,31 @@ def test_chin_support_refinement_requires_exact_g14_and_isolated_run(cli_tmp_pat
     assert paths.metrics == paths.final / tool.CHIN_SUPPORT_METRICS_NAME
 
 
+def test_collision_severity_mode_reuses_source_metrics_and_isolates_output(cli_tmp_path):
+    tool = load_tool()
+
+    config = tool.parse_blender_args(valid_collision_severity_cli(cli_tmp_path))
+
+    assert config.collision_severity_diagnostic is True
+    paths = tool.collision_severity_run_paths(config.output_dir, config.run_id)
+    assert paths.metrics == paths.final / tool.COLLISION_SEVERITY_METRICS_NAME
+
+
+def test_collision_severity_record_selection_prefers_lowest_overlap_pole3d_compensation():
+    tool = load_tool()
+    stored = {
+        "compensation_candidates": [
+            {"source_candidate_id": "candidate_100__comp_001", "metrics": {"torso_penetration_count": 2, "surface_contact_distance": 0.01}},
+            {"source_candidate_id": "pole3d_0227__comp_065", "metrics": {"torso_penetration_count": 89, "surface_contact_distance": 0.029}},
+            {"source_candidate_id": "pole3d_0020__comp_065", "metrics": {"torso_penetration_count": 341, "surface_contact_distance": 0.026}},
+        ]
+    }
+
+    selected = tool.collision_severity_source_records(stored)
+
+    assert selected["compensated"]["source_candidate_id"] == "pole3d_0227__comp_065"
+
+
 def test_selected_g14_orientation_reconstructs_exact_gallery_targets():
     tool = load_tool()
 
@@ -1354,6 +1388,76 @@ def test_collision_attribution_reports_regions_polygons_points_and_bbox():
     assert evidence["representative_pairs"][0]["moving_world_point"] == pytest.approx((1 / 30, 1 / 30, 0.0))
     assert evidence["overlap_bbox"]["min"] == pytest.approx((0.0, 0.0, 0.0))
     assert evidence["overlap_bbox"]["max"] == pytest.approx((0.12, 0.12, 0.0))
+
+
+def test_penetration_depth_summary_reports_percentiles_and_pmx_units():
+    tool = load_tool()
+
+    summary = tool.summarize_penetration_depths((0.001, 0.002, 0.003, 0.010))
+
+    assert summary["sample_count"] == 4
+    assert summary["median_blender"] == pytest.approx(0.0025)
+    assert summary["p95_blender"] == pytest.approx(0.00895)
+    assert summary["max_blender"] == pytest.approx(0.010)
+    assert summary["median_pmx"] == pytest.approx(0.03125)
+    assert summary["max_pmx"] == pytest.approx(0.125)
+
+
+def test_collision_area_evidence_uses_unique_polygons_and_moving_area_ratio():
+    tool = load_tool()
+    vertices = (
+        (0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0), (2.0, 0.0, 1.0), (0.0, 1.0, 1.0),
+        (3.0, 0.0, 0.0), (5.0, 0.0, 0.0), (3.0, 1.0, 0.0),
+    )
+    moving = (
+        {"polygon_index": 10, "vertices": (0, 1, 2), "region": "forearm", "group": "右ひじ"},
+        {"polygon_index": 11, "vertices": (6, 7, 8), "region": "forearm", "group": "右ひじ"},
+    )
+    target = (
+        {"polygon_index": 20, "vertices": (3, 4, 5), "region": "torso", "group": "上半身2"},
+    )
+
+    evidence = tool.collision_area_evidence(((0, 0), (0, 0)), moving, target, vertices)
+
+    assert evidence["moving_intersecting_area_blender2"] == pytest.approx(1.0)
+    assert evidence["target_intersecting_area_blender2"] == pytest.approx(1.0)
+    assert evidence["moving_region_area_blender2"] == pytest.approx(2.0)
+    assert evidence["moving_intersection_area_ratio"] == pytest.approx(0.5)
+    assert evidence["moving_intersecting_area_pmx2"] == pytest.approx(156.25)
+
+
+def test_overlap_bbox_and_silhouette_summary_are_explicit():
+    tool = load_tool()
+
+    bbox = tool.overlap_bbox_evidence(((1.0, 2.0, 3.0), (4.0, 6.0, 8.0)))
+    silhouette = tool.classify_silhouette_visibility({
+        "front": (False, False),
+        "left": (True, False),
+        "right": (False,),
+    })
+
+    assert bbox["dimensions"] == pytest.approx((3.0, 4.0, 5.0))
+    assert bbox["center"] == pytest.approx((2.5, 4.0, 5.5))
+    assert silhouette["front"]["classification"] == "internal_or_covered"
+    assert silhouette["left"]["classification"] == "reaches_visible_outer_surface"
+    assert silhouette["overall"] == "visible_from_some_review_views"
+
+
+def test_severity_scale_comparison_reports_ratios_without_acceptance_verdict():
+    tool = load_tool()
+
+    comparison = tool.compare_penetration_scales(
+        max_depth=0.004,
+        median_mesh_edge=0.010,
+        sleeve_thickness=0.020,
+        chest_thickness=0.040,
+    )
+
+    assert comparison["depth_to_median_edge_ratio"] == pytest.approx(0.4)
+    assert comparison["depth_to_sleeve_thickness_ratio"] == pytest.approx(0.2)
+    assert comparison["depth_to_chest_thickness_ratio"] == pytest.approx(0.1)
+    assert "verdict" not in comparison
 
 
 def test_candidate_render_names_cover_top_six_full_body_views():

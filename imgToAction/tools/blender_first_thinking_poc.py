@@ -217,6 +217,8 @@ ORIENTATION_GALLERY_DIRECTORY = "orientation_gallery"
 ORIENTATION_GALLERY_METRICS_NAME = "orientation_gallery_metrics.json"
 CHIN_SUPPORT_DIRECTORY = "chin_support_refinement"
 CHIN_SUPPORT_METRICS_NAME = "chin_support_metrics.json"
+COLLISION_SEVERITY_DIRECTORY = "collision_severity_diagnostic"
+COLLISION_SEVERITY_METRICS_NAME = "collision_severity_metrics.json"
 G14_ORIENTATION_SOURCE_ID = (
     "gallery_14_thumb_opposition_m15_sxp00_tzm10_thumb_opposed_base"
 )
@@ -433,6 +435,7 @@ class PocConfig:
     select_static: bool
     orientation_gallery: bool
     chin_support_refinement: bool
+    collision_severity_diagnostic: bool
     run_id: str | None
     overwrite_run: bool
     source_candidate_id: str | None
@@ -1097,6 +1100,24 @@ def gallery_source_reference(stored_metrics, source_candidate_id: str):
     return _candidate_from_record(candidate_record), seed_metrics
 
 
+def collision_severity_source_records(stored_metrics):
+    compensated = [
+        record for record in stored_metrics.get("compensation_candidates", ())
+        if str(record.get("source_candidate_id", "")).startswith("pole3d_")
+        and "__comp_" in str(record.get("source_candidate_id", ""))
+        and record.get("metrics", {}).get("torso_penetration_count") is not None
+        and int(record["metrics"]["torso_penetration_count"]) > 0
+    ]
+    if not compensated:
+        raise ValueError("Source metrics contain no reconstructable colliding pole3d compensation")
+    best = min(compensated, key=lambda record: (
+        int(record["metrics"]["torso_penetration_count"]),
+        float(record["metrics"].get("surface_contact_distance", math.inf)),
+        str(record["source_candidate_id"]),
+    ))
+    return {"compensated": best}
+
+
 def gallery_arm_state_reproduction_reasons(expected, actual) -> tuple[str, ...]:
     reasons = []
     vector_tolerances = {
@@ -1236,6 +1257,7 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--select-static", action="store_true")
     mode.add_argument("--orientation-gallery", action="store_true")
     mode.add_argument("--chin-support-refinement", action="store_true")
+    mode.add_argument("--collision-severity-diagnostic", action="store_true")
     parser.add_argument("--run-id")
     parser.add_argument("--overwrite-run", action="store_true")
     parser.add_argument("--source-candidate-id")
@@ -1279,6 +1301,15 @@ def chin_support_run_paths(output_dir: Path, run_id: str) -> StaticRunPaths:
     )
 
 
+def collision_severity_run_paths(output_dir: Path, run_id: str) -> StaticRunPaths:
+    paths = static_run_paths(output_dir, run_id)
+    return StaticRunPaths(
+        temporary=paths.temporary,
+        final=paths.final,
+        metrics=paths.final / COLLISION_SEVERITY_METRICS_NAME,
+    )
+
+
 def _validated_config(namespace: argparse.Namespace) -> PocConfig:
     source_blend = namespace.source_blend.resolve()
     vmd = namespace.vmd.resolve() if namespace.vmd is not None else None
@@ -1313,6 +1344,7 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         or namespace.select_static
         or namespace.orientation_gallery
         or namespace.chin_support_refinement
+        or namespace.collision_severity_diagnostic
     )
     if static_mode and (
         source_blend.name != OUTPUT_BLEND_NAME or not _same_path(source_blend, output_blend)
@@ -1333,11 +1365,14 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         if namespace.chin_support_refinement:
             paths = chin_support_run_paths(output_dir, namespace.run_id)
             run_metrics_path = paths.metrics
+        elif namespace.collision_severity_diagnostic:
+            paths = collision_severity_run_paths(output_dir, namespace.run_id)
+            run_metrics_path = paths.metrics
         else:
             run_metrics_path = paths.metrics
-        if (namespace.search_static or namespace.orientation_gallery or namespace.chin_support_refinement) and paths.final.exists() and not namespace.overwrite_run:
+        if (namespace.search_static or namespace.orientation_gallery or namespace.chin_support_refinement or namespace.collision_severity_diagnostic) and paths.final.exists() and not namespace.overwrite_run:
             raise ValueError(f"Static run already exists: {paths.final}")
-        if (namespace.search_static or namespace.orientation_gallery or namespace.chin_support_refinement) and paths.temporary.exists() and not namespace.overwrite_run:
+        if (namespace.search_static or namespace.orientation_gallery or namespace.chin_support_refinement or namespace.collision_severity_diagnostic) and paths.temporary.exists() and not namespace.overwrite_run:
             raise ValueError(f"Temporary static run already exists: {paths.temporary}")
     if namespace.select_static:
         if not namespace.source_candidate_id or not SOURCE_CANDIDATE_PATTERN.fullmatch(
@@ -1370,6 +1405,15 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
             )
         if orientation_gallery_metrics is None or not orientation_gallery_metrics.is_file():
             raise ValueError("Chin-support refinement requires persisted orientation gallery metrics")
+    elif namespace.collision_severity_diagnostic:
+        if source_static_metrics is None or not source_static_metrics.is_file():
+            raise ValueError(
+                f"Collision severity source metrics do not exist: {source_static_metrics}"
+            )
+        if namespace.source_candidate_id is not None or namespace.orientation_source_id is not None:
+            raise ValueError("Collision severity diagnostic uses its fixed evidence candidates")
+        if orientation_gallery_metrics is not None:
+            raise ValueError("Collision severity diagnostic does not use gallery metrics")
     elif (
         namespace.source_candidate_id is not None
         or namespace.orientation_source_id is not None
@@ -1393,6 +1437,7 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         select_static=namespace.select_static,
         orientation_gallery=namespace.orientation_gallery,
         chin_support_refinement=namespace.chin_support_refinement,
+        collision_severity_diagnostic=namespace.collision_severity_diagnostic,
         run_id=namespace.run_id,
         overwrite_run=namespace.overwrite_run,
         source_candidate_id=namespace.source_candidate_id,
@@ -1611,22 +1656,25 @@ def attribute_collision_pairs(overlap_pairs, moving_records, target_records, ver
         overlap_vertex_indices.update(moving["vertices"])
         overlap_vertex_indices.update(target["vertices"])
         if len(representatives) < 12:
+            moving_area = _polygon_area(points, moving["vertices"])
+            torso_area = _polygon_area(points, target["vertices"])
             representatives.append({
                 "moving_region": moving_region,
                 "moving_group": moving_group,
                 "moving_polygon_index": int(moving["polygon_index"]),
                 "moving_world_point": centroid(moving),
+                "moving_polygon_area_blender2": moving_area,
+                "moving_polygon_area_pmx2": moving_area / (PMX_TO_BLENDER_SCALE ** 2),
                 "torso_region": target_region,
                 "torso_group": target_group,
                 "torso_polygon_index": int(target["polygon_index"]),
                 "torso_world_point": centroid(target),
+                "torso_polygon_area_blender2": torso_area,
+                "torso_polygon_area_pmx2": torso_area / (PMX_TO_BLENDER_SCALE ** 2),
             })
     if overlap_vertex_indices:
         overlap_points = tuple(points[index] for index in overlap_vertex_indices)
-        overlap_bbox = {
-            "min": tuple(min(point[axis] for point in overlap_points) for axis in range(3)),
-            "max": tuple(max(point[axis] for point in overlap_points) for axis in range(3)),
-        }
+        overlap_bbox = overlap_bbox_evidence(overlap_points)
     else:
         overlap_bbox = None
     return {
@@ -1637,6 +1685,145 @@ def attribute_collision_pairs(overlap_pairs, moving_records, target_records, ver
         "representative_pairs": representatives,
         "overlap_bbox": overlap_bbox,
     }
+
+
+def _linear_percentile(values, percentile: float) -> float:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return 0.0
+    position = (len(ordered) - 1) * float(percentile)
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    fraction = position - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+
+def summarize_penetration_depths(depths) -> dict[str, float | int]:
+    values = tuple(max(0.0, float(depth)) for depth in depths)
+    median = _linear_percentile(values, 0.5)
+    p95 = _linear_percentile(values, 0.95)
+    maximum = max(values, default=0.0)
+    return {
+        "sample_count": len(values),
+        "median_blender": median,
+        "p95_blender": p95,
+        "max_blender": maximum,
+        "median_pmx": median / PMX_TO_BLENDER_SCALE,
+        "p95_pmx": p95 / PMX_TO_BLENDER_SCALE,
+        "max_pmx": maximum / PMX_TO_BLENDER_SCALE,
+    }
+
+
+def _polygon_area(points, indices) -> float:
+    polygon = [points[int(index)] for index in indices]
+    if len(polygon) < 3:
+        return 0.0
+    origin = polygon[0]
+    area = 0.0
+    for first, second in zip(polygon[1:-1], polygon[2:], strict=True):
+        left = tuple(first[axis] - origin[axis] for axis in range(3))
+        right = tuple(second[axis] - origin[axis] for axis in range(3))
+        cross = (
+            left[1] * right[2] - left[2] * right[1],
+            left[2] * right[0] - left[0] * right[2],
+            left[0] * right[1] - left[1] * right[0],
+        )
+        area += math.sqrt(sum(value * value for value in cross)) * 0.5
+    return area
+
+
+def collision_area_evidence(overlap_pairs, moving_records, target_records, vertices):
+    points = tuple(tuple(float(value) for value in point) for point in vertices)
+    moving_indices = {int(pair[0]) for pair in overlap_pairs}
+    target_indices = {int(pair[1]) for pair in overlap_pairs}
+    moving_keys = {
+        (moving_records[index]["region"], moving_records[index]["group"])
+        for index in moving_indices
+    }
+    moving_area = sum(
+        _polygon_area(points, moving_records[index]["vertices"])
+        for index in moving_indices
+    )
+    target_area = sum(
+        _polygon_area(points, target_records[index]["vertices"])
+        for index in target_indices
+    )
+    moving_region_area = sum(
+        _polygon_area(points, record["vertices"])
+        for record in moving_records
+        if (record["region"], record["group"]) in moving_keys
+    )
+    area_scale = PMX_TO_BLENDER_SCALE ** 2
+    return {
+        "moving_intersecting_polygon_count": len(moving_indices),
+        "target_intersecting_polygon_count": len(target_indices),
+        "moving_intersecting_area_blender2": moving_area,
+        "target_intersecting_area_blender2": target_area,
+        "moving_region_area_blender2": moving_region_area,
+        "moving_intersection_area_ratio": (
+            moving_area / moving_region_area if moving_region_area > 0.0 else 0.0
+        ),
+        "moving_intersecting_area_pmx2": moving_area / area_scale,
+        "target_intersecting_area_pmx2": target_area / area_scale,
+        "moving_region_area_pmx2": moving_region_area / area_scale,
+    }
+
+
+def overlap_bbox_evidence(points):
+    values = tuple(tuple(float(value) for value in point) for point in points)
+    if not values:
+        return None
+    minimum = tuple(min(point[axis] for point in values) for axis in range(3))
+    maximum = tuple(max(point[axis] for point in values) for axis in range(3))
+    dimensions = tuple(maximum[axis] - minimum[axis] for axis in range(3))
+    center = tuple((maximum[axis] + minimum[axis]) * 0.5 for axis in range(3))
+    return {
+        "min": minimum,
+        "max": maximum,
+        "dimensions": dimensions,
+        "center": center,
+        "dimensions_pmx": tuple(value / PMX_TO_BLENDER_SCALE for value in dimensions),
+        "center_pmx": tuple(value / PMX_TO_BLENDER_SCALE for value in center),
+    }
+
+
+def classify_silhouette_visibility(view_hits):
+    result = {}
+    any_visible = False
+    for view, hits in view_hits.items():
+        values = tuple(bool(value) for value in hits)
+        visible_count = sum(values)
+        any_visible = any_visible or visible_count > 0
+        result[view] = {
+            "sample_count": len(values),
+            "visible_count": visible_count,
+            "covered_count": len(values) - visible_count,
+            "classification": (
+                "reaches_visible_outer_surface"
+                if visible_count else "internal_or_covered"
+            ),
+        }
+    result["overall"] = (
+        "visible_from_some_review_views" if any_visible else "internal_or_covered_all_views"
+    )
+    return result
+
+
+def compare_penetration_scales(
+    *, max_depth, median_mesh_edge, sleeve_thickness, chest_thickness
+):
+    depth = float(max_depth)
+    result = {"max_depth_blender": depth}
+    for key, value in (
+        ("depth_to_median_edge_ratio", median_mesh_edge),
+        ("depth_to_sleeve_thickness_ratio", sleeve_thickness),
+        ("depth_to_chest_thickness_ratio", chest_thickness),
+    ):
+        numeric = float(value) if value is not None else 0.0
+        result[key] = depth / numeric if numeric > 0.0 else None
+    return result
 
 
 def combine_head_collision_evidence(
@@ -3233,6 +3420,222 @@ def _full_collision_evidence(mesh, geometry, invariant):
     }, vertices
 
 
+def _face_center_normal(record, vertices):
+    polygon = [Vector(vertices[index]) for index in record["vertices"]]
+    center = sum(polygon, Vector((0.0, 0.0, 0.0))) / len(polygon)
+    normal = (polygon[1] - polygon[0]).cross(polygon[2] - polygon[0])
+    if normal.length_squared <= 1e-12:
+        return center, None
+    return center, normal.normalized()
+
+
+def _record_surface_samples(record, vertices):
+    points = [Vector(vertices[index]) for index in record["vertices"]]
+    points.append(sum(points, Vector((0.0, 0.0, 0.0))) / len(points))
+    return tuple(points)
+
+
+def _negative_signed_depths(records, vertices, tree):
+    depths = []
+    representatives = []
+    for record in records:
+        for point in _record_surface_samples(record, vertices):
+            nearest = tree.find_nearest(point)
+            if nearest is None:
+                continue
+            location, normal, polygon_index, distance = nearest
+            signed = float((point - location).dot(normal))
+            if signed >= -MESH_PENETRATION_TOLERANCE:
+                continue
+            depth = -signed
+            depths.append(depth)
+            if len(representatives) < 12:
+                representatives.append({
+                    "depth_blender": depth,
+                    "depth_pmx": depth / PMX_TO_BLENDER_SCALE,
+                    "sample_world": tuple(float(value) for value in point),
+                    "nearest_surface_world": tuple(float(value) for value in location),
+                    "nearest_surface_normal_world": tuple(float(value) for value in normal),
+                    "nearest_polygon_index": int(polygon_index),
+                    "unsigned_distance": float(distance),
+                })
+    return depths, representatives
+
+
+def _record_edge_lengths(records, vertices):
+    lengths = []
+    seen = set()
+    for record in records:
+        indices = tuple(int(index) for index in record["vertices"])
+        for first, second in zip(indices, indices[1:] + indices[:1], strict=True):
+            edge = tuple(sorted((first, second)))
+            if edge in seen:
+                continue
+            seen.add(edge)
+            lengths.append((Vector(vertices[first]) - Vector(vertices[second])).length)
+    return tuple(lengths)
+
+
+def _shell_thickness_samples(records, vertices, tree, median_edge):
+    epsilon = max(1e-5, float(median_edge) * 0.05)
+    max_distance = max(0.2, float(median_edge) * 20.0)
+    samples = []
+    for record in records:
+        center, normal = _face_center_normal(record, vertices)
+        if normal is None:
+            continue
+        for sign in (-1.0, 1.0):
+            outward = normal * sign
+            direction = -outward
+            first = tree.ray_cast(center + outward * epsilon, direction, max_distance)
+            if first[0] is None:
+                continue
+            second_start = first[0] + direction * (epsilon * 4.0)
+            second = tree.ray_cast(second_start, direction, max_distance)
+            if second[0] is None:
+                continue
+            thickness = (second[0] - first[0]).length
+            if thickness > epsilon * 2.0:
+                samples.append(float(thickness))
+                break
+    return tuple(samples)
+
+
+def _silhouette_visibility(full_tree, points, model_median_edge):
+    tolerance = max(float(model_median_edge), 0.002)
+    view_directions = {
+        "front": Vector((0.0, -1.0, 0.0)),
+        "left": Vector((1.0, 0.0, 0.0)),
+        "right": Vector((-1.0, 0.0, 0.0)),
+    }
+    hits = {}
+    for view, to_camera in view_directions.items():
+        values = []
+        for point in points:
+            point = Vector(point)
+            start = point + to_camera * 3.0
+            hit = full_tree.ray_cast(start, -to_camera, 6.0)
+            values.append(
+                hit[0] is not None and (hit[0] - point).length <= tolerance
+            )
+        hits[view] = tuple(values)
+    result = classify_silhouette_visibility(hits)
+    result["method"] = (
+        "orthographic camera-direction ray test; first full-mesh hit must be within "
+        "one model-wide median mesh edge of the collision sample"
+    )
+    result["visibility_tolerance_blender"] = tolerance
+    return result
+
+
+def _collision_severity_evidence(mesh, geometry, vertices, overlap_pairs):
+    focus_pairs = tuple(
+        (int(moving_index), int(target_index))
+        for moving_index, target_index in overlap_pairs
+        if geometry["moving_face_records"][int(moving_index)]["region"] in {
+            "forearm", "mixed_hand_forearm"
+        }
+        and geometry["torso_face_records"][int(target_index)]["group"] == "上半身2"
+    )
+    moving_indices = sorted({pair[0] for pair in focus_pairs})
+    target_indices = sorted({pair[1] for pair in focus_pairs})
+    moving_records = tuple(geometry["moving_face_records"][index] for index in moving_indices)
+    target_records = tuple(geometry["torso_face_records"][index] for index in target_indices)
+    moving_tree = _bvh(vertices, geometry["moving_faces"])
+    torso_tree = _bvh(vertices, geometry["torso_faces"])
+    full_tree = _bvh(vertices, tuple(tuple(int(index) for index in polygon.vertices) for polygon in mesh.data.polygons))
+    moving_depths, moving_representatives = _negative_signed_depths(
+        moving_records, vertices, torso_tree
+    )
+    target_depths, target_representatives = _negative_signed_depths(
+        target_records, vertices, moving_tree
+    )
+    depths = tuple(moving_depths + target_depths)
+    depth_summary = summarize_penetration_depths(depths)
+    edge_lengths = _record_edge_lengths((*moving_records, *target_records), vertices)
+    median_edge = _linear_percentile(edge_lengths, 0.5)
+    model_edge_lengths = tuple(
+        (Vector(vertices[edge.vertices[0]]) - Vector(vertices[edge.vertices[1]])).length
+        for edge in mesh.data.edges
+    )
+    model_median_edge = _linear_percentile(model_edge_lengths, 0.5)
+    sleeve_thickness_samples = _shell_thickness_samples(
+        moving_records, vertices, moving_tree, median_edge
+    )
+    chest_thickness_samples = _shell_thickness_samples(
+        target_records, vertices, torso_tree, median_edge
+    )
+    sleeve_thickness = _linear_percentile(sleeve_thickness_samples, 0.5) or None
+    chest_thickness = _linear_percentile(chest_thickness_samples, 0.5) or None
+    attribution = attribute_collision_pairs(
+        focus_pairs,
+        geometry["moving_face_records"],
+        geometry["torso_face_records"],
+        vertices,
+    )
+    marker_points = tuple(
+        tuple(
+            (float(moving) + float(target)) * 0.5
+            for moving, target in zip(
+                item["moving_world_point"], item["torso_world_point"], strict=True
+            )
+        )
+        for item in attribution["representative_pairs"]
+    )
+    return {
+        "raw_overlap_count": len(overlap_pairs),
+        "focused_forearm_upper_chest_overlap_count": len(focus_pairs),
+        "depth_method": (
+            "bidirectional negative signed nearest-surface samples from overlapping "
+            "moving and target polygons"
+        ),
+        "depth_caveat": (
+            "signed depth is a mesh-normal proxy for intersecting layered shells, not a "
+            "solid-volume containment proof"
+        ),
+        "penetration_depth": depth_summary,
+        "representative_depth_samples": moving_representatives + target_representatives,
+        "area": collision_area_evidence(
+            focus_pairs,
+            geometry["moving_face_records"],
+            geometry["torso_face_records"],
+            vertices,
+        ),
+        "attribution": attribution,
+        "overlap_bbox": attribution["overlap_bbox"],
+        "median_local_mesh_edge_blender": median_edge,
+        "median_local_mesh_edge_pmx": median_edge / PMX_TO_BLENDER_SCALE,
+        "model_median_mesh_edge_blender": model_median_edge,
+        "model_median_mesh_edge_pmx": model_median_edge / PMX_TO_BLENDER_SCALE,
+        "sleeve_thickness_blender": sleeve_thickness,
+        "chest_thickness_blender": chest_thickness,
+        "sleeve_thickness_pmx": (
+            sleeve_thickness / PMX_TO_BLENDER_SCALE
+            if sleeve_thickness is not None else None
+        ),
+        "chest_thickness_pmx": (
+            chest_thickness / PMX_TO_BLENDER_SCALE
+            if chest_thickness is not None else None
+        ),
+        "sleeve_thickness_samples": len(sleeve_thickness_samples),
+        "chest_thickness_samples": len(chest_thickness_samples),
+        "thickness_method": (
+            "second-hit shell traversal along each implicated polygon normal; chest "
+            "thickness may span the full closed torso shell"
+        ),
+        "scale_comparison": compare_penetration_scales(
+            max_depth=depth_summary["max_blender"],
+            median_mesh_edge=model_median_edge,
+            sleeve_thickness=sleeve_thickness,
+            chest_thickness=chest_thickness,
+        ),
+        "silhouette_visibility": _silhouette_visibility(
+            full_tree, marker_points, model_median_edge
+        ),
+        "marker_points": marker_points,
+    }
+
+
 def _refresh_frame(frame: int = VALIDATION_FRAME) -> None:
     scene = bpy.context.scene
     scene.frame_set(frame - 1)
@@ -4102,6 +4505,98 @@ def _render_diagnostic_candidate(output_dir, armature, controls, candidate, cont
         "left": Vector((1.0, 0.0, 0.0)),
         "right": Vector((-1.0, 0.0, 0.0)),
         "back": Vector((0.0, 1.0, 0.0)),
+    }
+
+
+def _render_collision_severity_diagnostic(output_dir, source_id, vertices, severity):
+    scene = bpy.context.scene
+    camera, center, distance, ortho_scale, bbox_min, bbox_max = _full_body_camera(
+        scene, vertices
+    )
+    scene.render.resolution_x = RENDER_RESOLUTION
+    scene.render.resolution_y = RENDER_RESOLUTION
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    relative_root = Path(COLLISION_SEVERITY_DIRECTORY) / source_id
+    directory = Path(output_dir) / relative_root
+    directory.mkdir(parents=True, exist_ok=True)
+    view_directions = {
+        "front": Vector((0.0, -1.0, 0.0)),
+        "left": Vector((1.0, 0.0, 0.0)),
+        "right": Vector((-1.0, 0.0, 0.0)),
+        "back": Vector((0.0, 1.0, 0.0)),
+    }
+    renders = {}
+    for view, direction in view_directions.items():
+        camera.data.ortho_scale = ortho_scale
+        camera.location = center + direction * distance
+        camera.rotation_euler = (center - camera.location).to_track_quat("-Z", "Y").to_euler()
+        output = directory / f"{view}.png"
+        scene.render.filepath = str(output)
+        bpy.ops.render.render(write_still=True)
+        renders[view] = str(relative_root / f"{view}.png")
+
+    bbox = severity["overlap_bbox"]
+    close_center = Vector(bbox["center"] if bbox else center)
+    close_scale = max(
+        0.32,
+        max(bbox["dimensions"]) * 3.0 if bbox else 0.52,
+    )
+    camera.data.ortho_scale = close_scale
+    camera.location = close_center + Vector((0.0, -1.0, 0.0)) * 2.0
+    camera.rotation_euler = (close_center - camera.location).to_track_quat("-Z", "Y").to_euler()
+    normal_closeup = directory / "collision_closeup_normal.png"
+    scene.render.filepath = str(normal_closeup)
+    bpy.ops.render.render(write_still=True)
+    renders["collision_closeup_normal"] = str(
+        relative_root / "collision_closeup_normal.png"
+    )
+
+    marker_material = _gallery_emission_material(
+        "POC_COLLISION_SEVERITY_MARKER_MAT", (1.0, 0.02, 0.01, 1.0)
+    )
+    marker_radius = max(
+        0.003,
+        float(severity["median_local_mesh_edge_blender"]) * 0.45,
+    )
+    markers = []
+    try:
+        for index, point in enumerate(severity["marker_points"][:12], start=1):
+            bpy.ops.mesh.primitive_uv_sphere_add(
+                segments=16,
+                ring_count=8,
+                radius=marker_radius,
+                location=Vector(point) + Vector((0.0, -0.012, 0.0)),
+            )
+            marker = bpy.context.object
+            marker.name = f"POC_COLLISION_MARKER_{source_id}_{index:02d}"
+            marker.data.materials.append(marker_material)
+            markers.append(marker)
+        marked_closeup = directory / "collision_closeup_marked.png"
+        scene.render.filepath = str(marked_closeup)
+        bpy.ops.render.render(write_still=True)
+        renders["collision_closeup_marked"] = str(
+            relative_root / "collision_closeup_marked.png"
+        )
+    finally:
+        for marker in markers:
+            bpy.data.objects.remove(marker, do_unlink=True)
+    return {
+        "renders": renders,
+        "marker_count": len(markers),
+        "marker_radius_blender": marker_radius,
+        "marker_overlay_offset": (0.0, -0.012, 0.0),
+        "full_body_camera": {
+            "ortho_scale": float(ortho_scale),
+            "center": tuple(float(value) for value in center),
+            "bbox_min": tuple(float(value) for value in bbox_min),
+            "bbox_max": tuple(float(value) for value in bbox_max),
+        },
+        "closeup_camera": {
+            "ortho_scale": float(close_scale),
+            "center": tuple(float(value) for value in close_center),
+            "view": "front camera at -Y",
+        },
     }
     renders = {}
     for view, direction in view_directions.items():
@@ -5474,6 +5969,8 @@ def chin_support_refinement(config: PocConfig) -> None:
             armature, controls, context["baseline_state"],
             compensation_controls, finger_controls,
         )
+
+
         restoration_reasons = compare_static_state(
             context["baseline_state"],
             _capture_static_control_state(
@@ -5554,6 +6051,185 @@ def chin_support_refinement(config: PocConfig) -> None:
             "eligible": metrics_document["eligible_count"],
             "rendered": len(render_states),
             "contact_sheet": str(paths.final / render_evidence["contact_sheet"]),
+            "metrics": str(paths.metrics),
+        })
+    finally:
+        _restore_static_control_state(
+            armature, controls, context["baseline_state"],
+            compensation_controls, finger_controls,
+        )
+
+
+def collision_severity_diagnostic(config: PocConfig) -> None:
+    _require_blender()
+    if (
+        not config.collision_severity_diagnostic
+        or config.run_id is None
+        or config.source_static_metrics is None
+    ):
+        raise ValueError("Collision severity diagnostic requires its mode, run ID, and source metrics")
+    current_blend = Path(bpy.data.filepath)
+    if not current_blend or not _same_path(current_blend, config.source_blend):
+        raise RuntimeError(f"Blender must open the existing POC blend: {config.source_blend}")
+    paths = collision_severity_run_paths(config.output_dir, config.run_id)
+    if config.overwrite_run and paths.temporary.exists():
+        shutil.rmtree(paths.temporary)
+    paths.temporary.mkdir(parents=True, exist_ok=False)
+
+    armature, mesh = _validate_scene_objects()
+    compensation_controls = _ensure_compensation_controls(armature)
+    _validate_compensation_baseline(armature, compensation_controls)
+    finger_controls = _ensure_finger_controls(armature)
+    _validate_finger_baseline(armature, finger_controls)
+    controls = _existing_controls()
+    _validate_existing_poc(armature, controls)
+    math_module = _load_motion_math()
+    geometry = _mesh_geometry_sets(mesh)
+    context = _prepare_static_context(
+        armature, mesh, controls, geometry, math_module,
+        compensation_controls, finger_controls,
+    )
+    stored = json.loads(config.source_static_metrics.read_text(encoding="utf-8"))
+    selected_records = collision_severity_source_records(stored)
+    candidate_by_id = {
+        candidate.candidate_id: candidate for candidate in static_candidate_grid()
+    }
+    compensated_record = selected_records["compensated"]
+    targets = (
+        (
+            "candidate_4330",
+            candidate_by_id["candidate_4330"],
+            None,
+            stored.get("diagnostics", {}).get("candidate_4330"),
+        ),
+        (
+            "candidate_4334",
+            candidate_by_id["candidate_4334"],
+            None,
+            stored.get("diagnostics", {}).get("candidate_4334"),
+        ),
+        (
+            str(compensated_record["source_candidate_id"]),
+            _candidate_from_record(compensated_record),
+            _compensation_from_record(compensated_record),
+            compensated_record,
+        ),
+    )
+    results = []
+    started = time.perf_counter()
+    try:
+        for source_id, candidate, compensation, stored_record in targets:
+            _set_finger_identity(finger_controls)
+            if compensation is None:
+                _set_compensation_identity(compensation_controls)
+                _apply_context_candidate(armature, controls, candidate, context)
+            else:
+                _apply_compensated_state(
+                    armature, controls, candidate, compensation, context
+                )
+            collision_metrics, vertices = _full_collision_evidence(
+                mesh, geometry, context["invariant_collision"]
+            )
+            moving_tree = _bvh(vertices, geometry["moving_faces"])
+            torso_tree = _bvh(vertices, geometry["torso_faces"])
+            overlap_pairs = tuple(moving_tree.overlap(torso_tree))
+            severity = _collision_severity_evidence(
+                mesh, geometry, vertices, overlap_pairs
+            )
+            stored_overlap_count = (
+                stored_record.get("metrics", {}).get("torso_penetration_count")
+                if stored_record else None
+            )
+            raw_count_matches_stored = (
+                stored_overlap_count is None
+                or int(stored_overlap_count)
+                == int(collision_metrics["torso_penetration_count"])
+            )
+            render_evidence = _render_collision_severity_diagnostic(
+                paths.temporary, source_id, vertices, severity
+            )
+            results.append({
+                "source_id": source_id,
+                "state": "upper_body_compensated" if compensation is not None else "arm_only",
+                "candidate_parameters": {
+                    "alignment_factor": candidate.alignment_factor,
+                    "hand_offset": candidate.hand_offset,
+                    "palm_euler_deg": candidate.palm_euler_deg,
+                    "pole_offset": candidate.pole_offset,
+                    "pole_offset_3d": candidate.pole_offset_3d,
+                    "twist_influences": candidate.twist_influences,
+                },
+                "compensation": (
+                    {
+                        "upper_chest_turn_deg": compensation.upper_chest_turn_deg,
+                        "upper_chest_lean_deg": compensation.upper_chest_lean_deg,
+                        "shoulder_retract_deg": compensation.shoulder_retract_deg,
+                        "shoulder_elevate_deg": compensation.shoulder_elevate_deg,
+                        "neck_toward_deg": compensation.neck_toward_deg,
+                        "head_toward_deg": compensation.head_toward_deg,
+                    }
+                    if compensation is not None else None
+                ),
+                "stored_raw_overlap_count": stored_overlap_count,
+                "raw_overlap_count_matches_stored": raw_count_matches_stored,
+                "collision_metrics": collision_metrics,
+                "severity": severity,
+                "render_evidence": render_evidence,
+            })
+        _restore_static_control_state(
+            armature, controls, context["baseline_state"],
+            compensation_controls, finger_controls,
+        )
+        restoration_reasons = compare_static_state(
+            context["baseline_state"],
+            _capture_static_control_state(
+                armature, controls, compensation_controls, finger_controls
+            ),
+            tolerance=1e-6,
+        )
+        if restoration_reasons:
+            raise RuntimeError(
+                "Collision severity diagnostic failed to restore baseline controls: "
+                + "; ".join(restoration_reasons)
+            )
+        metrics = {
+            "mode": "collision-severity-diagnostic",
+            "selection_status": "NEEDS_CONTEXT",
+            "acceptance_thresholds_changed": False,
+            "run_id": config.run_id,
+            "frame": VALIDATION_FRAME,
+            "source_blend": str(config.source_blend),
+            "output_blend_unchanged": str(config.output_blend),
+            "source_static_metrics": str(config.source_static_metrics),
+            "duration_seconds": time.perf_counter() - started,
+            "candidate_count": len(results),
+            "candidates": results,
+        }
+        metrics_path = paths.temporary / COLLISION_SEVERITY_METRICS_NAME
+        metrics_path.write_text(
+            json.dumps(
+                metrics, ensure_ascii=False, indent=2,
+                sort_keys=True, allow_nan=False,
+            ) + "\n",
+            encoding="utf-8",
+        )
+        expected = [metrics_path]
+        expected.extend(
+            paths.temporary / relative
+            for result in results
+            for relative in result["render_evidence"]["renders"].values()
+        )
+        missing = [str(path) for path in expected if not path.is_file()]
+        if missing:
+            raise RuntimeError(
+                "Collision severity diagnostic is missing artifacts: " + ", ".join(missing)
+            )
+        if paths.final.exists():
+            shutil.rmtree(paths.final)
+        paths.temporary.rename(paths.final)
+        print("POC_COLLISION_SEVERITY_COMPLETE", {
+            "run_id": config.run_id,
+            "candidates": [result["source_id"] for result in results],
             "metrics": str(paths.metrics),
         })
     finally:
@@ -6638,6 +7314,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         orientation_gallery(config)
     elif config.chin_support_refinement:
         chin_support_refinement(config)
+    elif config.collision_severity_diagnostic:
+        collision_severity_diagnostic(config)
     else:
         raise ValueError("No POC mode selected")
     return 0
