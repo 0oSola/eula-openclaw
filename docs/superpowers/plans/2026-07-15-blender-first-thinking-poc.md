@@ -72,7 +72,7 @@ Expected: FAIL because the entry point does not exist.
 
 - [ ] **Step 3: Implement deterministic scene loading and v16 import**
 
-Select `优菈_arm`, import v16 through `bpy.ops.mmd_tools.import_vmd` with PMX mapping, scale `0.08`, margin `0`, and a new action. Rename the action `POC_v16_reference` and fail if the armature, required Japanese bone names, action, model mesh, or frame range is missing.
+Set the scene to frame `0` before importing because mmd_tools offsets VMD keys from the current scene frame. Select `优菈_arm`, import v16 through `bpy.ops.mmd_tools.import_vmd` with PMX mapping, scale `0.08`, margin `0`, and a new action. Rename the action `POC_v16_reference` and fail if the armature, required Japanese bone names, action, model mesh, or exact action range `0-240` is missing.
 
 - [ ] **Step 4: Add a non-deforming proxy chain**
 
@@ -291,4 +291,3 @@ State whether the static pose passed, whether the transition passed, which const
 git add docs/architecture/current-system-topology.md imgToAction/outputs/actions/blender_first_thinking_poc/review/feasibility_report.md
 git commit -m "docs: record Blender-first motion feasibility result"
 ```
-
