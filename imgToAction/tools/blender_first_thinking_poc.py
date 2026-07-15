@@ -85,6 +85,24 @@ FINGER_CONSTRAINT_SPECS = {
     }
     for bone_name in RIGHT_FINGER_BONES
 }
+SLEEVE_CORRECTIVE_BONES = ("右手捩1", "右手捩2", "右手捩3")
+SLEEVE_CORRECTIVE_CONTROL_NAMES = {
+    bone_name: f"POC_{bone_name}_SLEEVE_DELTA"
+    for bone_name in SLEEVE_CORRECTIVE_BONES
+}
+SLEEVE_CORRECTIVE_CONSTRAINT_NAMES = {
+    bone_name: f"POC_{bone_name}_SLEEVE_LOCAL_DELTA"
+    for bone_name in SLEEVE_CORRECTIVE_BONES
+}
+SLEEVE_CORRECTIVE_CONSTRAINT_SPECS = {
+    bone_name: {
+        "owner_bone": bone_name,
+        "owner_space": "LOCAL",
+        "target_space": "LOCAL",
+        "mix_mode": "BEFORE",
+    }
+    for bone_name in SLEEVE_CORRECTIVE_BONES
+}
 COMPENSATION_BONES = {
     "upper_chest": "上半身2",
     "right_shoulder": "右肩",
@@ -174,6 +192,7 @@ REQUIRED_BONES = (
     "右ひじ",
     "右手捩",
     "右手首",
+    *SLEEVE_CORRECTIVE_BONES,
     "上半身2",
     "首",
     "頭",
@@ -219,6 +238,8 @@ CHIN_SUPPORT_DIRECTORY = "chin_support_refinement"
 CHIN_SUPPORT_METRICS_NAME = "chin_support_metrics.json"
 COLLISION_SEVERITY_DIRECTORY = "collision_severity_diagnostic"
 COLLISION_SEVERITY_METRICS_NAME = "collision_severity_metrics.json"
+SLEEVE_CORRECTIVE_DIRECTORY = "sleeve_corrective_feasibility"
+SLEEVE_CORRECTIVE_METRICS_NAME = "sleeve_corrective_metrics.json"
 G14_ORIENTATION_SOURCE_ID = (
     "gallery_14_thumb_opposition_m15_sxp00_tzm10_thumb_opposed_base"
 )
@@ -317,6 +338,14 @@ ORIENTATION_GALLERY_MAX_RENDER_COUNT = 18
 ORIENTATION_GALLERY_CLOSEUP_SCALE = 0.52
 ORIENTATION_GALLERY_CONTACT_SHEET_COLUMNS = 5
 ORIENTATION_GALLERY_CONTACT_SHEET_TILE = 256
+SLEEVE_CORRECTIVE_MAX_DEG = 8.0
+SLEEVE_CORRECTIVE_MAX_ADJACENT_DEG = 4.01
+SLEEVE_PRIMARY_POSITION_TOLERANCE = 1e-5
+SLEEVE_PRIMARY_ROTATION_TOLERANCE_DEG = 1e-4
+SLEEVE_FINGERTIP_POSITION_TOLERANCE = 1e-5
+SLEEVE_CONTACT_POSITION_TOLERANCE = 1e-5
+SLEEVE_FACE_MIN_AREA_RATIO = 0.60
+SLEEVE_FACE_MAX_AREA_RATIO = 1.50
 PROTECTED_LOCAL_BONES = (
     "下半身",
     "左肩",
@@ -406,6 +435,13 @@ class ChinSupportRefinement:
 
 
 @dataclass(frozen=True)
+class SleeveCorrection:
+    swings_deg: tuple[
+        tuple[float, float], tuple[float, float], tuple[float, float]
+    ]
+
+
+@dataclass(frozen=True)
 class OrientationGalleryVariant:
     source_id: str
     family: str
@@ -436,6 +472,7 @@ class PocConfig:
     orientation_gallery: bool
     chin_support_refinement: bool
     collision_severity_diagnostic: bool
+    sleeve_corrective_feasibility: bool
     run_id: str | None
     overwrite_run: bool
     source_candidate_id: str | None
@@ -936,6 +973,94 @@ def chin_support_refinement_grid() -> tuple[ChinSupportRefinement, ...]:
     )
 
 
+def sleeve_correction_smoothness(correction: SleeveCorrection) -> dict[str, float]:
+    vectors = correction.swings_deg
+    adjacent = tuple(
+        math.hypot(
+            vectors[index + 1][0] - vectors[index][0],
+            vectors[index + 1][1] - vectors[index][1],
+        )
+        for index in range(2)
+    )
+    second = math.hypot(
+        vectors[0][0] - 2.0 * vectors[1][0] + vectors[2][0],
+        vectors[0][1] - 2.0 * vectors[1][1] + vectors[2][1],
+    )
+    return {
+        "max_adjacent_delta_deg": max(adjacent),
+        "second_difference_deg": second,
+        "smoothness_penalty": sum(value * value for value in adjacent) + second * second,
+    }
+
+
+def sleeve_correction_reasons(correction: SleeveCorrection) -> tuple[str, ...]:
+    if len(correction.swings_deg) != len(SLEEVE_CORRECTIVE_BONES):
+        raise ValueError("Sleeve correction must contain three ordered bone swings")
+    reasons = []
+    magnitudes = tuple(math.hypot(*swing) for swing in correction.swings_deg)
+    if not all(math.isfinite(value) for value in magnitudes):
+        reasons.append("Sleeve correction contains non-finite angles")
+    if max(magnitudes, default=0.0) > SLEEVE_CORRECTIVE_MAX_DEG + 1e-6:
+        reasons.append(f"Sleeve correction exceeds {SLEEVE_CORRECTIVE_MAX_DEG:g} degrees")
+    smoothness = sleeve_correction_smoothness(correction)
+    if smoothness["max_adjacent_delta_deg"] > SLEEVE_CORRECTIVE_MAX_ADJACENT_DEG:
+        reasons.append("Sleeve correction is not smooth across bones 1-2-3")
+    return tuple(reasons)
+
+
+def sleeve_correction_grid() -> tuple[SleeveCorrection, ...]:
+    diagonal = math.sqrt(0.5)
+    directions = (
+        (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
+        (diagonal, diagonal), (diagonal, -diagonal),
+        (-diagonal, diagonal), (-diagonal, -diagonal),
+    )
+    profiles = (
+        (1.0, 1.0, 1.0),
+        (0.5, 0.75, 1.0),
+        (1.0, 0.75, 0.5),
+        (0.5, 1.0, 0.5),
+    )
+    corrections = [SleeveCorrection(((0.0, 0.0),) * 3)]
+    for magnitude, direction, profile in itertools.product(
+        (2.0, 4.0, 6.0, 8.0), directions, profiles
+    ):
+        corrections.append(SleeveCorrection(tuple(
+            (
+                magnitude * weight * direction[0],
+                magnitude * weight * direction[1],
+            )
+            for weight in profile
+        )))
+    return tuple(corrections)
+
+
+def sleeve_primary_drift_reasons(metrics) -> tuple[str, ...]:
+    reasons = []
+    if float(metrics["max_primary_position_drift"]) > SLEEVE_PRIMARY_POSITION_TOLERANCE:
+        reasons.append("Primary shoulder/elbow/wrist position drift exceeds tolerance")
+    if (
+        float(metrics["max_primary_rotation_drift_deg"])
+        > SLEEVE_PRIMARY_ROTATION_TOLERANCE_DEG
+    ):
+        reasons.append("Primary shoulder/elbow/wrist rotation drift exceeds tolerance")
+    if float(metrics["max_fingertip_drift"]) > SLEEVE_FINGERTIP_POSITION_TOLERANCE:
+        reasons.append("Primary fingertip world drift exceeds tolerance")
+    if float(metrics["contact_point_drift"]) > SLEEVE_CONTACT_POSITION_TOLERANCE:
+        reasons.append("Primary contact point drift exceeds tolerance")
+    return tuple(reasons)
+
+
+def sleeve_correction_rank(record):
+    return (
+        int(record["raw_overlap_count"]) != 0,
+        int(record["raw_overlap_count"]),
+        float(record["max_penetration_depth"]),
+        float(record["smoothness_penalty"]),
+        str(record["source_id"]),
+    )
+
+
 def index_knuckle_region_indices(
     *, index1_indices, index2_indices, index3_indices, faces
 ):
@@ -1258,6 +1383,7 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--orientation-gallery", action="store_true")
     mode.add_argument("--chin-support-refinement", action="store_true")
     mode.add_argument("--collision-severity-diagnostic", action="store_true")
+    mode.add_argument("--sleeve-corrective-feasibility", action="store_true")
     parser.add_argument("--run-id")
     parser.add_argument("--overwrite-run", action="store_true")
     parser.add_argument("--source-candidate-id")
@@ -1310,6 +1436,15 @@ def collision_severity_run_paths(output_dir: Path, run_id: str) -> StaticRunPath
     )
 
 
+def sleeve_corrective_run_paths(output_dir: Path, run_id: str) -> StaticRunPaths:
+    paths = static_run_paths(output_dir, run_id)
+    return StaticRunPaths(
+        temporary=paths.temporary,
+        final=paths.final,
+        metrics=paths.final / SLEEVE_CORRECTIVE_METRICS_NAME,
+    )
+
+
 def _validated_config(namespace: argparse.Namespace) -> PocConfig:
     source_blend = namespace.source_blend.resolve()
     vmd = namespace.vmd.resolve() if namespace.vmd is not None else None
@@ -1345,6 +1480,7 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         or namespace.orientation_gallery
         or namespace.chin_support_refinement
         or namespace.collision_severity_diagnostic
+        or namespace.sleeve_corrective_feasibility
     )
     if static_mode and (
         source_blend.name != OUTPUT_BLEND_NAME or not _same_path(source_blend, output_blend)
@@ -1368,11 +1504,14 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         elif namespace.collision_severity_diagnostic:
             paths = collision_severity_run_paths(output_dir, namespace.run_id)
             run_metrics_path = paths.metrics
+        elif namespace.sleeve_corrective_feasibility:
+            paths = sleeve_corrective_run_paths(output_dir, namespace.run_id)
+            run_metrics_path = paths.metrics
         else:
             run_metrics_path = paths.metrics
-        if (namespace.search_static or namespace.orientation_gallery or namespace.chin_support_refinement or namespace.collision_severity_diagnostic) and paths.final.exists() and not namespace.overwrite_run:
+        if (namespace.search_static or namespace.orientation_gallery or namespace.chin_support_refinement or namespace.collision_severity_diagnostic or namespace.sleeve_corrective_feasibility) and paths.final.exists() and not namespace.overwrite_run:
             raise ValueError(f"Static run already exists: {paths.final}")
-        if (namespace.search_static or namespace.orientation_gallery or namespace.chin_support_refinement or namespace.collision_severity_diagnostic) and paths.temporary.exists() and not namespace.overwrite_run:
+        if (namespace.search_static or namespace.orientation_gallery or namespace.chin_support_refinement or namespace.collision_severity_diagnostic or namespace.sleeve_corrective_feasibility) and paths.temporary.exists() and not namespace.overwrite_run:
             raise ValueError(f"Temporary static run already exists: {paths.temporary}")
     if namespace.select_static:
         if not namespace.source_candidate_id or not SOURCE_CANDIDATE_PATTERN.fullmatch(
@@ -1414,6 +1553,15 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
             raise ValueError("Collision severity diagnostic uses its fixed evidence candidates")
         if orientation_gallery_metrics is not None:
             raise ValueError("Collision severity diagnostic does not use gallery metrics")
+    elif namespace.sleeve_corrective_feasibility:
+        if source_static_metrics is None or not source_static_metrics.is_file():
+            raise ValueError(
+                f"Sleeve corrective source metrics do not exist: {source_static_metrics}"
+            )
+        if namespace.source_candidate_id is not None or namespace.orientation_source_id is not None:
+            raise ValueError("Sleeve corrective feasibility uses fixed near-contact candidates")
+        if orientation_gallery_metrics is not None:
+            raise ValueError("Sleeve corrective feasibility does not use gallery metrics")
     elif (
         namespace.source_candidate_id is not None
         or namespace.orientation_source_id is not None
@@ -1438,6 +1586,7 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         orientation_gallery=namespace.orientation_gallery,
         chin_support_refinement=namespace.chin_support_refinement,
         collision_severity_diagnostic=namespace.collision_severity_diagnostic,
+        sleeve_corrective_feasibility=namespace.sleeve_corrective_feasibility,
         run_id=namespace.run_id,
         overwrite_run=namespace.overwrite_run,
         source_candidate_id=namespace.source_candidate_id,
@@ -2494,6 +2643,8 @@ def _validate_finger_baseline(armature, controls) -> None:
             constraint.mute = True
         armature.update_tag()
         _refresh_frame()
+
+
         baseline = {name: _world_rotation(armature, name) for name in RIGHT_FINGER_BONES}
         for constraint in constraints.values():
             constraint.mute = False
@@ -2533,6 +2684,189 @@ def _validate_finger_baseline(armature, controls) -> None:
             constraint.mute = previous_mutes[name]
         armature.update_tag()
         _refresh_frame()
+
+
+def _ensure_sleeve_corrective_controls(armature):
+    collection = bpy.data.collections.get(CONTROL_COLLECTION_NAME)
+    if collection is None:
+        collection = bpy.data.collections.new(CONTROL_COLLECTION_NAME)
+        bpy.context.scene.collection.children.link(collection)
+    controls = {}
+    for bone_name in SLEEVE_CORRECTIVE_BONES:
+        control_name = SLEEVE_CORRECTIVE_CONTROL_NAMES[bone_name]
+        control = bpy.data.objects.get(control_name)
+        if control is None:
+            control = bpy.data.objects.new(control_name, None)
+            collection.objects.link(control)
+            control.empty_display_type = "ARROWS"
+            control.empty_display_size = 0.025
+            control.show_in_front = True
+        control.parent = armature
+        control.matrix_parent_inverse = Matrix.Identity(4)
+        control.location = armature.matrix_world.inverted() @ _pose_head_world(
+            armature, bone_name
+        )
+        control.rotation_mode = "QUATERNION"
+        control.rotation_quaternion = Quaternion((1.0, 0.0, 0.0, 0.0))
+        controls[bone_name] = control
+    if "POC_sleeve_corrective_influence" not in armature:
+        armature["POC_sleeve_corrective_influence"] = 1.0
+        armature.id_properties_ui("POC_sleeve_corrective_influence").update(
+            min=0.0, max=1.0
+        )
+    for bone_name, spec in SLEEVE_CORRECTIVE_CONSTRAINT_SPECS.items():
+        owner = armature.pose.bones[bone_name]
+        constraint_name = SLEEVE_CORRECTIVE_CONSTRAINT_NAMES[bone_name]
+        constraint = owner.constraints.get(constraint_name)
+        if constraint is None:
+            constraint = owner.constraints.new("COPY_ROTATION")
+            constraint.name = constraint_name
+            constraint.target = controls[bone_name]
+            constraint.owner_space = spec["owner_space"]
+            constraint.target_space = spec["target_space"]
+            constraint.mix_mode = spec["mix_mode"]
+            constraint.use_x = True
+            constraint.use_y = True
+            constraint.use_z = True
+            constraint.influence = 0.0
+            _add_influence_driver(
+                constraint, armature, "POC_sleeve_corrective_influence"
+            )
+        elif constraint.target != controls[bone_name]:
+            raise RuntimeError(
+                f"Sleeve corrective constraint target mismatch: {constraint_name}"
+            )
+    return controls
+
+
+def _sleeve_corrective_constraints(armature):
+    return {
+        bone_name: armature.pose.bones[bone_name].constraints[
+            SLEEVE_CORRECTIVE_CONSTRAINT_NAMES[bone_name]
+        ]
+        for bone_name in SLEEVE_CORRECTIVE_BONES
+    }
+
+
+def _set_sleeve_corrective_identity(controls):
+    for control in controls.values():
+        control.rotation_mode = "QUATERNION"
+        control.rotation_quaternion = Quaternion((1.0, 0.0, 0.0, 0.0))
+
+
+def _sleeve_rest_local_axes(armature):
+    axes = {}
+    for bone_name in SLEEVE_CORRECTIVE_BONES:
+        rest = armature.data.bones[bone_name]
+        rest_rotation = rest.matrix_local.to_3x3().normalized()
+        longitudinal_armature = (rest.tail_local - rest.head_local).normalized()
+        longitudinal = (rest_rotation.inverted() @ longitudinal_armature).normalized()
+        swing_a_armature = rest_rotation @ Vector((1.0, 0.0, 0.0))
+        swing_a = rest_rotation.inverted() @ swing_a_armature
+        swing_a -= longitudinal * swing_a.dot(longitudinal)
+        if swing_a.length_squared <= 1e-12:
+            swing_a = Vector((0.0, 0.0, 1.0))
+            swing_a -= longitudinal * swing_a.dot(longitudinal)
+        swing_a.normalize()
+        swing_b = longitudinal.cross(swing_a).normalized()
+        axes[bone_name] = {
+            "longitudinal": tuple(float(value) for value in longitudinal),
+            "swing_a": tuple(float(value) for value in swing_a),
+            "swing_b": tuple(float(value) for value in swing_b),
+            "derivation": "PMX rest matrix and rest head-tail longitudinal axis",
+        }
+    return axes
+
+
+def _validate_sleeve_corrective_baseline(armature, controls, axes):
+    constraints = _sleeve_corrective_constraints(armature)
+    previous_enabled = float(armature["POC_enabled"])
+    previous_mutes = {
+        name: constraint.mute for name, constraint in constraints.items()
+    }
+    _set_sleeve_corrective_identity(controls)
+    try:
+        armature["POC_enabled"] = 1.0
+        for constraint in constraints.values():
+            constraint.mute = True
+        armature.update_tag()
+        _refresh_frame()
+
+
+        baseline = {
+            name: _world_rotation(armature, name)
+            for name in SLEEVE_CORRECTIVE_BONES
+        }
+        for constraint in constraints.values():
+            constraint.mute = False
+        armature.update_tag()
+        _refresh_frame()
+        enabled = {
+            name: _rotation_delta_degrees(
+                baseline[name], _world_rotation(armature, name)
+            )
+            for name in SLEEVE_CORRECTIVE_BONES
+        }
+        if any(value > COMPENSATION_BASELINE_TOLERANCE_DEG for value in enabled.values()):
+            raise RuntimeError(
+                f"Sleeve corrective identity controls introduce a baseline jump: {enabled}"
+            )
+        response = {}
+        for name in SLEEVE_CORRECTIVE_BONES:
+            controls[name].rotation_quaternion = Quaternion(
+                Vector(axes[name]["swing_a"]), math.radians(1.0)
+            )
+            armature.update_tag()
+            _refresh_frame()
+            response[name] = _rotation_delta_degrees(
+                baseline[name], _world_rotation(armature, name)
+            )
+            controls[name].rotation_quaternion = Quaternion((1.0, 0.0, 0.0, 0.0))
+        if any(not 0.99 <= value <= 1.01 for value in response.values()):
+            raise RuntimeError(
+                f"Sleeve corrective controls do not produce calibrated local deltas: {response}"
+            )
+        for constraint in constraints.values():
+            constraint.mute = True
+        armature.update_tag()
+        _refresh_frame()
+        restored = {
+            name: _rotation_delta_degrees(
+                baseline[name], _world_rotation(armature, name)
+            )
+            for name in SLEEVE_CORRECTIVE_BONES
+        }
+        if any(value > COMPENSATION_BASELINE_TOLERANCE_DEG for value in restored.values()):
+            raise RuntimeError(
+                f"Sleeve corrective constraints do not restore exactly: {restored}"
+            )
+    finally:
+        armature["POC_enabled"] = previous_enabled
+        _set_sleeve_corrective_identity(controls)
+        for name, constraint in constraints.items():
+            constraint.mute = previous_mutes[name]
+        armature.update_tag()
+        _refresh_frame()
+
+
+def _apply_sleeve_correction(armature, controls, axes, correction):
+    reasons = sleeve_correction_reasons(correction)
+    if reasons:
+        raise ValueError("Invalid sleeve correction: " + "; ".join(reasons))
+    quaternions = {}
+    for bone_name, swing in zip(
+        SLEEVE_CORRECTIVE_BONES, correction.swings_deg, strict=True
+    ):
+        quaternion = (
+            _axis_angle_quaternion(axes[bone_name]["swing_a"], swing[0])
+            @ _axis_angle_quaternion(axes[bone_name]["swing_b"], swing[1])
+        ).normalized()
+        controls[bone_name].rotation_mode = "QUATERNION"
+        controls[bone_name].rotation_quaternion = quaternion
+        quaternions[bone_name] = tuple(float(value) for value in quaternion)
+    armature.update_tag()
+    _refresh_frame()
+    return quaternions
 
 
 def _add_influence_driver(constraint, armature, property_name: str) -> None:
@@ -3202,6 +3536,9 @@ def _mesh_geometry_sets(mesh):
     hand = _vertices_for_groups(mesh, _group_indices(mesh, RIGHT_HAND_VERTEX_GROUPS))
     palm = _vertices_for_groups(mesh, _group_indices(mesh, PALM_VERTEX_GROUPS))
     forearm = _vertices_for_groups(mesh, _group_indices(mesh, RIGHT_FOREARM_VERTEX_GROUPS))
+    sleeve_corrective = _vertices_for_groups(
+        mesh, _group_indices(mesh, SLEEVE_CORRECTIVE_BONES)
+    )
     head = _vertices_for_groups(mesh, _group_indices(mesh, HEAD_VERTEX_GROUPS))
     torso = _vertices_for_groups(mesh, _group_indices(mesh, TORSO_VERTEX_GROUPS))
     adjacent = _vertices_for_groups(
@@ -3248,6 +3585,8 @@ def _mesh_geometry_sets(mesh):
         "side_palm_vertices": palm,
         "hand_vertices": hand,
         "moving_vertices": moving,
+        "sleeve_corrective_vertices": sleeve_corrective,
+        "sleeve_corrective_faces": _polygons_touching(mesh, sleeve_corrective),
         "palm_faces": _polygons_touching(mesh, palm),
         "contact_faces": _polygons_touching(mesh, contact),
         "contact_surface_faces": _polygons_touching(mesh, contact_surface),
@@ -3633,6 +3972,135 @@ def _collision_severity_evidence(mesh, geometry, vertices, overlap_pairs):
             full_tree, marker_points, model_median_edge
         ),
         "marker_points": marker_points,
+    }
+
+
+def _capture_sleeve_primary_state(armature, contact_world):
+    primary_bones = ("右肩", "右腕", "右ひじ", "右手首")
+    return {
+        "bone_positions": {
+            name: {
+                "head": tuple(float(value) for value in _pose_head_world(armature, name)),
+                "tail": tuple(
+                    float(value)
+                    for value in (armature.matrix_world @ armature.pose.bones[name].tail)
+                ),
+            }
+            for name in primary_bones
+        },
+        "bone_rotations": {
+            name: tuple(float(value) for value in _world_rotation(armature, name))
+            for name in primary_bones
+        },
+        "fingertips": _finger_tip_positions(armature),
+        "contact_world": tuple(float(value) for value in contact_world),
+    }
+
+
+def _sleeve_primary_drift(baseline, current):
+    position_drifts = []
+    for name in baseline["bone_positions"]:
+        for endpoint in ("head", "tail"):
+            position_drifts.append(_point_distance(
+                baseline["bone_positions"][name][endpoint],
+                current["bone_positions"][name][endpoint],
+            ))
+    rotation_drifts = [
+        quaternion_distance_degrees(
+            baseline["bone_rotations"][name], current["bone_rotations"][name]
+        )
+        for name in baseline["bone_rotations"]
+    ]
+    fingertip_drifts = [
+        _point_distance(baseline["fingertips"][name], current["fingertips"][name])
+        for name in baseline["fingertips"]
+    ]
+    return {
+        "max_primary_position_drift": max(position_drifts, default=0.0),
+        "max_primary_rotation_drift_deg": max(rotation_drifts, default=0.0),
+        "max_fingertip_drift": max(fingertip_drifts, default=0.0),
+        "contact_point_drift": _point_distance(
+            baseline["contact_world"], current["contact_world"]
+        ),
+        "position_drift_by_bone": {
+            name: max(
+                _point_distance(
+                    baseline["bone_positions"][name][endpoint],
+                    current["bone_positions"][name][endpoint],
+                )
+                for endpoint in ("head", "tail")
+            )
+            for name in baseline["bone_positions"]
+        },
+        "rotation_drift_by_bone_deg": {
+            name: quaternion_distance_degrees(
+                baseline["bone_rotations"][name], current["bone_rotations"][name]
+            )
+            for name in baseline["bone_rotations"]
+        },
+        "fingertip_drift_by_name": {
+            name: _point_distance(
+                baseline["fingertips"][name], current["fingertips"][name]
+            )
+            for name in baseline["fingertips"]
+        },
+    }
+
+
+def _capture_sleeve_shape(vertices, faces):
+    points = tuple(tuple(float(value) for value in point) for point in vertices)
+    records = []
+    for index, face in enumerate(faces):
+        first, second, third = (Vector(vertices[vertex]) for vertex in face[:3])
+        normal = (second - first).cross(third - first)
+        area = _polygon_area(points, face)
+        records.append({
+            "face_index": index,
+            "area": area,
+            "normal": (
+                tuple(float(value) for value in normal.normalized())
+                if normal.length_squared > 1e-12 else (0.0, 0.0, 0.0)
+            ),
+        })
+    return tuple(records)
+
+
+def _sleeve_shape_evidence(baseline, current):
+    ratios = []
+    flipped = 0
+    finite = True
+    for before, after in zip(baseline, current, strict=True):
+        before_area = float(before["area"])
+        after_area = float(after["area"])
+        finite = finite and math.isfinite(after_area) and all(
+            math.isfinite(value) for value in after["normal"]
+        )
+        if before_area > 1e-12:
+            ratios.append(after_area / before_area)
+        dot = sum(
+            left * right
+            for left, right in zip(before["normal"], after["normal"], strict=True)
+        )
+        if dot < 0.0:
+            flipped += 1
+    minimum = min(ratios, default=1.0)
+    maximum = max(ratios, default=1.0)
+    reasons = []
+    if not finite:
+        reasons.append("Sleeve corrective mesh contains non-finite face evidence")
+    if flipped:
+        reasons.append("Sleeve corrective mesh contains inverted faces")
+    if minimum < SLEEVE_FACE_MIN_AREA_RATIO:
+        reasons.append("Sleeve corrective mesh contains collapsed faces")
+    if maximum > SLEEVE_FACE_MAX_AREA_RATIO:
+        reasons.append("Sleeve corrective mesh contains excessively stretched faces")
+    return {
+        "face_count": len(current),
+        "minimum_area_ratio": minimum,
+        "maximum_area_ratio": maximum,
+        "flipped_face_count": flipped,
+        "matrices_finite": finite,
+        "reasons": reasons,
     }
 
 
@@ -4508,7 +4976,15 @@ def _render_diagnostic_candidate(output_dir, armature, controls, candidate, cont
     }
 
 
-def _render_collision_severity_diagnostic(output_dir, source_id, vertices, severity):
+def _render_collision_severity_diagnostic(
+    output_dir,
+    source_id,
+    vertices,
+    severity,
+    *,
+    output_directory=COLLISION_SEVERITY_DIRECTORY,
+    overlay_severity=None,
+):
     scene = bpy.context.scene
     camera, center, distance, ortho_scale, bbox_min, bbox_max = _full_body_camera(
         scene, vertices
@@ -4517,7 +4993,7 @@ def _render_collision_severity_diagnostic(output_dir, source_id, vertices, sever
     scene.render.resolution_y = RENDER_RESOLUTION
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = "PNG"
-    relative_root = Path(COLLISION_SEVERITY_DIRECTORY) / source_id
+    relative_root = Path(output_directory) / source_id
     directory = Path(output_dir) / relative_root
     directory.mkdir(parents=True, exist_ok=True)
     view_directions = {
@@ -4536,7 +5012,8 @@ def _render_collision_severity_diagnostic(output_dir, source_id, vertices, sever
         bpy.ops.render.render(write_still=True)
         renders[view] = str(relative_root / f"{view}.png")
 
-    bbox = severity["overlap_bbox"]
+    overlay = overlay_severity or severity
+    bbox = severity["overlap_bbox"] or overlay["overlap_bbox"]
     close_center = Vector(bbox["center"] if bbox else center)
     close_scale = max(
         0.32,
@@ -4557,11 +5034,11 @@ def _render_collision_severity_diagnostic(output_dir, source_id, vertices, sever
     )
     marker_radius = max(
         0.003,
-        float(severity["median_local_mesh_edge_blender"]) * 0.45,
+        float(overlay["median_local_mesh_edge_blender"]) * 0.45,
     )
     markers = []
     try:
-        for index, point in enumerate(severity["marker_points"][:12], start=1):
+        for index, point in enumerate(overlay["marker_points"][:12], start=1):
             bpy.ops.mesh.primitive_uv_sphere_add(
                 segments=16,
                 ring_count=8,
@@ -4586,6 +5063,10 @@ def _render_collision_severity_diagnostic(output_dir, source_id, vertices, sever
         "marker_count": len(markers),
         "marker_radius_blender": marker_radius,
         "marker_overlay_offset": (0.0, -0.012, 0.0),
+        "marker_source": (
+            "baseline_collision_points" if overlay_severity is not None
+            else "current_collision_points"
+        ),
         "full_body_camera": {
             "ortho_scale": float(ortho_scale),
             "center": tuple(float(value) for value in center),
@@ -6060,6 +6541,324 @@ def chin_support_refinement(config: PocConfig) -> None:
         )
 
 
+def sleeve_corrective_feasibility(config: PocConfig) -> None:
+    _require_blender()
+    if (
+        not config.sleeve_corrective_feasibility
+        or config.run_id is None
+        or config.source_static_metrics is None
+    ):
+        raise ValueError("Sleeve corrective feasibility requires its mode, run ID, and source metrics")
+    current_blend = Path(bpy.data.filepath)
+    if not current_blend or not _same_path(current_blend, config.source_blend):
+        raise RuntimeError(f"Blender must open the existing POC blend: {config.source_blend}")
+    paths = sleeve_corrective_run_paths(config.output_dir, config.run_id)
+    if config.overwrite_run and paths.temporary.exists():
+        shutil.rmtree(paths.temporary)
+    paths.temporary.mkdir(parents=True, exist_ok=False)
+
+    armature, mesh = _validate_scene_objects()
+    compensation_controls = _ensure_compensation_controls(armature)
+    _validate_compensation_baseline(armature, compensation_controls)
+    finger_controls = _ensure_finger_controls(armature)
+    _validate_finger_baseline(armature, finger_controls)
+    sleeve_controls = _ensure_sleeve_corrective_controls(armature)
+    sleeve_axes = _sleeve_rest_local_axes(armature)
+    _validate_sleeve_corrective_baseline(armature, sleeve_controls, sleeve_axes)
+    controls = _existing_controls()
+    _validate_existing_poc(armature, controls)
+    math_module = _load_motion_math()
+    geometry = _mesh_geometry_sets(mesh)
+    if not geometry["sleeve_corrective_faces"]:
+        raise RuntimeError("Sleeve corrective weighted groups contain no closed surface faces")
+    context = _prepare_static_context(
+        armature, mesh, controls, geometry, math_module,
+        compensation_controls, finger_controls,
+    )
+    stored = json.loads(config.source_static_metrics.read_text(encoding="utf-8"))
+    candidate_by_id = {
+        candidate.candidate_id: candidate for candidate in static_candidate_grid()
+    }
+    seed_ids = ("candidate_4330", "candidate_4334")
+    corrections = sleeve_correction_grid()
+    baseline_by_seed = {}
+    evaluated = []
+    started = time.perf_counter()
+    try:
+        for seed_id in seed_ids:
+            candidate = candidate_by_id[seed_id]
+            _set_compensation_identity(compensation_controls)
+            _set_finger_identity(finger_controls)
+            _set_sleeve_corrective_identity(sleeve_controls)
+            _apply_context_candidate(armature, controls, candidate, context)
+            surface = _current_chin_surface(mesh, armature, context["chin_surface"])
+            contact = _surface_contact_evidence_bvh(mesh, geometry, surface)
+            collision_before, vertices_before = _full_collision_evidence(
+                mesh, geometry, context["invariant_collision"]
+            )
+            moving_tree_before = _bvh(vertices_before, geometry["moving_faces"])
+            torso_tree_before = _bvh(vertices_before, geometry["torso_faces"])
+            overlap_before = tuple(moving_tree_before.overlap(torso_tree_before))
+            severity_before = _collision_severity_evidence(
+                mesh, geometry, vertices_before, overlap_before
+            )
+            sleeve_tree_before = _bvh(
+                vertices_before, geometry["sleeve_corrective_faces"]
+            )
+            head_tree_before = _bvh(vertices_before, geometry["head_faces"])
+            hand_tree_before = _bvh(vertices_before, geometry["hand_faces"])
+            baseline = {
+                "candidate": candidate,
+                "contact": contact,
+                "primary": _capture_sleeve_primary_state(
+                    armature, contact["hand_contact_world"]
+                ),
+                "shape": _capture_sleeve_shape(
+                    vertices_before, geometry["sleeve_corrective_faces"]
+                ),
+                "collision": collision_before,
+                "severity": severity_before,
+                "sleeve_head_overlap_count": len(
+                    sleeve_tree_before.overlap(head_tree_before)
+                ),
+                "sleeve_hand_overlap_count": len(
+                    sleeve_tree_before.overlap(hand_tree_before)
+                ),
+            }
+            baseline_by_seed[seed_id] = baseline
+
+            for correction_index, correction in enumerate(corrections):
+                source_id = f"{seed_id}__sleeve_{correction_index:03d}"
+                _set_sleeve_corrective_identity(sleeve_controls)
+                _apply_context_candidate(armature, controls, candidate, context)
+                quaternions = _apply_sleeve_correction(
+                    armature, sleeve_controls, sleeve_axes, correction
+                )
+                current_surface = _current_chin_surface(
+                    mesh, armature, context["chin_surface"]
+                )
+                current_contact = _surface_contact_evidence_bvh(
+                    mesh, geometry, current_surface
+                )
+                current_primary = _capture_sleeve_primary_state(
+                    armature, current_contact["hand_contact_world"]
+                )
+                primary_drift = _sleeve_primary_drift(
+                    baseline["primary"], current_primary
+                )
+                collision_after, vertices_after = _full_collision_evidence(
+                    mesh, geometry, context["invariant_collision"]
+                )
+                sleeve_tree = _bvh(
+                    vertices_after, geometry["sleeve_corrective_faces"]
+                )
+                head_tree = _bvh(vertices_after, geometry["head_faces"])
+                hand_tree = _bvh(vertices_after, geometry["hand_faces"])
+                sleeve_head_count = len(sleeve_tree.overlap(head_tree))
+                sleeve_hand_count = len(sleeve_tree.overlap(hand_tree))
+                shape = _sleeve_shape_evidence(
+                    baseline["shape"],
+                    _capture_sleeve_shape(
+                        vertices_after, geometry["sleeve_corrective_faces"]
+                    ),
+                )
+                smoothness = sleeve_correction_smoothness(correction)
+                reasons = list(sleeve_correction_reasons(correction))
+                reasons.extend(sleeve_primary_drift_reasons(primary_drift))
+                reasons.extend(shape["reasons"])
+                if collision_after["head_collision_count"] != baseline["collision"]["head_collision_count"]:
+                    reasons.append("Sleeve correction changes the existing hand/head collision state")
+                if sleeve_head_count > baseline["sleeve_head_overlap_count"]:
+                    reasons.append("Sleeve correction introduces additional sleeve/head overlap")
+                if sleeve_hand_count > baseline["sleeve_hand_overlap_count"]:
+                    reasons.append("Sleeve correction introduces additional sleeve/hand overlap")
+                matrices = tuple(
+                    armature.pose.bones[name].matrix
+                    for name in SLEEVE_CORRECTIVE_BONES
+                ) + tuple(control.matrix_world for control in sleeve_controls.values())
+                if not all(_finite_matrix(matrix) for matrix in matrices):
+                    reasons.append("Sleeve correction contains non-finite matrices")
+                raw_overlap = int(collision_after["torso_penetration_count"])
+                eligible = not reasons and raw_overlap == 0
+                evaluated.append({
+                    "source_id": source_id,
+                    "seed_id": seed_id,
+                    "correction_index": correction_index,
+                    "eligible": eligible,
+                    "reasons": list(dict.fromkeys(reasons)),
+                    "raw_overlap_count": raw_overlap,
+                    "overlap_before": int(
+                        baseline["collision"]["torso_penetration_count"]
+                    ),
+                    "overlap_reduction": int(
+                        baseline["collision"]["torso_penetration_count"]
+                    ) - raw_overlap,
+                    "max_penetration_depth": 0.0,
+                    "smoothness_penalty": smoothness["smoothness_penalty"],
+                    "correction": correction,
+                    "correction_swings_deg": correction.swings_deg,
+                    "correction_quaternions": quaternions,
+                    "local_axes": sleeve_axes,
+                    "primary_drift": primary_drift,
+                    "contact_before": baseline["contact"],
+                    "contact_after": current_contact,
+                    "shape": shape,
+                    "collision_after": collision_after,
+                    "sleeve_head_overlap_before": baseline["sleeve_head_overlap_count"],
+                    "sleeve_head_overlap_after": sleeve_head_count,
+                    "sleeve_hand_overlap_before": baseline["sleeve_hand_overlap_count"],
+                    "sleeve_hand_overlap_after": sleeve_hand_count,
+                    "smoothness": smoothness,
+                })
+
+        shortlist = sorted(evaluated, key=sleeve_correction_rank)[:24]
+        for record in shortlist:
+            baseline = baseline_by_seed[record["seed_id"]]
+            _set_sleeve_corrective_identity(sleeve_controls)
+            _apply_context_candidate(
+                armature, controls, baseline["candidate"], context
+            )
+            _apply_sleeve_correction(
+                armature, sleeve_controls, sleeve_axes, record["correction"]
+            )
+            vertices = _evaluated_world_vertices(mesh)
+            moving_tree = _bvh(vertices, geometry["moving_faces"])
+            torso_tree = _bvh(vertices, geometry["torso_faces"])
+            overlaps = tuple(moving_tree.overlap(torso_tree))
+            severity_after = _collision_severity_evidence(
+                mesh, geometry, vertices, overlaps
+            )
+            record["severity_before"] = baseline["severity"]
+            record["severity_after"] = severity_after
+            record["max_penetration_depth"] = severity_after["penetration_depth"]["max_blender"]
+
+        ranked = sorted(evaluated, key=sleeve_correction_rank)
+        eligible = [record for record in ranked if record["eligible"]]
+        render_records = (eligible or ranked)[:STATIC_RENDER_COUNT]
+        closeups = []
+        for record in render_records:
+            baseline = baseline_by_seed[record["seed_id"]]
+            _set_sleeve_corrective_identity(sleeve_controls)
+            _apply_context_candidate(
+                armature, controls, baseline["candidate"], context
+            )
+            _apply_sleeve_correction(
+                armature, sleeve_controls, sleeve_axes, record["correction"]
+            )
+            vertices = _evaluated_world_vertices(mesh)
+            if "severity_after" not in record:
+                moving_tree = _bvh(vertices, geometry["moving_faces"])
+                torso_tree = _bvh(vertices, geometry["torso_faces"])
+                record["severity_before"] = baseline["severity"]
+                record["severity_after"] = _collision_severity_evidence(
+                    mesh, geometry, vertices,
+                    tuple(moving_tree.overlap(torso_tree)),
+                )
+            render = _render_collision_severity_diagnostic(
+                paths.temporary,
+                record["source_id"],
+                vertices,
+                record["severity_after"],
+                output_directory=SLEEVE_CORRECTIVE_DIRECTORY,
+                overlay_severity=record["severity_before"],
+            )
+            record["render_evidence"] = render
+            closeups.append(
+                paths.temporary
+                / render["renders"]["collision_closeup_normal"]
+            )
+        contact_sheet_relative = Path(SLEEVE_CORRECTIVE_DIRECTORY) / "contact_sheet.png"
+        _write_orientation_contact_sheet(
+            closeups, paths.temporary / contact_sheet_relative
+        )
+
+        _set_sleeve_corrective_identity(sleeve_controls)
+        _restore_static_control_state(
+            armature, controls, context["baseline_state"],
+            compensation_controls, finger_controls,
+        )
+        metrics = {
+            "mode": "sleeve-corrective-feasibility",
+            "selection_status": "NEEDS_CONTEXT" if eligible else "BLOCKED",
+            "acceptance_thresholds_changed": False,
+            "run_id": config.run_id,
+            "frame": VALIDATION_FRAME,
+            "source_blend": str(config.source_blend),
+            "output_blend_unchanged": str(config.output_blend),
+            "source_static_metrics": str(config.source_static_metrics),
+            "seed_ids": seed_ids,
+            "correction_count_per_seed": len(corrections),
+            "evaluated_count": len(evaluated),
+            "zero_overlap_count": len(eligible),
+            "rendered_count": len(render_records),
+            "duration_seconds": time.perf_counter() - started,
+            "local_axes": sleeve_axes,
+            "limits": {
+                "max_correction_deg": SLEEVE_CORRECTIVE_MAX_DEG,
+                "max_adjacent_delta_deg": SLEEVE_CORRECTIVE_MAX_ADJACENT_DEG,
+                "primary_position_tolerance": SLEEVE_PRIMARY_POSITION_TOLERANCE,
+                "primary_rotation_tolerance_deg": SLEEVE_PRIMARY_ROTATION_TOLERANCE_DEG,
+                "fingertip_position_tolerance": SLEEVE_FINGERTIP_POSITION_TOLERANCE,
+                "contact_position_tolerance": SLEEVE_CONTACT_POSITION_TOLERANCE,
+                "face_area_ratio": (
+                    SLEEVE_FACE_MIN_AREA_RATIO, SLEEVE_FACE_MAX_AREA_RATIO
+                ),
+            },
+            "baseline_by_seed": {
+                seed_id: {
+                    "collision": baseline["collision"],
+                    "severity": baseline["severity"],
+                    "contact": baseline["contact"],
+                    "sleeve_head_overlap_count": baseline["sleeve_head_overlap_count"],
+                    "sleeve_hand_overlap_count": baseline["sleeve_hand_overlap_count"],
+                }
+                for seed_id, baseline in baseline_by_seed.items()
+            },
+            "contact_sheet": str(contact_sheet_relative),
+            "rendered_candidates": render_records,
+            "candidate_table": evaluated,
+        }
+        metrics_path = paths.temporary / SLEEVE_CORRECTIVE_METRICS_NAME
+        metrics_path.write_text(
+            json.dumps(
+                metrics, ensure_ascii=False, indent=2,
+                sort_keys=True, allow_nan=False,
+                default=lambda value: (
+                    {"swings_deg": value.swings_deg}
+                    if isinstance(value, SleeveCorrection) else str(value)
+                ),
+            ) + "\n",
+            encoding="utf-8",
+        )
+        expected = [metrics_path, paths.temporary / contact_sheet_relative]
+        expected.extend(
+            paths.temporary / relative
+            for record in render_records
+            for relative in record["render_evidence"]["renders"].values()
+        )
+        missing = [str(path) for path in expected if not path.is_file()]
+        if missing:
+            raise RuntimeError(
+                "Sleeve corrective feasibility is missing artifacts: " + ", ".join(missing)
+            )
+        if paths.final.exists():
+            shutil.rmtree(paths.final)
+        paths.temporary.rename(paths.final)
+        print("POC_SLEEVE_CORRECTIVE_COMPLETE", {
+            "run_id": config.run_id,
+            "evaluated": len(evaluated),
+            "zero_overlap": len(eligible),
+            "rendered": len(render_records),
+            "metrics": str(paths.metrics),
+        })
+    finally:
+        _set_sleeve_corrective_identity(sleeve_controls)
+        _restore_static_control_state(
+            armature, controls, context["baseline_state"],
+            compensation_controls, finger_controls,
+        )
+
+
 def collision_severity_diagnostic(config: PocConfig) -> None:
     _require_blender()
     if (
@@ -7316,6 +8115,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         chin_support_refinement(config)
     elif config.collision_severity_diagnostic:
         collision_severity_diagnostic(config)
+    elif config.sleeve_corrective_feasibility:
+        sleeve_corrective_feasibility(config)
     else:
         raise ValueError("No POC mode selected")
     return 0

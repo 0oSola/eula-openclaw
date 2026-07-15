@@ -135,6 +135,13 @@ def valid_collision_severity_cli(tmp_path):
     return argv
 
 
+def valid_sleeve_corrective_cli(tmp_path):
+    argv = valid_collision_severity_cli(tmp_path)
+    argv[argv.index("--collision-severity-diagnostic")] = "--sleeve-corrective-feasibility"
+    argv[argv.index("run-20260715-collision-severity-001")] = "run-20260715-sleeve-corrective-001"
+    return argv
+
+
 def test_module_loads_without_blender_python():
     tool = load_tool()
 
@@ -150,6 +157,22 @@ def test_proxy_bones_preserve_matching_source_rest_orientation():
         "POC_右ひじ_CTRL": "右ひじ",
         "POC_右手_CTRL": "右手首",
     }
+
+
+def test_sleeve_corrective_constraints_are_local_before_deltas():
+    tool = load_tool()
+
+    assert tool.SLEEVE_CORRECTIVE_BONES == ("右手捩1", "右手捩2", "右手捩3")
+    assert set(tool.SLEEVE_CORRECTIVE_CONSTRAINT_SPECS) == set(tool.SLEEVE_CORRECTIVE_BONES)
+    assert all(
+        spec == {
+            "owner_bone": bone_name,
+            "owner_space": "LOCAL",
+            "target_space": "LOCAL",
+            "mix_mode": "BEFORE",
+        }
+        for bone_name, spec in tool.SLEEVE_CORRECTIVE_CONSTRAINT_SPECS.items()
+    )
 
 
 def test_proxy_elbow_uses_calibrated_one_direction_local_z_hinge():
@@ -805,6 +828,59 @@ def test_combined_dual_contact_refinement_is_bounded_by_head_and_finger_limits()
     assert all(max(abs(value) for value in item.palm_refinement_deg) <= 3.0 for item in refinements)
 
 
+def test_sleeve_correction_grid_is_bounded_smooth_and_contains_identity():
+    tool = load_tool()
+
+    corrections = tool.sleeve_correction_grid()
+
+    assert corrections == tool.sleeve_correction_grid()
+    assert 100 <= len(corrections) <= 180
+    assert corrections[0].swings_deg == ((0.0, 0.0),) * 3
+    assert all(tool.sleeve_correction_reasons(item) == () for item in corrections)
+    assert all(
+        max(math.hypot(*swing) for swing in item.swings_deg)
+        <= tool.SLEEVE_CORRECTIVE_MAX_DEG
+        for item in corrections
+    )
+
+
+def test_sleeve_correction_rejects_abrupt_or_excessive_profiles():
+    tool = load_tool()
+
+    abrupt = tool.SleeveCorrection(((0.0, 0.0), (8.0, 0.0), (0.0, 0.0)))
+    excessive = tool.SleeveCorrection(((9.0, 0.0), (8.0, 0.0), (7.0, 0.0)))
+
+    assert any("smooth" in reason.lower() for reason in tool.sleeve_correction_reasons(abrupt))
+    assert any("8" in reason for reason in tool.sleeve_correction_reasons(excessive))
+
+
+def test_sleeve_primary_invariance_uses_named_tight_tolerances():
+    tool = load_tool()
+    valid = {
+        "max_primary_position_drift": tool.SLEEVE_PRIMARY_POSITION_TOLERANCE * 0.5,
+        "max_primary_rotation_drift_deg": tool.SLEEVE_PRIMARY_ROTATION_TOLERANCE_DEG * 0.5,
+        "max_fingertip_drift": tool.SLEEVE_FINGERTIP_POSITION_TOLERANCE * 0.5,
+        "contact_point_drift": tool.SLEEVE_CONTACT_POSITION_TOLERANCE * 0.5,
+    }
+
+    assert tool.sleeve_primary_drift_reasons(valid) == ()
+    invalid = {**valid, "max_primary_position_drift": tool.SLEEVE_PRIMARY_POSITION_TOLERANCE * 2.0}
+    assert any("primary" in reason.lower() for reason in tool.sleeve_primary_drift_reasons(invalid))
+
+
+def test_sleeve_correction_ranking_prioritizes_zero_and_reduced_overlap():
+    tool = load_tool()
+    records = [
+        {"source_id": "unchanged", "raw_overlap_count": 44, "max_penetration_depth": 0.01, "smoothness_penalty": 0.0},
+        {"source_id": "reduced", "raw_overlap_count": 8, "max_penetration_depth": 0.02, "smoothness_penalty": 0.0},
+        {"source_id": "zero", "raw_overlap_count": 0, "max_penetration_depth": 0.0, "smoothness_penalty": 1.0},
+    ]
+
+    ranked = sorted(records, key=tool.sleeve_correction_rank)
+
+    assert [record["source_id"] for record in ranked] == ["zero", "reduced", "unchanged"]
+
+
 def test_behavior_diagnostics_have_nonzero_bounded_thresholds():
     tool = load_tool()
 
@@ -927,6 +1003,16 @@ def test_collision_severity_mode_reuses_source_metrics_and_isolates_output(cli_t
     assert config.collision_severity_diagnostic is True
     paths = tool.collision_severity_run_paths(config.output_dir, config.run_id)
     assert paths.metrics == paths.final / tool.COLLISION_SEVERITY_METRICS_NAME
+
+
+def test_sleeve_corrective_mode_reuses_source_metrics_and_isolates_output(cli_tmp_path):
+    tool = load_tool()
+
+    config = tool.parse_blender_args(valid_sleeve_corrective_cli(cli_tmp_path))
+
+    assert config.sleeve_corrective_feasibility is True
+    paths = tool.sleeve_corrective_run_paths(config.output_dir, config.run_id)
+    assert paths.metrics == paths.final / tool.SLEEVE_CORRECTIVE_METRICS_NAME
 
 
 def test_collision_severity_record_selection_prefers_lowest_overlap_pole3d_compensation():
