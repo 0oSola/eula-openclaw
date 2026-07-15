@@ -508,17 +508,80 @@ def test_orientation_gallery_variants_are_deterministic_bounded_and_calibrated()
     assert variants == tool.orientation_gallery_variants()
     assert len(variants) == 18
     assert len({variant.source_id for variant in variants}) == len(variants)
-    assert {-45.0, -30.0, -15.0, 0.0, 15.0, 30.0, 45.0} <= {
-        variant.axial_angle_deg for variant in variants
-    }
     assert all(sum(variant.twist_distribution) == pytest.approx(1.0) for variant in variants)
     assert all(min(variant.twist_distribution) >= 0.0 for variant in variants)
     assert all(tool.validate_absolute_finger_targets(variant.finger_targets_deg) == () for variant in variants)
     assert {variant.family for variant in variants} >= {
-        "axial_sweep", "distribution", "thumb_opposition", "index_alignment"
+        "semi_closed_axial", "palm_tilt", "thumb_opposition", "index_alignment"
     }
+    assert {variant.axial_angle_deg for variant in variants} <= {-30.0, -15.0}
+    assert any(variant.palm_swing_deg for variant in variants)
+    assert any(variant.palm_tilt_deg for variant in variants)
     assert 0.0 < tool.ORIENTATION_GALLERY_OUTWARD_CLEARANCE <= 0.03
     assert tool.ORIENTATION_GALLERY_FORWARD_CLEARANCE == pytest.approx(0.060)
+
+
+def test_semiclosed_targets_have_progressive_half_curl_and_distinct_thumb_opposition():
+    tool = load_tool()
+    targets = tool.semi_closed_finger_targets()
+
+    for name, pose in targets.items():
+        assert tool.validate_absolute_finger_targets(pose) == (), name
+        middle = -pose["右中指１"][0]
+        ring = -pose["右薬指１"][0]
+        little = -pose["右小指１"][0]
+        assert 30.0 <= middle < ring < little <= 60.0
+        assert -pose["右人指１"][0] <= 15.0
+    assert targets["thumb_support"]["右親指０"] != targets["thumb_opposed"]["右親指０"]
+    assert targets["thumb_support"]["右親指１"] != targets["thumb_opposed"]["右親指１"]
+
+
+def test_nonaxial_palm_control_compensates_for_wrist_influence():
+    tool = load_tool()
+
+    assert tool.palm_control_nonaxial_degrees(6.0, 0.15) == pytest.approx(40.0)
+    with pytest.raises(ValueError, match="wrist influence"):
+        tool.palm_control_nonaxial_degrees(6.0, 0.0)
+
+
+def test_gallery_pose_uniqueness_rejects_thumb_noop_and_duplicate_hash():
+    tool = load_tool()
+    half = math.radians(8.0) / 2.0
+    identity = (1.0, 0.0, 0.0, 0.0)
+    rotated = (math.cos(half), math.sin(half), 0.0, 0.0)
+    base = {
+        "comparison_group": "thumb_m30",
+        "comparison_dimension": "thumb",
+        "evaluated_finger_quaternions": {
+            "右親指０": identity, "右親指１": identity, "右親指２": identity,
+        },
+        "fingertip_world": {"thumb": (0.0, 0.0, 0.0), "index": (1.0, 0.0, 0.0)},
+        "palm_final_quaternion": identity,
+    }
+    distinct = [
+        {**base, "source_id": "thumb_support", "evaluated_pose_hash": "a"},
+        {
+            **base,
+            "source_id": "thumb_opposed",
+            "evaluated_pose_hash": "b",
+            "evaluated_finger_quaternions": {
+                "右親指０": rotated, "右親指１": identity, "右親指２": identity,
+            },
+            "fingertip_world": {"thumb": (0.004, 0.0, 0.0), "index": (1.0, 0.0, 0.0)},
+        },
+    ]
+
+    assert tool.orientation_gallery_pose_uniqueness_reasons(distinct) == ()
+    noop = [{**record, "evaluated_pose_hash": "same"} for record in distinct]
+    noop[1] = {
+        **noop[1],
+        "evaluated_finger_quaternions": base["evaluated_finger_quaternions"],
+        "fingertip_world": base["fingertip_world"],
+    }
+    reasons = tool.orientation_gallery_pose_uniqueness_reasons(noop)
+    assert any("pose hash" in reason.lower() for reason in reasons)
+    assert any("thumb quaternion" in reason.lower() for reason in reasons)
+    assert any("thumb tip" in reason.lower() for reason in reasons)
 
 
 def test_orientation_gallery_rejects_only_hard_anatomy_or_collision_failures():

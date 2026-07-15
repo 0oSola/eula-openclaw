@@ -387,9 +387,13 @@ class OrientationGalleryVariant:
     family: str
     label: str
     axial_angle_deg: float
+    palm_swing_deg: float
+    palm_tilt_deg: float
     twist_distribution: tuple[float, float, float]
     thumb_variant: str
     index_variant: str
+    comparison_group: str
+    comparison_dimension: str
     finger_targets_deg: dict[str, tuple[float, float, float]]
 
 
@@ -617,8 +621,11 @@ def validate_absolute_finger_targets(joint_targets_deg) -> tuple[str, ...]:
             reasons.append(f"{bone_name} absolute flex exceeds 65 degrees")
         if target[0] > 30.0 + 1e-6:
             reasons.append(f"{bone_name} reverse extension exceeds 30 degrees")
-        if max(abs(target[1]), abs(target[2])) > 12.0 + 1e-6:
-            reasons.append(f"{bone_name} fingertip spread exceeds 12 degrees")
+        spread_limit = 30.0 if bone_name.startswith("右親指") else 12.0
+        if max(abs(target[1]), abs(target[2])) > spread_limit + 1e-6:
+            reasons.append(
+                f"{bone_name} fingertip spread exceeds {spread_limit:g} degrees"
+            )
     for prefix in ("右人指", "右中指", "右薬指", "右小指"):
         curls = tuple(max(0.0, -float(joint_targets_deg[f"{prefix}{joint}"][0])) for joint in "１２３")
         if curls[2] > curls[0] + 20.0:
@@ -755,73 +762,177 @@ def dual_contact_refinement_grid() -> tuple[DualContactRefinement, ...]:
 
 
 def orientation_gallery_variants() -> tuple[OrientationGalleryVariant, ...]:
-    base = next(
-        preset for preset in semantic_finger_presets()
-        if preset.name == "support_index_long"
-    ).joint_targets_deg
-    thumb_targets = {
-        "base": {name: base[name] for name in ("右親指０", "右親指１", "右親指２")},
-        "open": {
-            "右親指０": (-8.0, -12.0, -8.0),
-            "右親指１": (-15.0, -8.0, 0.0),
-            "右親指２": (-8.0, 0.0, 0.0),
-        },
-        "opposed": {
-            "右親指０": (-20.0, -12.0, -8.0),
-            "右親指１": (-30.0, -10.0, 0.0),
-            "右親指２": (-18.0, 0.0, 0.0),
-        },
-    }
-    index_targets = {
-        "base": {name: base[name] for name in ("右人指１", "右人指２", "右人指３")},
-        "jaw_align": {
-            "右人指１": (-6.0, -6.0, -8.0),
-            "右人指２": (-4.0, -2.0, 0.0),
-            "右人指３": (-2.0, 0.0, 0.0),
-        },
-    }
-    distributions = {
-        "balanced": (0.35, 0.50, 0.15),
-        "forearm": (0.55, 0.35, 0.10),
-        "wrist": (0.20, 0.45, 0.35),
-    }
+    targets = semi_closed_finger_targets()
+    distribution = (0.35, 0.50, 0.15)
     specs = []
-    for angle in (-45.0, -30.0, -15.0, 0.0, 15.0, 30.0, 45.0):
-        specs.append(("axial_sweep", angle, "balanced", "base", "base"))
-    for angle in (-30.0, 15.0):
-        specs.extend((
-            ("distribution", angle, "forearm", "base", "base"),
-            ("distribution", angle, "wrist", "base", "base"),
+    for angle in (-30.0, -15.0):
+        angle_key = f"m{abs(int(angle)):02d}"
+        specs.append((
+            "semi_closed_axial", angle, 0.0, 0.0, "base", "base",
+            "semi_closed_axial", "palm",
         ))
-    for angle in (-30.0, 15.0):
-        specs.extend((
-            ("thumb_opposition", angle, "balanced", "open", "base"),
-            ("thumb_opposition", angle, "balanced", "opposed", "base"),
-        ))
-    for angle in (-30.0, 0.0, 15.0):
-        specs.append(("index_alignment", angle, "balanced", "base", "jaw_align"))
+        for swing, tilt in ((-6.0, 0.0), (6.0, 0.0), (0.0, -6.0), (0.0, 6.0)):
+            specs.append((
+                "palm_tilt", angle, swing, tilt, "base", "base",
+                f"palm_{angle_key}", "palm",
+            ))
+        for thumb in ("thumb_support", "thumb_opposed"):
+            specs.append((
+                "thumb_opposition", angle, 0.0, 0.0, thumb, "base",
+                f"thumb_{angle_key}", "thumb",
+            ))
+        for index_pose in ("index_high", "index_long"):
+            specs.append((
+                "index_alignment", angle, 0.0, 0.0, "base", index_pose,
+                f"index_{angle_key}", "index",
+            ))
 
     variants = []
-    for index, (family, angle, distribution, thumb, index_pose) in enumerate(specs, start=1):
-        targets = dict(base)
-        targets.update(thumb_targets[thumb])
-        targets.update(index_targets[index_pose])
+    for index, (
+        family, angle, swing, tilt, thumb, index_pose,
+        comparison_group, comparison_dimension,
+    ) in enumerate(specs, start=1):
+        pose = dict(targets["base"])
+        if thumb != "base":
+            for bone_name in ("右親指０", "右親指１", "右親指２"):
+                pose[bone_name] = targets[thumb][bone_name]
+        if index_pose != "base":
+            for bone_name in ("右人指１", "右人指２", "右人指３"):
+                pose[bone_name] = targets[index_pose][bone_name]
         angle_label = f"p{int(angle):02d}" if angle >= 0 else f"m{abs(int(angle)):02d}"
-        source_id = f"gallery_{index:02d}_{family}_{angle_label}_{distribution}_{thumb}_{index_pose}"
+        source_id = (
+            f"gallery_{index:02d}_{family}_{angle_label}_"
+            f"sx{int(swing):+03d}_tz{int(tilt):+03d}_{thumb}_{index_pose}"
+        ).replace("+", "p").replace("-", "m")
         variants.append(OrientationGalleryVariant(
             source_id=source_id,
             family=family,
             label=(
-                f"G{index:02d}  axial {angle:+.0f}  {distribution}\n"
-                f"thumb {thumb}  index {index_pose}"
+                f"G{index:02d} axial {angle:+.0f} swing {swing:+.0f} tilt {tilt:+.0f}\n"
+                f"thumb {thumb} index {index_pose}"
             ),
             axial_angle_deg=angle,
-            twist_distribution=distributions[distribution],
+            palm_swing_deg=swing,
+            palm_tilt_deg=tilt,
+            twist_distribution=distribution,
             thumb_variant=thumb,
             index_variant=index_pose,
-            finger_targets_deg=targets,
+            comparison_group=comparison_group,
+            comparison_dimension=comparison_dimension,
+            finger_targets_deg=pose,
         ))
     return tuple(variants)
+
+
+def semi_closed_finger_targets() -> dict[str, dict[str, tuple[float, float, float]]]:
+    relaxed = _finger_pose_targets(
+        (
+            (-18.0, -16.0, -10.0),
+            (-26.0, -12.0, -6.0),
+            (-16.0, -4.0, -2.0),
+        ),
+        (
+            (-10.0, -8.0, -8.0),
+            (-8.0, -3.0, 0.0),
+            (-5.0, 0.0, 0.0),
+        ),
+        ((-34.0, 0.0, 0.0), (-42.0, 0.0, 0.0), (-34.0, 0.0, 0.0)),
+        ((-42.0, 0.0, 0.0), (-50.0, 0.0, 0.0), (-42.0, 0.0, 0.0)),
+        ((-50.0, 0.0, 0.0), (-58.0, 0.0, 0.0), (-50.0, 0.0, 0.0)),
+    )
+    variants = {"base": dict(relaxed)}
+    variants["thumb_support"] = {
+        **relaxed,
+        "右親指０": (-24.0, 10.0, 8.0),
+        "右親指１": (-32.0, 8.0, 5.0),
+        "右親指２": (-20.0, 4.0, 2.0),
+    }
+    variants["thumb_opposed"] = {
+        **relaxed,
+        "右親指０": (-36.0, 20.0, 12.0),
+        "右親指１": (-46.0, 16.0, 8.0),
+        "右親指２": (-30.0, 8.0, 4.0),
+    }
+    variants["index_high"] = {
+        **relaxed,
+        "右人指１": (-6.0, -12.0, -6.0),
+        "右人指２": (-5.0, -4.0, 0.0),
+        "右人指３": (-3.0, 0.0, 0.0),
+    }
+    variants["index_long"] = {
+        **relaxed,
+        "右人指１": (-4.0, -8.0, -10.0),
+        "右人指２": (-3.0, -2.0, 0.0),
+        "右人指３": (-2.0, 0.0, 0.0),
+    }
+    return variants
+
+
+def palm_control_nonaxial_degrees(requested_degrees: float, wrist_influence: float) -> float:
+    influence = float(wrist_influence)
+    if not math.isfinite(influence) or influence <= 0.0:
+        raise ValueError("Gallery wrist influence must be positive")
+    return float(requested_degrees) / influence
+
+
+def _point_distance(left, right) -> float:
+    return math.sqrt(sum(
+        (float(a) - float(b)) ** 2 for a, b in zip(left, right, strict=True)
+    ))
+
+
+def orientation_gallery_pose_uniqueness_reasons(records) -> tuple[str, ...]:
+    reasons = []
+    hashes = {}
+    for record in records:
+        pose_hash = record["evaluated_pose_hash"]
+        if pose_hash in hashes:
+            reasons.append(
+                f"Evaluated pose hash is duplicated by {hashes[pose_hash]} and {record['source_id']}"
+            )
+        hashes[pose_hash] = record["source_id"]
+    groups = {}
+    for record in records:
+        groups.setdefault(
+            (record["comparison_group"], record["comparison_dimension"]), []
+        ).append(record)
+    for (group_name, dimension), group in groups.items():
+        if len(group) < 2:
+            continue
+        for left, right in itertools.combinations(group, 2):
+            if dimension == "thumb":
+                distance = max(
+                    quaternion_distance_degrees(
+                        left["evaluated_finger_quaternions"][bone_name],
+                        right["evaluated_finger_quaternions"][bone_name],
+                    )
+                    for bone_name in ("右親指０", "右親指１", "右親指２")
+                )
+                if distance < 2.0:
+                    reasons.append(f"{group_name} thumb quaternion variants are pose-identical")
+                if _point_distance(
+                    left["fingertip_world"]["thumb"], right["fingertip_world"]["thumb"]
+                ) < 0.002:
+                    reasons.append(f"{group_name} thumb tip variants are pose-identical")
+            elif dimension == "index":
+                distance = max(
+                    quaternion_distance_degrees(
+                        left["evaluated_finger_quaternions"][bone_name],
+                        right["evaluated_finger_quaternions"][bone_name],
+                    )
+                    for bone_name in ("右人指１", "右人指２", "右人指３")
+                )
+                if distance < 2.0:
+                    reasons.append(f"{group_name} index quaternion variants are pose-identical")
+                if _point_distance(
+                    left["fingertip_world"]["index"], right["fingertip_world"]["index"]
+                ) < 0.002:
+                    reasons.append(f"{group_name} index tip variants are pose-identical")
+            elif quaternion_distance_degrees(
+                left["palm_final_quaternion"], right["palm_final_quaternion"]
+            ) < 1.0:
+                reasons.append(f"{group_name} palm variants are pose-identical")
+    return tuple(dict.fromkeys(reasons))
 
 
 def orientation_gallery_rejection_reasons(metrics) -> tuple[str, ...]:
@@ -4290,9 +4401,9 @@ def _orientation_gallery_baseline(candidate_by_id):
         base_candidate, palm_refinement, "candidate_764_orientation_gallery"
     )
     compensation = finger_search_compensations()[1]
-    preset = next(
-        preset for preset in semantic_finger_presets()
-        if preset.name == "support_index_long"
+    preset = FingerPosePreset(
+        name="semi_closed_base",
+        joint_targets_deg=semi_closed_finger_targets()["base"],
     )
     return candidate, compensation, preset
 
@@ -4347,11 +4458,26 @@ def _apply_orientation_gallery_variant(
     _refresh_frame()
     palm = controls["palm"]
     base_quaternion = palm.rotation_euler.to_quaternion().normalized()
+    wrist_influence = float(variant.twist_distribution[2])
+    swing_control_degrees = palm_control_nonaxial_degrees(
+        variant.palm_swing_deg, wrist_influence
+    )
+    tilt_control_degrees = palm_control_nonaxial_degrees(
+        variant.palm_tilt_deg, wrist_influence
+    )
+    swing_quaternion = Quaternion(
+        Vector((1.0, 0.0, 0.0)), math.radians(swing_control_degrees)
+    )
     axial_quaternion = Quaternion(
         Vector((0.0, 1.0, 0.0)), math.radians(variant.axial_angle_deg)
     )
+    tilt_quaternion = Quaternion(
+        Vector((0.0, 0.0, 1.0)), math.radians(tilt_control_degrees)
+    )
     palm.rotation_mode = "QUATERNION"
-    palm.rotation_quaternion = (base_quaternion @ axial_quaternion).normalized()
+    palm.rotation_quaternion = (
+        base_quaternion @ swing_quaternion @ axial_quaternion @ tilt_quaternion
+    ).normalized()
     armature.update_tag()
     _refresh_frame()
     return {
@@ -4363,7 +4489,11 @@ def _apply_orientation_gallery_variant(
         "finger_solution": finger_solution,
         "palm_base_quaternion": tuple(float(value) for value in base_quaternion),
         "palm_axial_quaternion": tuple(float(value) for value in axial_quaternion),
+        "palm_swing_quaternion": tuple(float(value) for value in swing_quaternion),
+        "palm_tilt_quaternion": tuple(float(value) for value in tilt_quaternion),
         "palm_final_quaternion": tuple(float(value) for value in palm.rotation_quaternion),
+        "palm_swing_control_deg": swing_control_degrees,
+        "palm_tilt_control_deg": tilt_control_degrees,
         "outward_clearance_local": tuple(
             float(value) * ORIENTATION_GALLERY_OUTWARD_CLEARANCE
             for value in context["orientation_gallery_outward_local"]
@@ -4373,6 +4503,52 @@ def _apply_orientation_gallery_variant(
             for value in context["orientation_gallery_forward_local"]
         ),
     }
+
+
+def _tip_surface_evidence(armature, chin_surface):
+    fingertips = _finger_tip_positions(armature)
+    evidence = {}
+    for source in ("thumb", "index"):
+        point = Vector(fingertips[source])
+        nearest = chin_surface["tree"].find_nearest(point)
+        if nearest is None:
+            raise RuntimeError(f"Unable to measure evaluated {source} tip against chin surface")
+        location, normal, triangle_index, distance = nearest
+        evidence[source] = {
+            "tip_world": tuple(float(value) for value in point),
+            "chin_surface_world": tuple(float(value) for value in location),
+            "distance": float(distance),
+            "signed_distance": float((point - location).dot(normal)),
+            "triangle_index": int(triangle_index),
+        }
+    return evidence
+
+
+def _evaluated_finger_quaternions(armature):
+    return {
+        bone_name: tuple(
+            float(value)
+            for value in _evaluated_local_rotation(armature, bone_name).normalized()
+        )
+        for bone_name in RIGHT_FINGER_BONES
+    }
+
+
+def _orientation_gallery_pose_hash(palm_quaternion, finger_quaternions, fingertips):
+    payload = {
+        "palm": [round(float(value), 9) for value in palm_quaternion],
+        "fingers": {
+            bone_name: [round(float(value), 9) for value in finger_quaternions[bone_name]]
+            for bone_name in RIGHT_FINGER_BONES
+        },
+        "tips": {
+            source: [round(float(value), 9) for value in fingertips[source]]
+            for source in ("thumb", "index")
+        },
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _gallery_emission_material(name, color):
@@ -4596,6 +4772,14 @@ def orientation_gallery(config: PocConfig) -> None:
                 armature, controls, context["previous"], current_surface["chin_world"]
             )
             metrics.update(_surface_contact_evidence_bvh(mesh, geometry, current_surface))
+            tip_surface = _tip_surface_evidence(armature, current_surface)
+            fingertips = _finger_tip_positions(armature)
+            evaluated_finger_quaternions = _evaluated_finger_quaternions(armature)
+            metrics["tip_surface_evidence"] = tip_surface
+            metrics["tip_surface_distance_by_source"] = {
+                source: evidence["distance"] for source, evidence in tip_surface.items()
+            }
+            metrics["fingertip_world"] = fingertips
             collision_metrics, vertices = _full_collision_evidence(
                 mesh, geometry, context["invariant_collision"]
             )
@@ -4615,6 +4799,8 @@ def orientation_gallery(config: PocConfig) -> None:
                 "valid": not reasons,
                 "reasons": list(reasons),
                 "axial_angle_deg": variant.axial_angle_deg,
+                "palm_swing_deg": variant.palm_swing_deg,
+                "palm_tilt_deg": variant.palm_tilt_deg,
                 "twist_distribution": variant.twist_distribution,
                 "twist_distribution_degrees": tuple(
                     variant.axial_angle_deg * influence
@@ -4622,16 +4808,30 @@ def orientation_gallery(config: PocConfig) -> None:
                 ),
                 "thumb_variant": variant.thumb_variant,
                 "index_variant": variant.index_variant,
+                "comparison_group": variant.comparison_group,
+                "comparison_dimension": variant.comparison_dimension,
                 "finger_absolute_targets_deg": variant.finger_targets_deg,
                 "finger_absolute_solution": applied["finger_solution"],
+                "evaluated_finger_quaternions": evaluated_finger_quaternions,
+                "fingertip_world": fingertips,
                 "palm_quaternions": {
                     key: applied[key]
                     for key in (
                         "palm_base_quaternion",
                         "palm_axial_quaternion",
+                        "palm_swing_quaternion",
+                        "palm_tilt_quaternion",
                         "palm_final_quaternion",
                     )
                 },
+                "palm_final_quaternion": applied["palm_final_quaternion"],
+                "palm_swing_control_deg": applied["palm_swing_control_deg"],
+                "palm_tilt_control_deg": applied["palm_tilt_control_deg"],
+                "evaluated_pose_hash": _orientation_gallery_pose_hash(
+                    applied["palm_final_quaternion"],
+                    evaluated_finger_quaternions,
+                    fingertips,
+                ),
                 "outward_clearance_local": applied["outward_clearance_local"],
                 "forward_clearance_local": applied["forward_clearance_local"],
                 "compensation_angles_deg": applied["compensation_angles_deg"],
@@ -4641,6 +4841,12 @@ def orientation_gallery(config: PocConfig) -> None:
             evaluated.append(record)
             if not reasons:
                 valid_states.append((variant, record, vertices))
+        uniqueness_reasons = orientation_gallery_pose_uniqueness_reasons(evaluated)
+        if uniqueness_reasons:
+            raise RuntimeError(
+                "Orientation gallery contains pose-identical labeled variants: "
+                + "; ".join(uniqueness_reasons)
+            )
         if not ORIENTATION_GALLERY_MIN_RENDER_COUNT <= len(valid_states) <= ORIENTATION_GALLERY_MAX_RENDER_COUNT:
             print("POC_ORIENTATION_GALLERY_REJECTIONS", [
                 {
