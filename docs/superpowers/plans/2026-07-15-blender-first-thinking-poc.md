@@ -147,6 +147,10 @@ Use the rendered four views to reject candidates with broken silhouettes, face o
 
 Build BVH trees from the evaluated `优菈_mesh`. Compare the right-hand/forearm vertex groups against head, neck, chest, and torso polygons while excluding adjacent right-arm polygons. Record intersection count and minimum clearance.
 
+- [ ] **Step 6a: Apply bounded sleeve corrective bones when required**
+
+If a contact-valid arm pose is anatomically correct but `右手捩1/2/3`-weighted sleeve geometry intersects `上半身2`, search small calibrated local rotations on those auxiliary bones. Require zero shoulder/elbow/wrist/finger/contact transform drift and reject any corrective deformation that creates a visible sleeve collapse or new collision.
+
 - [ ] **Step 7: Save the selected static pose and metrics**
 
 Write the chosen controls into the POC blend and produce `static_pose_metrics.json` with explicit PASS, WARN, or FAIL verdicts. Stop here if the hero pose is not visibly better than v16.

@@ -48,6 +48,8 @@ The bounded upper-body compensation limits are:
 
 The right-hand pose is part of the contact solve rather than being inherited unchanged from v16. Thumb and index controls may extend toward the lower jaw while the middle, ring, and little fingers retain a relaxed progressive curl. Finger deltas must use calibrated PMX local axes and remain inside the verified finger-motion ranges.
 
+When the anatomical arm pose is correct but the model's thick sleeve intersects the torso, existing weighted auxiliary bones such as `右手捩1/2/3` may be used as bounded clothing corrective bones. Corrective motion must not change shoulder, elbow, wrist, finger, or contact-point transforms, and must remain exportable through ordinary VMD bone frames.
+
 Blender native IK, pole, local rotation limits, and tracking constraints provide the control rig. Python supplies coupled anatomical checks, swing-twist evaluation, comfort-zone scoring, reproducible scene construction, measurements, and rendering.
 
 ## Constraint Priority
