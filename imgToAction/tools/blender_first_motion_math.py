@@ -176,14 +176,20 @@ def clamped_two_bone_reach(
     target_distance = length(delta)
     min_reach = abs(upper - lower)
     max_reach = upper + lower
-    reachable = min_reach - EPSILON <= target_distance <= max_reach + EPSILON
-    if not reachable and reject_unreachable:
+    if target_distance <= EPSILON and min_reach <= EPSILON:
+        raise UnreachableTargetError(
+            "Target is singular because an equal-length two-bone chain has no bend axis at its root"
+        )
+
+    solved_distance = min(max(target_distance, min_reach), max_reach)
+    clamped = solved_distance != target_distance
+    reachable = not clamped
+    if clamped and reject_unreachable:
         raise UnreachableTargetError(
             f"Target distance {target_distance:.6g} is outside the two-bone reach interval "
             f"[{min_reach:.6g}, {max_reach:.6g}]"
         )
 
-    solved_distance = min(max(target_distance, min_reach), max_reach)
     if target_distance <= EPSILON:
         direction = (1.0, 0.0, 0.0)
     else:
@@ -194,7 +200,7 @@ def clamped_two_bone_reach(
         requested_target=target_vector,
         end=end,
         reachable=reachable,
-        clamped=not reachable,
+        clamped=clamped,
         original_distance=target_distance,
         solved_distance=solved_distance,
         min_reach=min_reach,
@@ -286,14 +292,24 @@ def select_elbow_candidate(
     if len(choices) != 2:
         raise ValueError("Exactly two elbow candidates are required")
 
-    def candidate_score(candidate: Vector) -> tuple[float, float]:
-        continuity = 0.0
-        if previous_elbow is not None:
-            continuity = continuity_score(candidate, previous_elbow, root, end)
-        pole_alignment = elbow_side(root, end, candidate, pole)
-        return continuity, -pole_alignment
+    root_vector = _vector(root)
+    axis = vector_subtract(end, root_vector)
+    projected_pole = project_onto_plane(vector_subtract(pole, root_vector), axis)
+    pool = choices
+    if length(projected_pole) > EPSILON:
+        pole_facing = tuple(candidate for candidate in choices if elbow_side(root, end, candidate, pole) > EPSILON)
+        if pole_facing:
+            pool = pole_facing
 
-    return min(choices, key=candidate_score)
+    def candidate_score(candidate: Vector) -> tuple[float, float]:
+        continuity = (
+            continuity_score(candidate, previous_elbow, root, end)
+            if previous_elbow is not None
+            else 0.0
+        )
+        return continuity, -elbow_side(root, end, candidate, pole)
+
+    return min(pool, key=candidate_score)
 
 
 def solve_two_bone(

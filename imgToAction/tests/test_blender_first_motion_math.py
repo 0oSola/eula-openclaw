@@ -75,6 +75,25 @@ def test_elbow_candidate_is_selected_on_the_pole_facing_side():
     assert tool.dot(elbow_offset, projected_pole) > 0.0
 
 
+def test_pole_facing_candidate_wins_when_previous_elbow_is_opposite():
+    tool = load_tool()
+    root = (0.0, 0.0, 0.0)
+    target = (1.0, 0.0, 0.0)
+    pole = (0.0, 0.0, 1.0)
+    candidates = tool.elbow_candidates(root, target, 1.0, 1.0, pole)
+    pole_opposite = min(candidates, key=lambda elbow: tool.elbow_side(root, target, elbow, pole))
+
+    selected = tool.select_elbow_candidate(
+        candidates,
+        root,
+        target,
+        pole,
+        previous_elbow=pole_opposite,
+    )
+
+    assert tool.elbow_side(root, target, selected, pole) > 0.0
+
+
 def test_adjacent_targets_keep_the_same_elbow_side():
     tool = load_tool()
     root = (0.0, 0.0, 0.0)
@@ -94,6 +113,43 @@ def test_adjacent_targets_keep_the_same_elbow_side():
     assert first_sign > 0.0
     assert second_sign > 0.0
     assert distance(first.elbow, second.elbow) < 0.05
+
+
+@pytest.mark.parametrize("target_distance", [0.0, 0.5e-9])
+def test_equal_length_chain_rejects_zero_axis_target(target_distance):
+    tool = load_tool()
+
+    with pytest.raises(tool.UnreachableTargetError, match="singular"):
+        tool.solve_two_bone(
+            root=(0.0, 0.0, 0.0),
+            target=(target_distance, 0.0, 0.0),
+            upper_length=1.0,
+            lower_length=1.0,
+            pole=(0.0, 0.0, 1.0),
+        )
+
+
+def test_reachability_and_clamping_are_consistent_near_max_boundary():
+    tool = load_tool()
+    inside = tool.clamped_two_bone_reach(
+        root=(0.0, 0.0, 0.0),
+        target=(2.0 - 0.5e-9, 0.0, 0.0),
+        upper_length=1.0,
+        lower_length=1.0,
+    )
+    outside = tool.clamped_two_bone_reach(
+        root=(0.0, 0.0, 0.0),
+        target=(2.0 + 0.5e-9, 0.0, 0.0),
+        upper_length=1.0,
+        lower_length=1.0,
+    )
+
+    assert inside.reachable is True
+    assert inside.clamped is False
+    assert inside.solved_distance == inside.original_distance
+    assert outside.reachable is False
+    assert outside.clamped is True
+    assert outside.solved_distance == 2.0
 
 
 def test_projection_and_signed_angle_use_tuple_vectors():
