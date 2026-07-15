@@ -371,6 +371,111 @@ def test_compensation_stage_survivors_round_robin_seed_depth():
     assert counts == {"arm_a": 2, "arm_b": 2}
 
 
+def test_semantic_finger_controls_use_calibrated_local_delta_axes():
+    tool = load_tool()
+
+    assert tool.RIGHT_FINGER_BONES == (
+        "右親指０", "右親指１", "右親指２",
+        "右人指１", "右人指２", "右人指３",
+        "右中指１", "右中指２", "右中指３",
+        "右薬指１", "右薬指２", "右薬指３",
+        "右小指１", "右小指２", "右小指３",
+    )
+    assert tool.FINGER_FLEXION_AXIS == "LOCAL_X_NEGATIVE"
+    assert tool.FINGER_CONTROL_PARENT_SPACE == "ARMATURE_LOCAL"
+    assert all(spec["owner_space"] == "LOCAL" for spec in tool.FINGER_CONSTRAINT_SPECS.values())
+    assert all(spec["target_space"] == "LOCAL" for spec in tool.FINGER_CONSTRAINT_SPECS.values())
+    assert all(spec["mix_mode"] == "BEFORE" for spec in tool.FINGER_CONSTRAINT_SPECS.values())
+
+
+def test_semantic_finger_presets_are_bounded_and_progressively_relaxed():
+    tool = load_tool()
+    presets = tool.semantic_finger_presets()
+
+    assert 4 <= len(presets) <= 16
+    assert presets == tool.semantic_finger_presets()
+    assert {preset.name for preset in presets} >= {"support_soft", "support_reach"}
+    reach = next(preset for preset in presets if preset.name == "support_reach")
+    assert all(value < 0.0 for value in reach.joint_deltas_deg["右人指１"])
+    for preset in presets:
+        assert tool.validate_finger_pose(preset.joint_deltas_deg) == ()
+        middle = -preset.joint_deltas_deg["右中指１"][0]
+        ring = -preset.joint_deltas_deg["右薬指１"][0]
+        little = -preset.joint_deltas_deg["右小指１"][0]
+        assert middle <= ring <= little
+
+
+def test_finger_pose_limits_reject_reverse_claw_and_excessive_spread():
+    tool = load_tool()
+    baseline = dict(tool.semantic_finger_presets()[0].joint_deltas_deg)
+
+    reverse = {**baseline, "右人指３": (35.0, 0.0, 0.0)}
+    claw = {
+        **baseline,
+        "右中指１": (0.0, 0.0, 0.0),
+        "右中指２": (-5.0, 0.0, 0.0),
+        "右中指３": (-30.0, 0.0, 0.0),
+    }
+    spread = {**baseline, "右人指１": (0.0, 0.0, 16.0)}
+
+    assert any("reverse" in reason for reason in tool.validate_finger_pose(reverse))
+    assert any("claw" in reason for reason in tool.validate_finger_pose(claw))
+    assert any("spread" in reason for reason in tool.validate_finger_pose(spread))
+
+
+def test_finger_contact_improvement_requires_thumb_or_index_patch_without_collision():
+    tool = load_tool()
+    before = {
+        "surface_contact_distance": 0.042,
+        "thumb_index_contact_patch_count": 0,
+        "head_collision_count": 0,
+        "torso_penetration_count": 0,
+    }
+    improved = {
+        "surface_contact_distance": 0.025,
+        "thumb_index_contact_patch_count": 4,
+        "head_collision_count": 0,
+        "torso_penetration_count": 0,
+    }
+
+    assert tool.finger_contact_improves_evidence(before, improved, warning_distance=0.03)
+    assert not tool.finger_contact_improves_evidence(
+        before, {**improved, "head_collision_count": 1}, warning_distance=0.03
+    )
+
+
+def test_semantic_finger_search_grid_is_bounded():
+    tool = load_tool()
+    count = (
+        len(tool.FINGER_SEED_IDS)
+        * len(tool.finger_palm_refinements())
+        * len(tool.semantic_finger_presets())
+        * len(tool.finger_search_compensations())
+    )
+
+    assert count == 216
+    assert 6 <= tool.FINGER_STAGE_SURVIVOR_LIMIT <= 48
+
+
+def test_finger_reach_diagnostic_reports_geometry_shortfall():
+    tool = load_tool()
+    records = [{
+        "source_candidate_id": "candidate_779__finger_p01_s02_c01",
+        "metrics": {
+            "surface_contact_distance": 0.0352,
+            "contact_distance_by_source": {"thumb": 0.087, "index": 0.0352},
+            "thumb_index_contact_patch_count": 0,
+            "head_collision_count": 0,
+            "torso_penetration_count": 0,
+        },
+    }]
+
+    diagnostic = tool.finger_reach_diagnostic(records, warning_distance=0.0301)
+
+    assert diagnostic["finger_length_or_orientation_insufficient"] is True
+    assert diagnostic["distance_shortfall"] == pytest.approx(0.0051)
+
+
 def test_behavior_diagnostics_have_nonzero_bounded_thresholds():
     tool = load_tool()
 

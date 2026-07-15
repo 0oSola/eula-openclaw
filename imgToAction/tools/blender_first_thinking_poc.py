@@ -60,6 +60,30 @@ COMPENSATION_CONTROL_NAMES = {
     "head": "POC_頭_DELTA",
 }
 COMPENSATION_CONTROL_PARENT_SPACE = "ARMATURE_LOCAL"
+RIGHT_FINGER_BONES = (
+    "右親指０", "右親指１", "右親指２",
+    "右人指１", "右人指２", "右人指３",
+    "右中指１", "右中指２", "右中指３",
+    "右薬指１", "右薬指２", "右薬指３",
+    "右小指１", "右小指２", "右小指３",
+)
+FINGER_FLEXION_AXIS = "LOCAL_X_NEGATIVE"
+FINGER_CONTROL_PARENT_SPACE = "ARMATURE_LOCAL"
+FINGER_CONTROL_NAMES = {
+    bone_name: f"POC_{bone_name}_DELTA" for bone_name in RIGHT_FINGER_BONES
+}
+FINGER_CONSTRAINT_NAMES = {
+    bone_name: f"POC_{bone_name}_LOCAL_DELTA" for bone_name in RIGHT_FINGER_BONES
+}
+FINGER_CONSTRAINT_SPECS = {
+    bone_name: {
+        "owner_bone": bone_name,
+        "owner_space": "LOCAL",
+        "target_space": "LOCAL",
+        "mix_mode": "BEFORE",
+    }
+    for bone_name in RIGHT_FINGER_BONES
+}
 COMPENSATION_BONES = {
     "upper_chest": "上半身2",
     "right_shoulder": "右肩",
@@ -152,6 +176,7 @@ REQUIRED_BONES = (
     "上半身2",
     "首",
     "頭",
+    *RIGHT_FINGER_BONES,
 )
 EXPECTED_ACTION_RANGE = (0.0, 240.0)
 VALIDATION_FRAME = 150
@@ -194,7 +219,7 @@ STAGE_B_SURVIVOR_LIMIT = 48
 STAGE_C_SURVIVOR_LIMIT = 48
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 SOURCE_CANDIDATE_PATTERN = re.compile(
-    r"^(?:candidate_[0-9]+|pole3d_[0-9]+)(?:__comp_[0-9]{3})?$"
+    r"^(?:candidate_[0-9]+|pole3d_[0-9]+)(?:__comp_[0-9]{3}|__finger_p[0-9]{2}_s[0-9]{2}_c[0-9]{2})?$"
 )
 
 CONTACT_VERTEX_GROUPS = (
@@ -273,6 +298,8 @@ COMPENSATION_SEED_LIMIT = 6
 COMPENSATION_STAGE_D_LIMIT = 48
 COMPENSATION_STAGE_E_LIMIT = 24
 COMPENSATION_BASELINE_TOLERANCE_DEG = 1e-5
+FINGER_SEED_IDS = ("candidate_764", "candidate_779")
+FINGER_STAGE_SURVIVOR_LIMIT = 36
 PROTECTED_LOCAL_BONES = (
     "下半身",
     "左肩",
@@ -319,6 +346,12 @@ class UpperBodyCompensation:
             self.neck_toward_deg,
             self.head_toward_deg,
         ))
+
+
+@dataclass(frozen=True)
+class FingerPosePreset:
+    name: str
+    joint_deltas_deg: dict[str, tuple[float, float, float]]
 
 
 @dataclass(frozen=True)
@@ -431,6 +464,152 @@ def compensation_improves_evidence(
         and int(after["head_collision_count"]) == 0
         and int(after["torso_penetration_count"]) < int(before["torso_penetration_count"])
     )
+
+
+def _finger_pose_deltas(
+    thumb,
+    index,
+    middle,
+    ring,
+    little,
+) -> dict[str, tuple[float, float, float]]:
+    values = (*thumb, *index, *middle, *ring, *little)
+    return {
+        bone_name: tuple(float(value) for value in delta)
+        for bone_name, delta in zip(RIGHT_FINGER_BONES, values, strict=True)
+    }
+
+
+def semantic_finger_presets() -> tuple[FingerPosePreset, ...]:
+    relaxed = (
+        ((8, -5, -5), (10, -3, 0), (6, 0, 0)),
+        ((0, -10, -10), (0, 0, 0), (0, 0, 0)),
+        ((-2, 0, 0), (-4, 0, 0), (-6, 0, 0)),
+        ((-4, 0, 0), (-6, 0, 0), (-8, 0, 0)),
+        ((-6, 0, 0), (-9, 0, 0), (-12, 0, 0)),
+    )
+    variants = (
+        ("support_soft", relaxed),
+        ("support_reach", (
+            ((12, -7, -7), (14, -4, 0), (9, 0, 0)),
+            ((-4, -12, -12), (0, -4, 0), (0, 0, 0)),
+            *relaxed[2:],
+        )),
+        ("support_thumb_low", (
+            ((10, -10, -5), (13, -5, 0), (8, 0, 0)),
+            ((0, -12, -8), (0, -4, 0), (0, 0, 0)),
+            *relaxed[2:],
+        )),
+        ("support_index_long", (
+            relaxed[0],
+            ((-8, -10, -12), (-4, -4, 0), (0, 0, 0)),
+            *relaxed[2:],
+        )),
+        ("support_open", (
+            ((14, -6, -9), (15, -3, 0), (10, 0, 0)),
+            ((0, -8, -12), (0, 0, 0), (0, 0, 0)),
+            ((0, 0, 0), (-3, 0, 0), (-5, 0, 0)),
+            ((-3, 0, 0), (-5, 0, 0), (-7, 0, 0)),
+            ((-5, 0, 0), (-8, 0, 0), (-11, 0, 0)),
+        )),
+        ("support_curled", (
+            relaxed[0], relaxed[1],
+            ((-4, 0, 0), (-7, 0, 0), (-10, 0, 0)),
+            ((-6, 0, 0), (-9, 0, 0), (-12, 0, 0)),
+            ((-8, 0, 0), (-12, 0, 0), (-16, 0, 0)),
+        )),
+    )
+    return tuple(
+        FingerPosePreset(name, _finger_pose_deltas(*groups))
+        for name, groups in variants
+    )
+
+
+def validate_finger_pose(joint_deltas_deg) -> tuple[str, ...]:
+    if set(joint_deltas_deg) != set(RIGHT_FINGER_BONES):
+        raise ValueError("Finger pose must contain exactly the 15 right-finger bones")
+    reasons = []
+    for bone_name in RIGHT_FINGER_BONES:
+        delta = tuple(float(value) for value in joint_deltas_deg[bone_name])
+        if len(delta) != 3 or not all(math.isfinite(value) for value in delta):
+            raise ValueError(f"Finger delta must contain three finite values: {bone_name}")
+        if math.sqrt(sum(value * value for value in delta)) > 40.0 + 1e-6:
+            reasons.append(f"{bone_name} exceeds the 40 degree verified delta limit")
+        if delta[0] > 30.0 + 1e-6:
+            reasons.append(f"{bone_name} reverse extension exceeds 30 degrees")
+        if max(abs(delta[1]), abs(delta[2])) > 12.0 + 1e-6:
+            reasons.append(f"{bone_name} fingertip spread exceeds 12 degrees")
+    for prefix in ("右人指", "右中指", "右薬指", "右小指"):
+        curls = tuple(max(0.0, -float(joint_deltas_deg[f"{prefix}{joint}"][0])) for joint in "１２３")
+        if curls[2] > curls[0] + 20.0:
+            reasons.append(f"{prefix} claw shape has excessive distal curl")
+    proximal_curls = tuple(
+        max(0.0, -float(joint_deltas_deg[f"{prefix}１"][0]))
+        for prefix in ("右中指", "右薬指", "右小指")
+    )
+    if not proximal_curls[0] <= proximal_curls[1] <= proximal_curls[2]:
+        reasons.append("Relaxed finger curl is not progressive from middle to little")
+    return tuple(reasons)
+
+
+def finger_contact_improves_evidence(before, after, *, warning_distance: float) -> bool:
+    return (
+        float(after["surface_contact_distance"]) <= float(warning_distance)
+        and float(after["surface_contact_distance"]) < float(before["surface_contact_distance"])
+        and int(after["thumb_index_contact_patch_count"]) > 0
+        and int(after["head_collision_count"]) == 0
+        and int(after["torso_penetration_count"]) == 0
+    )
+
+
+def finger_palm_refinements() -> tuple[tuple[float, float, float], ...]:
+    return (
+        (0.0, 0.0, 0.0),
+        (-6.0, 0.0, 0.0), (6.0, 0.0, 0.0),
+        (0.0, -6.0, 0.0), (0.0, 6.0, 0.0),
+        (0.0, 0.0, -6.0), (0.0, 0.0, 6.0),
+        (-4.0, 4.0, 0.0), (4.0, -4.0, 0.0),
+    )
+
+
+def finger_search_compensations() -> tuple[UpperBodyCompensation, ...]:
+    return (
+        UpperBodyCompensation(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        UpperBodyCompensation(0.0, 0.0, 0.0, 0.0, 1.5, 1.5),
+    )
+
+
+def finger_reach_diagnostic(records, *, warning_distance: float) -> dict[str, object]:
+    if not records:
+        return {
+            "finger_length_or_orientation_insufficient": True,
+            "reason": "No bounded semantic finger candidate survived",
+        }
+    best = min(records, key=lambda record: float(record["metrics"]["surface_contact_distance"]))
+    metrics = best["metrics"]
+    distance = float(metrics["surface_contact_distance"])
+    collision_free = (
+        int(metrics["head_collision_count"]) == 0
+        and int(metrics["torso_penetration_count"]) == 0
+    )
+    insufficient = (
+        collision_free
+        and distance > float(warning_distance)
+        and int(metrics["thumb_index_contact_patch_count"]) == 0
+    )
+    return {
+        "best_source_candidate_id": best["source_candidate_id"],
+        "best_surface_contact_distance": distance,
+        "warning_distance": float(warning_distance),
+        "distance_shortfall": max(0.0, distance - float(warning_distance)),
+        "contact_distance_by_source": metrics.get("contact_distance_by_source", {}),
+        "collision_free": collision_free,
+        "finger_length_or_orientation_insufficient": insufficient,
+        "reason": (
+            "Bounded thumb/index local-axis and palm refinement cannot reach the chin band"
+            if insufficient else "Failure is not solely attributable to bounded finger reach"
+        ),
+    }
 
 
 def compensated_source_id(arm_source_id: str, compensation_index: int) -> str:
@@ -962,6 +1141,8 @@ def static_selection_eligibility(
         reasons.append("Surface contact exceeds the geometry-derived warning distance")
     if int(metrics["contact_patch_count"]) <= 0:
         reasons.append("Surface contact patch is empty")
+    if int(metrics.get("thumb_index_contact_patch_count", metrics["contact_patch_count"])) <= 0:
+        reasons.append("Thumb/index lower-jaw contact patch is empty")
     if int(metrics["surface_intersection_count"]) > 0:
         reasons.append("Contact surface intersection is present")
     if int(metrics["head_collision_count"]) > 0:
@@ -1410,6 +1591,116 @@ def _validate_compensation_baseline(armature, controls) -> None:
         armature["POC_enabled"] = previous_enabled
         for key, constraint in constraints.items():
             constraint.mute = previous_mutes[key]
+        armature.update_tag()
+        _refresh_frame()
+
+
+def _ensure_finger_controls(armature):
+    collection = bpy.data.collections.get(CONTROL_COLLECTION_NAME)
+    if collection is None:
+        collection = bpy.data.collections.new(CONTROL_COLLECTION_NAME)
+        bpy.context.scene.collection.children.link(collection)
+    controls = {}
+    for bone_name in RIGHT_FINGER_BONES:
+        control_name = FINGER_CONTROL_NAMES[bone_name]
+        control = bpy.data.objects.get(control_name)
+        if control is None:
+            control = bpy.data.objects.new(control_name, None)
+            collection.objects.link(control)
+            control.empty_display_type = "ARROWS"
+            control.empty_display_size = 0.018
+            control.show_in_front = True
+        control.parent = armature
+        control.matrix_parent_inverse = Matrix.Identity(4)
+        control.location = armature.matrix_world.inverted() @ _pose_head_world(armature, bone_name)
+        control.rotation_mode = "QUATERNION"
+        control.rotation_quaternion = Quaternion((1.0, 0.0, 0.0, 0.0))
+        controls[bone_name] = control
+    if "POC_finger_influence" not in armature:
+        armature["POC_finger_influence"] = 1.0
+        armature.id_properties_ui("POC_finger_influence").update(min=0.0, max=1.0)
+    for bone_name, spec in FINGER_CONSTRAINT_SPECS.items():
+        owner = armature.pose.bones[bone_name]
+        constraint_name = FINGER_CONSTRAINT_NAMES[bone_name]
+        constraint = owner.constraints.get(constraint_name)
+        if constraint is None:
+            constraint = owner.constraints.new("COPY_ROTATION")
+            constraint.name = constraint_name
+            constraint.target = controls[bone_name]
+            constraint.owner_space = spec["owner_space"]
+            constraint.target_space = spec["target_space"]
+            constraint.mix_mode = spec["mix_mode"]
+            constraint.use_x = True
+            constraint.use_y = True
+            constraint.use_z = True
+            constraint.influence = 0.0
+            _add_influence_driver(constraint, armature, "POC_finger_influence")
+        elif constraint.target != controls[bone_name]:
+            raise RuntimeError(f"Finger constraint target mismatch: {constraint_name}")
+    return controls
+
+
+def _finger_constraints(armature):
+    return {
+        bone_name: armature.pose.bones[bone_name].constraints[FINGER_CONSTRAINT_NAMES[bone_name]]
+        for bone_name in RIGHT_FINGER_BONES
+    }
+
+
+def _set_finger_identity(controls) -> None:
+    for control in controls.values():
+        control.rotation_mode = "QUATERNION"
+        control.rotation_quaternion = Quaternion((1.0, 0.0, 0.0, 0.0))
+
+
+def _validate_finger_baseline(armature, controls) -> None:
+    constraints = _finger_constraints(armature)
+    previous_enabled = float(armature["POC_enabled"])
+    previous_mutes = {name: constraint.mute for name, constraint in constraints.items()}
+    _set_finger_identity(controls)
+    try:
+        armature["POC_enabled"] = 1.0
+        for constraint in constraints.values():
+            constraint.mute = True
+        armature.update_tag()
+        _refresh_frame()
+        baseline = {name: _world_rotation(armature, name) for name in RIGHT_FINGER_BONES}
+        for constraint in constraints.values():
+            constraint.mute = False
+        armature.update_tag()
+        _refresh_frame()
+        enabled = {
+            name: _rotation_delta_degrees(baseline[name], _world_rotation(armature, name))
+            for name in RIGHT_FINGER_BONES
+        }
+        if any(delta > COMPENSATION_BASELINE_TOLERANCE_DEG for delta in enabled.values()):
+            raise RuntimeError(f"Finger identity controls introduce a baseline jump: {enabled}")
+        response = {}
+        for name in RIGHT_FINGER_BONES:
+            controls[name].rotation_quaternion = Quaternion(Vector((1, 0, 0)), math.radians(-1))
+            armature.update_tag()
+            _refresh_frame()
+            response[name] = _rotation_delta_degrees(baseline[name], _world_rotation(armature, name))
+            controls[name].rotation_quaternion = Quaternion((1, 0, 0, 0))
+            armature.update_tag()
+            _refresh_frame()
+        if any(not 0.99 <= delta <= 1.01 for delta in response.values()):
+            raise RuntimeError(f"Finger controls do not produce local X deltas: {response}")
+        for constraint in constraints.values():
+            constraint.mute = True
+        armature.update_tag()
+        _refresh_frame()
+        restored = {
+            name: _rotation_delta_degrees(baseline[name], _world_rotation(armature, name))
+            for name in RIGHT_FINGER_BONES
+        }
+        if any(delta > COMPENSATION_BASELINE_TOLERANCE_DEG for delta in restored.values()):
+            raise RuntimeError(f"Finger constraints do not restore v16 exactly: {restored}")
+    finally:
+        armature["POC_enabled"] = previous_enabled
+        _set_finger_identity(controls)
+        for name, constraint in constraints.items():
+            constraint.mute = previous_mutes[name]
         armature.update_tag()
         _refresh_frame()
 
@@ -2355,7 +2646,9 @@ def _apply_static_candidate(
     _refresh_frame()
 
 
-def _capture_static_control_state(armature, controls, compensation_controls=None) -> dict[str, object]:
+def _capture_static_control_state(
+    armature, controls, compensation_controls=None, finger_controls=None
+) -> dict[str, object]:
     state = {
         "hand": tuple(float(value) for value in controls["hand"].location),
         "pole": tuple(float(value) for value in controls["pole"].location),
@@ -2371,10 +2664,18 @@ def _capture_static_control_state(armature, controls, compensation_controls=None
             key: tuple(float(value) for value in control.rotation_quaternion)
             for key, control in compensation_controls.items()
         }
+    if finger_controls is not None:
+        state["finger_influence"] = float(armature["POC_finger_influence"])
+        state["finger_quaternions"] = {
+            name: tuple(float(value) for value in control.rotation_quaternion)
+            for name, control in finger_controls.items()
+        }
     return state
 
 
-def _restore_static_control_state(armature, controls, state: dict[str, object], compensation_controls=None) -> None:
+def _restore_static_control_state(
+    armature, controls, state: dict[str, object], compensation_controls=None, finger_controls=None
+) -> None:
     controls["hand"].location = Vector(state["hand"])
     controls["pole"].location = Vector(state["pole"])
     controls["palm"].matrix_basis = Matrix(tuple(
@@ -2390,6 +2691,11 @@ def _restore_static_control_state(armature, controls, state: dict[str, object], 
         for key, quaternion in state["compensation_quaternions"].items():
             compensation_controls[key].rotation_mode = "QUATERNION"
             compensation_controls[key].rotation_quaternion = Quaternion(quaternion)
+    if finger_controls is not None and "finger_quaternions" in state:
+        armature["POC_finger_influence"] = float(state["finger_influence"])
+        for name, quaternion in state["finger_quaternions"].items():
+            finger_controls[name].rotation_mode = "QUATERNION"
+            finger_controls[name].rotation_quaternion = Quaternion(quaternion)
     armature.update_tag()
     _refresh_frame()
 
@@ -2559,6 +2865,22 @@ def _surface_contact_evidence_bvh(mesh, geometry, chin_surface):
         signed < -MESH_PENETRATION_TOLERANCE
         for _distance, _source, _index, _point, _location, signed, _triangle in samples
     )
+    patch_by_source = {
+        source: sum(
+            distance <= band.warning_distance
+            for distance, sample_source, *_rest in samples
+            if sample_source == source
+        )
+        for source in groups
+    }
+    distance_by_source = {
+        source: min(
+            distance
+            for distance, sample_source, *_rest in samples
+            if sample_source == source
+        )
+        for source in groups
+    }
     return {
         "surface_contact_distance": best[0],
         "contact_error": best[0],
@@ -2570,7 +2892,10 @@ def _surface_contact_evidence_bvh(mesh, geometry, chin_surface):
         "nearest_chin_triangle_index": best[6],
         "surface_intersection_count": contact_overlap_count,
         "negative_signed_sample_count": negative_signed_samples,
-        "contact_patch_count": sum(distance <= band.warning_distance for distance, *_rest in samples),
+        "contact_patch_count": sum(patch_by_source.values()),
+        "contact_patch_by_source": patch_by_source,
+        "contact_distance_by_source": distance_by_source,
+        "thumb_index_contact_patch_count": patch_by_source["thumb"] + patch_by_source["index"],
         "contact_sample_count": len(samples),
     }
 
@@ -2899,6 +3224,62 @@ def _render_compensated_candidates(output_dir, armature, controls, ranked, conte
     }
 
 
+def _render_finger_candidates(output_dir, armature, controls, ranked, context, vertices_by_candidate):
+    scene = bpy.context.scene
+    candidate_root = Path(output_dir) / STATIC_CANDIDATE_DIRECTORY
+    candidate_root.mkdir(parents=True, exist_ok=True)
+    combined_vertices = tuple(
+        vertex
+        for _state, record in ranked[:STATIC_RENDER_COUNT]
+        for vertex in vertices_by_candidate[record["source_candidate_id"]]
+    )
+    camera, center, distance, ortho_scale, bbox_min, bbox_max = _full_body_camera(
+        scene, combined_vertices
+    )
+    scene.render.resolution_x = RENDER_RESOLUTION
+    scene.render.resolution_y = RENDER_RESOLUTION
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    view_directions = {
+        "front": Vector((0, -1, 0)), "left": Vector((1, 0, 0)),
+        "right": Vector((-1, 0, 0)), "back": Vector((0, 1, 0)),
+    }
+    rendered = []
+    rendered_records = [record for _state, record in ranked[:STATIC_RENDER_COUNT]]
+    assign_render_ranks(rendered_records)
+    for (candidate, compensation, preset), record in ranked[:STATIC_RENDER_COUNT]:
+        _apply_semantic_finger_state(
+            armature, controls, candidate, compensation, preset, context
+        )
+        rank = int(record["rank"])
+        directory = candidate_root / f"candidate_{rank:03d}"
+        directory.mkdir(parents=True, exist_ok=True)
+        record["render_directory"] = str(Path(STATIC_CANDIDATE_DIRECTORY) / f"candidate_{rank:03d}")
+        record["renders"] = {}
+        for view, direction in view_directions.items():
+            camera.location = center + direction * distance
+            camera.rotation_euler = (center - camera.location).to_track_quat("-Z", "Y").to_euler()
+            output = directory / f"{view}.png"
+            scene.render.filepath = str(output)
+            bpy.ops.render.render(write_still=True)
+            relative = Path(STATIC_CANDIDATE_DIRECTORY) / f"candidate_{rank:03d}" / f"{view}.png"
+            record["renders"][view] = str(relative)
+            rendered.append(str(relative))
+    return {
+        "camera_name": camera.name,
+        "ortho_scale": float(ortho_scale),
+        "center": tuple(float(value) for value in center),
+        "bbox_min": tuple(float(value) for value in bbox_min),
+        "bbox_max": tuple(float(value) for value in bbox_max),
+        "resolution": (RENDER_RESOLUTION, RENDER_RESOLUTION),
+        "view_semantics": {
+            "front": "camera at -Y", "left": "character-left view, camera at +X",
+            "right": "character-right view, camera at -X", "back": "camera at +Y",
+        },
+        "rendered_files": rendered,
+    }
+
+
 def _render_diagnostic_candidate(output_dir, armature, controls, candidate, context, vertices):
     scene = bpy.context.scene
     _apply_context_candidate(armature, controls, candidate, context)
@@ -2949,6 +3330,40 @@ def _candidate_from_record(record) -> StaticCandidate:
     )
 
 
+def _finger_refined_candidate(candidate, palm_delta, source_id):
+    return StaticCandidate(
+        candidate_id=source_id,
+        alignment_factor=candidate.alignment_factor,
+        hand_offset=candidate.hand_offset,
+        palm_euler_deg=tuple(
+            float(value) + float(delta)
+            for value, delta in zip(candidate.palm_euler_deg, palm_delta, strict=True)
+        ),
+        pole_offset=candidate.pole_offset,
+        twist_influences=candidate.twist_influences,
+        pole_offset_3d=candidate.pole_offset_3d,
+        search_family="semantic_finger",
+    )
+
+
+def _finger_source_id(arm_source_id, palm_index, preset_index, compensation_index):
+    return (
+        f"{arm_source_id}__finger_p{palm_index:02d}_"
+        f"s{preset_index:02d}_c{compensation_index:02d}"
+    )
+
+
+def _finger_rank_key(item):
+    _state, record = item
+    metrics = record["metrics"]
+    return (
+        int(metrics.get("thumb_index_contact_patch_count", 0)) <= 0,
+        float(metrics.get("surface_contact_distance", math.inf)),
+        float(record.get("score", math.inf)),
+        record["source_candidate_id"],
+    )
+
+
 def _compensation_from_record(record) -> UpperBodyCompensation:
     parameters = record["parameters"]["compensation"]
     return UpperBodyCompensation(
@@ -2961,13 +3376,31 @@ def _compensation_from_record(record) -> UpperBodyCompensation:
     )
 
 
-def _prepare_static_context(armature, mesh, controls, geometry, math_module, compensation_controls=None):
+def _finger_preset_from_record(record) -> FingerPosePreset:
+    parameters = record["parameters"]
+    return FingerPosePreset(
+        name=str(parameters["finger_preset"]),
+        joint_deltas_deg={
+            name: tuple(float(value) for value in delta)
+            for name, delta in parameters["finger_joint_deltas_deg"].items()
+        },
+    )
+
+
+def _prepare_static_context(
+    armature, mesh, controls, geometry, math_module,
+    compensation_controls=None, finger_controls=None,
+):
     scene = bpy.context.scene
     scene.frame_set(VALIDATION_FRAME)
     _reset_static_controls_to_v16(armature, controls)
     if compensation_controls is not None:
         _set_compensation_identity(compensation_controls)
-    baseline_state = _capture_static_control_state(armature, controls, compensation_controls)
+    if finger_controls is not None:
+        _set_finger_identity(finger_controls)
+    baseline_state = _capture_static_control_state(
+        armature, controls, compensation_controls, finger_controls
+    )
     previous = _capture_pose_state(armature, VALIDATION_FRAME - 1)
     scene.frame_set(VALIDATION_FRAME)
     bpy.context.view_layer.update()
@@ -3020,6 +3453,7 @@ def _prepare_static_context(armature, mesh, controls, geometry, math_module, com
         "pole_basis": pole_basis,
         "invariant_collision": _invariant_collision_context(baseline_vertices, geometry),
         "compensation_controls": compensation_controls,
+        "finger_controls": finger_controls,
         "compensation_axes": compensation_axes,
         "protected_pose_hashes": protected_pose_hashes(protected_channels),
     }
@@ -3115,6 +3549,66 @@ def _apply_upper_body_compensation(armature, context, compensation):
         for key, quaternion in quaternions.items()
     }
     return quaternions, angles
+
+
+def _apply_finger_preset(armature, context, preset):
+    reasons = validate_finger_pose(preset.joint_deltas_deg)
+    if reasons:
+        raise ValueError("Invalid semantic finger preset: " + "; ".join(reasons))
+    controls = context["finger_controls"]
+    quaternions = {}
+    angles = {}
+    for bone_name in RIGHT_FINGER_BONES:
+        delta = preset.joint_deltas_deg[bone_name]
+        quaternion = Euler(
+            tuple(math.radians(float(value)) for value in delta), "XYZ"
+        ).to_quaternion().normalized()
+        controls[bone_name].rotation_mode = "QUATERNION"
+        controls[bone_name].rotation_quaternion = quaternion
+        quaternions[bone_name] = tuple(float(value) for value in quaternion)
+        angles[bone_name] = quaternion_angle_degrees(quaternions[bone_name])
+    armature.update_tag()
+    _refresh_frame()
+    return quaternions, angles
+
+
+def _finger_tip_positions(armature):
+    names = {
+        "thumb": "右親指２",
+        "index": "右人指３",
+        "middle": "右中指３",
+        "ring": "右薬指３",
+        "little": "右小指３",
+    }
+    return {
+        name: tuple(
+            float(value)
+            for value in (
+                armature.matrix_world @ armature.pose.bones[bone_name].tail
+            )
+        )
+        for name, bone_name in names.items()
+    }
+
+
+def _apply_semantic_finger_state(
+    armature, controls, candidate, compensation, preset, context
+):
+    _set_compensation_identity(context["compensation_controls"])
+    _set_finger_identity(context["finger_controls"])
+    _apply_context_candidate(armature, controls, candidate, context)
+    compensation_quaternions, compensation_angles = _apply_upper_body_compensation(
+        armature, context, compensation
+    )
+    finger_quaternions, finger_angles = _apply_finger_preset(
+        armature, context, preset
+    )
+    return (
+        compensation_quaternions,
+        compensation_angles,
+        finger_quaternions,
+        finger_angles,
+    )
 
 
 def _current_protected_pose_hashes(armature):
@@ -3219,6 +3713,67 @@ def _stage_e_update(math_module, record, collision_metrics):
     }
 
 
+def _stage_f_record(
+    math_module,
+    candidate,
+    arm_source_id,
+    palm_refinement,
+    preset,
+    compensation,
+    compensation_quaternions,
+    compensation_angles,
+    finger_quaternions,
+    finger_angles,
+    measurements,
+    surface_metrics,
+    seed_collision,
+    context,
+):
+    record = _stage_a_record(math_module, candidate, measurements)
+    record["arm_source_candidate_id"] = arm_source_id
+    record["parameters"].update({
+        "palm_refinement_deg": palm_refinement,
+        "finger_preset": preset.name,
+        "finger_joint_deltas_deg": preset.joint_deltas_deg,
+        "finger_quaternions": finger_quaternions,
+        "compensation": _compensation_parameter_record(
+            compensation, compensation_quaternions, compensation_angles, context
+        ),
+    })
+    protected_current = _current_protected_pose_hashes(context["armature"])
+    protected_reasons = compare_protected_pose_hashes(
+        context["protected_pose_hashes"], protected_current
+    )
+    record["metrics"].update({
+        "finger_preset": preset.name,
+        "finger_joint_deltas_deg": preset.joint_deltas_deg,
+        "finger_quaternion_angles_deg": finger_angles,
+        "fingertip_world": _finger_tip_positions(context["armature"]),
+        "compensation_angles_deg": compensation_angles,
+        "protected_pose_hashes": protected_current,
+        "protected_pose_unchanged": not protected_reasons,
+        "collision_before_finger_solve": seed_collision,
+    })
+    if protected_reasons:
+        record["valid"] = False
+        record["reasons"] = list(dict.fromkeys([*record["reasons"], *protected_reasons]))
+    _stage_b_update(math_module, record, surface_metrics, context["chin_surface"]["band"])
+    record["stage"] = "F"
+    return record
+
+
+def _stage_g_update(math_module, record, collision_metrics, warning_distance):
+    _stage_c_update(math_module, record, collision_metrics)
+    record["stage"] = "G"
+    record["metrics"]["finger_contact_improves_evidence"] = (
+        finger_contact_improves_evidence(
+            record["metrics"]["collision_before_finger_solve"],
+            record["metrics"],
+            warning_distance=warning_distance,
+        )
+    )
+
+
 def _stage_b_update(math_module, record, surface_metrics, band):
     verdict, contact_reasons = math_module.classify_surface_contact(
         surface_metrics["surface_contact_distance"],
@@ -3294,12 +3849,15 @@ def search_static(config: PocConfig) -> None:
     armature, mesh = _validate_scene_objects()
     compensation_controls = _ensure_compensation_controls(armature)
     _validate_compensation_baseline(armature, compensation_controls)
+    finger_controls = _ensure_finger_controls(armature)
+    _validate_finger_baseline(armature, finger_controls)
     controls = _existing_controls()
     _validate_existing_poc(armature, controls)
     math_module = _load_motion_math()
     geometry = _mesh_geometry_sets(mesh)
     context = _prepare_static_context(
-        armature, mesh, controls, geometry, math_module, compensation_controls
+        armature, mesh, controls, geometry, math_module,
+        compensation_controls, finger_controls,
     )
     stage_metrics = {}
     candidates = static_candidate_grid()
@@ -3479,7 +4037,143 @@ def search_static(config: PocConfig) -> None:
         }
         print("POC_STATIC_STAGE_E", stage_metrics["E"])
 
-        if len(stage_e_valid) < STATIC_RENDER_COUNT:
+        started = time.perf_counter()
+        finger_seed_records = {}
+        for source_id in FINGER_SEED_IDS:
+            candidate = candidate_by_id[source_id]
+            _set_compensation_identity(compensation_controls)
+            _set_finger_identity(finger_controls)
+            _apply_context_candidate(armature, controls, candidate, context)
+            measurements = _anatomy_measurements(
+                armature, controls, context["previous"], context["chin_world"]
+            )
+            seed_record = _stage_a_record(math_module, candidate, measurements)
+            surface_metrics = _surface_contact_evidence_bvh(
+                mesh, geometry, context["chin_surface"]
+            )
+            _stage_b_update(
+                math_module, seed_record, surface_metrics, context["chin_surface"]["band"]
+            )
+            collision_metrics, _vertices = _full_collision_evidence(
+                mesh, geometry, context["invariant_collision"]
+            )
+            _stage_c_update(math_module, seed_record, collision_metrics)
+            elbow = seed_record["metrics"]["elbow_angle_deg"]
+            if (
+                seed_record["metrics"]["head_collision_count"] != 0
+                or seed_record["metrics"]["torso_penetration_count"] != 0
+                or not math_module.ELBOW_COMFORT_MIN_DEG <= elbow <= math_module.ELBOW_COMFORT_MAX_DEG
+            ):
+                raise RuntimeError(f"Semantic finger seed is not collision-free and anatomical: {source_id}")
+            finger_seed_records[source_id] = seed_record
+
+        stage_f_evaluated = []
+        presets = semantic_finger_presets()
+        palm_refinements = finger_palm_refinements()
+        finger_compensations = finger_search_compensations()
+        for arm_source_id in FINGER_SEED_IDS:
+            base_candidate = candidate_by_id[arm_source_id]
+            seed_record = finger_seed_records[arm_source_id]
+            seed_collision = {
+                key: seed_record["metrics"].get(key)
+                for key in (
+                    "surface_contact_distance", "thumb_index_contact_patch_count",
+                    "head_collision_count", "torso_penetration_count", "minimum_clearance",
+                )
+            }
+            for palm_index, palm_refinement in enumerate(palm_refinements):
+                for preset_index, preset in enumerate(presets):
+                    for compensation_index, compensation in enumerate(finger_compensations):
+                        source_id = _finger_source_id(
+                            arm_source_id, palm_index, preset_index, compensation_index
+                        )
+                        candidate = _finger_refined_candidate(
+                            base_candidate, palm_refinement, source_id
+                        )
+                        (
+                            compensation_quaternions,
+                            compensation_angles,
+                            finger_quaternions,
+                            finger_angles,
+                        ) = _apply_semantic_finger_state(
+                            armature, controls, candidate, compensation, preset, context
+                        )
+                        current_surface = _current_chin_surface(
+                            mesh, armature, context["chin_surface"]
+                        )
+                        measurements = _anatomy_measurements(
+                            armature, controls, context["previous"], current_surface["chin_world"]
+                        )
+                        surface_metrics = _surface_contact_evidence_bvh(
+                            mesh, geometry, current_surface
+                        )
+                        record = _stage_f_record(
+                            math_module, candidate, arm_source_id, palm_refinement,
+                            preset, compensation, compensation_quaternions,
+                            compensation_angles, finger_quaternions, finger_angles,
+                            measurements, surface_metrics, seed_collision, context,
+                        )
+                        stage_f_evaluated.append(((candidate, compensation, preset), record))
+        finger_strata = {}
+        for item in stage_f_evaluated:
+            if item[1]["valid"]:
+                finger_strata.setdefault(item[1]["arm_source_candidate_id"], []).append(item)
+        for items in finger_strata.values():
+            items.sort(key=_finger_rank_key)
+        stage_f_valid = []
+        depth = 0
+        while len(stage_f_valid) < FINGER_STAGE_SURVIVOR_LIMIT:
+            advanced = False
+            for source_id in FINGER_SEED_IDS:
+                items = finger_strata.get(source_id, ())
+                if depth < len(items):
+                    stage_f_valid.append(items[depth])
+                    advanced = True
+                    if len(stage_f_valid) == FINGER_STAGE_SURVIVOR_LIMIT:
+                        break
+            if not advanced:
+                break
+            depth += 1
+        stage_metrics["F"] = {
+            "seed_count": len(finger_seed_records),
+            "input_count": len(stage_f_evaluated),
+            "survivor_count": len(stage_f_valid),
+            "rejected_count": len(stage_f_evaluated) - len(stage_f_valid),
+            "duration_seconds": time.perf_counter() - started,
+        }
+        print("POC_STATIC_STAGE_F", stage_metrics["F"])
+
+        started = time.perf_counter()
+        finger_vertices = {}
+        for (candidate, compensation, preset), record in stage_f_valid:
+            _apply_semantic_finger_state(
+                armature, controls, candidate, compensation, preset, context
+            )
+            collision_metrics, vertices = _full_collision_evidence(
+                mesh, geometry, context["invariant_collision"]
+            )
+            _stage_g_update(
+                math_module, record, collision_metrics,
+                context["chin_surface"]["band"].warning_distance,
+            )
+            finger_vertices[record["source_candidate_id"]] = vertices
+        stage_g_valid = sorted(
+            (item for item in stage_f_valid if item[1]["valid"]),
+            key=lambda item: (not item[1].get("selection_eligible", False), *_finger_rank_key(item)),
+        )
+        stage_metrics["G"] = {
+            "input_count": len(stage_f_valid),
+            "survivor_count": len(stage_g_valid),
+            "rejected_count": len(stage_f_valid) - len(stage_g_valid),
+            "duration_seconds": time.perf_counter() - started,
+        }
+        print("POC_STATIC_STAGE_G", stage_metrics["G"])
+        reach_diagnostic = finger_reach_diagnostic(
+            [record for _state, record in stage_g_valid],
+            warning_distance=context["chin_surface"]["band"].warning_distance,
+        )
+
+        if len(stage_g_valid) < STATIC_RENDER_COUNT:
             print("POC_STATIC_STAGE_C_REJECTIONS", [
                 {
                     "candidate": record["source_candidate_id"],
@@ -3494,34 +4188,36 @@ def search_static(config: PocConfig) -> None:
                 for _candidate, record in stage_c_input
             ])
         eligible_count = sum(
-            record.get("selection_eligible", False) for _state, record in stage_e_valid
+            record.get("selection_eligible", False) for _state, record in stage_g_valid
         )
         policy = static_search_policy(
-            collision_clear_count=len(stage_e_valid),
+            collision_clear_count=len(stage_g_valid),
             selection_eligible_count=eligible_count,
         )
         eligible_ranked = [
-            item for item in stage_e_valid if item[1].get("selection_eligible", False)
+            item for item in stage_g_valid if item[1].get("selection_eligible", False)
         ]
         render_ranked = eligible_ranked[: int(policy["ranked_render_count"])]
         render_evidence = (
-            _render_compensated_candidates(
+            _render_finger_candidates(
                 paths.temporary,
                 armature,
                 controls,
                 render_ranked,
                 context,
-                compensated_vertices,
+                finger_vertices,
             )
             if render_ranked
             else {"rendered_files": [], "reason": "No selection-eligible collision-clear candidate set"}
         )
         _restore_static_control_state(
-            armature, controls, context["baseline_state"], compensation_controls
+            armature, controls, context["baseline_state"], compensation_controls, finger_controls
         )
         restoration_differences = compare_static_state(
             context["baseline_state"],
-            _capture_static_control_state(armature, controls, compensation_controls),
+            _capture_static_control_state(
+                armature, controls, compensation_controls, finger_controls
+            ),
             1e-6,
         )
         if restoration_differences:
@@ -3536,9 +4232,10 @@ def search_static(config: PocConfig) -> None:
             "frame": VALIDATION_FRAME,
             "source_blend": str(config.source_blend),
             "output_blend_unchanged": str(config.output_blend),
-            "candidate_count": len(candidates) + len(stage_d_evaluated),
+            "candidate_count": len(candidates) + len(stage_d_evaluated) + len(stage_f_evaluated),
             "arm_candidate_count": len(candidates),
             "compensation_candidate_count": len(stage_d_evaluated),
+            "semantic_finger_candidate_count": len(stage_f_evaluated),
             "rendered_count": len(rendered_records),
             "selection_eligible_count": eligible_count,
             "stage_metrics": stage_metrics,
@@ -3591,11 +4288,25 @@ def search_static(config: PocConfig) -> None:
                 "constraint_space": "local bone-space quaternion delta",
                 "protected_baseline_hashes": context["protected_pose_hashes"],
             },
+            "semantic_finger_search": {
+                "seed_source_ids": list(FINGER_SEED_IDS),
+                "preset_names": [preset.name for preset in presets],
+                "palm_refinements_deg": palm_refinements,
+                "compensation_count": len(finger_compensations),
+                "flexion_axis": FINGER_FLEXION_AXIS,
+                "calibration": "20260702 verified PMX bone-local finger tests; fist flexion is local -X",
+                "reach_diagnostic": reach_diagnostic,
+                "seed_metrics": {
+                    source_id: record["metrics"]
+                    for source_id, record in finger_seed_records.items()
+                },
+            },
             "render_evidence": render_evidence,
             "diagnostics": diagnostic_records,
             "ranked_candidates": rendered_records,
             "candidates": [record for _candidate, record in evaluated],
             "compensation_candidates": [record for _state, record in stage_d_evaluated],
+            "semantic_finger_candidates": [record for _state, record in stage_f_evaluated],
         }
         temporary_metrics = paths.temporary / STATIC_METRICS_NAME
         temporary_metrics.write_text(
@@ -3611,14 +4322,14 @@ def search_static(config: PocConfig) -> None:
         paths.temporary.rename(paths.final)
         print("POC_STATIC_SEARCH_COMPLETE", {
             "run_id": config.run_id,
-            "evaluated": len(candidates) + len(stage_d_evaluated),
+            "evaluated": len(candidates) + len(stage_d_evaluated) + len(stage_f_evaluated),
             "rendered": len(rendered_records),
             "metrics": str(paths.metrics),
             "selection_status": policy["selection_status"],
         })
     finally:
         _restore_static_control_state(
-            armature, controls, context["baseline_state"], compensation_controls
+            armature, controls, context["baseline_state"], compensation_controls, finger_controls
         )
 
 
@@ -3630,17 +4341,21 @@ def select_static(config: PocConfig) -> None:
     if not current_blend or not _same_path(current_blend, config.source_blend):
         raise RuntimeError(f"Blender must open the existing POC blend: {config.source_blend}")
     stored_run = json.loads(config.run_metrics_path.read_text(encoding="utf-8"))
+    selectable_records = stored_run.get(
+        "semantic_finger_candidates",
+        stored_run.get("compensation_candidates", stored_run["candidates"]),
+    )
     stored_record = next(
         (
             record
-            for record in stored_run.get("compensation_candidates", stored_run["candidates"])
+            for record in selectable_records
             if record["source_candidate_id"] == config.source_candidate_id
         ),
         None,
     )
     if (
         stored_record is None
-        or stored_record.get("stage") not in ("C", "E")
+        or stored_record.get("stage") not in ("C", "E", "G")
         or not stored_record.get("valid")
         or not stored_record.get("selection_eligible")
     ):
@@ -3649,18 +4364,25 @@ def select_static(config: PocConfig) -> None:
     armature, mesh = _validate_scene_objects()
     compensation_controls = _ensure_compensation_controls(armature)
     _validate_compensation_baseline(armature, compensation_controls)
+    finger_controls = _ensure_finger_controls(armature)
+    _validate_finger_baseline(armature, finger_controls)
     controls = _existing_controls()
     _validate_existing_poc(armature, controls)
     math_module = _load_motion_math()
     geometry = _mesh_geometry_sets(mesh)
     context = _prepare_static_context(
-        armature, mesh, controls, geometry, math_module, compensation_controls
+        armature, mesh, controls, geometry, math_module,
+        compensation_controls, finger_controls,
     )
     candidate = _candidate_from_record(stored_record)
     _apply_context_candidate(armature, controls, candidate, context)
-    if stored_record.get("stage") == "E":
+    if stored_record.get("stage") in ("E", "G"):
         compensation = _compensation_from_record(stored_record)
         _apply_upper_body_compensation(armature, context, compensation)
+        if stored_record.get("stage") == "G":
+            _apply_finger_preset(
+                armature, context, _finger_preset_from_record(stored_record)
+            )
         current_surface = _current_chin_surface(mesh, armature, context["chin_surface"])
     else:
         current_surface = context["chin_surface"]
@@ -3713,6 +4435,8 @@ def build_setup(config: PocConfig) -> None:
     _create_constraints(armature, controls)
     compensation_controls = _ensure_compensation_controls(armature)
     _validate_compensation_baseline(armature, compensation_controls)
+    finger_controls = _ensure_finger_controls(armature)
+    _validate_finger_baseline(armature, finger_controls)
     _validate_setup(armature, action, controls)
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
