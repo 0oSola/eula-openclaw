@@ -151,6 +151,10 @@ Build BVH trees from the evaluated `优菈_mesh`. Compare the right-hand/forearm
 
 If a contact-valid arm pose is anatomically correct but `右手捩1/2/3`-weighted sleeve geometry intersects `上半身2`, search small calibrated local rotations on those auxiliary bones. Require zero shoulder/elbow/wrist/finger/contact transform drift and reject any corrective deformation that creates a visible sleeve collapse or new collision.
 
+- [ ] **Step 6b: Generate a derived-PMX sleeve corrective morph when bones are insufficient**
+
+Keep the source PMX untouched. On a copied model, create `思考_右袖修正` from the collision-attributed `右手捩1/2/3` sleeve vertices, push them out of `上半身2` with a geometry-derived safety margin, smooth the displacement while pinning unaffected boundaries, and verify morph values `0` and `1`. Export the derived PMX only after Blender mesh validation; continue to defer VMD export until visual approval.
+
 - [ ] **Step 7: Save the selected static pose and metrics**
 
 Write the chosen controls into the POC blend and produce `static_pose_metrics.json` with explicit PASS, WARN, or FAIL verdicts. Stop here if the hero pose is not visibly better than v16.

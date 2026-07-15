@@ -50,6 +50,8 @@ The right-hand pose is part of the contact solve rather than being inherited unc
 
 When the anatomical arm pose is correct but the model's thick sleeve intersects the torso, existing weighted auxiliary bones such as `右手捩1/2/3` may be used as bounded clothing corrective bones. Corrective motion must not change shoulder, elbow, wrist, finger, or contact-point transforms, and must remain exportable through ordinary VMD bone frames.
 
+If bounded corrective bones cannot remove the sleeve collision, create a derived PMX copy with a vertex morph named `思考_右袖修正`. The morph may move only the collision-affected right-sleeve vertices, must preserve the original PMX unchanged, and must be zero outside the thinking-contact phase. Morph generation must smooth displacement across the sleeve while pinning the unaffected boundary and must pass the same real-mesh collision and silhouette review.
+
 Blender native IK, pole, local rotation limits, and tracking constraints provide the control rig. Python supplies coupled anatomical checks, swing-twist evaluation, comfort-zone scoring, reproducible scene construction, measurements, and rendering.
 
 ## Constraint Priority
