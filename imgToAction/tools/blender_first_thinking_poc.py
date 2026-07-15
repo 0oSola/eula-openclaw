@@ -220,8 +220,8 @@ CHIN_SUPPORT_METRICS_NAME = "chin_support_metrics.json"
 G14_ORIENTATION_SOURCE_ID = (
     "gallery_14_thumb_opposition_m15_sxp00_tzm10_thumb_opposed_base"
 )
-INDEX_JAW_ALIGNMENT_MAX_DEG = 25.0
-THUMB_CHIN_VERTICAL_TOLERANCE = 0.002
+INDEX_SUPPORT_NORMAL_MAX_DEG = 35.0
+THUMB_INDEX_CONTOUR_MAX_EDGE_MULTIPLIER = 7.0
 STATIC_CANDIDATE_DIRECTORY = "candidates"
 STATIC_CAMERA_NAME = "POC Static Full Body Camera"
 STAGE_A_SURVIVOR_LIMIT = 216
@@ -887,18 +887,22 @@ def chin_support_semantic_reasons(
     metrics, band: ChinSupportBand
 ) -> tuple[str, ...]:
     reasons = []
-    if float(metrics["support_region_distance"]) > band.support_warning_distance:
-        reasons.append("Chin support region exceeds its geometry-derived warning distance")
-    if int(metrics["support_region_patch_count"]) <= 0:
-        reasons.append("Chin support region contact patch is empty")
-    if float(metrics["index_jaw_alignment_deg"]) > INDEX_JAW_ALIGNMENT_MAX_DEG:
+    if float(metrics["index_support_surface_distance"]) > band.support_warning_distance:
+        reasons.append("Index support surface exceeds its geometry-derived warning distance")
+    if int(metrics["index_support_patch_count"]) <= 0:
+        reasons.append("Index support surface contact patch is empty")
+    if (
+        float(metrics["index_support_normal_opposition_error_deg"])
+        > INDEX_SUPPORT_NORMAL_MAX_DEG
+    ):
         reasons.append(
-            f"Index proximal jaw alignment exceeds {INDEX_JAW_ALIGNMENT_MAX_DEG:.1f} degrees"
+            "Index support normal opposition error exceeds "
+            f"{INDEX_SUPPORT_NORMAL_MAX_DEG:.1f} degrees"
         )
-    if not bool(metrics["thumb_below_chin"]):
-        reasons.append("Thumb is not below the lower-chin support point")
-    if not bool(metrics["thumb_inside_lateral"]):
-        reasons.append("Thumb is not on the intended inside/lateral side of the chin")
+    if not bool(metrics["index_support_under_chin"]):
+        reasons.append("Index support patch is not positioned under the lower chin")
+    if not bool(metrics["thumb_contour_bounded"]):
+        reasons.append("Thumb exceeds the bounded opposed hand contour")
     return tuple(reasons)
 
 
@@ -907,14 +911,20 @@ def chin_support_refinement_grid() -> tuple[ChinSupportRefinement, ...]:
         (0.0, 0.0, 0.0),
         (-0.002, 0.0, 0.0),
         (0.002, 0.0, 0.0),
+        (-0.004, 0.0, 0.0),
+        (0.004, 0.0, 0.0),
         (0.0, -0.002, 0.0),
         (0.0, 0.002, 0.0),
         (0.0, 0.0, -0.002),
         (0.0, 0.0, 0.002),
     )
-    head_neck = ((0.0, 0.0), (1.5, 2.0))
-    palm = ((0.0, 0.0, 0.0), (2.0, 0.0, -2.0))
-    thumb = ((0.0, 0.0, 0.0), (-4.0, 3.0, 2.0), (4.0, -3.0, -2.0))
+    head_neck = ((0.0, 0.0), (1.5, 2.0), (2.0, 3.0))
+    palm = (
+        (0.0, 0.0, 0.0),
+        (2.0, 0.0, -2.0),
+        (-2.0, 0.0, 2.0),
+    )
+    thumb = ((0.0, 0.0, 0.0), (-4.0, 3.0, 2.0))
     return tuple(
         ChinSupportRefinement(offset, neck, head, palm_delta, thumb_delta)
         for offset, (neck, head), palm_delta, thumb_delta in itertools.product(
@@ -923,84 +933,37 @@ def chin_support_refinement_grid() -> tuple[ChinSupportRefinement, ...]:
     )
 
 
-def chin_support_region_indices(
-    vertices,
-    *,
-    thumb_base_indices,
-    index_proximal_indices,
-    thumb_tip_indices,
-    faces,
+def index_knuckle_region_indices(
+    *, index1_indices, index2_indices, index3_indices, faces
 ):
-    available = set(vertices)
-    thumb_base = set(thumb_base_indices) & available
-    index_proximal = set(index_proximal_indices) & available
-    thumb_tip = set(thumb_tip_indices) & available
-    def nearest_distance(index, targets):
-        point = vertices[index]
-        return min(_point_distance(point, vertices[target]) for target in targets)
-
-    def inside_half(indices, targets):
-        if not indices or not targets:
-            return set()
-        ranked = sorted((nearest_distance(index, targets), index) for index in indices)
-        cutoff = ranked[(len(ranked) - 1) // 2][0]
-        return {index for distance, index in ranked if distance <= cutoff + 1e-12}
-
-    thumb_inside = inside_half(thumb_base, index_proximal)
-    index_radial = inside_half(index_proximal, thumb_base)
-    web_faces = tuple(
+    proximal = (set(index1_indices) | set(index2_indices)) - set(index3_indices)
+    support_faces = tuple(
         tuple(int(index) for index in face)
         for face in faces
-        if set(face) <= (thumb_inside | index_radial)
-        and set(face) & thumb_base
-        and set(face) & index_proximal
+        if set(face) <= proximal
     )
-    web_vertices = set(itertools.chain.from_iterable(web_faces))
-    support_vertices = (thumb_inside | index_radial | web_vertices) - thumb_tip
     return {
-        "support_vertices": support_vertices,
-        "web_vertices": web_vertices,
-        "support_faces": web_faces,
-        "thumb_base_vertices": thumb_inside - thumb_tip,
-        "index_proximal_vertices": index_radial,
+        "support_vertices": proximal,
+        "support_faces": support_faces,
+        "triangle_count": len(support_faces),
+        "vertex_count": len(proximal),
     }
 
 
-def jaw_guide_tangent(anchor, surface_points, surface_normal, model_lateral):
+def surface_normal_opposition_error(first, second) -> float:
     def normalized(values):
         vector = tuple(float(value) for value in values)
         length = math.sqrt(sum(value * value for value in vector))
         if length <= 1e-12:
-            raise ValueError("Jaw guide vectors must be non-zero")
+            raise ValueError("Surface normals must be non-zero")
         return tuple(value / length for value in vector)
 
-    origin = tuple(float(value) for value in anchor)
-    normal = normalized(surface_normal)
-    lateral = normalized(model_lateral)
-    offsets = [
-        tuple(float(value) - origin[index] for index, value in enumerate(point))
-        for point in surface_points
-    ]
-    character_right = [
-        offset for offset in offsets
-        if sum(value * axis for value, axis in zip(offset, lateral, strict=True)) < 0.0
-    ]
-    if not character_right:
-        raise ValueError("Lower-chin surface has no character-right guide points")
-    guide = min(
-        character_right,
-        key=lambda offset: sum(
-            value * axis for value, axis in zip(offset, lateral, strict=True)
-        ),
-    )
-    normal_component = sum(
-        value * axis for value, axis in zip(guide, normal, strict=True)
-    )
-    tangent = tuple(
-        value - normal_component * axis
-        for value, axis in zip(guide, normal, strict=True)
-    )
-    return normalized(tangent)
+    left = normalized(first)
+    right = normalized(second)
+    dot = max(-1.0, min(1.0, sum(
+        a * b for a, b in zip(left, right, strict=True)
+    )))
+    return abs(180.0 - math.degrees(math.acos(dot)))
 
 
 def semi_closed_finger_targets() -> dict[str, dict[str, tuple[float, float, float]]]:
@@ -3046,6 +3009,7 @@ def _mesh_geometry_sets(mesh):
     thumb2 = _vertices_for_groups(mesh, _group_indices(mesh, ("右親指２",)))
     index1 = _vertices_for_groups(mesh, _group_indices(mesh, ("右人指１",)))
     index2 = _vertices_for_groups(mesh, _group_indices(mesh, ("右人指２",)))
+    index3 = _vertices_for_groups(mesh, _group_indices(mesh, ("右人指３",)))
     thumb = _vertices_for_groups(mesh, _group_indices(mesh, ("右親指０", "右親指１", "右親指２")))
     index = _vertices_for_groups(mesh, _group_indices(mesh, ("右人指１", "右人指２", "右人指３")))
     hand = _vertices_for_groups(mesh, _group_indices(mesh, RIGHT_HAND_VERTEX_GROUPS))
@@ -3059,15 +3023,10 @@ def _mesh_geometry_sets(mesh):
     )
     moving = hand | forearm
     contact_surface = thumb | index | palm
-    support_region = chin_support_region_indices(
-        {
-            vertex.index: tuple(float(value) for value in vertex.co)
-            for vertex in mesh.data.vertices
-            if vertex.index in (thumb0 | thumb1 | thumb2 | index1 | index2)
-        },
-        thumb_base_indices=thumb0 | thumb1,
-        index_proximal_indices=index1 | index2,
-        thumb_tip_indices=thumb2,
+    index_knuckle_region = index_knuckle_region_indices(
+        index1_indices=index1,
+        index2_indices=index2,
+        index3_indices=index3,
         faces=tuple(tuple(int(index) for index in polygon.vertices) for polygon in mesh.data.polygons),
     )
     moving_records = _polygon_records(
@@ -3097,7 +3056,8 @@ def _mesh_geometry_sets(mesh):
         "index_vertices": index,
         "index1_vertices": index1,
         "index2_vertices": index2,
-        "chin_support_region": support_region,
+        "index3_vertices": index3,
+        "index_knuckle_region": index_knuckle_region,
         "side_palm_vertices": palm,
         "hand_vertices": hand,
         "moving_vertices": moving,
@@ -3635,123 +3595,113 @@ def _surface_contact_evidence_bvh(mesh, geometry, chin_surface):
 
 
 def _chin_support_surface_evidence(mesh, geometry, chin_surface, armature):
-    region = geometry["chin_support_region"]
+    region = geometry["index_knuckle_region"]
+    support_faces = region["support_faces"]
     support_indices = region["support_vertices"]
-    if not support_indices:
-        raise RuntimeError("Chin support region contains no weighted proximal vertices")
-    diagnostic_regions = {
-        "thumb0_all": geometry["thumb0_vertices"],
-        "thumb1_all": geometry["thumb1_vertices"],
-        "index1_all": geometry["index1_vertices"],
-        "index2_all": geometry["index2_vertices"],
-        "thumb_inside_base": region["thumb_base_vertices"],
-        "index_proximal_radial": region["index_proximal_vertices"],
-        "web": region["web_vertices"],
-    }
-    requested = set().union(*diagnostic_regions.values())
+    if not support_faces:
+        raise RuntimeError("Index knuckle support region contains no proximal surface triangles")
+    requested = support_indices | geometry["thumb0_vertices"] | geometry["thumb1_vertices"]
     vertices = _evaluated_world_vertex_subset(mesh, requested)
-    samples = []
-    for index in sorted(support_indices):
-        point = vertices[index]
-        nearest = chin_surface["tree"].find_nearest(point)
-        if nearest is None:
-            continue
-        location, normal, triangle_index, distance = nearest
-        source = (
-            "thumb_inside_base"
-            if index in region["thumb_base_vertices"]
-            else "index_proximal_radial"
-        )
-        samples.append({
-            "distance": float(distance),
-            "source": source,
-            "vertex_index": int(index),
-            "hand_world": tuple(float(value) for value in point),
-            "chin_surface_world": tuple(float(value) for value in location),
-            "signed_distance": float((point - location).dot(normal)),
-            "triangle_index": int(triangle_index),
-            "normal": normal.normalized(),
-        })
-    if not samples:
-        raise RuntimeError("Chin support region could not be measured against the lower chin")
-    best = min(
-        samples,
-        key=lambda item: (item["distance"], item["source"], item["vertex_index"]),
-    )
     band = derive_chin_support_band(
         mesh_resolution=chin_surface["band"].mesh_resolution,
         chin_warning_distance=chin_surface["band"].warning_distance,
     )
+    samples = []
+    for face_index, face in enumerate(support_faces):
+        first, second, third = (vertices[index] for index in face)
+        index_normal = (second - first).cross(third - first)
+        if index_normal.length_squared <= 1e-12:
+            continue
+        index_normal.normalize()
+        points = (first, second, third, (first + second + third) / 3.0)
+        for point_index, point in enumerate(points):
+            nearest = chin_surface["tree"].find_nearest(point)
+            if nearest is not None:
+                location, chin_normal, chin_triangle_index, distance = nearest
+                samples.append({
+                    "distance": float(distance),
+                    "index_face_index": int(face_index),
+                    "index_face_vertices": tuple(int(index) for index in face),
+                    "sample_index": int(point_index),
+                    "index_surface_world": tuple(float(value) for value in point),
+                    "chin_surface_world": tuple(float(value) for value in location),
+                    "index_surface_normal_world": tuple(float(value) for value in index_normal),
+                    "chin_surface_normal_world": tuple(float(value) for value in chin_normal),
+                    "normal_opposition_error_deg": surface_normal_opposition_error(
+                        index_normal, chin_normal
+                    ),
+                    "chin_triangle_index": int(chin_triangle_index),
+                    "signed_chin_distance": float((point - location).dot(chin_normal)),
+                })
+    if not samples:
+        raise RuntimeError("Index knuckle triangles could not be measured against the lower chin")
+    best = min(samples, key=lambda item: (
+        item["distance"], item["normal_opposition_error_deg"],
+        item["index_face_index"], item["sample_index"],
+    ))
     patch = [
         item for item in samples
         if item["distance"] <= band.support_warning_distance
+        and item["normal_opposition_error_deg"] <= INDEX_SUPPORT_NORMAL_MAX_DEG
     ]
-    diagnostic_distance_by_region = {}
-    for name, indices in diagnostic_regions.items():
-        distances = []
-        for index in indices:
-            nearest = chin_surface["tree"].find_nearest(vertices[index])
-            if nearest is not None:
-                distances.append(float(nearest[3]))
-        diagnostic_distance_by_region[name] = min(distances) if distances else None
-    index_bone = armature.pose.bones["右人指１"]
-    index_direction = armature.matrix_world.to_3x3() @ (index_bone.tail - index_bone.head)
-    index_direction.normalize()
-    model_lateral = armature.matrix_world.to_3x3() @ Vector((1.0, 0.0, 0.0))
-    model_lateral.normalize()
-    jaw_tangent = Vector(jaw_guide_tangent(
-        best["chin_surface_world"],
-        (tuple(float(value) for value in point) for point in chin_surface["region_vertices"].values()),
-        tuple(float(value) for value in best["normal"]),
-        tuple(float(value) for value in model_lateral),
-    ))
-    alignment = math.degrees(index_direction.angle(jaw_tangent))
-    alignment = min(alignment, 180.0 - alignment)
+    support_sample = min(
+        patch,
+        key=lambda item: (
+            item["distance"], item["normal_opposition_error_deg"],
+            item["index_face_index"], item["sample_index"],
+        ),
+    ) if patch else best
     fingertips = _finger_tip_positions(armature)
     tip_surface = _tip_surface_evidence(armature, chin_surface)
     thumb_tip = Vector(fingertips["thumb"])
-    chin_point = Vector(best["chin_surface_world"])
-    thumb_vertical_offset = float(thumb_tip.z - chin_point.z)
-    thumb_lateral_offset = float((thumb_tip - chin_point).dot(model_lateral))
+    index_surface_point = Vector(support_sample["index_surface_world"])
+    thumb_to_index_surface = min(
+        (thumb_tip - vertices[index]).length for index in support_indices
+    )
+    contour_limit = band.mesh_resolution * THUMB_INDEX_CONTOUR_MAX_EDGE_MULTIPLIER
+    thumb_vertical_offset = float(thumb_tip.z - index_surface_point.z)
+    under_chin_tolerance = band.mesh_resolution
+    contact_vertical_offset = float(
+        Vector(support_sample["index_surface_world"]).z
+        - Vector(support_sample["chin_surface_world"]).z
+    )
     return {
-        "support_region_distance": best["distance"],
-        "support_region_patch_count": len(patch),
-        "support_region_nearest": {
-            key: value for key, value in best.items() if key != "normal"
-        },
-        "support_region_patch_by_source": {
-            source: sum(item["source"] == source for item in patch)
-            for source in ("thumb_inside_base", "index_proximal_radial")
-        },
-        "support_region_vertex_count": len(support_indices),
-        "support_region_face_count": len(region["support_faces"]),
-        "support_region_web_vertex_count": len(region["web_vertices"]),
-        "support_region_vertex_indices": tuple(sorted(support_indices)),
-        "support_region_face_vertices": region["support_faces"],
-        "support_diagnostic_distance_by_region": diagnostic_distance_by_region,
+        "index_support_surface_distance": best["distance"],
+        "index_support_patch_count": len({item["index_face_index"] for item in patch}),
+        "index_support_patch_sample_count": len(patch),
+        "index_support_nearest": best,
+        "index_support_patch_representative": support_sample,
+        "index_support_surface_normal_world": support_sample["index_surface_normal_world"],
+        "chin_support_surface_normal_world": support_sample["chin_surface_normal_world"],
+        "index_support_normal_opposition_error_deg": support_sample["normal_opposition_error_deg"],
+        "index_support_normal_max_deg": INDEX_SUPPORT_NORMAL_MAX_DEG,
+        "index_support_under_chin": contact_vertical_offset <= under_chin_tolerance,
+        "index_support_vertical_offset_from_chin": contact_vertical_offset,
+        "index_support_under_chin_tolerance": under_chin_tolerance,
+        "index_support_vertex_count": len(support_indices),
+        "index_support_triangle_count": len(support_faces),
+        "index_support_vertex_indices": tuple(sorted(support_indices)),
+        "index_support_face_vertices": support_faces,
         "support_band": {
             "mesh_resolution": band.mesh_resolution,
             "support_target_distance": band.support_target_distance,
             "support_warning_distance": band.support_warning_distance,
             "derivation": band.derivation,
         },
-        "index_proximal_direction_world": tuple(float(value) for value in index_direction),
-        "jaw_tangent_world": tuple(float(value) for value in jaw_tangent),
-        "index_jaw_alignment_deg": float(alignment),
-        "index_jaw_alignment_max_deg": INDEX_JAW_ALIGNMENT_MAX_DEG,
         "thumb_tip_world": tuple(float(value) for value in thumb_tip),
-        "thumb_tip_surface_distance": float(
-            tip_surface["thumb"]["distance"]
-        ),
+        "thumb_tip_surface_distance": float(tip_surface["thumb"]["distance"]),
         "index_tip_surface_distance": float(tip_surface["index"]["distance"]),
         "tip_surface_evidence": tip_surface,
-        "thumb_vertical_offset_from_chin": thumb_vertical_offset,
-        "thumb_lateral_offset_from_chin": thumb_lateral_offset,
-        "thumb_below_chin": thumb_vertical_offset <= THUMB_CHIN_VERTICAL_TOLERANCE,
-        "thumb_inside_lateral": thumb_lateral_offset < -THUMB_CHIN_VERTICAL_TOLERANCE,
-        "thumb_position_derivation": (
-            "thumb tip is a sanity check below the nearest support point and on the "
-            "negative model-local X side; it is not a mandatory contact source"
+        "thumb_index_contour_distance": float(thumb_to_index_surface),
+        "thumb_index_contour_max_distance": float(contour_limit),
+        "thumb_vertical_offset_from_index_support": thumb_vertical_offset,
+        "thumb_contour_bounded": bool(
+            thumb_to_index_surface <= contour_limit
+            and thumb_vertical_offset <= band.mesh_resolution * 2.0
+        ),
+        "thumb_contour_derivation": (
+            "thumb tip remains within seven median lower-chin triangle edges of the "
+            "index 1/2 surface and no more than two edges above the support point"
         ),
     }
 
@@ -5231,7 +5181,9 @@ def _render_chin_support_candidates(
         record["rank"] = rank
         record["renders"] = renders
         mapping.append({"rank": rank, "source_id": record["source_id"], **renders})
-        support_point = Vector(record["metrics"]["support_region_nearest"]["hand_world"])
+        support_point = Vector(
+            record["metrics"]["index_support_nearest"]["index_surface_world"]
+        )
         fingertips = _finger_tip_positions(armature)
         close_center = (
             support_point + Vector(fingertips["index"]) + Vector(fingertips["thumb"])
@@ -5274,18 +5226,20 @@ def _render_chin_support_candidates(
 
 def _chin_support_rank(record, band):
     metrics = record["metrics"]
-    patch_penalty = 0.0 if metrics["support_region_patch_count"] > 0 else 4.0
+    patch_penalty = 0.0 if metrics["index_support_patch_count"] > 0 else 4.0
     contact_penalty = abs(
-        metrics["support_region_distance"] - band.support_target_distance
+        metrics["index_support_surface_distance"] - band.support_target_distance
     ) / max(band.mesh_resolution, 1e-9)
-    alignment_penalty = metrics["index_jaw_alignment_deg"] / INDEX_JAW_ALIGNMENT_MAX_DEG
-    thumb_penalty = float(not metrics["thumb_below_chin"]) + float(
-        not metrics["thumb_inside_lateral"]
+    normal_penalty = (
+        metrics["index_support_normal_opposition_error_deg"]
+        / INDEX_SUPPORT_NORMAL_MAX_DEG
     )
+    position_penalty = float(not metrics["index_support_under_chin"])
+    thumb_penalty = float(not metrics["thumb_contour_bounded"])
     return (
         not record.get("eligible", False),
         not record.get("collision_valid", False),
-        patch_penalty + contact_penalty + alignment_penalty + thumb_penalty,
+        patch_penalty + contact_penalty + normal_penalty + position_penalty + thumb_penalty,
         record["source_id"],
     )
 
@@ -5561,7 +5515,7 @@ def chin_support_refinement(config: PocConfig) -> None:
                 "support_warning_distance": band.support_warning_distance,
                 "derivation": band.derivation,
             },
-            "index_jaw_alignment_max_deg": INDEX_JAW_ALIGNMENT_MAX_DEG,
+            "index_support_normal_max_deg": INDEX_SUPPORT_NORMAL_MAX_DEG,
             "stage_metrics": stage_durations,
             "evaluated_count": len(refinements),
             "collision_evaluated_count": len(shortlist),
