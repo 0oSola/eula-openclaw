@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import hashlib
 import importlib.util
 import itertools
 import json
@@ -51,6 +52,34 @@ CONTROL_NAMES = {
     "pole": "POC_右ひじ_POLE",
     "palm": "POC_手掌_ORIENTATION",
     "chin": "POC_下巴_CONTACT",
+}
+COMPENSATION_CONTROL_NAMES = {
+    "upper_chest": "POC_上半身2_DELTA",
+    "right_shoulder": "POC_右肩_DELTA",
+    "neck": "POC_首_DELTA",
+    "head": "POC_頭_DELTA",
+}
+COMPENSATION_CONTROL_PARENT_SPACE = "ARMATURE_LOCAL"
+COMPENSATION_BONES = {
+    "upper_chest": "上半身2",
+    "right_shoulder": "右肩",
+    "neck": "首",
+    "head": "頭",
+}
+COMPENSATION_CONSTRAINT_SPECS = {
+    key: {
+        "owner_bone": bone_name,
+        "owner_space": "LOCAL",
+        "target_space": "LOCAL",
+        "mix_mode": "BEFORE",
+    }
+    for key, bone_name in COMPENSATION_BONES.items()
+}
+COMPENSATION_CONSTRAINT_NAMES = {
+    "upper_chest": "POC_上半身2_LOCAL_DELTA",
+    "right_shoulder": "POC_右肩_LOCAL_DELTA",
+    "neck": "POC_首_LOCAL_DELTA",
+    "head": "POC_頭_LOCAL_DELTA",
 }
 CONSTRAINT_NAMES = {
     "ik": "POC_右腕_IK",
@@ -120,6 +149,8 @@ REQUIRED_BONES = (
     "右ひじ",
     "右手捩",
     "右手首",
+    "上半身2",
+    "首",
     "頭",
 )
 EXPECTED_ACTION_RANGE = (0.0, 240.0)
@@ -162,7 +193,9 @@ STAGE_A_SURVIVOR_LIMIT = 216
 STAGE_B_SURVIVOR_LIMIT = 48
 STAGE_C_SURVIVOR_LIMIT = 48
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
-SOURCE_CANDIDATE_PATTERN = re.compile(r"^candidate_[0-9]+$")
+SOURCE_CANDIDATE_PATTERN = re.compile(
+    r"^(?:candidate_[0-9]+|pole3d_[0-9]+)(?:__comp_[0-9]{3})?$"
+)
 
 CONTACT_VERTEX_GROUPS = (
     "右親指０",
@@ -233,6 +266,26 @@ MESH_PENETRATION_TOLERANCE = 5e-5
 FULL_BODY_MARGIN = 1.18
 RENDER_RESOLUTION = 768
 CHIN_REGION_BOOTSTRAP_RADIUS = 0.05
+UPPER_CHEST_MAX_DEG = 4.0
+RIGHT_SHOULDER_MAX_DEG = 3.0
+NECK_HEAD_COMBINED_MAX_DEG = 5.0
+COMPENSATION_SEED_LIMIT = 6
+COMPENSATION_STAGE_D_LIMIT = 48
+COMPENSATION_STAGE_E_LIMIT = 24
+COMPENSATION_BASELINE_TOLERANCE_DEG = 1e-5
+PROTECTED_LOCAL_BONES = (
+    "下半身",
+    "左肩",
+    "左腕",
+    "左ひじ",
+    "左手首",
+    "左足",
+    "左ひざ",
+    "左足首",
+    "右足",
+    "右ひざ",
+    "右足首",
+)
 
 
 @dataclass(frozen=True)
@@ -245,6 +298,27 @@ class StaticCandidate:
     twist_influences: tuple[float, float, float]
     pole_offset_3d: tuple[float, float, float] = (0.0, 0.0, 0.0)
     search_family: str = "legacy_scalar"
+
+
+@dataclass(frozen=True)
+class UpperBodyCompensation:
+    upper_chest_turn_deg: float
+    upper_chest_lean_deg: float
+    shoulder_retract_deg: float
+    shoulder_elevate_deg: float
+    neck_toward_deg: float
+    head_toward_deg: float
+
+    @property
+    def is_identity(self) -> bool:
+        return not any((
+            self.upper_chest_turn_deg,
+            self.upper_chest_lean_deg,
+            self.shoulder_retract_deg,
+            self.shoulder_elevate_deg,
+            self.neck_toward_deg,
+            self.head_toward_deg,
+        ))
 
 
 @dataclass(frozen=True)
@@ -270,6 +344,147 @@ class StaticRunPaths:
     temporary: Path
     final: Path
     metrics: Path
+
+
+def quaternion_angle_degrees(quaternion: Sequence[float]) -> float:
+    values = tuple(float(value) for value in quaternion)
+    if len(values) != 4 or not all(math.isfinite(value) for value in values):
+        raise ValueError("Quaternion must contain four finite components")
+    magnitude = math.sqrt(sum(value * value for value in values))
+    if magnitude <= 1e-12:
+        raise ValueError("Quaternion cannot be zero")
+    normalized_w = max(-1.0, min(1.0, abs(values[0] / magnitude)))
+    return math.degrees(2.0 * math.acos(normalized_w))
+
+
+def validate_compensation_angles(angles: dict[str, float]) -> tuple[str, ...]:
+    required = set(COMPENSATION_BONES)
+    if set(angles) != required:
+        raise ValueError(f"Compensation angles must contain exactly: {sorted(required)}")
+    values = {name: float(value) for name, value in angles.items()}
+    if not all(math.isfinite(value) and value >= 0.0 for value in values.values()):
+        raise ValueError("Compensation angles must be finite and non-negative")
+    reasons = []
+    if values["upper_chest"] > UPPER_CHEST_MAX_DEG + 1e-6:
+        reasons.append(f"upper_chest exceeds {UPPER_CHEST_MAX_DEG:g} degrees")
+    if values["right_shoulder"] > RIGHT_SHOULDER_MAX_DEG + 1e-6:
+        reasons.append(f"right_shoulder exceeds {RIGHT_SHOULDER_MAX_DEG:g} degrees")
+    if values["neck"] + values["head"] > NECK_HEAD_COMBINED_MAX_DEG + 1e-6:
+        reasons.append(f"neck/head combined exceeds {NECK_HEAD_COMBINED_MAX_DEG:g} degrees")
+    return tuple(reasons)
+
+
+def upper_body_compensation_grid() -> tuple[UpperBodyCompensation, ...]:
+    chest = ((0.0, 0.0), (2.0, 0.0), (-2.0, 0.0), (0.0, 2.0), (0.0, -2.0))
+    shoulder = ((0.0, 0.0), (1.5, 0.0), (-1.5, 0.0), (0.0, 1.5), (0.0, -1.5))
+    head_neck = ((0.0, 0.0), (1.5, 1.5), (2.0, 2.5))
+    return tuple(
+        UpperBodyCompensation(
+            upper_chest_turn_deg=chest_values[0],
+            upper_chest_lean_deg=chest_values[1],
+            shoulder_retract_deg=shoulder_values[0],
+            shoulder_elevate_deg=shoulder_values[1],
+            neck_toward_deg=head_values[0],
+            head_toward_deg=head_values[1],
+        )
+        for chest_values, shoulder_values, head_values in itertools.product(
+            chest, shoulder, head_neck
+        )
+    )
+
+
+def protected_pose_hashes(local_channels: dict[str, Sequence[float]]) -> dict[str, str]:
+    hashes = {}
+    for bone_name, values in sorted(local_channels.items()):
+        payload = json.dumps(
+            [float(value) for value in values],
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("ascii")
+        hashes[bone_name] = hashlib.sha256(payload).hexdigest()
+    return hashes
+
+
+def compare_protected_pose_hashes(
+    expected: dict[str, str],
+    actual: dict[str, str],
+) -> tuple[str, ...]:
+    differences = []
+    for bone_name in sorted(set(expected) | set(actual)):
+        if expected.get(bone_name) != actual.get(bone_name):
+            differences.append(f"Protected local pose changed for {bone_name}")
+    return tuple(differences)
+
+
+def compensation_improves_evidence(
+    before: dict[str, float | int],
+    after: dict[str, float | int],
+    *,
+    warning_distance: float,
+) -> bool:
+    math_module = _load_motion_math()
+    elbow = float(after["elbow_angle_deg"])
+    return (
+        float(after["surface_contact_distance"]) <= float(warning_distance)
+        and int(after["contact_patch_count"]) > 0
+        and math_module.ELBOW_COMFORT_MIN_DEG <= elbow <= math_module.ELBOW_COMFORT_MAX_DEG
+        and int(after["head_collision_count"]) == 0
+        and int(after["torso_penetration_count"]) < int(before["torso_penetration_count"])
+    )
+
+
+def compensated_source_id(arm_source_id: str, compensation_index: int) -> str:
+    if compensation_index < 0:
+        raise ValueError("Compensation index must be non-negative")
+    return f"{arm_source_id}__comp_{compensation_index:03d}"
+
+
+def _compensation_contact_rank(item):
+    _state, record = item
+    metrics = record["metrics"]
+    elbow = float(metrics["elbow_angle_deg"])
+    elbow_comfort = _load_motion_math().ELBOW_COMFORT_MIN_DEG <= elbow <= _load_motion_math().ELBOW_COMFORT_MAX_DEG
+    return (
+        int(metrics.get("contact_patch_count", 0)) <= 0,
+        not elbow_comfort,
+        float(metrics.get("surface_contact_distance", math.inf)),
+        float(record.get("score", math.inf)),
+        record["source_candidate_id"],
+    )
+
+
+def compensation_seed_candidates(records, limit: int):
+    if limit <= 0:
+        return []
+    return sorted(records, key=_compensation_contact_rank)[:limit]
+
+
+def compensation_stage_survivors(records, limit: int):
+    if limit <= 0:
+        return []
+    valid = [item for item in records if item[1].get("valid", False)]
+    strata = {}
+    for item in valid:
+        arm_source = item[1].get("arm_source_candidate_id", "__global__")
+        strata.setdefault(arm_source, []).append(item)
+    for items in strata.values():
+        items.sort(key=_compensation_contact_rank)
+    selected = []
+    depth = 0
+    ordered_keys = sorted(strata)
+    while len(selected) < limit:
+        advanced = False
+        for key in ordered_keys:
+            items = strata[key]
+            if depth < len(items):
+                selected.append(items[depth])
+                advanced = True
+                if len(selected) == limit:
+                    break
+        if not advanced:
+            break
+        depth += 1
+    return sorted(selected, key=_compensation_contact_rank)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -667,7 +882,10 @@ def static_search_policy(
     collision_clear_count: int,
     selection_eligible_count: int,
 ) -> dict[str, object]:
-    can_render_ranked = collision_clear_count >= STATIC_RENDER_COUNT and selection_eligible_count > 0
+    can_render_ranked = (
+        collision_clear_count >= STATIC_RENDER_COUNT
+        and selection_eligible_count >= STATIC_RENDER_COUNT
+    )
     return {
         "selection_status": "NEEDS_CONTEXT" if can_render_ranked else "BLOCKED_NEEDS_CONTEXT",
         "ranked_render_count": STATIC_RENDER_COUNT if can_render_ranked else 0,
@@ -1072,6 +1290,128 @@ def _create_controls(armature):
     controls["palm"].matrix_parent_inverse = Matrix.Identity(4)
     controls["palm"].matrix_basis = Matrix.Identity(4)
     return controls
+
+
+def _ensure_compensation_controls(armature):
+    collection = bpy.data.collections.get(CONTROL_COLLECTION_NAME)
+    if collection is None:
+        collection = bpy.data.collections.new(CONTROL_COLLECTION_NAME)
+        bpy.context.scene.collection.children.link(collection)
+    controls = {}
+    for key, control_name in COMPENSATION_CONTROL_NAMES.items():
+        control = bpy.data.objects.get(control_name)
+        if control is None:
+            control = bpy.data.objects.new(control_name, None)
+            collection.objects.link(control)
+            control.empty_display_type = "ARROWS"
+            control.empty_display_size = 0.08
+            control.show_in_front = True
+        control.rotation_mode = "QUATERNION"
+        control.parent = armature
+        control.matrix_parent_inverse = Matrix.Identity(4)
+        control.rotation_quaternion = Quaternion((1.0, 0.0, 0.0, 0.0))
+        control.location = armature.matrix_world.inverted() @ _pose_head_world(
+            armature, COMPENSATION_BONES[key]
+        )
+        controls[key] = control
+
+    if "POC_compensation_influence" not in armature:
+        armature["POC_compensation_influence"] = 1.0
+        armature.id_properties_ui("POC_compensation_influence").update(min=0.0, max=1.0)
+    for key, spec in COMPENSATION_CONSTRAINT_SPECS.items():
+        owner = armature.pose.bones[spec["owner_bone"]]
+        constraint_name = COMPENSATION_CONSTRAINT_NAMES[key]
+        constraint = owner.constraints.get(constraint_name)
+        if constraint is None:
+            constraint = owner.constraints.new("COPY_ROTATION")
+            constraint.name = constraint_name
+            constraint.target = controls[key]
+            constraint.owner_space = spec["owner_space"]
+            constraint.target_space = spec["target_space"]
+            constraint.mix_mode = spec["mix_mode"]
+            constraint.use_x = True
+            constraint.use_y = True
+            constraint.use_z = True
+            constraint.influence = 0.0
+            _add_influence_driver(constraint, armature, "POC_compensation_influence")
+        elif constraint.target != controls[key]:
+            raise RuntimeError(f"Compensation constraint target mismatch: {constraint_name}")
+    return controls
+
+
+def _compensation_constraints(armature):
+    return {
+        key: armature.pose.bones[COMPENSATION_BONES[key]].constraints[
+            COMPENSATION_CONSTRAINT_NAMES[key]
+        ]
+        for key in COMPENSATION_BONES
+    }
+
+
+def _set_compensation_identity(controls) -> None:
+    for control in controls.values():
+        control.rotation_mode = "QUATERNION"
+        control.rotation_quaternion = Quaternion((1.0, 0.0, 0.0, 0.0))
+
+
+def _validate_compensation_baseline(armature, controls) -> None:
+    constraints = _compensation_constraints(armature)
+    previous_enabled = float(armature["POC_enabled"])
+    previous_mutes = {key: constraint.mute for key, constraint in constraints.items()}
+    _set_compensation_identity(controls)
+    try:
+        armature["POC_enabled"] = 1.0
+        for constraint in constraints.values():
+            constraint.mute = True
+        armature.update_tag()
+        _refresh_frame()
+        baseline = {
+            key: _world_rotation(armature, bone_name)
+            for key, bone_name in COMPENSATION_BONES.items()
+        }
+        for constraint in constraints.values():
+            constraint.mute = False
+        armature.update_tag()
+        _refresh_frame()
+        enabled_deltas = {
+            key: _rotation_delta_degrees(baseline[key], _world_rotation(armature, bone_name))
+            for key, bone_name in COMPENSATION_BONES.items()
+        }
+        if any(delta > COMPENSATION_BASELINE_TOLERANCE_DEG for delta in enabled_deltas.values()):
+            raise RuntimeError(f"Compensation identity controls introduce a baseline jump: {enabled_deltas}")
+        response_deltas = {}
+        for key, bone_name in COMPENSATION_BONES.items():
+            controls[key].rotation_quaternion = Quaternion(
+                Vector((1.0, 0.0, 0.0)), math.radians(1.0)
+            )
+            armature.update_tag()
+            _refresh_frame()
+            response_deltas[key] = _rotation_delta_degrees(
+                baseline[key], _world_rotation(armature, bone_name)
+            )
+            controls[key].rotation_quaternion = Quaternion((1.0, 0.0, 0.0, 0.0))
+            armature.update_tag()
+            _refresh_frame()
+        if any(not 0.99 <= delta <= 1.01 for delta in response_deltas.values()):
+            raise RuntimeError(
+                f"Compensation controls do not produce local quaternion deltas: {response_deltas}"
+            )
+        for constraint in constraints.values():
+            constraint.mute = True
+        armature.update_tag()
+        _refresh_frame()
+        restored = {
+            key: _rotation_delta_degrees(baseline[key], _world_rotation(armature, bone_name))
+            for key, bone_name in COMPENSATION_BONES.items()
+        }
+        if any(delta > COMPENSATION_BASELINE_TOLERANCE_DEG for delta in restored.values()):
+            raise RuntimeError(f"Compensation constraints do not restore exactly: {restored}")
+    finally:
+        armature["POC_enabled"] = previous_enabled
+        for key, constraint in constraints.items():
+            constraint.mute = previous_mutes[key]
+        armature.update_tag()
+        _refresh_frame()
 
 
 def _add_influence_driver(constraint, armature, property_name: str) -> None:
@@ -1897,16 +2237,18 @@ def _invariant_collision_context(vertices, geometry):
 
 def _full_collision_evidence(mesh, geometry, invariant):
     vertices = _evaluated_world_vertices(mesh)
+    head_tree = _bvh(vertices, geometry["head_faces"])
+    torso_tree = _bvh(vertices, geometry["torso_faces"])
     palm_tree = _bvh(vertices, geometry["palm_faces"])
     contact_tree = _bvh(vertices, geometry["contact_faces"])
     hand_tree = _bvh(vertices, geometry["hand_faces"])
     moving_tree = _bvh(vertices, geometry["moving_faces"])
     _head_clearance, head_penetration = _nearest_surface_evidence(
-        (vertices[index] for index in geometry["hand_vertices"]), invariant["head_tree"]
+        (vertices[index] for index in geometry["hand_vertices"]), head_tree
     )
-    palm_intersections = len(palm_tree.overlap(invariant["head_tree"]))
-    finger_intersections = len(contact_tree.overlap(invariant["head_tree"]))
-    full_hand_intersections = len(hand_tree.overlap(invariant["head_tree"]))
+    palm_intersections = len(palm_tree.overlap(head_tree))
+    finger_intersections = len(contact_tree.overlap(head_tree))
+    full_hand_intersections = len(hand_tree.overlap(head_tree))
     head_evidence = combine_head_collision_evidence(
         palm_intersections=palm_intersections,
         finger_intersections=finger_intersections,
@@ -1914,9 +2256,9 @@ def _full_collision_evidence(mesh, geometry, invariant):
         signed_penetration_depth=head_penetration,
     )
     minimum_clearance, _torso_signed_penetration = _nearest_surface_evidence(
-        (vertices[index] for index in geometry["moving_vertices"]), invariant["torso_tree"]
+        (vertices[index] for index in geometry["moving_vertices"]), torso_tree
     )
-    torso_overlap_pairs = tuple(moving_tree.overlap(invariant["torso_tree"]))
+    torso_overlap_pairs = tuple(moving_tree.overlap(torso_tree))
     torso_attribution = attribute_collision_pairs(
         torso_overlap_pairs,
         geometry["moving_face_records"],
@@ -2013,8 +2355,8 @@ def _apply_static_candidate(
     _refresh_frame()
 
 
-def _capture_static_control_state(armature, controls) -> dict[str, object]:
-    return {
+def _capture_static_control_state(armature, controls, compensation_controls=None) -> dict[str, object]:
+    state = {
         "hand": tuple(float(value) for value in controls["hand"].location),
         "pole": tuple(float(value) for value in controls["pole"].location),
         "palm_basis": tuple(float(value) for row in controls["palm"].matrix_basis for value in row),
@@ -2023,9 +2365,16 @@ def _capture_static_control_state(armature, controls) -> dict[str, object]:
         "hand_twist_influence": float(armature["POC_hand_twist_influence"]),
         "wrist_influence": float(armature["POC_wrist_influence"]),
     }
+    if compensation_controls is not None:
+        state["compensation_influence"] = float(armature["POC_compensation_influence"])
+        state["compensation_quaternions"] = {
+            key: tuple(float(value) for value in control.rotation_quaternion)
+            for key, control in compensation_controls.items()
+        }
+    return state
 
 
-def _restore_static_control_state(armature, controls, state: dict[str, object]) -> None:
+def _restore_static_control_state(armature, controls, state: dict[str, object], compensation_controls=None) -> None:
     controls["hand"].location = Vector(state["hand"])
     controls["pole"].location = Vector(state["pole"])
     controls["palm"].matrix_basis = Matrix(tuple(
@@ -2036,6 +2385,11 @@ def _restore_static_control_state(armature, controls, state: dict[str, object]) 
     armature["POC_upper_twist_influence"] = float(state["upper_twist_influence"])
     armature["POC_hand_twist_influence"] = float(state["hand_twist_influence"])
     armature["POC_wrist_influence"] = float(state["wrist_influence"])
+    if compensation_controls is not None and "compensation_quaternions" in state:
+        armature["POC_compensation_influence"] = float(state["compensation_influence"])
+        for key, quaternion in state["compensation_quaternions"].items():
+            compensation_controls[key].rotation_mode = "QUATERNION"
+            compensation_controls[key].rotation_quaternion = Quaternion(quaternion)
     armature.update_tag()
     _refresh_frame()
 
@@ -2218,6 +2572,27 @@ def _surface_contact_evidence_bvh(mesh, geometry, chin_surface):
         "negative_signed_sample_count": negative_signed_samples,
         "contact_patch_count": sum(distance <= band.warning_distance for distance, *_rest in samples),
         "contact_sample_count": len(samples),
+    }
+
+
+def _current_chin_surface(mesh, armature, baseline_surface):
+    region = baseline_surface["region"]
+    region_vertices = _evaluated_world_vertex_subset(mesh, region["vertex_indices"])
+    tree = _local_bvh(region_vertices, region["triangles"])
+    chin_world = _calibrated_chin_points(armature)[2]
+    nearest = tree.find_nearest(chin_world)
+    if nearest is None:
+        raise RuntimeError("Unable to project the current head-tracked chin point")
+    location, normal, triangle_index, distance = nearest
+    return {
+        "region": region,
+        "band": baseline_surface["band"],
+        "tree": tree,
+        "calibrated_nearest_world": location,
+        "calibrated_nearest_normal": normal.normalized(),
+        "calibrated_surface_distance": float(distance),
+        "calibrated_nearest_triangle_index": int(triangle_index),
+        "chin_world": chin_world,
     }
 
 
@@ -2464,6 +2839,66 @@ def _render_candidates(
     }
 
 
+def _render_compensated_candidates(output_dir, armature, controls, ranked, context, vertices_by_candidate):
+    scene = bpy.context.scene
+    candidate_root = Path(output_dir) / STATIC_CANDIDATE_DIRECTORY
+    candidate_root.mkdir(parents=True, exist_ok=True)
+    combined_vertices = tuple(
+        vertex
+        for _state, record in ranked[:STATIC_RENDER_COUNT]
+        for vertex in vertices_by_candidate[record["source_candidate_id"]]
+    )
+    camera, center, distance, ortho_scale, bbox_min, bbox_max = _full_body_camera(
+        scene, combined_vertices
+    )
+    scene.render.resolution_x = RENDER_RESOLUTION
+    scene.render.resolution_y = RENDER_RESOLUTION
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    view_directions = {
+        "front": Vector((0.0, -1.0, 0.0)),
+        "left": Vector((1.0, 0.0, 0.0)),
+        "right": Vector((-1.0, 0.0, 0.0)),
+        "back": Vector((0.0, 1.0, 0.0)),
+    }
+    rendered = []
+    rendered_records = [record for _state, record in ranked[:STATIC_RENDER_COUNT]]
+    assign_render_ranks(rendered_records)
+    for (candidate, compensation), record in ranked[:STATIC_RENDER_COUNT]:
+        _apply_compensated_state(armature, controls, candidate, compensation, context)
+        rank = int(record["rank"])
+        directory = candidate_root / f"candidate_{rank:03d}"
+        directory.mkdir(parents=True, exist_ok=True)
+        record["render_directory"] = str(
+            Path(STATIC_CANDIDATE_DIRECTORY) / f"candidate_{rank:03d}"
+        )
+        record["renders"] = {}
+        for view, direction in view_directions.items():
+            camera.location = center + direction * distance
+            camera.rotation_euler = (center - camera.location).to_track_quat("-Z", "Y").to_euler()
+            output = directory / f"{view}.png"
+            scene.render.filepath = str(output)
+            bpy.ops.render.render(write_still=True)
+            relative = Path(STATIC_CANDIDATE_DIRECTORY) / f"candidate_{rank:03d}" / f"{view}.png"
+            record["renders"][view] = str(relative)
+            rendered.append(str(relative))
+    return {
+        "camera_name": camera.name,
+        "ortho_scale": float(ortho_scale),
+        "center": tuple(float(value) for value in center),
+        "bbox_min": tuple(float(value) for value in bbox_min),
+        "bbox_max": tuple(float(value) for value in bbox_max),
+        "resolution": (RENDER_RESOLUTION, RENDER_RESOLUTION),
+        "view_semantics": {
+            "front": "camera at -Y",
+            "left": "character-left view, camera at +X",
+            "right": "character-right view, camera at -X",
+            "back": "camera at +Y",
+        },
+        "rendered_files": rendered,
+    }
+
+
 def _render_diagnostic_candidate(output_dir, armature, controls, candidate, context, vertices):
     scene = bpy.context.scene
     _apply_context_candidate(armature, controls, candidate, context)
@@ -2514,11 +2949,25 @@ def _candidate_from_record(record) -> StaticCandidate:
     )
 
 
-def _prepare_static_context(armature, mesh, controls, geometry, math_module):
+def _compensation_from_record(record) -> UpperBodyCompensation:
+    parameters = record["parameters"]["compensation"]
+    return UpperBodyCompensation(
+        upper_chest_turn_deg=float(parameters["upper_chest_turn_deg"]),
+        upper_chest_lean_deg=float(parameters["upper_chest_lean_deg"]),
+        shoulder_retract_deg=float(parameters["shoulder_retract_deg"]),
+        shoulder_elevate_deg=float(parameters["shoulder_elevate_deg"]),
+        neck_toward_deg=float(parameters["neck_toward_deg"]),
+        head_toward_deg=float(parameters["head_toward_deg"]),
+    )
+
+
+def _prepare_static_context(armature, mesh, controls, geometry, math_module, compensation_controls=None):
     scene = bpy.context.scene
     scene.frame_set(VALIDATION_FRAME)
     _reset_static_controls_to_v16(armature, controls)
-    baseline_state = _capture_static_control_state(armature, controls)
+    if compensation_controls is not None:
+        _set_compensation_identity(compensation_controls)
+    baseline_state = _capture_static_control_state(armature, controls, compensation_controls)
     previous = _capture_pose_state(armature, VALIDATION_FRAME - 1)
     scene.frame_set(VALIDATION_FRAME)
     bpy.context.view_layer.update()
@@ -2542,7 +2991,19 @@ def _prepare_static_context(armature, mesh, controls, geometry, math_module):
     pole_axis = armature.matrix_world.to_3x3() @ Vector((0.0, 1.0, 0.0))
     pole_axis.normalize()
     pole_basis = pole_search_basis(shoulder, wrist, base_pole)
+    protected_channels = {
+        bone_name: tuple(
+            float(value) for row in armature.pose.bones[bone_name].matrix_basis for value in row
+        )
+        for bone_name in PROTECTED_LOCAL_BONES
+    }
+    compensation_axes = (
+        _derive_compensation_axes(armature, target_contact)
+        if compensation_controls is not None
+        else None
+    )
     return {
+        "armature": armature,
         "baseline_state": baseline_state,
         "previous": previous,
         "chin_rest": chin_rest,
@@ -2558,6 +3019,9 @@ def _prepare_static_context(armature, mesh, controls, geometry, math_module):
         "pole_axis": pole_axis,
         "pole_basis": pole_basis,
         "invariant_collision": _invariant_collision_context(baseline_vertices, geometry),
+        "compensation_controls": compensation_controls,
+        "compensation_axes": compensation_axes,
+        "protected_pose_hashes": protected_pose_hashes(protected_channels),
     }
 
 
@@ -2567,6 +3031,192 @@ def _apply_context_candidate(armature, controls, candidate, context):
         context["base_hand"], context["contact_delta"], context["base_pole"], context["pole_axis"],
         context["pole_basis"],
     )
+
+
+def _toward_target_local_axis(armature, bone_name: str, target_world):
+    origin = _pose_head_world(armature, bone_name)
+    target_direction = target_world - origin
+    if target_direction.length_squared <= 1e-12:
+        return Vector((1.0, 0.0, 0.0))
+    target_direction.normalize()
+    forward_world = armature.matrix_world.to_3x3() @ Vector((0.0, -1.0, 0.0))
+    forward_world.normalize()
+    axis_world = forward_world.cross(target_direction)
+    if axis_world.length_squared <= 1e-12:
+        axis_world = armature.matrix_world.to_3x3() @ Vector((1.0, 0.0, 0.0))
+    axis_world.normalize()
+    bone_world_rotation = _world_rotation(armature, bone_name)
+    local_axis = bone_world_rotation.inverted() @ axis_world
+    local_axis.normalize()
+    return local_axis
+
+
+def _rest_world_direction_to_local_axis(armature, bone_name: str, world_direction):
+    rest_rotation = (
+        armature.matrix_world.to_3x3()
+        @ armature.data.bones[bone_name].matrix_local.to_3x3()
+    ).normalized()
+    local_axis = rest_rotation.inverted() @ Vector(world_direction).normalized()
+    local_axis.normalize()
+    return local_axis
+
+
+def _derive_compensation_axes(armature, target_world):
+    model_rotation = armature.matrix_world.to_3x3().normalized()
+    model_right = model_rotation @ Vector((1.0, 0.0, 0.0))
+    model_forward = model_rotation @ Vector((0.0, -1.0, 0.0))
+    model_up = model_rotation @ Vector((0.0, 0.0, 1.0))
+    return {
+        "upper_chest_turn": _rest_world_direction_to_local_axis(
+            armature, "上半身2", model_up
+        ),
+        "upper_chest_lean": _rest_world_direction_to_local_axis(
+            armature, "上半身2", model_right
+        ),
+        "shoulder_retract": _rest_world_direction_to_local_axis(
+            armature, "右肩", model_up
+        ),
+        "shoulder_elevate": _rest_world_direction_to_local_axis(
+            armature, "右肩", model_forward
+        ),
+        "neck_toward": _toward_target_local_axis(armature, "首", target_world),
+        "head_toward": _toward_target_local_axis(armature, "頭", target_world),
+    }
+
+
+def _axis_angle_quaternion(axis, angle_degrees: float):
+    if abs(angle_degrees) <= 1e-12:
+        return Quaternion((1.0, 0.0, 0.0, 0.0))
+    return Quaternion(Vector(axis).normalized(), math.radians(angle_degrees))
+
+
+def _apply_upper_body_compensation(armature, context, compensation):
+    controls = context["compensation_controls"]
+    axes = context["compensation_axes"]
+    quaternions = {
+        "upper_chest": (
+            _axis_angle_quaternion(axes["upper_chest_turn"], compensation.upper_chest_turn_deg)
+            @ _axis_angle_quaternion(axes["upper_chest_lean"], compensation.upper_chest_lean_deg)
+        ).normalized(),
+        "right_shoulder": (
+            _axis_angle_quaternion(axes["shoulder_retract"], compensation.shoulder_retract_deg)
+            @ _axis_angle_quaternion(axes["shoulder_elevate"], compensation.shoulder_elevate_deg)
+        ).normalized(),
+        "neck": _axis_angle_quaternion(axes["neck_toward"], compensation.neck_toward_deg).normalized(),
+        "head": _axis_angle_quaternion(axes["head_toward"], compensation.head_toward_deg).normalized(),
+    }
+    for key, quaternion in quaternions.items():
+        controls[key].rotation_mode = "QUATERNION"
+        controls[key].rotation_quaternion = quaternion
+    armature.update_tag()
+    _refresh_frame()
+    angles = {
+        key: quaternion_angle_degrees(tuple(float(value) for value in quaternion))
+        for key, quaternion in quaternions.items()
+    }
+    return quaternions, angles
+
+
+def _current_protected_pose_hashes(armature):
+    channels = {
+        bone_name: tuple(
+            float(value) for row in armature.pose.bones[bone_name].matrix_basis for value in row
+        )
+        for bone_name in PROTECTED_LOCAL_BONES
+    }
+    return protected_pose_hashes(channels)
+
+
+def _compensation_parameter_record(compensation, quaternions, angles, context):
+    return {
+        "upper_chest_turn_deg": compensation.upper_chest_turn_deg,
+        "upper_chest_lean_deg": compensation.upper_chest_lean_deg,
+        "shoulder_retract_deg": compensation.shoulder_retract_deg,
+        "shoulder_elevate_deg": compensation.shoulder_elevate_deg,
+        "neck_toward_deg": compensation.neck_toward_deg,
+        "head_toward_deg": compensation.head_toward_deg,
+        "quaternions": {
+            key: tuple(float(value) for value in quaternion)
+            for key, quaternion in quaternions.items()
+        },
+        "quaternion_angles_deg": angles,
+        "local_axes": {
+            key: tuple(float(value) for value in axis)
+            for key, axis in context["compensation_axes"].items()
+        },
+    }
+
+
+def _apply_compensated_state(armature, controls, candidate, compensation, context):
+    _set_compensation_identity(context["compensation_controls"])
+    _apply_context_candidate(armature, controls, candidate, context)
+    return _apply_upper_body_compensation(armature, context, compensation)
+
+
+def _stage_d_record(
+    math_module,
+    arm_candidate,
+    arm_record,
+    compensation,
+    compensation_index,
+    quaternions,
+    angles,
+    measurements,
+    surface_metrics,
+    context,
+):
+    record = _stage_a_record(math_module, arm_candidate, measurements)
+    record["source_candidate_id"] = compensated_source_id(
+        arm_candidate.candidate_id, compensation_index
+    )
+    record["arm_source_candidate_id"] = arm_candidate.candidate_id
+    record["parameters"]["compensation"] = _compensation_parameter_record(
+        compensation, quaternions, angles, context
+    )
+    limit_reasons = validate_compensation_angles(angles)
+    protected_current = _current_protected_pose_hashes(context["armature"])
+    protected_reasons = compare_protected_pose_hashes(
+        context["protected_pose_hashes"], protected_current
+    )
+    record["metrics"].update({
+        "compensation_angles_deg": angles,
+        "protected_pose_hashes": protected_current,
+        "protected_pose_unchanged": not protected_reasons,
+        "collision_before_compensation": {
+            key: arm_record["metrics"].get(key)
+            for key in (
+                "head_collision_count",
+                "torso_penetration_count",
+                "torso_collision_attribution",
+                "minimum_clearance",
+                "surface_contact_distance",
+                "contact_patch_count",
+                "elbow_angle_deg",
+            )
+        },
+    })
+    if limit_reasons or protected_reasons:
+        record["valid"] = False
+        record["reasons"] = list(dict.fromkeys([
+            *record["reasons"], *limit_reasons, *protected_reasons,
+        ]))
+    _stage_b_update(math_module, record, surface_metrics, context["chin_surface"]["band"])
+    record["stage"] = "D"
+    return record
+
+
+def _stage_e_update(math_module, record, collision_metrics):
+    _stage_c_update(math_module, record, collision_metrics)
+    record["stage"] = "E"
+    record["metrics"]["collision_after_compensation"] = {
+        key: collision_metrics.get(key)
+        for key in (
+            "head_collision_count",
+            "torso_penetration_count",
+            "torso_collision_attribution",
+            "minimum_clearance",
+        )
+    }
 
 
 def _stage_b_update(math_module, record, surface_metrics, band):
@@ -2642,11 +3292,15 @@ def search_static(config: PocConfig) -> None:
     paths.temporary.mkdir(parents=True, exist_ok=False)
 
     armature, mesh = _validate_scene_objects()
+    compensation_controls = _ensure_compensation_controls(armature)
+    _validate_compensation_baseline(armature, compensation_controls)
     controls = _existing_controls()
     _validate_existing_poc(armature, controls)
     math_module = _load_motion_math()
     geometry = _mesh_geometry_sets(mesh)
-    context = _prepare_static_context(armature, mesh, controls, geometry, math_module)
+    context = _prepare_static_context(
+        armature, mesh, controls, geometry, math_module, compensation_controls
+    )
     stage_metrics = {}
     candidates = static_candidate_grid()
     evaluated = []
@@ -2735,7 +3389,97 @@ def search_static(config: PocConfig) -> None:
             )
             diagnostic_records[source_id] = diagnostic_record
 
-        if len(stage_c_valid) < STATIC_RENDER_COUNT:
+        seed_pool = list(stage_c_input)
+        seed_pool.extend(
+            (candidate_by_id[source_id], record)
+            for source_id, record in diagnostic_records.items()
+            if source_id in candidate_by_id
+        )
+        unique_seed_pool = {}
+        for candidate, record in seed_pool:
+            unique_seed_pool[candidate.candidate_id] = (candidate, record)
+        compensation_seeds = compensation_seed_candidates(
+            tuple(unique_seed_pool.values()), COMPENSATION_SEED_LIMIT
+        )
+
+        started = time.perf_counter()
+        stage_d_evaluated = []
+        compensation_grid = upper_body_compensation_grid()
+        for arm_candidate, arm_record in compensation_seeds:
+            for compensation_index, compensation in enumerate(compensation_grid):
+                quaternions, angles = _apply_compensated_state(
+                    armature, controls, arm_candidate, compensation, context
+                )
+                current_surface = _current_chin_surface(mesh, armature, context["chin_surface"])
+                measurements = _anatomy_measurements(
+                    armature, controls, context["previous"], current_surface["chin_world"]
+                )
+                surface_metrics = _surface_contact_evidence_bvh(
+                    mesh, geometry, current_surface
+                )
+                record = _stage_d_record(
+                    math_module,
+                    arm_candidate,
+                    arm_record,
+                    compensation,
+                    compensation_index,
+                    quaternions,
+                    angles,
+                    measurements,
+                    surface_metrics,
+                    context,
+                )
+                stage_d_evaluated.append(((arm_candidate, compensation), record))
+        stage_d_valid = compensation_stage_survivors(
+            stage_d_evaluated, COMPENSATION_STAGE_D_LIMIT
+        )
+        stage_metrics["D"] = {
+            "seed_count": len(compensation_seeds),
+            "grid_count_per_seed": len(compensation_grid),
+            "input_count": len(stage_d_evaluated),
+            "survivor_count": len(stage_d_valid),
+            "rejected_count": len(stage_d_evaluated) - len(stage_d_valid),
+            "duration_seconds": time.perf_counter() - started,
+        }
+        print("POC_STATIC_STAGE_D", stage_metrics["D"])
+
+        started = time.perf_counter()
+        stage_e_input = compensation_stage_survivors(
+            stage_d_valid, COMPENSATION_STAGE_E_LIMIT
+        )
+        compensated_vertices = {}
+        for (arm_candidate, compensation), record in stage_e_input:
+            _apply_compensated_state(
+                armature, controls, arm_candidate, compensation, context
+            )
+            collision_metrics, vertices = _full_collision_evidence(
+                mesh, geometry, context["invariant_collision"]
+            )
+            _stage_e_update(math_module, record, collision_metrics)
+            before = record["metrics"]["collision_before_compensation"]
+            record["metrics"]["compensation_improves_evidence"] = (
+                compensation_improves_evidence(
+                    before,
+                    record["metrics"],
+                    warning_distance=context["chin_surface"]["band"].warning_distance,
+                )
+                if before.get("torso_penetration_count") is not None
+                else False
+            )
+            compensated_vertices[record["source_candidate_id"]] = vertices
+        stage_e_valid = sorted(
+            (item for item in stage_e_input if item[1]["valid"]),
+            key=lambda item: (not item[1].get("selection_eligible", False), *_compensation_contact_rank(item)),
+        )
+        stage_metrics["E"] = {
+            "input_count": len(stage_e_input),
+            "survivor_count": len(stage_e_valid),
+            "rejected_count": len(stage_e_input) - len(stage_e_valid),
+            "duration_seconds": time.perf_counter() - started,
+        }
+        print("POC_STATIC_STAGE_E", stage_metrics["E"])
+
+        if len(stage_e_valid) < STATIC_RENDER_COUNT:
             print("POC_STATIC_STAGE_C_REJECTIONS", [
                 {
                     "candidate": record["source_candidate_id"],
@@ -2750,31 +3494,40 @@ def search_static(config: PocConfig) -> None:
                 for _candidate, record in stage_c_input
             ])
         eligible_count = sum(
-            record.get("selection_eligible", False) for _candidate, record in stage_c_valid
+            record.get("selection_eligible", False) for _state, record in stage_e_valid
         )
         policy = static_search_policy(
-            collision_clear_count=len(stage_c_valid),
+            collision_clear_count=len(stage_e_valid),
             selection_eligible_count=eligible_count,
         )
-        render_ranked = stage_c_valid[: int(policy["ranked_render_count"])]
+        eligible_ranked = [
+            item for item in stage_e_valid if item[1].get("selection_eligible", False)
+        ]
+        render_ranked = eligible_ranked[: int(policy["ranked_render_count"])]
         render_evidence = (
-            _render_candidates(
-                paths.temporary, armature, controls, render_ranked,
-                context["base_hand"], context["contact_delta"], context["base_pole"], context["pole_axis"],
-                context["pole_basis"],
-                vertices_by_candidate,
+            _render_compensated_candidates(
+                paths.temporary,
+                armature,
+                controls,
+                render_ranked,
+                context,
+                compensated_vertices,
             )
             if render_ranked
             else {"rendered_files": [], "reason": "No selection-eligible collision-clear candidate set"}
         )
-        _restore_static_control_state(armature, controls, context["baseline_state"])
+        _restore_static_control_state(
+            armature, controls, context["baseline_state"], compensation_controls
+        )
         restoration_differences = compare_static_state(
-            context["baseline_state"], _capture_static_control_state(armature, controls), 1e-6
+            context["baseline_state"],
+            _capture_static_control_state(armature, controls, compensation_controls),
+            1e-6,
         )
         if restoration_differences:
             raise RuntimeError("Static search failed to restore baseline controls: " + "; ".join(restoration_differences))
 
-        rendered_records = [record for _candidate, record in render_ranked]
+        rendered_records = [record for _state, record in render_ranked]
         chin_surface = context["chin_surface"]
         metrics = {
             "mode": "search-static",
@@ -2783,7 +3536,9 @@ def search_static(config: PocConfig) -> None:
             "frame": VALIDATION_FRAME,
             "source_blend": str(config.source_blend),
             "output_blend_unchanged": str(config.output_blend),
-            "candidate_count": len(candidates),
+            "candidate_count": len(candidates) + len(stage_d_evaluated),
+            "arm_candidate_count": len(candidates),
+            "compensation_candidate_count": len(stage_d_evaluated),
             "rendered_count": len(rendered_records),
             "selection_eligible_count": eligible_count,
             "stage_metrics": stage_metrics,
@@ -2823,10 +3578,24 @@ def search_static(config: PocConfig) -> None:
                 "legacy_candidate_count": sum(candidate.search_family == "legacy_scalar" for candidate in candidates),
                 "pole_3d_candidate_count": sum(candidate.search_family == "pole_3d" for candidate in candidates),
             },
+            "upper_body_compensation": {
+                "seed_source_ids": [
+                    candidate.candidate_id for candidate, _record in compensation_seeds
+                ],
+                "grid_count": len(compensation_grid),
+                "limits_degrees": {
+                    "upper_chest": UPPER_CHEST_MAX_DEG,
+                    "right_shoulder": RIGHT_SHOULDER_MAX_DEG,
+                    "neck_head_combined": NECK_HEAD_COMBINED_MAX_DEG,
+                },
+                "constraint_space": "local bone-space quaternion delta",
+                "protected_baseline_hashes": context["protected_pose_hashes"],
+            },
             "render_evidence": render_evidence,
             "diagnostics": diagnostic_records,
             "ranked_candidates": rendered_records,
             "candidates": [record for _candidate, record in evaluated],
+            "compensation_candidates": [record for _state, record in stage_d_evaluated],
         }
         temporary_metrics = paths.temporary / STATIC_METRICS_NAME
         temporary_metrics.write_text(
@@ -2842,13 +3611,15 @@ def search_static(config: PocConfig) -> None:
         paths.temporary.rename(paths.final)
         print("POC_STATIC_SEARCH_COMPLETE", {
             "run_id": config.run_id,
-            "evaluated": len(candidates),
+            "evaluated": len(candidates) + len(stage_d_evaluated),
             "rendered": len(rendered_records),
             "metrics": str(paths.metrics),
             "selection_status": policy["selection_status"],
         })
     finally:
-        _restore_static_control_state(armature, controls, context["baseline_state"])
+        _restore_static_control_state(
+            armature, controls, context["baseline_state"], compensation_controls
+        )
 
 
 def select_static(config: PocConfig) -> None:
@@ -2860,27 +3631,46 @@ def select_static(config: PocConfig) -> None:
         raise RuntimeError(f"Blender must open the existing POC blend: {config.source_blend}")
     stored_run = json.loads(config.run_metrics_path.read_text(encoding="utf-8"))
     stored_record = next(
-        (record for record in stored_run["candidates"] if record["source_candidate_id"] == config.source_candidate_id),
+        (
+            record
+            for record in stored_run.get("compensation_candidates", stored_run["candidates"])
+            if record["source_candidate_id"] == config.source_candidate_id
+        ),
         None,
     )
     if (
         stored_record is None
-        or stored_record.get("stage") != "C"
+        or stored_record.get("stage") not in ("C", "E")
         or not stored_record.get("valid")
         or not stored_record.get("selection_eligible")
     ):
         raise ValueError(f"Reviewed source candidate is not selection-eligible: {config.source_candidate_id}")
 
     armature, mesh = _validate_scene_objects()
+    compensation_controls = _ensure_compensation_controls(armature)
+    _validate_compensation_baseline(armature, compensation_controls)
     controls = _existing_controls()
     _validate_existing_poc(armature, controls)
     math_module = _load_motion_math()
     geometry = _mesh_geometry_sets(mesh)
-    context = _prepare_static_context(armature, mesh, controls, geometry, math_module)
+    context = _prepare_static_context(
+        armature, mesh, controls, geometry, math_module, compensation_controls
+    )
     candidate = _candidate_from_record(stored_record)
     _apply_context_candidate(armature, controls, candidate, context)
-    measured = _anatomy_measurements(armature, controls, context["previous"], context["chin_world"])
-    measured.update(_surface_contact_evidence_bvh(mesh, geometry, context["chin_surface"]))
+    if stored_record.get("stage") == "E":
+        compensation = _compensation_from_record(stored_record)
+        _apply_upper_body_compensation(armature, context, compensation)
+        current_surface = _current_chin_surface(mesh, armature, context["chin_surface"])
+    else:
+        current_surface = context["chin_surface"]
+    measured = _anatomy_measurements(
+        armature,
+        controls,
+        context["previous"],
+        current_surface.get("chin_world", context["chin_world"]),
+    )
+    measured.update(_surface_contact_evidence_bvh(mesh, geometry, current_surface))
     collision_metrics, _vertices = _full_collision_evidence(mesh, geometry, context["invariant_collision"])
     measured.update(collision_metrics)
     differences = compare_selected_metrics(stored_record["metrics"], measured)
@@ -2921,6 +3711,8 @@ def build_setup(config: PocConfig) -> None:
     _create_proxy_chain(armature)
     controls = _create_controls(armature)
     _create_constraints(armature, controls)
+    compensation_controls = _ensure_compensation_controls(armature)
+    _validate_compensation_baseline(armature, compensation_controls)
     _validate_setup(armature, action, controls)
 
     config.output_dir.mkdir(parents=True, exist_ok=True)

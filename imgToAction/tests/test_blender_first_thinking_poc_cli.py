@@ -1,4 +1,5 @@
 import importlib.util
+import math
 from pathlib import Path
 import shutil
 import sys
@@ -164,6 +165,210 @@ def test_palm_control_drives_proxy_hand_as_a_local_delta():
         "mix_mode": "REPLACE",
     }
     assert 0.0 < tool.ENABLED_DELTA_LIMIT_DEG <= 10.0
+
+
+def test_upper_body_compensation_controls_use_local_quaternion_delta_constraints():
+    tool = load_tool()
+
+    assert tool.COMPENSATION_CONTROL_PARENT_SPACE == "ARMATURE_LOCAL"
+    assert tool.COMPENSATION_CONTROL_NAMES == {
+        "upper_chest": "POC_上半身2_DELTA",
+        "right_shoulder": "POC_右肩_DELTA",
+        "neck": "POC_首_DELTA",
+        "head": "POC_頭_DELTA",
+    }
+    assert tool.COMPENSATION_BONES == {
+        "upper_chest": "上半身2",
+        "right_shoulder": "右肩",
+        "neck": "首",
+        "head": "頭",
+    }
+    assert all(spec["owner_space"] == "LOCAL" for spec in tool.COMPENSATION_CONSTRAINT_SPECS.values())
+    assert all(spec["target_space"] == "LOCAL" for spec in tool.COMPENSATION_CONSTRAINT_SPECS.values())
+    assert all(spec["mix_mode"] == "BEFORE" for spec in tool.COMPENSATION_CONSTRAINT_SPECS.values())
+
+
+def test_compensation_quaternion_limits_are_hard_and_combined_for_head_neck():
+    tool = load_tool()
+
+    assert tool.UPPER_CHEST_MAX_DEG == 4.0
+    assert tool.RIGHT_SHOULDER_MAX_DEG == 3.0
+    assert tool.NECK_HEAD_COMBINED_MAX_DEG == 5.0
+    assert tool.quaternion_angle_degrees((math.cos(math.radians(2)), math.sin(math.radians(2)), 0, 0)) == pytest.approx(4.0)
+    assert tool.validate_compensation_angles({
+        "upper_chest": 4.0,
+        "right_shoulder": 3.0,
+        "neck": 2.0,
+        "head": 3.0,
+    }) == ()
+    assert any("upper_chest" in reason for reason in tool.validate_compensation_angles({
+        "upper_chest": 4.01,
+        "right_shoulder": 0.0,
+        "neck": 0.0,
+        "head": 0.0,
+    }))
+    assert any("neck/head" in reason for reason in tool.validate_compensation_angles({
+        "upper_chest": 0.0,
+        "right_shoulder": 0.0,
+        "neck": 2.1,
+        "head": 3.0,
+    }))
+
+
+def test_compensation_grid_and_stages_are_deterministic_and_bounded():
+    tool = load_tool()
+
+    grid = tool.upper_body_compensation_grid()
+
+    assert grid == tool.upper_body_compensation_grid()
+    assert 20 <= len(grid) <= 100
+    assert grid[0].is_identity
+    assert max(abs(item.upper_chest_turn_deg) for item in grid) <= tool.UPPER_CHEST_MAX_DEG
+    assert max(abs(item.upper_chest_lean_deg) for item in grid) <= tool.UPPER_CHEST_MAX_DEG
+    assert max(abs(item.shoulder_retract_deg) for item in grid) <= tool.RIGHT_SHOULDER_MAX_DEG
+    assert max(item.neck_toward_deg + item.head_toward_deg for item in grid) <= tool.NECK_HEAD_COMBINED_MAX_DEG
+    assert 6 <= tool.COMPENSATION_STAGE_E_LIMIT <= tool.COMPENSATION_STAGE_D_LIMIT < len(grid) * tool.COMPENSATION_SEED_LIMIT
+
+
+def test_protected_local_pose_hashes_detect_any_channel_change():
+    tool = load_tool()
+    baseline = {
+        "下半身": tuple(float(index) for index in range(16)),
+        "左腕": tuple(float(index) / 10 for index in range(16)),
+    }
+
+    expected = tool.protected_pose_hashes(baseline)
+    unchanged = tool.protected_pose_hashes(dict(baseline))
+    changed_pose = dict(baseline)
+    changed_pose["左腕"] = (*baseline["左腕"][:-1], baseline["左腕"][-1] + 1e-4)
+
+    assert tool.compare_protected_pose_hashes(expected, unchanged) == ()
+    assert any("左腕" in reason for reason in tool.compare_protected_pose_hashes(
+        expected, tool.protected_pose_hashes(changed_pose)
+    ))
+
+
+def test_compensation_improvement_requires_contact_anatomy_and_lower_collision_count():
+    tool = load_tool()
+    before = {
+        "surface_contact_distance": 0.025,
+        "contact_patch_count": 8,
+        "elbow_angle_deg": 58.0,
+        "head_collision_count": 0,
+        "torso_penetration_count": 40,
+    }
+    improved = {**before, "torso_penetration_count": 0}
+    lost_contact = {**improved, "contact_patch_count": 0}
+
+    assert tool.compensation_improves_evidence(before, improved, warning_distance=0.03) is True
+    assert tool.compensation_improves_evidence(before, lost_contact, warning_distance=0.03) is False
+
+
+def test_compensation_seed_selection_keeps_near_contact_colliding_candidates():
+    tool = load_tool()
+    candidates = tuple(
+        tool.StaticCandidate(
+            f"candidate_{index}", 1.0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+            0.0, (0.25, 0.5, 0.25),
+        )
+        for index in range(4)
+    )
+    records = [
+        (candidates[0], {"source_candidate_id": "candidate_0", "score": 3.0, "metrics": {
+            "surface_contact_distance": 0.021, "contact_patch_count": 35,
+            "elbow_angle_deg": 46.0, "torso_penetration_count": 44,
+        }}),
+        (candidates[1], {"source_candidate_id": "candidate_1", "score": 1.0, "metrics": {
+            "surface_contact_distance": 0.042, "contact_patch_count": 0,
+            "elbow_angle_deg": 60.0, "torso_penetration_count": 0,
+        }}),
+        (candidates[2], {"source_candidate_id": "candidate_2", "score": 2.0, "metrics": {
+            "surface_contact_distance": 0.029, "contact_patch_count": 6,
+            "elbow_angle_deg": 55.0, "torso_penetration_count": 118,
+        }}),
+        (candidates[3], {"source_candidate_id": "candidate_3", "score": 0.5, "metrics": {
+            "surface_contact_distance": 0.025, "contact_patch_count": 0,
+            "elbow_angle_deg": 58.0, "torso_penetration_count": 0,
+        }}),
+    ]
+
+    seeds = tool.compensation_seed_candidates(records, limit=3)
+
+    assert [candidate.candidate_id for candidate, _record in seeds] == [
+        "candidate_2", "candidate_0", "candidate_3",
+    ]
+
+
+def test_compensation_stage_survivors_are_bounded_and_use_stable_source_ids():
+    tool = load_tool()
+    compensation = tool.upper_body_compensation_grid()[1]
+    assert tool.compensated_source_id("pole3d_0227", 1) == "pole3d_0227__comp_001"
+
+    records = [
+        (None, {"source_candidate_id": "a", "valid": True, "score": 9.0, "metrics": {
+            "surface_contact_distance": 0.02, "contact_patch_count": 5, "elbow_angle_deg": 60.0,
+        }}),
+        (None, {"source_candidate_id": "b", "valid": True, "score": 1.0, "metrics": {
+            "surface_contact_distance": 0.02, "contact_patch_count": 0, "elbow_angle_deg": 60.0,
+        }}),
+        (None, {"source_candidate_id": "c", "valid": True, "score": 2.0, "metrics": {
+            "surface_contact_distance": 0.02, "contact_patch_count": 4, "elbow_angle_deg": 54.0,
+        }}),
+    ]
+
+    survivors = tool.compensation_stage_survivors(records, limit=2)
+
+    assert [record["source_candidate_id"] for _state, record in survivors] == ["a", "c"]
+    assert compensation.is_identity is False
+
+
+def test_compensation_stage_survivors_preserve_each_arm_seed():
+    tool = load_tool()
+    records = []
+    for arm_id, scores in (("arm_a", (1.0, 2.0, 3.0)), ("arm_b", (100.0,))):
+        for index, score in enumerate(scores):
+            records.append((None, {
+                "source_candidate_id": f"{arm_id}_{index}",
+                "arm_source_candidate_id": arm_id,
+                "valid": True,
+                "score": score,
+                "metrics": {
+                    "surface_contact_distance": 0.02,
+                    "contact_patch_count": 5,
+                    "elbow_angle_deg": 60.0,
+                },
+            }))
+
+    survivors = tool.compensation_stage_survivors(records, limit=2)
+
+    assert {record["arm_source_candidate_id"] for _state, record in survivors} == {
+        "arm_a", "arm_b",
+    }
+
+
+def test_compensation_stage_survivors_round_robin_seed_depth():
+    tool = load_tool()
+    records = []
+    for arm_id, base_score in (("arm_a", 0.0), ("arm_b", 100.0)):
+        for index in range(3):
+            records.append((None, {
+                "source_candidate_id": f"{arm_id}_{index}",
+                "arm_source_candidate_id": arm_id,
+                "valid": True,
+                "score": base_score + index,
+                "metrics": {
+                    "surface_contact_distance": 0.02,
+                    "contact_patch_count": 5,
+                    "elbow_angle_deg": 60.0,
+                },
+            }))
+
+    survivors = tool.compensation_stage_survivors(records, limit=4)
+
+    counts = {arm_id: 0 for arm_id in ("arm_a", "arm_b")}
+    for _state, record in survivors:
+        counts[record["arm_source_candidate_id"]] += 1
+    assert counts == {"arm_a": 2, "arm_b": 2}
 
 
 def test_behavior_diagnostics_have_nonzero_bounded_thresholds():
@@ -540,12 +745,14 @@ def test_static_search_policy_promotes_blocked_diagnostics_without_ranked_render
     tool = load_tool()
 
     blocked = tool.static_search_policy(collision_clear_count=0, selection_eligible_count=0)
-    review = tool.static_search_policy(collision_clear_count=8, selection_eligible_count=1)
+    insufficient = tool.static_search_policy(collision_clear_count=8, selection_eligible_count=1)
+    review = tool.static_search_policy(collision_clear_count=8, selection_eligible_count=6)
 
     assert blocked == {
         "selection_status": "BLOCKED_NEEDS_CONTEXT",
         "ranked_render_count": 0,
     }
+    assert insufficient == blocked
     assert review == {
         "selection_status": "NEEDS_CONTEXT",
         "ranked_render_count": 6,
