@@ -312,6 +312,16 @@ def test_rank_source_mapping_is_stable_and_rejects_gaps():
         tool.rank_source_mapping([{"rank": 2, "source_candidate_id": "candidate_003"}])
 
 
+def test_render_rank_assignment_is_contiguous_and_mutates_only_rank():
+    tool = load_tool()
+    records = [{"source_candidate_id": "candidate_010"}, {"source_candidate_id": "candidate_003"}]
+
+    tool.assign_render_ranks(records)
+
+    assert [record["rank"] for record in records] == [1, 2]
+    assert [record["source_candidate_id"] for record in records] == ["candidate_010", "candidate_003"]
+
+
 def test_candidate_state_and_remeasurement_comparisons_are_explicit():
     tool = load_tool()
     baseline = {"hand": (1.0, 2.0, 3.0), "enabled": 0.0}
@@ -338,6 +348,9 @@ def test_static_selection_requires_contact_patch_margin_and_clear_geometry():
         "surface_intersection_count": 0,
         "head_collision_count": 0,
         "torso_penetration_count": 0,
+        "minimum_clearance": tool._load_motion_math().CLEARANCE_COMFORT_DISTANCE,
+        "continuity_distance": tool._load_motion_math().CONTINUITY_COMFORT_DISTANCE,
+        "elbow_angle_deg": 60.0,
     }
 
     assert tool.static_selection_eligibility(metrics, warning_distance=0.03) == ()
@@ -346,6 +359,12 @@ def test_static_selection_requires_contact_patch_margin_and_clear_geometry():
     metrics["contact_patch_count"] = 3
     metrics["surface_contact_distance"] = 0.031
     assert any("warning" in reason for reason in tool.static_selection_eligibility(metrics, 0.03))
+    metrics["surface_contact_distance"] = 0.02
+    metrics["minimum_clearance"] = 0.001
+    assert any("clearance" in reason.lower() for reason in tool.static_selection_eligibility(metrics, 0.03))
+    metrics["minimum_clearance"] = tool._load_motion_math().CLEARANCE_COMFORT_DISTANCE
+    metrics["elbow_angle_deg"] = 50.0
+    assert any("elbow" in reason.lower() for reason in tool.static_selection_eligibility(metrics, 0.03))
 
 
 def test_lower_chin_region_uses_bounded_local_head_topology():
@@ -414,13 +433,87 @@ def test_static_candidate_grid_is_deterministic_bounded_and_complete():
     assert first == second
     assert len(first) >= 900
     assert len({candidate.candidate_id for candidate in first}) == len(first)
-    assert all(candidate.candidate_id == f"candidate_{index:03d}" for index, candidate in enumerate(first, 1))
+    assert all(
+        candidate.candidate_id == f"candidate_{index:03d}"
+        for index, candidate in enumerate(first[:4860], 1)
+    )
     assert max(candidate.alignment_factor for candidate in first) == pytest.approx(1.0)
     assert min(candidate.alignment_factor for candidate in first) <= 0.4
     assert all(max(abs(value) for value in candidate.hand_offset) <= 0.04 for candidate in first)
     assert max(max(abs(value) for value in candidate.palm_euler_deg) for candidate in first) >= 35.0
     assert all(abs(candidate.pole_offset) <= 0.18 for candidate in first)
     assert all(sum(candidate.twist_influences) == pytest.approx(1.0) for candidate in first)
+
+
+def test_pole_basis_is_chain_relative_orthonormal_and_semantically_oriented():
+    tool = load_tool()
+
+    basis = tool.pole_search_basis(
+        shoulder=(0.0, 0.0, 0.0),
+        wrist=(1.0, 0.2, 0.1),
+        base_pole=(0.2, -1.0, 0.4),
+    )
+
+    axes = tuple(basis[name] for name in ("outward_lateral", "forward_depth", "vertical"))
+    assert all(sum(value * value for value in axis) == pytest.approx(1.0) for axis in axes)
+    assert sum(a * b for a, b in zip(axes[0], axes[1], strict=True)) == pytest.approx(0.0, abs=1e-6)
+    assert sum(a * b for a, b in zip(axes[0], axes[2], strict=True)) == pytest.approx(0.0, abs=1e-6)
+    assert sum(a * b for a, b in zip(axes[1], axes[2], strict=True)) == pytest.approx(0.0, abs=1e-6)
+    assert basis["derivation"] == "shoulder_wrist_chain"
+
+
+def test_pole_offset_grid_is_bounded_3d_and_preserves_legacy_candidates():
+    tool = load_tool()
+
+    offsets = tool.pole_offset_grid()
+    candidates = tool.static_candidate_grid()
+
+    assert offsets == tool.pole_offset_grid()
+    assert (0.0, 0.0, 0.0) in offsets
+    assert 7 <= len(offsets) <= 20
+    assert any(offset[0] != 0.0 for offset in offsets)
+    assert any(offset[1] != 0.0 for offset in offsets)
+    assert any(offset[2] != 0.0 for offset in offsets)
+    assert all(max(abs(value) for value in offset) <= 0.18 for offset in offsets)
+    assert max(max(abs(value) for value in offset) for offset in offsets) == pytest.approx(0.16)
+    assert candidates[4329].candidate_id == "candidate_4330"
+    assert candidates[4329].search_family == "legacy_scalar"
+    assert any(candidate.search_family == "pole_3d" for candidate in candidates)
+    assert any(
+        candidate.search_family == "pole_3d"
+        and candidate.alignment_factor == pytest.approx(0.65)
+        and candidate.hand_offset == (0.025, 0.0, -0.015)
+        for candidate in candidates
+    )
+    assert len(candidates) < 7000
+
+
+def test_collision_attribution_reports_regions_polygons_points_and_bbox():
+    tool = load_tool()
+    moving = (
+        {"polygon_index": 10, "vertices": (0, 1, 2), "region": "forearm", "group": "右ひじ"},
+        {"polygon_index": 11, "vertices": (3, 4, 5), "region": "hand", "group": "右手首"},
+    )
+    torso = (
+        {"polygon_index": 20, "vertices": (6, 7, 8), "region": "torso", "group": "上半身2"},
+    )
+    vertices = (
+        (0.0, 0.0, 0.0), (0.1, 0.0, 0.0), (0.0, 0.1, 0.0),
+        (1.0, 1.0, 1.0), (1.1, 1.0, 1.0), (1.0, 1.1, 1.0),
+        (0.02, 0.02, 0.0), (0.12, 0.02, 0.0), (0.02, 0.12, 0.0),
+    )
+
+    evidence = tool.attribute_collision_pairs(((0, 0),), moving, torso, vertices)
+
+    assert evidence["counts_by_moving_region"] == {"forearm": 1}
+    assert evidence["counts_by_moving_group"] == {"右ひじ": 1}
+    assert evidence["counts_by_torso_group"] == {"上半身2": 1}
+    assert evidence["counts_by_pair"] == {"forearm:右ひじ -> torso:上半身2": 1}
+    assert evidence["representative_pairs"][0]["moving_polygon_index"] == 10
+    assert evidence["representative_pairs"][0]["torso_polygon_index"] == 20
+    assert evidence["representative_pairs"][0]["moving_world_point"] == pytest.approx((1 / 30, 1 / 30, 0.0))
+    assert evidence["overlap_bbox"]["min"] == pytest.approx((0.0, 0.0, 0.0))
+    assert evidence["overlap_bbox"]["max"] == pytest.approx((0.12, 0.12, 0.0))
 
 
 def test_candidate_render_names_cover_top_six_full_body_views():
@@ -441,6 +534,22 @@ def test_render_artifact_paths_include_candidate_root(cli_tmp_path):
 
     assert paths[0] == run_dir / "candidates" / "candidate_001" / "front.png"
     assert paths[-1] == run_dir / "candidates" / "candidate_001" / "back.png"
+
+
+def test_static_search_policy_promotes_blocked_diagnostics_without_ranked_renders():
+    tool = load_tool()
+
+    blocked = tool.static_search_policy(collision_clear_count=0, selection_eligible_count=0)
+    review = tool.static_search_policy(collision_clear_count=8, selection_eligible_count=1)
+
+    assert blocked == {
+        "selection_status": "BLOCKED_NEEDS_CONTEXT",
+        "ranked_render_count": 0,
+    }
+    assert review == {
+        "selection_status": "NEEDS_CONTEXT",
+        "ranked_render_count": 6,
+    }
 
 
 def test_collision_face_classification_rejects_partial_and_adjacent_faces():
