@@ -396,18 +396,18 @@ def test_semantic_finger_presets_are_bounded_and_progressively_relaxed():
     assert presets == tool.semantic_finger_presets()
     assert {preset.name for preset in presets} >= {"support_soft", "support_reach"}
     reach = next(preset for preset in presets if preset.name == "support_reach")
-    assert all(value < 0.0 for value in reach.joint_deltas_deg["右人指１"])
+    assert all(value < 0.0 for value in reach.joint_targets_deg["右人指１"])
     for preset in presets:
-        assert tool.validate_finger_pose(preset.joint_deltas_deg) == ()
-        middle = -preset.joint_deltas_deg["右中指１"][0]
-        ring = -preset.joint_deltas_deg["右薬指１"][0]
-        little = -preset.joint_deltas_deg["右小指１"][0]
+        assert tool.validate_absolute_finger_targets(preset.joint_targets_deg) == ()
+        middle = -preset.joint_targets_deg["右中指１"][0]
+        ring = -preset.joint_targets_deg["右薬指１"][0]
+        little = -preset.joint_targets_deg["右小指１"][0]
         assert middle <= ring <= little
 
 
 def test_finger_pose_limits_reject_reverse_claw_and_excessive_spread():
     tool = load_tool()
-    baseline = dict(tool.semantic_finger_presets()[0].joint_deltas_deg)
+    baseline = dict(tool.semantic_finger_presets()[0].joint_targets_deg)
 
     reverse = {**baseline, "右人指３": (35.0, 0.0, 0.0)}
     claw = {
@@ -418,9 +418,46 @@ def test_finger_pose_limits_reject_reverse_claw_and_excessive_spread():
     }
     spread = {**baseline, "右人指１": (0.0, 0.0, 16.0)}
 
-    assert any("reverse" in reason for reason in tool.validate_finger_pose(reverse))
-    assert any("claw" in reason for reason in tool.validate_finger_pose(claw))
-    assert any("spread" in reason for reason in tool.validate_finger_pose(spread))
+    assert any("reverse" in reason for reason in tool.validate_absolute_finger_targets(reverse))
+    assert any("claw" in reason for reason in tool.validate_absolute_finger_targets(claw))
+    assert any("spread" in reason for reason in tool.validate_absolute_finger_targets(spread))
+
+
+def test_absolute_finger_target_replaces_180_degree_v16_curl():
+    tool = load_tool()
+    baseline = (0.0, 1.0, 0.0, 0.0)
+    half_angle = math.radians(-10.0) / 2.0
+    target = (math.cos(half_angle), math.sin(half_angle), 0.0, 0.0)
+
+    delta = tool.absolute_local_control_delta(target, baseline)
+    final = tool.compose_before_local_delta(delta, baseline)
+
+    assert tool.quaternion_distance_degrees(final, target) == pytest.approx(0.0, abs=1e-6)
+    assert tool.quaternion_angle_degrees(delta) > 150.0
+
+
+def test_absolute_finger_composition_order_is_target_times_baseline_inverse():
+    tool = load_tool()
+    baseline = (math.cos(math.radians(45)), math.sin(math.radians(45)), 0.0, 0.0)
+    target = (math.cos(math.radians(10)), 0.0, math.sin(math.radians(10)), 0.0)
+
+    delta = tool.absolute_local_control_delta(target, baseline)
+
+    assert tool.quaternion_distance_degrees(
+        tool.compose_before_local_delta(delta, baseline), target
+    ) == pytest.approx(0.0, abs=1e-6)
+    assert tool.quaternion_distance_degrees(
+        tool.compose_before_local_delta(baseline, delta), target
+    ) > 1.0
+
+
+def test_final_absolute_angle_validation_ignores_large_corrective_delta():
+    tool = load_tool()
+    targets = dict(tool.semantic_finger_presets()[0].joint_targets_deg)
+    assert tool.validate_absolute_finger_targets(targets) == ()
+
+    fist_target = {**targets, "右薬指１": (-180.0, 0.0, 0.0)}
+    assert any("absolute flex" in reason for reason in tool.validate_absolute_finger_targets(fist_target))
 
 
 def test_finger_contact_improvement_requires_thumb_or_index_patch_without_collision():
@@ -455,6 +492,97 @@ def test_semantic_finger_search_grid_is_bounded():
 
     assert count == 216
     assert 6 <= tool.FINGER_STAGE_SURVIVOR_LIMIT <= 48
+
+
+def test_absolute_finger_stage_retains_contact_only_failures_for_refinement():
+    tool = load_tool()
+    records = [
+        (("state_a",), {
+            "arm_source_candidate_id": "candidate_764",
+            "finger_stage_anatomy_valid": True,
+            "valid": False,
+            "score": 5.0,
+            "source_candidate_id": "absolute_near_miss",
+            "metrics": {
+                "surface_contact_distance": 0.041,
+                "thumb_index_contact_patch_count": 0,
+            },
+        }),
+        (("state_b",), {
+            "arm_source_candidate_id": "candidate_764",
+            "finger_stage_anatomy_valid": False,
+            "valid": False,
+            "score": 1.0,
+            "source_candidate_id": "anatomy_failure",
+            "metrics": {
+                "surface_contact_distance": 0.020,
+                "thumb_index_contact_patch_count": 8,
+            },
+        }),
+    ]
+
+    survivors = tool.finger_stage_survivors(
+        records, seed_ids=("candidate_764",), limit=8
+    )
+
+    assert [record["source_candidate_id"] for _state, record in survivors] == [
+        "absolute_near_miss"
+    ]
+
+
+def test_absolute_finger_stage_diversifies_palm_orientations():
+    tool = load_tool()
+    records = []
+    for palm_index, distance in enumerate((0.030, 0.060)):
+        for rank in range(2):
+            records.append(((palm_index, rank), {
+                "arm_source_candidate_id": "candidate_764",
+                "finger_stage_anatomy_valid": True,
+                "score": distance + rank,
+                "source_candidate_id": f"palm_{palm_index}_{rank}",
+                "parameters": {"palm_refinement_deg": (palm_index * 3.0, 0.0, 0.0)},
+                "metrics": {
+                    "surface_contact_distance": distance + rank * 0.001,
+                    "thumb_index_contact_patch_count": 0,
+                },
+            }))
+
+    survivors = tool.finger_stage_survivors(
+        records, seed_ids=("candidate_764",), limit=2
+    )
+
+    assert {record["parameters"]["palm_refinement_deg"] for _state, record in survivors} == {
+        (0.0, 0.0, 0.0),
+        (3.0, 0.0, 0.0),
+    }
+
+
+def test_semantic_diagnostic_falls_back_to_best_absolute_candidate():
+    tool = load_tool()
+    records = [
+        (("far",), {
+            "source_candidate_id": "absolute_far",
+            "score": 2.0,
+            "metrics": {
+                "surface_contact_distance": 0.050,
+                "thumb_index_contact_patch_count": 0,
+            },
+        }),
+        (("near",), {
+            "source_candidate_id": "absolute_near",
+            "score": 3.0,
+            "metrics": {
+                "surface_contact_distance": 0.035,
+                "thumb_index_contact_patch_count": 2,
+            },
+        }),
+    ]
+
+    _state, record = tool.semantic_diagnostic_candidate(
+        records, preferred_source_id="legacy_additive_candidate"
+    )
+
+    assert record["source_candidate_id"] == "absolute_near"
 
 
 def test_finger_reach_diagnostic_reports_geometry_shortfall():
@@ -502,7 +630,7 @@ def test_combined_dual_contact_refinement_is_bounded_by_head_and_finger_limits()
     assert 100 <= len(refinements) <= 400
     assert refinements == tool.dual_contact_refinement_grid()
     assert all(item.neck_toward_deg + item.head_toward_deg <= 5.0 for item in refinements)
-    assert all(max(abs(value) for delta in item.thumb_deltas_deg.values() for value in delta) <= 40.0 for item in refinements)
+    assert all(max(abs(value) for target in item.thumb_targets_deg.values() for value in target) <= 40.0 for item in refinements)
     assert all(max(abs(value) for value in item.palm_refinement_deg) <= 3.0 for item in refinements)
 
 

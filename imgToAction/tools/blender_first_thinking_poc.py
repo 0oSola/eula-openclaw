@@ -351,7 +351,7 @@ class UpperBodyCompensation:
 @dataclass(frozen=True)
 class FingerPosePreset:
     name: str
-    joint_deltas_deg: dict[str, tuple[float, float, float]]
+    joint_targets_deg: dict[str, tuple[float, float, float]]
 
 
 @dataclass(frozen=True)
@@ -367,7 +367,7 @@ class DualContactBand:
 class DualContactRefinement:
     neck_toward_deg: float
     head_toward_deg: float
-    thumb_deltas_deg: dict[str, tuple[float, float, float]]
+    thumb_targets_deg: dict[str, tuple[float, float, float]]
     palm_refinement_deg: tuple[float, float, float]
 
 
@@ -405,6 +405,46 @@ def quaternion_angle_degrees(quaternion: Sequence[float]) -> float:
         raise ValueError("Quaternion cannot be zero")
     normalized_w = max(-1.0, min(1.0, abs(values[0] / magnitude)))
     return math.degrees(2.0 * math.acos(normalized_w))
+
+
+def _normalized_quaternion_tuple(quaternion: Sequence[float]) -> tuple[float, float, float, float]:
+    values = tuple(float(value) for value in quaternion)
+    if len(values) != 4 or not all(math.isfinite(value) for value in values):
+        raise ValueError("Quaternion must contain four finite components")
+    magnitude = math.sqrt(sum(value * value for value in values))
+    if magnitude <= 1e-12:
+        raise ValueError("Quaternion cannot be zero")
+    return tuple(value / magnitude for value in values)
+
+
+def _quaternion_multiply(left, right) -> tuple[float, float, float, float]:
+    lw, lx, ly, lz = _normalized_quaternion_tuple(left)
+    rw, rx, ry, rz = _normalized_quaternion_tuple(right)
+    return _normalized_quaternion_tuple((
+        lw * rw - lx * rx - ly * ry - lz * rz,
+        lw * rx + lx * rw + ly * rz - lz * ry,
+        lw * ry - lx * rz + ly * rw + lz * rx,
+        lw * rz + lx * ry - ly * rx + lz * rw,
+    ))
+
+
+def _quaternion_inverse(quaternion) -> tuple[float, float, float, float]:
+    w, x, y, z = _normalized_quaternion_tuple(quaternion)
+    return (w, -x, -y, -z)
+
+
+def absolute_local_control_delta(target_local, baseline_local):
+    return _quaternion_multiply(target_local, _quaternion_inverse(baseline_local))
+
+
+def compose_before_local_delta(control_delta, baseline_local):
+    return _quaternion_multiply(control_delta, baseline_local)
+
+
+def quaternion_distance_degrees(left, right) -> float:
+    return quaternion_angle_degrees(
+        _quaternion_multiply(left, _quaternion_inverse(right))
+    )
 
 
 def validate_compensation_angles(angles: dict[str, float]) -> tuple[str, ...]:
@@ -483,7 +523,7 @@ def compensation_improves_evidence(
     )
 
 
-def _finger_pose_deltas(
+def _finger_pose_targets(
     thumb,
     index,
     middle,
@@ -499,69 +539,69 @@ def _finger_pose_deltas(
 
 def semantic_finger_presets() -> tuple[FingerPosePreset, ...]:
     relaxed = (
-        ((8, -5, -5), (10, -3, 0), (6, 0, 0)),
-        ((0, -10, -10), (0, 0, 0), (0, 0, 0)),
-        ((-2, 0, 0), (-4, 0, 0), (-6, 0, 0)),
-        ((-4, 0, 0), (-6, 0, 0), (-8, 0, 0)),
-        ((-6, 0, 0), (-9, 0, 0), (-12, 0, 0)),
+        ((-12, -8, -5), (-18, -4, 0), (-10, 0, 0)),
+        ((-5, -8, -8), (-4, 0, 0), (-3, 0, 0)),
+        ((-18, 0, 0), (-24, 0, 0), (-18, 0, 0)),
+        ((-24, 0, 0), (-30, 0, 0), (-24, 0, 0)),
+        ((-30, 0, 0), (-36, 0, 0), (-30, 0, 0)),
     )
     variants = (
         ("support_soft", relaxed),
         ("support_reach", (
-            ((12, -7, -7), (14, -4, 0), (9, 0, 0)),
-            ((-4, -12, -12), (0, -4, 0), (0, 0, 0)),
+            ((-18, -12, -8), (-25, -8, 0), (-15, 0, 0)),
+            ((-8, -12, -12), (-6, -4, 0), (-4, 0, 0)),
             *relaxed[2:],
         )),
         ("support_thumb_low", (
-            ((10, -10, -5), (13, -5, 0), (8, 0, 0)),
-            ((0, -12, -8), (0, -4, 0), (0, 0, 0)),
+            ((-20, -12, -5), (-30, -8, 0), (-18, 0, 0)),
+            ((-4, -12, -8), (-4, -4, 0), (-2, 0, 0)),
             *relaxed[2:],
         )),
         ("support_index_long", (
             relaxed[0],
-            ((-8, -10, -12), (-4, -4, 0), (0, 0, 0)),
+            ((-10, -10, -12), (-7, -4, 0), (-4, 0, 0)),
             *relaxed[2:],
         )),
         ("support_open", (
-            ((14, -6, -9), (15, -3, 0), (10, 0, 0)),
-            ((0, -8, -12), (0, 0, 0), (0, 0, 0)),
-            ((0, 0, 0), (-3, 0, 0), (-5, 0, 0)),
-            ((-3, 0, 0), (-5, 0, 0), (-7, 0, 0)),
-            ((-5, 0, 0), (-8, 0, 0), (-11, 0, 0)),
+            ((-15, -10, -8), (-22, -6, 0), (-12, 0, 0)),
+            ((-3, -8, -12), (-3, 0, 0), (-2, 0, 0)),
+            ((-14, 0, 0), (-20, 0, 0), (-15, 0, 0)),
+            ((-20, 0, 0), (-26, 0, 0), (-20, 0, 0)),
+            ((-26, 0, 0), (-32, 0, 0), (-26, 0, 0)),
         )),
         ("support_curled", (
             relaxed[0], relaxed[1],
-            ((-4, 0, 0), (-7, 0, 0), (-10, 0, 0)),
-            ((-6, 0, 0), (-9, 0, 0), (-12, 0, 0)),
-            ((-8, 0, 0), (-12, 0, 0), (-16, 0, 0)),
+            ((-22, 0, 0), (-28, 0, 0), (-22, 0, 0)),
+            ((-28, 0, 0), (-34, 0, 0), (-28, 0, 0)),
+            ((-34, 0, 0), (-40, 0, 0), (-34, 0, 0)),
         )),
     )
     return tuple(
-        FingerPosePreset(name, _finger_pose_deltas(*groups))
+        FingerPosePreset(name, _finger_pose_targets(*groups))
         for name, groups in variants
     )
 
 
-def validate_finger_pose(joint_deltas_deg) -> tuple[str, ...]:
-    if set(joint_deltas_deg) != set(RIGHT_FINGER_BONES):
+def validate_absolute_finger_targets(joint_targets_deg) -> tuple[str, ...]:
+    if set(joint_targets_deg) != set(RIGHT_FINGER_BONES):
         raise ValueError("Finger pose must contain exactly the 15 right-finger bones")
     reasons = []
     for bone_name in RIGHT_FINGER_BONES:
-        delta = tuple(float(value) for value in joint_deltas_deg[bone_name])
-        if len(delta) != 3 or not all(math.isfinite(value) for value in delta):
-            raise ValueError(f"Finger delta must contain three finite values: {bone_name}")
-        if math.sqrt(sum(value * value for value in delta)) > 40.0 + 1e-6:
-            reasons.append(f"{bone_name} exceeds the 40 degree verified delta limit")
-        if delta[0] > 30.0 + 1e-6:
+        target = tuple(float(value) for value in joint_targets_deg[bone_name])
+        if len(target) != 3 or not all(math.isfinite(value) for value in target):
+            raise ValueError(f"Finger target must contain three finite values: {bone_name}")
+        if target[0] < -65.0 - 1e-6:
+            reasons.append(f"{bone_name} absolute flex exceeds 65 degrees")
+        if target[0] > 30.0 + 1e-6:
             reasons.append(f"{bone_name} reverse extension exceeds 30 degrees")
-        if max(abs(delta[1]), abs(delta[2])) > 12.0 + 1e-6:
+        if max(abs(target[1]), abs(target[2])) > 12.0 + 1e-6:
             reasons.append(f"{bone_name} fingertip spread exceeds 12 degrees")
     for prefix in ("右人指", "右中指", "右薬指", "右小指"):
-        curls = tuple(max(0.0, -float(joint_deltas_deg[f"{prefix}{joint}"][0])) for joint in "１２３")
+        curls = tuple(max(0.0, -float(joint_targets_deg[f"{prefix}{joint}"][0])) for joint in "１２３")
         if curls[2] > curls[0] + 20.0:
             reasons.append(f"{prefix} claw shape has excessive distal curl")
     proximal_curls = tuple(
-        max(0.0, -float(joint_deltas_deg[f"{prefix}１"][0]))
+        max(0.0, -float(joint_targets_deg[f"{prefix}１"][0]))
         for prefix in ("右中指", "右薬指", "右小指")
     )
     if not proximal_curls[0] <= proximal_curls[1] <= proximal_curls[2]:
@@ -667,15 +707,15 @@ def dual_contact_refinement_grid() -> tuple[DualContactRefinement, ...]:
     base = next(
         preset for preset in semantic_finger_presets()
         if preset.name == "support_thumb_low"
-    ).joint_deltas_deg
+    ).joint_targets_deg
     thumb_variants = (
         {name: base[name] for name in ("右親指０", "右親指１", "右親指２")},
-        {"右親指０": (10.0, -12.0, -5.0), "右親指１": (13.0, -5.0, 0.0), "右親指２": (8.0, 0.0, 0.0)},
-        {"右親指０": (10.0, -10.0, -5.0), "右親指１": (-10.0, -5.0, 0.0), "右親指２": (8.0, 0.0, 0.0)},
-        {"右親指０": (10.0, -10.0, -5.0), "右親指１": (-20.0, -5.0, 0.0), "右親指２": (8.0, 0.0, 0.0)},
-        {"右親指０": (10.0, -10.0, -5.0), "右親指１": (13.0, -5.0, 0.0), "右親指２": (-10.0, 0.0, 0.0)},
-        {"右親指０": (10.0, -10.0, -5.0), "右親指１": (13.0, -5.0, 0.0), "右親指２": (-20.0, 0.0, 0.0)},
-        {"右親指０": (10.0, -12.0, -5.0), "右親指１": (-20.0, -5.0, 0.0), "右親指２": (-20.0, 0.0, 0.0)},
+        {"右親指０": (-15.0, -12.0, -5.0), "右親指１": (-25.0, -8.0, 0.0), "右親指２": (-15.0, 0.0, 0.0)},
+        {"右親指０": (-20.0, -8.0, -5.0), "右親指１": (-20.0, -6.0, 0.0), "右親指２": (-12.0, 0.0, 0.0)},
+        {"右親指０": (-20.0, -12.0, -5.0), "右親指１": (-35.0, -8.0, 0.0), "右親指２": (-18.0, 0.0, 0.0)},
+        {"右親指０": (-18.0, -10.0, -5.0), "右親指１": (-25.0, -6.0, 0.0), "右親指２": (-25.0, 0.0, 0.0)},
+        {"右親指０": (-22.0, -12.0, -5.0), "右親指１": (-35.0, -8.0, 0.0), "右親指２": (-28.0, 0.0, 0.0)},
+        {"右親指０": (-25.0, -12.0, -5.0), "右親指１": (-40.0, -8.0, 0.0), "右親指２": (-30.0, 0.0, 0.0)},
     )
     head_neck = ((1.5, 1.5), (2.0, 3.0), (2.5, 2.5), (1.5, 3.5))
     palm = (
@@ -3531,6 +3571,59 @@ def _finger_rank_key(item):
     )
 
 
+def finger_stage_survivors(records, *, seed_ids, limit: int):
+    if limit <= 0:
+        return []
+    strata = {}
+    for item in records:
+        _state, record = item
+        if not record.get("finger_stage_anatomy_valid", False):
+            continue
+        source_id = record["arm_source_candidate_id"]
+        if source_id not in seed_ids:
+            continue
+        palm = tuple(record.get("parameters", {}).get("palm_refinement_deg", ()))
+        strata.setdefault((source_id, palm), []).append(item)
+    for items in strata.values():
+        items.sort(key=_finger_rank_key)
+    stratum_keys = sorted(
+        strata,
+        key=lambda key: (seed_ids.index(key[0]), key[1]),
+    )
+    survivors = []
+    depth = 0
+    while len(survivors) < limit:
+        advanced = False
+        for stratum_key in stratum_keys:
+            items = strata[stratum_key]
+            if depth >= len(items):
+                continue
+            survivors.append(items[depth])
+            advanced = True
+            if len(survivors) == limit:
+                break
+        if not advanced:
+            break
+        depth += 1
+    return survivors
+
+
+def semantic_diagnostic_candidate(records, *, preferred_source_id: str | None = None):
+    if not records:
+        raise ValueError("Semantic diagnostic requires at least one candidate")
+    if preferred_source_id is not None:
+        preferred = next(
+            (
+                item for item in records
+                if item[1]["source_candidate_id"] == preferred_source_id
+            ),
+            None,
+        )
+        if preferred is not None:
+            return preferred
+    return min(records, key=_finger_rank_key)
+
+
 def _compensation_from_record(record) -> UpperBodyCompensation:
     parameters = record["parameters"]["compensation"]
     return UpperBodyCompensation(
@@ -3547,9 +3640,9 @@ def _finger_preset_from_record(record) -> FingerPosePreset:
     parameters = record["parameters"]
     return FingerPosePreset(
         name=str(parameters["finger_preset"]),
-        joint_deltas_deg={
+        joint_targets_deg={
             name: tuple(float(value) for value in delta)
-            for name, delta in parameters["finger_joint_deltas_deg"].items()
+            for name, delta in parameters["finger_joint_targets_deg"].items()
         },
     )
 
@@ -3602,6 +3695,16 @@ def _prepare_static_context(
         if compensation_controls is not None
         else None
     )
+    finger_baseline_local_quaternions = (
+        {
+            bone_name: tuple(
+                float(value)
+                for value in armature.pose.bones[bone_name].matrix_basis.to_quaternion().normalized()
+            )
+            for bone_name in RIGHT_FINGER_BONES
+        }
+        if finger_controls is not None else None
+    )
     return {
         "armature": armature,
         "baseline_state": baseline_state,
@@ -3621,6 +3724,7 @@ def _prepare_static_context(
         "invariant_collision": _invariant_collision_context(baseline_vertices, geometry),
         "compensation_controls": compensation_controls,
         "finger_controls": finger_controls,
+        "finger_baseline_local_quaternions": finger_baseline_local_quaternions,
         "compensation_axes": compensation_axes,
         "protected_pose_hashes": protected_pose_hashes(protected_channels),
     }
@@ -3719,24 +3823,46 @@ def _apply_upper_body_compensation(armature, context, compensation):
 
 
 def _apply_finger_preset(armature, context, preset):
-    reasons = validate_finger_pose(preset.joint_deltas_deg)
+    reasons = validate_absolute_finger_targets(preset.joint_targets_deg)
     if reasons:
         raise ValueError("Invalid semantic finger preset: " + "; ".join(reasons))
     controls = context["finger_controls"]
-    quaternions = {}
-    angles = {}
+    control_quaternions = {}
+    target_quaternions = {}
+    corrective_angles = {}
     for bone_name in RIGHT_FINGER_BONES:
-        delta = preset.joint_deltas_deg[bone_name]
-        quaternion = Euler(
-            tuple(math.radians(float(value)) for value in delta), "XYZ"
+        target_degrees = preset.joint_targets_deg[bone_name]
+        target_quaternion = Euler(
+            tuple(math.radians(float(value)) for value in target_degrees), "XYZ"
         ).to_quaternion().normalized()
+        target_tuple = tuple(float(value) for value in target_quaternion)
+        baseline_tuple = context["finger_baseline_local_quaternions"][bone_name]
+        control_tuple = absolute_local_control_delta(target_tuple, baseline_tuple)
+        control_quaternion = Quaternion(control_tuple)
         controls[bone_name].rotation_mode = "QUATERNION"
-        controls[bone_name].rotation_quaternion = quaternion
-        quaternions[bone_name] = tuple(float(value) for value in quaternion)
-        angles[bone_name] = quaternion_angle_degrees(quaternions[bone_name])
+        controls[bone_name].rotation_quaternion = control_quaternion
+        control_quaternions[bone_name] = control_tuple
+        target_quaternions[bone_name] = target_tuple
+        corrective_angles[bone_name] = quaternion_angle_degrees(control_tuple)
     armature.update_tag()
     _refresh_frame()
-    return quaternions, angles
+    final_errors = {
+        bone_name: quaternion_distance_degrees(
+            tuple(float(value) for value in _evaluated_local_rotation(armature, bone_name).normalized()),
+            target_quaternions[bone_name],
+        )
+        for bone_name in RIGHT_FINGER_BONES
+    }
+    if any(error > 1e-3 for error in final_errors.values()):
+        raise RuntimeError(
+            f"Absolute finger targets did not reproduce through local BEFORE constraints: {final_errors}"
+        )
+    return control_quaternions, {
+        "corrective_angles_deg": corrective_angles,
+        "target_quaternions": target_quaternions,
+        "target_euler_deg": preset.joint_targets_deg,
+        "final_target_errors_deg": final_errors,
+    }
 
 
 def _finger_tip_positions(armature):
@@ -3767,14 +3893,14 @@ def _apply_semantic_finger_state(
     compensation_quaternions, compensation_angles = _apply_upper_body_compensation(
         armature, context, compensation
     )
-    finger_quaternions, finger_angles = _apply_finger_preset(
+    finger_quaternions, finger_solution = _apply_finger_preset(
         armature, context, preset
     )
     return (
         compensation_quaternions,
         compensation_angles,
         finger_quaternions,
-        finger_angles,
+        finger_solution,
     )
 
 
@@ -3890,7 +4016,7 @@ def _stage_f_record(
     compensation_quaternions,
     compensation_angles,
     finger_quaternions,
-    finger_angles,
+    finger_solution,
     measurements,
     surface_metrics,
     seed_collision,
@@ -3901,7 +4027,7 @@ def _stage_f_record(
     record["parameters"].update({
         "palm_refinement_deg": palm_refinement,
         "finger_preset": preset.name,
-        "finger_joint_deltas_deg": preset.joint_deltas_deg,
+        "finger_joint_targets_deg": preset.joint_targets_deg,
         "finger_quaternions": finger_quaternions,
         "compensation": _compensation_parameter_record(
             compensation, compensation_quaternions, compensation_angles, context
@@ -3913,8 +4039,8 @@ def _stage_f_record(
     )
     record["metrics"].update({
         "finger_preset": preset.name,
-        "finger_joint_deltas_deg": preset.joint_deltas_deg,
-        "finger_quaternion_angles_deg": finger_angles,
+        "finger_joint_targets_deg": preset.joint_targets_deg,
+        "finger_absolute_solution": finger_solution,
         "fingertip_world": _finger_tip_positions(context["armature"]),
         "compensation_angles_deg": compensation_angles,
         "protected_pose_hashes": protected_current,
@@ -3924,6 +4050,7 @@ def _stage_f_record(
     if protected_reasons:
         record["valid"] = False
         record["reasons"] = list(dict.fromkeys([*record["reasons"], *protected_reasons]))
+    record["finger_stage_anatomy_valid"] = bool(record["valid"])
     _stage_b_update(math_module, record, surface_metrics, context["chin_surface"]["band"])
     record["stage"] = "F"
     return record
@@ -3932,6 +4059,12 @@ def _stage_f_record(
 def _stage_g_update(math_module, record, collision_metrics, warning_distance):
     _stage_c_update(math_module, record, collision_metrics)
     record["stage"] = "G"
+    record["finger_stage_collision_valid"] = bool(
+        record.get("finger_stage_anatomy_valid", False)
+        and record["metrics"]["matrices_finite"]
+        and record["metrics"]["head_collision_count"] == 0
+        and record["metrics"]["torso_penetration_count"] == 0
+    )
     record["metrics"]["finger_contact_improves_evidence"] = (
         finger_contact_improves_evidence(
             record["metrics"]["collision_before_finger_solve"],
@@ -4261,7 +4394,7 @@ def search_static(config: PocConfig) -> None:
                             compensation_quaternions,
                             compensation_angles,
                             finger_quaternions,
-                            finger_angles,
+                            finger_solution,
                         ) = _apply_semantic_finger_state(
                             armature, controls, candidate, compensation, preset, context
                         )
@@ -4277,30 +4410,15 @@ def search_static(config: PocConfig) -> None:
                         record = _stage_f_record(
                             math_module, candidate, arm_source_id, palm_refinement,
                             preset, compensation, compensation_quaternions,
-                            compensation_angles, finger_quaternions, finger_angles,
+                            compensation_angles, finger_quaternions, finger_solution,
                             measurements, surface_metrics, seed_collision, context,
                         )
                         stage_f_evaluated.append(((candidate, compensation, preset), record))
-        finger_strata = {}
-        for item in stage_f_evaluated:
-            if item[1]["valid"]:
-                finger_strata.setdefault(item[1]["arm_source_candidate_id"], []).append(item)
-        for items in finger_strata.values():
-            items.sort(key=_finger_rank_key)
-        stage_f_valid = []
-        depth = 0
-        while len(stage_f_valid) < FINGER_STAGE_SURVIVOR_LIMIT:
-            advanced = False
-            for source_id in FINGER_SEED_IDS:
-                items = finger_strata.get(source_id, ())
-                if depth < len(items):
-                    stage_f_valid.append(items[depth])
-                    advanced = True
-                    if len(stage_f_valid) == FINGER_STAGE_SURVIVOR_LIMIT:
-                        break
-            if not advanced:
-                break
-            depth += 1
+        stage_f_valid = finger_stage_survivors(
+            stage_f_evaluated,
+            seed_ids=FINGER_SEED_IDS,
+            limit=FINGER_STAGE_SURVIVOR_LIMIT,
+        )
         stage_metrics["F"] = {
             "seed_count": len(finger_seed_records),
             "input_count": len(stage_f_evaluated),
@@ -4324,10 +4442,14 @@ def search_static(config: PocConfig) -> None:
                 context["chin_surface"]["band"].warning_distance,
             )
             finger_vertices[record["source_candidate_id"]] = vertices
-        stage_g_valid = sorted(
-            (item for item in stage_f_valid if item[1]["valid"]),
+        stage_g_evaluated = sorted(
+            stage_f_valid,
             key=lambda item: (not item[1].get("selection_eligible", False), *_finger_rank_key(item)),
         )
+        stage_g_valid = [
+            item for item in stage_g_evaluated
+            if item[1].get("finger_stage_collision_valid", False)
+        ]
         stage_metrics["G"] = {
             "input_count": len(stage_f_valid),
             "survivor_count": len(stage_g_valid),
@@ -4335,22 +4457,22 @@ def search_static(config: PocConfig) -> None:
             "duration_seconds": time.perf_counter() - started,
         }
         print("POC_STATIC_STAGE_G", stage_metrics["G"])
+        diagnostic_pool = stage_g_valid or stage_g_evaluated
         reach_diagnostic = finger_reach_diagnostic(
-            [record for _state, record in stage_g_valid],
+            [record for _state, record in diagnostic_pool],
             warning_distance=context["chin_surface"]["band"].warning_distance,
         )
 
-        exact_best_id = "candidate_779__finger_p01_s02_c01"
-        exact_best_state, exact_best_record = next(
-            item for item in stage_g_valid
-            if item[1]["source_candidate_id"] == exact_best_id
+        diagnostic_state, diagnostic_record = semantic_diagnostic_candidate(
+            diagnostic_pool,
+            preferred_source_id="candidate_779__finger_p01_s02_c01",
         )
-        exact_best_record["diagnostic_render_evidence"] = _render_semantic_diagnostic(
+        diagnostic_record["diagnostic_render_evidence"] = _render_semantic_diagnostic(
             paths.temporary,
             armature,
             mesh,
             controls,
-            *exact_best_state,
+            *diagnostic_state,
             context,
         )
 
@@ -4378,10 +4500,10 @@ def search_static(config: PocConfig) -> None:
                 candidate = _finger_refined_candidate(
                     seed_candidate, refinement.palm_refinement_deg, source_id
                 )
-                merged_deltas = dict(seed_preset.joint_deltas_deg)
-                merged_deltas.update(refinement.thumb_deltas_deg)
+                merged_deltas = dict(seed_preset.joint_targets_deg)
+                merged_deltas.update(refinement.thumb_targets_deg)
                 preset = FingerPosePreset(
-                    name=f"{seed_preset.name}_dual", joint_deltas_deg=merged_deltas
+                    name=f"{seed_preset.name}_dual", joint_targets_deg=merged_deltas
                 )
                 compensation = UpperBodyCompensation(
                     0.0, 0.0, 0.0, 0.0,
@@ -4392,7 +4514,7 @@ def search_static(config: PocConfig) -> None:
                     compensation_quaternions,
                     compensation_angles,
                     finger_quaternions,
-                    finger_angles,
+                    finger_solution,
                 ) = _apply_semantic_finger_state(
                     armature, controls, candidate, compensation, preset, context
                 )
@@ -4416,14 +4538,14 @@ def search_static(config: PocConfig) -> None:
                     math_module, candidate, seed_record["arm_source_candidate_id"],
                     refinement.palm_refinement_deg, preset, compensation,
                     compensation_quaternions, compensation_angles,
-                    finger_quaternions, finger_angles, measurements,
+                    finger_quaternions, finger_solution, measurements,
                     surface_metrics, seed_collision, context,
                 )
                 record["source_semantic_candidate_id"] = seed_record["source_candidate_id"]
                 record["parameters"]["dual_contact_refinement"] = {
                     "neck_toward_deg": refinement.neck_toward_deg,
                     "head_toward_deg": refinement.head_toward_deg,
-                    "thumb_deltas_deg": refinement.thumb_deltas_deg,
+                    "thumb_targets_deg": refinement.thumb_targets_deg,
                     "palm_refinement_deg": refinement.palm_refinement_deg,
                 }
                 record["dual_contact_reasons"] = list(
@@ -4432,7 +4554,10 @@ def search_static(config: PocConfig) -> None:
                 record["stage"] = "H"
                 stage_h_evaluated.append(((candidate, compensation, preset), record))
         stage_h_valid = sorted(
-            (item for item in stage_h_evaluated if item[1]["valid"]),
+            (
+                item for item in stage_h_evaluated
+                if item[1].get("finger_stage_anatomy_valid", False)
+            ),
             key=lambda item: (
                 len(item[1]["dual_contact_reasons"]),
                 max(
@@ -4475,7 +4600,10 @@ def search_static(config: PocConfig) -> None:
             record["stage"] = "I"
             dual_vertices[record["source_candidate_id"]] = vertices
         stage_i_valid = sorted(
-            (item for item in stage_h_valid if item[1]["valid"]),
+            (
+                item for item in stage_h_valid
+                if item[1].get("finger_stage_collision_valid", False)
+            ),
             key=lambda item: (
                 not item[1].get("selection_eligible", False),
                 len(item[1]["dual_contact_reasons"]),
@@ -4633,8 +4761,8 @@ def search_static(config: PocConfig) -> None:
                 "seed_source_ids": [
                     record["source_candidate_id"] for _state, record in dual_seed_items
                 ],
-                "exact_best_diagnostic_source_id": exact_best_id,
-                "exact_best_diagnostic": exact_best_record["diagnostic_render_evidence"],
+                "best_absolute_diagnostic_source_id": diagnostic_record["source_candidate_id"],
+                "best_absolute_diagnostic": diagnostic_record["diagnostic_render_evidence"],
             },
             "render_evidence": render_evidence,
             "diagnostics": diagnostic_records,
