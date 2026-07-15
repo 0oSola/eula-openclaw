@@ -1,6 +1,6 @@
 ﻿# 当前系统拓扑与架构蓝图
 
-更新时间：2026-06-23
+更新时间：2026-07-14
 
 本文用于两类场景：
 
@@ -35,11 +35,13 @@ Browser / Next.js UI
 | FastAPI API | `api/`, 默认 `http://127.0.0.1:8000`；dev-stack 默认 `http://127.0.0.1:8100` | 会话、消息、OpenClaw/TTS 代理、realtime voice WebSocket、资源、trace、admin API；默认只面向本机 loopback | 本项目内 | `GET /healthz`、`GET /admin/runtime-health` |
 | OpenClaw Gateway HTTP | `http://10.11.252.164:18789` | `/v1/models`、`/v1/responses` 文本生成 | 外部服务 | `GET /healthz/openclaw` |
 | OpenClaw Gateway WebSocket RPC | `ws://10.11.252.164:18789` | Feishu session 列表、history、实时消息订阅、agent/chat delta 事件 | 外部服务 | Bridge admin 状态、`sessions.list` |
-| OpenClaw Control Plane HTTP | `http://10.11.252.164:8765` | Codex daily review run、snapshot push、command queue、command result | 外部服务 | OpenClaw run 状态、FastAPI outbound snapshot response |
+| OpenClaw Control Plane HTTP | `http://10.11.252.164:8765` | v1 Codex daily review，以及 v2 Project Knowledge candidate、review command、exact publish payload、publication receipt | 外部服务 | OpenClaw run 状态、FastAPI durable cursor/change-set/receipt ledger |
 | Voice Workflow TTS | `http://10.11.252.164:5555` | 提交 TTS、查询任务、返回音频 URL | 外部服务 | `POST /api/v1/tts` + `GET /api/v1/tasks/{task_id}` |
 | Codex Interactive | FastAPI 内 `CodexInteractiveProvider`，目标进程为 `codex app-server --listen stdio://` | 产品内 Codex Console、只读/patch 多轮事件流、worktree diff、approval、checks、apply | 本项目内，默认关闭 | `GET /admin/runtime-health` 的 `codex` 字段 |
 | Codex Review Sync | FastAPI `codex_openclaw_review_sync` worker + OpenClaw `/v1/responses` | 把 desktop-pet 管理的 Codex 会话 evidence pack 提交给 OpenClaw，回写 draft 工作总结/踩坑/决策/followup | 本项目内，默认关闭 | `codex_openclaw_sync_outbox` 与 `codex_review_items` |
+| Codex Knowledge Extraction | FastAPI `codex_knowledge_extraction` worker + OpenClaw `/v1/responses` + `openclaw/skills/codex-session-knowledge-extraction` | 对可复盘 Codex 会话做信号评分，调用 OpenClaw skill 产出零到三个可读 Wiki 候选；候选包含 `memory_draft`、质量 Gate、发布状态以及可反向索引脚本/测试/命令/文件/符号的 `code_refs -> code_index` | 本项目内，默认关闭 | `codex_knowledge_extraction_outbox` 与 `codex_session_knowledge` |
 | Codex Review Control Plane Sync | FastAPI `openclaw_control_plane` worker + OpenClaw control-plane `/v1/apps/mmd/codex-review/*` | 把本地 daily summary/draft snapshot 主动推给 OpenClaw review run，轮询审核命令并回推命令结果 | 本项目内，默认关闭 | OpenClaw `codex-review-daily:YYYY-MM-DD` run 从 `awaiting_snapshot` 进入后续状态；FastAPI `last_codex_review_control_plane_commands` |
+| Project Domain Knowledge v2 Control Plane | FastAPI `domain_knowledge_control_plane` + OpenClaw `/v1/apps/mmd/project-knowledge/*` | durable candidate push、双重审核命令应用、exact Accepted Wiki Change Set 回推、publication receipt 落账 | 本项目内，`DOMAIN_KNOWLEDGE_CONTROL_PLANE_ENABLED=false` | `domain_knowledge_candidate_deliveries`、durable run cursors、change sets、receipts |
 | Codex Review Memory / OpenClaw Wiki | FastAPI review APIs/outbound worker + OpenClaw `memory-wiki` | 用户确认 draft 后把候选摘要转成结构化、可执行的长期 knowledge memory；FastAPI 主动把确认后的 Obsidian 页面 payload 推给 OpenClaw | 本项目内；OpenClaw wiki 发布在 OpenClaw 侧执行 | `codex_review_memory`、`codex_review_memory_versions`、OpenClaw review run 状态 |
 | SQLite | `api/data/sqlite/trace.db` | 会话、消息、TTS、Bridge、trace、资源索引 | 本地数据 | API 查询和测试 |
 | NDJSON logs | `api/data/logs/*.ndjson` | trace 双写日志 | 本地数据 | 直接查日志 |
@@ -102,12 +104,23 @@ CODEX_OPENCLAW_REVIEW_CHANNEL=codex-pet
 CODEX_OPENCLAW_REVIEW_SYNC_INTERVAL_SECONDS=10
 CODEX_OPENCLAW_REVIEW_MAX_PAYLOAD_CHARS=8000
 CODEX_OPENCLAW_REVIEW_DUMP_DEBUG_FILES=false
+CODEX_KNOWLEDGE_EXTRACTION_ENABLED=false
+CODEX_KNOWLEDGE_AGENT_ID=codex-manager
+CODEX_KNOWLEDGE_CHANNEL=codex-pet
+CODEX_KNOWLEDGE_SYNC_INTERVAL_SECONDS=10
+CODEX_KNOWLEDGE_MAX_PAYLOAD_CHARS=12000
+CODEX_KNOWLEDGE_MIN_SIGNAL_SCORE=5
+CODEX_KNOWLEDGE_TIMEOUT_SECONDS=300
+CODEX_KNOWLEDGE_PROMPT_VERSION=codex-domain-knowledge-v3
+CODEX_KNOWLEDGE_SKILL_PATH=openclaw/skills/codex-session-knowledge-extraction/SKILL.md
+CODEX_KNOWLEDGE_DUMP_DEBUG_FILES=false
 CODEX_OPENCLAW_CONTROL_PLANE_ENABLED=true
 OPENCLAW_CONTROL_PLANE_BASE_URL=http://10.11.252.164:8765
 OPENCLAW_CONTROL_PLANE_TOKEN=
 CODEX_OPENCLAW_CONTROL_PLANE_WORKSPACE_ID=mmd-companion
 CODEX_OPENCLAW_CONTROL_PLANE_SYNC_INTERVAL_SECONDS=60
 CODEX_OPENCLAW_CONTROL_PLANE_SNAPSHOT_LIMIT=20
+DOMAIN_KNOWLEDGE_CONTROL_PLANE_ENABLED=false
 
 CODEX_REVIEW_MEMORY_ENABLED=false
 CODEX_REVIEW_MEMORY_EXPORT_ROOT=api/data/openkb/codex-review
@@ -137,7 +150,7 @@ scripts\generate-codex-app-server-schema.ps1
 
 服务启动脚本 `scripts/dev-stack.ps1` 会在启动 API 前调用 `scripts/check-codex-app-server-schema.ps1`。当 `CODEX_INTERACTIVE_ENABLED=true` 时，该 preflight 会读取本地 `codex --version`、`api/.env`/环境变量中的 `CODEX_BIN`、以及 pinned manifest；schema 缺失或版本不一致时默认 fail fast，并提示手动运行生成脚本。开发环境如果确实要在启动时自动刷新 schema，可显式设置 `CODEX_SCHEMA_AUTO_UPDATE=true`，此时 preflight 会调用 `scripts\generate-codex-app-server-schema.ps1`；生产或正常启动不应静默自动更新 repo 文件。
 
-FastAPI 只给 app-server 传白名单环境变量：`PATH`、`HOME`、`CODEX_HOME`、`NO_COLOR`，以及 Windows 网络/TLS/用户目录运行所需的 `SystemRoot`、`WINDIR`、`COMSPEC`、`PATHEXT`、`TEMP`、`TMP`、`USERPROFILE`、`APPDATA`、`LOCALAPPDATA`、`PROGRAMDATA`。不会传 OpenClaw、TTS、数据库、Feishu、OpenAI API key 或其他项目密钥。Windows 上如果 `CODEX_BIN` 解析到 npm 的 `codex.cmd` shim，后端会优先定位同包内的 native `codex.exe` 再启动，避免 shim 进程的 stdio/lifecycle 问题；找不到 native executable 时才退回 shim。运行时仍只支持本地 stdio app-server transport；不暴露浏览器直连 app-server，不启用 TCP/WebSocket app-server transport、Cloud Codex、Codex MCP、真实 PTY/xterm shell embedding、auto-apply 或 approval bypass。前端 `/companion/tasks` 的 Codex Console 仅使用 xterm.js 作为只读 transcript 渲染器，把后端 WebSocket UI 事件格式化显示为终端行；它不接入本地 shell，不向浏览器暴露 Codex app-server stdin/stdout，也不改变审批、diff、checks、apply 的现有 API 边界。Codex prompt 输入框采用聊天式快捷键：`Enter` 发送当前 turn，`Shift+Enter` 保留换行编辑。
+FastAPI 只给 app-server 传白名单环境变量：`PATH`、`HOME`、`CODEX_HOME`、`NO_COLOR`，以及 Windows 网络/TLS/用户目录运行所需的 `SystemRoot`、`WINDIR`、`COMSPEC`、`PATHEXT`、`TEMP`、`TMP`、`USERPROFILE`、`APPDATA`、`LOCALAPPDATA`、`PROGRAMDATA`。不会传 OpenClaw、TTS、数据库、Feishu、OpenAI API key 或其他项目密钥。Windows 上如果 `CODEX_BIN` 解析到 npm 的 `codex.cmd` shim，后端会优先定位同包内的 native `codex.exe` 再启动，避免 shim 进程的 stdio/lifecycle 问题；找不到 native executable 时才退回 shim。当 `CODEX_WSL_ENABLED=true` 时，后端改为通过 `wsl.exe` 桥接启动 WSL 内的 codex 进程：命令行为 `wsl.exe -- bash -lc "codex app-server --listen stdio://"`，stdin/stdout 的 JSON-RPC 透传不受 `wsl.exe` 改动；此模式下 `build_env` 只传 `PATH`/`HOME`/`CODEX_HOME`/`NO_COLOR`，不传任何 Windows 环境变量。`CODEX_HOME` 应使用 WSL 路径格式（如 `/home/ksg/.codex`），`CODEX_WSL_EXEC` 可覆盖 `wsl.exe` 的路径（默认 `wsl.exe`）。运行时仍只支持本地 stdio app-server transport；不暴露浏览器直连 app-server，不启用 TCP/WebSocket app-server transport、Cloud Codex、Codex MCP、真实 PTY/xterm shell embedding、auto-apply 或 approval bypass。前端 `/companion/tasks` 的 Codex Console 仅使用 xterm.js 作为只读 transcript 渲染器，把后端 WebSocket UI 事件格式化显示为终端行；它不接入本地 shell，不向浏览器暴露 Codex app-server stdin/stdout，也不改变审批、diff、checks、apply 的现有 API 边界。Codex prompt 输入框采用聊天式快捷键：`Enter` 发送当前 turn，`Shift+Enter` 保留换行编辑。
 
 Patch session 会通过 `CodexWorktreeManager` 在 `CODEX_WORKTREE_ROOT` 下为当前选中的 workspace 创建独立 git worktree，sandbox 固定为 `workspace-write`；read-only session 在当前选中的 env 或 SQLite 登记 workspace 下运行，sandbox 固定为 `read-only`。`CODEX_MAX_CONCURRENT_SESSIONS` 在创建 session 前强制执行；执行前会按 `CODEX_SESSION_IDLE_TIMEOUT_SECONDS` 关闭超时 idle session，并同步关闭 provider runtime、更新 SQLite session status、写入 lifecycle trace。FastAPI shutdown 会调用 provider `close_all_sessions()` 关闭仍活跃的本地 Codex runtimes。turn request 或 event stream 超时会稳定产出 `turn_failed`，app-server stdout/process 关闭会产出 `session_closed`/`process_exit`，并把 session 标记为 failed 且写入 runtime-health last error。
 
@@ -145,9 +158,13 @@ app-server notification 会在 FastAPI 归一化为稳定 UI 事件，例如 `it
 
 Diff/check/apply 都围绕 worktree 执行；patch turn 完成后会自动生成 diff artifact，也支持前端手动刷新 diff。Apply 必须满足无 unresolved approval、显式 `confirm=true`、主 workspace 干净，并通过 `git apply --check` 后才会把 patch 写回主 workspace。Codex lifecycle 同时写入 `codex_events` 和通用 `trace_events`/NDJSON，覆盖 `codex.session.create|ready|failed`、`codex.turn.start|event|completed|failed`、`codex.approval.required|decided`、`codex.diff.ready`、`codex.checks.started|completed`、`codex.apply.started|completed|failed`、`codex.process.exit`；当 `CODEX_TRACE_REDACT_SECRETS=true` 时，trace payload 中 secret-like key 或 `TOKEN=...`/`SECRET=...` 等字符串值会先被替换为 `[REDACTED]`。测试可通过 `codex_use_deterministic_provider` 覆盖使用 deterministic provider，不启动真实 app-server。
 
-Codex Review Sync 是 desktop-pet/Codex 管理回顾链路，不是执行链路。desktop-pet 继续扫描用户既有 `CODEX_HOME/sessions/**/rollout-*.jsonl`，但只抽取 bounded facts 到 `desktop_pet_sessions.metadata.facts`，例如 failed commands、changed files、approval titles、error excerpts 和 event counts，不把完整 transcript 写入 SQLite。FastAPI 在 review-worthy status（`completed`、`failed`、`waiting_approval`、`file_changed`）上报后，若 `CODEX_OPENCLAW_REVIEW_ENABLED=true` 且存在 `OPENCLAW_TOKEN`，会用 `codex_review_fact_extractor` 合并 `desktop_pet_sessions`、`codex_events`、`codex_artifacts` 和 `codex_approvals` 生成 `codex_review_evidence_pack`，按 hash 写入 `codex_openclaw_sync_outbox`。`POST /desktop-pet/sessions` 如果收到旧版/本地 JSONL scanner payload 且 `workspace_id` 缺失，会默认归入 `CODEX_OPENCLAW_CONTROL_PLANE_WORKSPACE_ID`，避免 review drafts 因 workspace 为空而从 OpenClaw daily snapshot 中消失。后台 worker 调用 OpenClaw `/v1/responses`，发送前按 `CODEX_OPENCLAW_REVIEW_MAX_PAYLOAD_CHARS` 对 evidence pack 做 best-effort 裁剪，并使用 `x-openclaw-agent-id=CODEX_OPENCLAW_REVIEW_AGENT_ID`、`x-openclaw-message-channel=CODEX_OPENCLAW_REVIEW_CHANNEL`、`x-openclaw-session-key=codex-review:{pet_session_id}`，要求 OpenClaw 返回单个 JSON object，且 prompt 内明确 `work_summary` object、各 item list 和 `management` object 的 shape。Codex review JSON key、枚举、命令、文件路径、代码标识和引用的错误原文保持英文/原文，但 `title`、`summary`、`description`、`symptom`、`root_cause`、`fix`、`prevention`、`decision`、`result`、`work_done`、`management` 等用户可读字段要求输出简体中文。FastAPI 解析层会把 OpenClaw 偶发返回的 scalar/null `work_summary`、null list 或 null `management` 归一化为可保存结构，避免单个格式偏差导致整条 outbox 永久失败；解析成功后拆成 `codex_review_items(status=draft, source=openclaw)`。`CODEX_OPENCLAW_REVIEW_DUMP_DEBUG_FILES=true` 时，请求/响应 debug JSON 写入 `API_DATA_DIR/openclaw/codex-review/`，默认关闭。OpenClaw 不读取本机 Codex 文件、不接收完整 diff/patch、不直接 resume Codex、approve 权限或 apply patch。
+Codex Review Sync 是 desktop-pet/Codex 管理回顾链路，不是执行链路。desktop-pet 继续扫描用户既有 `CODEX_HOME/sessions/**/rollout-*.jsonl`，但只抽取 bounded facts 到 `desktop_pet_sessions.metadata.facts`，例如 failed commands、changed files、approval titles、error excerpts、event counts，以及会话叙事字段（user messages、assistant messages、function call summaries）。scanner 现在以分块流式方式读取完整 JSONL 事件序列，不再只看 head/tail；同时兼容 `function_call/function_call_output` 与当前 `custom_tool_call/custom_tool_call_output`，并按 `call_id` 把交错的工具输出回填到对应 method。`apply_patch` 输入中的 Add/Update/Delete File 会进入 workspace-relative changed files。scanner 还会生成结构化 `work_items` 与 `methods`：`work_items` 是按事件抽出的目标、助手更新、文件变更、审批和错误；`methods` 是工具/命令/检查/审批方法、命令文本、执行结果、exit code 与 bounded 输出片段；其中 `kind=check` 且 `outcome=success` 的 method 会被 FastAPI 提升为 `successful_checks`，供知识 evidence pack 和验证证据索引复用。scanner 会对这些事实字段做 secret-like 文本脱敏，不把完整 transcript 写入 SQLite；payload 还携带 `session_parser_version=codex-jsonl-stream-v2` 和 `review_facts_version=codex-review-facts-v2`，FastAPI 把这两个版本纳入 evidence/source hash，使旧的不完整抽取可以重新入队。会话叙事字段和结构化 work/method 字段是 OpenClaw 做会话总结的主要信息源，在 evidence pack 超过 `CODEX_OPENCLAW_REVIEW_MAX_PAYLOAD_CHARS` 时优先裁剪 function call summaries 和 methods，再把 work_items 裁成小骨架，最后才裁剪 assistant/user messages。FastAPI 在 review-worthy status（`completed`、`failed`、`waiting_approval`、`file_changed`）上报后，若 `CODEX_OPENCLAW_REVIEW_ENABLED=true` 且存在 `OPENCLAW_TOKEN`，会用 `codex_review_fact_extractor` 合并 `desktop_pet_sessions`、`codex_events`、`codex_artifacts` 和 `codex_approvals` 生成 `codex_review_evidence_pack`，按 hash 写入 `codex_openclaw_sync_outbox`。`POST /desktop-pet/sessions` 如果收到旧版/本地 JSONL scanner payload 且 `workspace_id` 缺失，会默认归入 `CODEX_OPENCLAW_CONTROL_PLANE_WORKSPACE_ID`，避免 review drafts 因 workspace 为空而从 OpenClaw daily snapshot 中消失。后台 worker 调用 OpenClaw `/v1/responses`，发送前按 `CODEX_OPENCLAW_REVIEW_MAX_PAYLOAD_CHARS` 对 evidence pack 做 best-effort 裁剪，并使用 `x-openclaw-agent-id=CODEX_OPENCLAW_REVIEW_AGENT_ID`、`x-openclaw-message-channel=CODEX_OPENCLAW_REVIEW_CHANNEL`、`x-openclaw-session-key=codex-review:{pet_session_id}`，要求 OpenClaw 返回单个 JSON object，且 prompt 内明确 `work_summary` object、各 item list 和 `management` object 的 shape。Codex review JSON key、枚举、命令、文件路径、代码标识和引用的错误原文保持英文/原文，但 `title`、`summary`、`description`、`symptom`、`root_cause`、`fix`、`prevention`、`decision`、`result`、`work_done`、`management` 等用户可读字段要求输出简体中文。FastAPI 解析层会把 OpenClaw 偶发返回的 scalar/null `work_summary`、null list 或 null `management` 归一化为可保存结构，避免单个格式偏差导致整条 outbox 永久失败；解析成功后拆成 `codex_review_items(status=draft, source=openclaw)`。`CODEX_OPENCLAW_REVIEW_DUMP_DEBUG_FILES=true` 时，请求/响应 debug JSON 写入 `API_DATA_DIR/openclaw/codex-review/`，默认关闭。OpenClaw 不读取本机 Codex 文件、不接收完整 diff/patch、不直接 resume Codex、approve 权限或 apply patch。
 
-当前已实现的 Codex review memory 流程由 FastAPI 持有状态机。本地 review API 仍可用于 Web/Pet/manual 工具：`GET /codex/reviews/daily-summary` 获取每日数量摘要，`GET /codex/reviews/drafts` 拉取待确认 draft，`POST /codex/reviews/items/{item_id}/decision` 写入 `accept`、`edit_accept`、`ignore` 或 `snooze` 决策。`decision` payload 现在在兼容旧 `edited_title` / `edited_summary` 的同时，支持优先级更高的结构化 `memory_draft`；该结构只允许出现在 `accept` / `edit_accept`，要求至少包含 `knowledge_kind`、`problem`、`when_to_use`、非空 `steps`、非空 `verification`、`source_summary`，且 `steps[*].order`、`verification[*].order` 必须从 1 开始严格递增。`edit_accept` 现在允许仅携带 `memory_draft` 而不强制依赖 legacy summary 字段。生产跨机设计不要求 OpenClaw 反连本机 FastAPI；OpenClaw 侧提供 review run / command queue，FastAPI outbound worker 每轮先主动推送 daily snapshot，再调用 `GET {OPENCLAW_CONTROL_PLANE_BASE_URL}/v1/apps/mmd/codex-review/runs/codex-review-daily:YYYY-MM-DD/commands?cursor=...` 轮询命令，在本地应用 `review_decision` 后调用 `POST {OPENCLAW_CONTROL_PLANE_BASE_URL}/v1/apps/mmd/codex-review/commands/{command_id}/result` 回推 `{ session_key, command_id, status, result, error, completed_at }`。FastAPI 当前支持的 control-plane command 类型是 `review_decision`，动作与本地 API 一致：`accept`、`edit_accept`、`ignore`、`snooze`；control-plane `review_decision` 使用与本地 API 相同的 `memory_draft` 校验规则。成功结果的 `result` 包含 `item_id`、`item_status` 和可选 `memory_id`，失败结果回传错误文本。command cursor 保存在进程内 `app.state.last_codex_review_control_plane_command_cursor`，最近一次处理结果保存在 `app.state.last_codex_review_control_plane_commands`。
+Codex Knowledge Extraction 是 review 事实之后的领域知识合成入口，仍然不让 OpenClaw 读取本机 rollout 或仓库。FastAPI 继续用 bounded `codex_review_evidence_pack` 派生 `codex_knowledge_evidence_pack`，保留 `reviewability` 和最多十二项的 legacy `code_index`，用于 v1/v2 兼容与会话线索；默认 `CODEX_KNOWLEDGE_PROMPT_VERSION=codex-domain-knowledge-v3`，`codex-session-knowledge-extraction` Skill 现在只合成 Domain Knowledge v2 草稿，输出 `schema_version=2`、`disposition=no_wiki|domain_knowledge_candidates`、`candidates[*].draft` 和 Evidence Reference ID，不再让模型输出 Runbook `memory_draft`、质量 Gate、发布状态或 locator 对象。FastAPI response parser 同时接受旧 `schema_version=1/wiki_candidates` 与新 v2 synthesis response；旧响应仍按 `code_index` reconciliation 保存，新响应只允许引用输入中已有的 canonical Repository Resolver Evidence Reference ID。`codex_session_knowledge.raw_response_json` 保留完整响应，read model 同时暴露 legacy `wiki_candidates` 与新 `domain_knowledge_candidates`。
+
+Domain Knowledge v2 的 Phase 2 基础模块和 Phase 3/4 FastAPI 控制面基础已经落地：`api/app/models/domain_knowledge.py` 定义 Concept Delta、Evidence Reference、Draft、Candidate、Proposal、Review Decision、Accepted Wiki Change Set 和 Publication Receipt 契约；SQLite additive tables 保存 Concept Delta、候选、immutable candidate revision、证据、candidate delivery、durable command/publish cursor、审核、exact change set、receipt、scan 和 control-plane ledger；Concept Delta Collector、fixed-revision Repository Resolver、Deterministic Gate 与 Topic Identity Resolver 继续负责事实和主题边界。`api/app/services/domain_knowledge_review_ledger.py` 会兼容 OpenClaw wire command 的 `id/input_payload_sha256/message_id/base_git_revision`，但归一化后仍严格校验 candidate delivery hash、candidate/proposal revision、approved knowledge、Markdown、完整 unified diff、target/base hash；同 command ID 的相同 payload 幂等重放，异内容硬失败。`api/app/services/domain_knowledge_control_plane.py` 负责 candidate batch、command result、exact publish payload 和 publication receipt，并且 cursor 只在整批命令或 receipt 持久化完成后推进。当前 `CODEX_KNOWLEDGE_EXTRACTION_ENABLED=false`，旧 synthesis worker 尚未自动收集 Concept Delta、调用 Resolver/Gate 并生成 delivery；`DOMAIN_KNOWLEDGE_CONTROL_PLANE_ENABLED=false`，v2 worker 默认不运行，因此仍不会自动发布 Obsidian。2026-07-14 重启后已用 Git HEAD `62e24257b025423fb085ef4c7534c19354785111` 的 Contract/实现/测试证据跑通 shadow candidate，OpenClaw 返回 item `accepted`；完整人工审核到最终 receipt 仍待实际操作验收。
+
+当前已实现的 Codex review memory 流程由 FastAPI 持有状态机。本地 review API 仍可用于 Web/Pet/manual 工具：`GET /codex/reviews/daily-summary` 获取数量摘要，`GET /codex/reviews/drafts` 拉取完整待确认 backlog，`POST /codex/reviews/items/{item_id}/decision` 写入 `accept`、`edit_accept`、`ignore` 或 `snooze` 决策。`decision` payload 现在在兼容旧 `edited_title` / `edited_summary` 的同时，支持优先级更高的结构化 `memory_draft`；该结构只允许出现在 `accept` / `edit_accept`，要求至少包含 `knowledge_kind`、`problem`、`when_to_use`、非空 `steps`、非空 `verification`、`source_summary`，且 `steps[*].order`、`verification[*].order` 必须从 1 开始严格递增。`edit_accept` 现在允许仅携带 `memory_draft` 而不强制依赖 legacy summary 字段。生产跨机设计不要求 OpenClaw 反连本机 FastAPI；OpenClaw 侧提供 review run / command queue。FastAPI daily snapshot 已拆成两层：兼容字段 `drafts`、`daily_new_items`、`work_units`、`learning_candidates` 和 `rollup` 只包含按 Asia/Shanghai 自然日筛选、当天新建或 `updated_at` 有实质更新的 review items；`pending_review_backlog` 只携带全部历史未处理项的数量、高优先级数量和建议批次，不再每天重复传完整旧候选。`summary.draft_count/high_priority_count` 表示当天增量，同时附带 `pending_backlog_count/pending_backlog_high_priority_count`。outbound worker 每轮重新计算 daily snapshot cursor，先查询 SQLite `codex_review_control_plane_snapshot_state`：同一 daily session key 已成功提交相同 cursor 时返回本地 `snapshot_unchanged`，不再发送 HTTP POST；当天增量、backlog 数量、日期发生变化或上次提交失败才调用 snapshot endpoint。OpenClaw 返回 `idempotent=true` 也作为成功提交持久化。snapshot 是否变化不影响后续 `GET {OPENCLAW_CONTROL_PLANE_BASE_URL}/v1/apps/mmd/codex-review/runs/codex-review-daily:YYYY-MM-DD/commands?cursor=...` 命令轮询和 publish-status 轮询。在本地应用 `review_decision` 后，FastAPI 调用 `POST {OPENCLAW_CONTROL_PLANE_BASE_URL}/v1/apps/mmd/codex-review/commands/{command_id}/result` 回推 `{ session_key, command_id, status, result, error, completed_at }`。FastAPI 当前支持的 control-plane command 类型是 `review_decision`，动作与本地 API 一致：`accept`、`edit_accept`、`ignore`、`snooze`；control-plane `review_decision` 使用与本地 API 相同的 `memory_draft` 校验规则。成功结果的 `result` 包含 `item_id`、`item_status` 和可选 `memory_id`，失败结果回传错误文本。command cursor 保存在进程内 `app.state.last_codex_review_control_plane_command_cursor`，最近一次处理结果保存在 `app.state.last_codex_review_control_plane_commands`。
 
 daily snapshot 推送由 `CODEX_OPENCLAW_CONTROL_PLANE_ENABLED` 控制，目标是 `POST {OPENCLAW_CONTROL_PLANE_BASE_URL}/v1/apps/mmd/codex-review/runs/codex-review-daily:YYYY-MM-DD/snapshot`，token 默认复用 `OPENCLAW_TOKEN`，也可用 `OPENCLAW_CONTROL_PLANE_TOKEN` 覆盖。snapshot 构建时会把历史 `desktop_pet_sessions.workspace_id IS NULL` 的 unscoped draft 临时视为当前 `CODEX_OPENCLAW_CONTROL_PLANE_WORKSPACE_ID`，本地 `/codex/reviews/drafts?workspace_id=...` API 仍保持严格 workspace 过滤。snapshot 现在包含四层语义：`drafts` 是兼容旧 OpenClaw 审核队列的逐条 draft；`work_units` 按 `pet_session_id` 聚合 goal/outcome/status、review item counts、top review items、changed files 和 checks/failures，用于项目工作总结；`learning_candidates` 从 blocker/pitfall/decision/followup/work_summary draft 派生 problem/root_cause/fix/prevention/lesson/证据，用于 OpenClaw 让用户确认哪些经验值得沉淀；`rollup` 汇总 work unit count、状态分布、review item/candidate 类型分布、高优先级 candidate 数、top tags、changed files、失败命令数和成功检查数，作为 OpenClaw 日报和复盘入口。空 title-only/无摘要/无证据的 draft 仍保留在 `drafts`，但不会进入 `learning_candidates`，避免污染经验沉淀候选。`work_units`、`learning_candidates` 和 `rollup` 都是 outbound snapshot 的派生视图，不直接写入 memory-wiki；只有用户确认后 FastAPI 才创建 memory。`accept` 和 `edit_accept` 会创建去重的 `codex_review_memory` 行，并在 `codex_review_memory_versions` 写入版本 1；如果决策 payload 带有 `memory_draft`，FastAPI 直接把它作为 canonical `details_json` 持久化，并优先用它渲染 memory `body`，不会再从 `edited_summary` 或 review summary 反推结构。未携带 `memory_draft` 时，仍保留旧的 summary-only 兼容路径，把 review draft 的 `summary/symptom/root_cause/fix/prevention/decision/result` 等候选信息归一化成结构化 knowledge memory。当前 body 渲染支持 `Problem`、`Root Cause`、`When To Use`、`Prerequisites`、`Steps`、`Verification`、`Cautions`、`Open Questions`、`Source Summary` 等分节，并会把 per-step `commands`、`file_refs`、`evidence_refs` 和 verification `expected_signal` 写入 Markdown。也就是说，`codex_review_items` 继续是待审核摘要候选，`codex_review_memory` 才是确认后的可执行知识沉淀；两者不复用同一语义层。历史 unscoped item 被确认时也使用当前 `CODEX_OPENCLAW_CONTROL_PLANE_WORKSPACE_ID` 作为 memory workspace，避免落到 `unknown`。后续编辑通过 append-only version 记录 `title/body/details_json`，不覆盖历史版本。`snooze` 的 `snooze_until` 保存在 review item details 中，未到期的 snoozed item 不会出现在 drafts 列表。默认 decision target 是 `openclaw_wiki`，所有本地 review API 目前使用 `x-user-id`，且必须命中 `ADMIN_USER_IDS`。
 
@@ -155,7 +172,198 @@ daily snapshot 推送由 `CODEX_OPENCLAW_CONTROL_PLANE_ENABLED` 控制，目标�
 
 本地 Codex Tool facade 当前暴露在 `/openclaw/tools/codex/*`，它是 FastAPI 执行 OpenClaw Codex tool command 时复用的受控入口，不替代浏览器 `/codex/interactive/*`。生产跨机链路应由 OpenClaw 把 Codex tool request 写入 OpenClaw command queue，FastAPI outbound worker 轮询后调用本地 facade；不要求 OpenClaw 直接访问本机 `/openclaw/tools/codex/*` URL。`POST /openclaw/tools/codex/sessions` 复用现有 Codex interactive session 创建逻辑，因此仍执行 admin、`CODEX_ALLOWED_USERS`、workspace allowlist、sandbox、worktree 和 provider 初始化校验；`GET /openclaw/tools/codex/sessions/{session_id}/status` 只返回 bounded session snapshot，包括 session/status、last output preview、pending approval refs、latest artifact refs 和 recent event headers，不返回完整 transcript、artifact metadata 或本地文件路径；`POST /openclaw/tools/codex/approvals/{approval_id}/decision` 复用现有 approval 决策逻辑。MMD project 是 OpenClaw 的 application channel/domain；LLM/model backend 只是 OpenClaw 在该 channel 内使用的能力之一。
 
-## 4. 主调用链：前端发消息
+## 4. Codex Domain Knowledge v2 拓扑与调用链
+
+这一链路负责把 Codex 会话、显式 Concept Delta 与固定 Git revision 的仓库事实转成 Domain Knowledge Candidate，并在 OpenClaw 审核后只发布 exact Accepted Wiki Change Set。Review Sync 与 Knowledge Extraction 仍从同一份本地会话事实分叉；Phase 2 模块和 v2 控制面/ledger 已实现，但从 legacy synthesis outbox 自动生成 v2 candidate delivery 的编排尚未接上。当前 `CODEX_KNOWLEDGE_EXTRACTION_ENABLED=false` 且 `DOMAIN_KNOWLEDGE_CONTROL_PLANE_ENABLED=false`，自动抽取和 v2 控制面默认都不启动。
+
+### 4.1 当前已实现拓扑
+
+```mermaid
+flowchart LR
+    A["Codex rollout JSONL<br/>CODEX_HOME/sessions/**/rollout-*.jsonl"] --> B["desktop-pet Electron scanner<br/>full streaming scan + bounded facts"]
+    B --> C["POST /desktop-pet/sessions"]
+    C --> D[("desktop_pet_sessions")]
+    D --> A1{"自动入口 Gate<br/>feature + token + reviewable status"}
+    A1 -- "满足" --> E["build_codex_review_evidence_pack"]
+    A1 -- "不满足" --> G0["不调用抽取器"]
+    O[("codex_events<br/>codex_artifacts<br/>codex_approvals")] --> E
+    E --> F["build_codex_knowledge_evidence_pack<br/>reviewability + code_index <= 12"]
+    M["Admin manual extract API<br/>admin + feature + token"] --> E
+    F --> G{"signal score 达标<br/>或 manual force"}
+    G -- "不满足" --> G1["不入队<br/>not_knowledge_candidate"]
+    G -- "满足" --> H[("codex_knowledge_extraction_outbox<br/>pending")]
+    H --> I["FastAPI background worker"]
+    S["local SKILL.md<br/>codex-domain-knowledge-v3"] --> I
+    I --> J["OpenClaw Gateway<br/>POST /v1/responses"]
+    J --> K["response parser<br/>legacy v1 + Domain Knowledge v2"]
+    K --> L[("codex_session_knowledge<br/>raw_response_json")]
+    L --> N["Admin read APIs<br/>latest / items"]
+    D -.-> CD["Concept Delta Collector<br/>(尚未编排)"]
+    REPO["Repository / Git<br/>fixed revision"] -.-> RR["Repository Evidence Resolver<br/>(read-only)"]
+    CD -.-> DG["Deterministic Domain Knowledge Gate"]
+    RR -.-> DG
+    DG -.-> TI["Topic Identity Resolver"]
+    TI -.-> V2[("domain_knowledge_candidates<br/>candidate versions + evidence")]
+    V2 --> DEL[("candidate deliveries<br/>durable + idempotent")]
+    DEL --> OC2["OpenClaw Project Knowledge<br/>candidate + proposal + human review"]
+    OC2 --> CMD[("durable review command")]
+    CMD --> LEDGER["FastAPI Review Ledger<br/>exact hash/revision validation"]
+    LEDGER --> CS[("Accepted Wiki Change Set<br/>exact files + full diff")]
+    CS --> PUB["OpenClaw memory-wiki publish<br/>base hash + lint + Git push"]
+    PUB --> REC[("Publication Receipt")]
+```
+
+`desktop-pet/electron/codexSessionFiles.ts` 分块流式扫描 rollout JSONL 的完整事件序列，同时只保留脱敏、限长的 `metadata.facts`、`work_items` 和 `methods`；完整 transcript 不会进入 FastAPI 或发给 OpenClaw。当前 scanner 兼容旧 `function_call` 和新 `custom_tool_call` 事件，并按 `call_id` 关联输出。Electron 主进程会在正常 session 扫描、完成态 watcher 以及每天凌晨 4 点补扫时调用 `POST /desktop-pet/sessions`。知识抽取使用的是 FastAPI 基于 SQLite 事实重新构建的 evidence pack，不允许 OpenClaw 回读本机 rollout、源码或文件系统。
+
+### 4.2 自动触发与手动触发
+
+自动入口是 `api/app/routes/desktop_pet.py` 的 `POST /desktop-pet/sessions`：
+
+1. 先 upsert `desktop_pet_sessions`；缺少 `workspace_id` 时使用 `CODEX_OPENCLAW_CONTROL_PLANE_WORKSPACE_ID`。
+2. 只有 `CODEX_KNOWLEDGE_EXTRACTION_ENABLED=true`、存在 `OPENCLAW_TOKEN`，且 `last_status` 为 `completed`、`failed`、`waiting_approval` 或 `file_changed` 时，才进入知识候选构建。
+3. `build_codex_knowledge_evidence_pack()` 先复用 review evidence builder，再加入 `kind=codex_knowledge_evidence_pack`、`prompt_version`、Skill 标识、`reviewability` 和 deterministic `code_index`。
+4. 信号分数未达到 `CODEX_KNOWLEDGE_MIN_SIGNAL_SCORE` 时直接返回 `queued=false / not_knowledge_candidate`，不会写 outbox。
+5. 入队使用 `(pet_session_id, source_hash)` 唯一键保证幂等；同一份 evidence 不会重复创建任务。普通自动上报不会把已失败的同 hash job 重排为 `pending`。
+
+手动入口是 admin-only API：
+
+```http
+POST /codex/knowledge/sessions/{pet_session_id}/extract
+Content-Type: application/json
+x-user-id: <admin>
+
+{
+  "force": true,
+  "min_signal_score": null
+}
+```
+
+该 API 仍要求 feature flag 已开启且 `OPENCLAW_TOKEN` 存在。默认 `force=true`：它绕过信号阈值，并把相同 `(pet_session_id, source_hash)` 的 `failed` job 原地重置为 `pending`、清空错误和 attempt count；它不会创建无限自动重试。`force=false` 时与自动链使用相同的候选 Gate。
+
+### 4.3 Worker 到 OpenClaw 的调用时序
+
+```mermaid
+sequenceDiagram
+    participant W as Knowledge Worker
+    participant DB as SQLite
+    participant OC as OpenClaw Gateway
+
+    W->>DB: claim oldest pending job
+    DB-->>W: status= sending, attempt_count + 1
+    W->>W: trim evidence to max payload<br/>load local SKILL.md
+    W->>OC: POST /v1/responses<br/>Bearer token + agent/channel/session headers
+    OC-->>W: one JSON object
+    W->>W: parse legacy schema v1 or Domain Knowledge synthesis v2
+    W->>W: reconcile legacy code_index or validate v2 Evidence Reference IDs
+    alt valid response
+        W->>DB: upsert codex_session_knowledge
+        W->>DB: outbox status= succeeded
+    else request or validation failure
+        W->>DB: outbox status= failed + last_error
+    end
+```
+
+FastAPI 启动时只有在 feature flag 开启、token 存在且 worker 未被测试 override 禁用时，才创建 `run_codex_knowledge_extraction_worker()`。worker 每 `CODEX_KNOWLEDGE_SYNC_INTERVAL_SECONDS` 处理最多一个最早的 `pending` job，请求使用独立的 `CODEX_KNOWLEDGE_TIMEOUT_SECONDS`，默认 300 秒。
+
+OpenClaw 请求为：
+
+```text
+POST {OPENCLAW_BASE_URL}/v1/responses
+Authorization: Bearer <OPENCLAW_TOKEN>
+x-openclaw-agent-id: {CODEX_KNOWLEDGE_AGENT_ID}
+x-openclaw-message-channel: {CODEX_KNOWLEDGE_CHANNEL}
+x-openclaw-session-key: codex-knowledge:{pet_session_id}
+
+model = OPENCLAW_MODEL（当前为 openclaw）
+stream = false
+input = prompt_version + 完整 SKILL.md contract + bounded evidence pack
+```
+
+这里的 Skill 执行方式是：FastAPI 从 `CODEX_KNOWLEDGE_SKILL_PATH` 读取本地 `SKILL.md`，把它完整嵌入 prompt 作为 authoritative contract，再由指定 OpenClaw agent 执行。OpenClaw 不会自行访问本仓库里的 Skill 文件；Skill 文件缺失时客户端才使用内置的最小 fallback contract。
+
+### 4.4 返回解析、证据约束与 Deterministic Gate
+
+response parser 保留两类输入合同：
+
+- Legacy `schema_version=1` 继续接受 `no_wiki|wiki_candidates`、`memory_draft`、`publish_status` 和最多十二项 `code_index`，保存前仍以输入 code index 覆盖模型 locator。
+- Domain Knowledge synthesis `schema_version=2` 接受 `no_wiki|domain_knowledge_candidates`。每个 candidate 必须是 `source_kind=session_incremental`，包含合法的 Domain Knowledge v2 draft，显式 `introduced_for/meaning/technical_solution/source/evidence_refs`，且 `confidence` 在 0 到 1 之间。
+- v2 candidate 只返回 Evidence Reference ID；当 worker 输入提供 `repository_evidence.evidence_refs` 或 canonical `evidence_index` 时，所有 candidate ref 必须存在于该索引。模型不返回、也不能修改 revision、blob、path、symbol、line 或 snippet hash。
+- `assessment.candidate_count` 必须与实际候选数一致；`no_wiki` 不允许携带候选。
+
+Phase 2 的 `evaluate_domain_knowledge_candidate()` 是独立的程序化 Gate，不由 OpenClaw prompt 代替。它重新校验 Candidate schema，从 Repository Evidence Pack 取 canonical refs 覆盖模型 evidence index，检查引入问题、定义、关系、四类边界、不变量、Contract/实现和测试/验证证据，并为 Contract/Workflow/Rule/Gate/Policy 检查 Concept Delta。未知 ref 或内容/证据缺口进入 `needs_evidence`，缺作者解释进入 `needs_author_explanation`，全部满足才进入 `ready_for_review`。当前 legacy outbox worker 尚未调用该 Gate。
+
+### 4.5 数据状态、查询 API 与 Wiki 发布边界
+
+Outbox 状态机是：
+
+```text
+pending -> sending -> succeeded
+                   -> failed
+
+failed -- manual force=true --> pending
+```
+
+成功结果完整保存在 `codex_session_knowledge.raw_response_json`。兼容字段 `domain/concepts/rule_concepts/...` 仍保留，但 v2 消费方应直接使用：
+
+```text
+disposition
+assessment
+wiki_candidates
+domain_knowledge_candidates
+rejected_items
+code_index
+```
+
+读取入口均为 admin-only：
+
+```http
+GET /codex/knowledge/sessions/{pet_session_id}/latest
+GET /codex/knowledge/items?workspace_id={workspace_id}&limit=20
+```
+
+legacy knowledge worker 的终点仍是 `codex_session_knowledge`；它返回的 v2 `domain_knowledge_candidates` 尚未自动进入 Resolver/Gate/topic identity 与 candidate delivery。另一方面，手工或后续编排产生的合格 candidate 已可以写入 immutable candidate version、进入 durable delivery，并走 OpenClaw Project Knowledge v2 控制面。现有 v1 人工审核链继续兼容运行：
+
+```text
+codex_review_items(status=draft)
+  -> user accept / edit_accept
+  -> codex_review_memory + codex_review_memory_versions
+  -> bounded wiki payload
+  -> OpenClaw control plane
+  -> memory-wiki / Obsidian Git vault
+```
+
+剩余自动化接线必须把 v2 draft 经 Repository Resolver、Deterministic Gate 和 Topic Identity Resolver 后保存成 immutable candidate revision 并 enqueue delivery；不能把 v2 draft 降级映射为 Runbook memory，也不能从 `codex_session_knowledge` 直接绕过审核写 Wiki。
+
+2026-07-14 已冻结 Domain Knowledge v2 目标合同：
+
+- 总执行 Spec：`docs/plans/2026-07-14-project-domain-knowledge-wiki-execution-spec.md`
+- OpenClaw 独立交付 Spec：`docs/plans/2026-07-14-openclaw-project-domain-knowledge-review-publish-spec.md`
+
+Phase 1 与 Phase 2 已实现；OpenClaw 侧 Wiki Change Proposal/双重审核路由，以及 FastAPI 侧 durable delivery/cursor、exact proposal validation、Accepted Wiki Change Set、publish payload 和 receipt ledger 也已实现。`create/update/merge/supersede` 的最终 Vault 行为由 OpenClaw 负责。当前缺口是 legacy synthesis 到 v2 candidate 的自动编排，以及一次真实用户审核后从 command 到 Obsidian Git receipt 的端到端验收。
+
+### 4.6 代码入口索引
+
+| 环节 | 当前实现 |
+| --- | --- |
+| Codex JSONL bounded scanner | `desktop-pet/electron/codexSessionFiles.ts` |
+| Electron 扫描调度与 session upsert | `desktop-pet/electron/main.ts` |
+| 自动触发入口 | `api/app/routes/desktop_pet.py` |
+| 手动触发与查询 API | `api/app/routes/codex_knowledge.py` |
+| 基础 review evidence 构建 | `api/app/services/codex_review_fact_extractor.py` |
+| 信号评分、`code_index`、outbox、worker、schema Gate 与 reconcile | `api/app/services/codex_knowledge_extraction.py` |
+| Domain Knowledge v2 Pydantic contracts | `api/app/models/domain_knowledge.py` |
+| Concept Delta Collector 与缺口 finding | `api/app/services/domain_knowledge_concept_delta.py` |
+| Fixed-revision Repository/Git evidence | `api/app/services/domain_knowledge_repository_resolver.py` |
+| Deterministic candidate Gate | `api/app/services/domain_knowledge_gate.py` |
+| Stable topic identity / alias matching | `api/app/services/domain_knowledge_topic_identity.py` |
+| Durable review ledger / exact proposal validation | `api/app/services/domain_knowledge_review_ledger.py` |
+| Project Knowledge v2 candidate/command/publish/receipt orchestration | `api/app/services/domain_knowledge_control_plane.py` |
+| OpenClaw `/v1/responses` 请求和 prompt 组装 | `api/app/services/openclaw_client.py` |
+| SQLite schema 与状态读写 | `api/app/db/store.py` |
+| OpenClaw 抽取 contract | `openclaw/skills/codex-session-knowledge-extraction/SKILL.md` |
+| 定向回归测试 | `api/tests/test_codex_knowledge_extraction.py`, `api/tests/test_domain_knowledge_*.py` |
+
+## 5. 主调用链：前端发消息
 
 ```text
 User sends message in Chatbox
@@ -168,6 +376,7 @@ User sends message in Chatbox
   -> normalize_assistant_reply()
   -> SQLite insert assistant message
   -> resolve motion action against favorite VMD assets
+     (exact token first; then controlled fallback for think/thinking_tilt or akimbo/叉腰)
   -> optional TTS flow
   -> response returns user_message + assistant_message
   -> frontend updates Chatbox and MMD stage
@@ -196,13 +405,13 @@ Companion 顶栏只常驻显示 `USER` 和短 `SESSION`，不再把长会话 tit
 | OpenClaw `/v1/responses` 读超时 | 主消息链路默认走 `stream=true`；收到完整 JSON 后立即返回，不强等 `response.completed`；若 stream 超时但已有内容，会以 partial 结果继续解析，避免直接丢弃；非流式/关闭 streaming 时不做同请求立即重试 |
 | OpenClaw 空内容 | 视为失败，进入 fallback |
 | 回复 JSON 不完整 | `normalize_assistant_reply()` 做兼容，缺动作时 fallback idle |
-| 动作无法匹配 VMD | `motion_resolution.status=fallback_idle`；只要后端没有给出 `resolved_asset_url/resolved_asset_id`，前端会随机抽取当前模型 `00_idle_loop` 中的 VMD 作为兜底；没有 idle VMD 时才回退默认 procedural idle |
+| 动作无法匹配 VMD | 先按 `asset_id`、显示名、文件名和 motion template 精确匹配；如果请求是 `think`/`thinking`/`thinking_tilt`，再从当前模型 `03_thinking_waiting` 收藏目录中按 `100pct`、`reference`、`思考` 命名优先级选择参考 VMD；如果请求是 `akimbo`/`hands_on_hips`/`hands-on-hips`/`arms_akimbo`/`arms-akimbo`/`叉腰`，再从当前模型 `06_strong_personality` 收藏目录中按 `100pct`、`reference`、`叉腰` 命名优先级选择参考 VMD；仍未命中时 `motion_resolution.status=fallback_idle`，前端会随机抽取当前模型 `00_idle_loop` 中的 VMD 作为兜底；没有 idle VMD 时才回退默认 procedural idle |
 
-## 5. 音频服务调用链
+## 6. 音频服务调用链
 
 当前音频由独立 Voice Workflow TTS 服务提供，不由 OpenClaw `/v1/audio/speech` 提供。
 
-### 5.1 消息内 TTS
+### 6.1 消息内 TTS
 
 ```text
 POST /sessions/{session_id}/messages
@@ -247,7 +456,7 @@ Frontend sees assistant_message.tts.proxy_audio_url
 
 Bridge 会话中的前端消息刷新不只比较 message id，也会比较消息内容和 TTS 引用签名（`tts.status`、`remote_audio_url`、`proxy_audio_url`、`task_id`、`error` 等）。因此长文本 TTS 先返回 `pending`、后台 worker 后续写成 `ready` 时，即使 message id 不变，Chatbox 也会用服务端最新消息覆盖本地旧状态，并拿到可播放的音频代理 URL。
 
-### 5.2 直接 Server TTS
+### 6.2 直接 Server TTS
 
 ```text
 Frontend requestServerTts()
@@ -259,7 +468,7 @@ Frontend requestServerTts()
   -> FastAPI returns audio bytes
 ```
 
-### 5.3 Realtime Voice 侧链路
+### 6.3 Realtime Voice 侧链路
 
 Phase 1 已接入为“消息服务主链路 + 语音 WebSocket 侧链路”：
 
@@ -290,7 +499,7 @@ POST /sessions/{session_id}/messages with tts_enabled=true
 - chunk 播放前失败时自动回退到长任务 `message_tts`；已经播放过部分 chunk 后失败时标记 `partial_failed`，不自动重播完整语音。
 - realtime chunk 合成出现未预期异常时，WebSocket 返回 `error { message_id, job_id, detail }`，前端按“未播放 chunk”路径回退到长任务 `message_tts`。
 
-## 6. OpenClaw Bridge 调用链
+## 7. OpenClaw Bridge 调用链
 
 Bridge 是“同步 OpenClaw/Feishu 已有会话消息到本地”的链路，不是前端发消息的主链路。
 
@@ -370,7 +579,7 @@ operator.pairing
 
 Cron 问候正文仍来自 OpenClaw/Feishu history 或 `OPENCLAW_GREETING_DASHBOARD_INDEX_PATH` 旁路索引，API 不会用 Voice Workflow 的 `.txt` 覆盖 `messages.content`。Cron 问候语音优先走远程 Voice Workflow 接口 5：`metadata.greeting_cron.audioFile` 或 `textFile` 存在时，后端只接受包含 `/eula_emotion_revelation/` 的 Voice 存储绝对路径、明确相对存储路径，或明确文件名兜底。`audioFile` 是 `.ogg`/`.wav` 时优先按 metadata 的真实音频路径探测，例如 `关心温柔/afternoon_20260518_1400.ogg`；如果该路径短时间内仍不可用，再尝试同名前缀 `.wav` 兜底。`textFile` 和 `.meta.json` 仍推导为同名前缀 `.wav`。后端会用 ranged GET 轻量探测 `{TTS_SERVICE_BASE_URL}/api/v1/eula-storage-audio/{path}`，每个候选路径最多短重试 3 次；重试等待按线性累加，基准值为 `min(TTS_SERVICE_POLL_INTERVAL_SECONDS, 1s)`，默认等待序列为 `1s -> 2s`。只有响应为 2xx/206 且 `content-type` 是 `audio/*` 时，才直接写成 ready 的 `message_tts.remote_audio_url`，不调用 `POST /api/v1/tts`。如果接口 5 返回 404、非音频 2xx 或探测失败，则回到原 `submit_task + wait_for_reference` 链路，用当前问候正文生成对应语音。
 
-## 7. MMD/VMD 资源链路
+## 8. MMD/VMD 资源链路
 
 ```text
 Frontend model selector
@@ -435,7 +644,21 @@ CompanionPage stageInteractionState
 
 渲染模式仍由前端 `renderPipeline` 隔离选择。`classic`、`hero-shot`、`genshin`、`mio-reference` 保持既有 Three.js/MMD runtime；新增 `reze-npr` 是 reze-engine 启发的实验模式，只迁移可在现有 Three.js 管线中低风险复刻的显示能力：按 PMX 材质名推断 face/body/hair/eye/stockings/metal/cloth 预设、对丝袜和 cutout 材质启用 Three.js `alphaHash`/`alphaToCoverage`、启用独立轮廓、ACES tone mapping、轻量 bloom 和 reze 风格灯光。它不接管 reze-engine 的 WebGPU renderer、PMX loader、VMD/IK/物理或 picking，因此不会改变现有模式的模型加载、VMD 播放和交互语义。`mio-reference` 当前默认开放镜头来自 2026-05-21 导出的 `Render Config`：`fov=32`、`position=[-9.39,12.522935,43.63]`、`target=[-1.861732,-2.847643,1.048369]`、`locked=false`，OrbitControls 的 `maxDistance` 仍为 72；页面启动时会把本地会话里的 `mio-reference` 镜头迁移到这组默认参数，避免旧 localStorage 覆盖默认构图。
 
-`/mmd-calibration-render` 是给 `imgToAction` 和 Playwright 脚本使用的无外壳渲染入口。页面复用同一个 `MMDStage` / `MMDCompanionRuntime`，通过 query string 接收 `modelUrl`、`vmdUrl`、`renderPipeline` 和可选 camera snapshot；`imgToAction/tools/render-axis-calibration.mjs` 会启动本地静态文件服务，把校准 PMX/VMD 暴露给该页面，再调用 runtime 的 `setCalibrationCaptureMode(true)` 和 `seekVmdFrame(frame, fps)` 对 CSV 帧表中的 target/hold 帧逐帧截图。校准模式只在脚本捕获时启用：`seekVmdFrame` 直接采样当前 VMD `AnimationClip` 的骨骼 position/quaternion track 并写回 bone transform，而不是依赖 `AnimationMixer` 的非线性 seek；render frame 同时暂停 VMD 时间推进、跳过 MMD helper update、关闭待机 loop、呼吸骨骼偏移和口型/表情叠加，避免截图混入 companion runtime 的 procedural 覆盖；正常 `/companion` 页面仍按原有播放循环和交互状态运行。
+`/mmd-calibration-render` 是给 `imgToAction` 和 Playwright 脚本使用的无外壳渲染入口。页面复用同一个 `MMDStage` / `MMDCompanionRuntime`，通过 query string 接收 `modelUrl`、`vmdUrl`、`renderPipeline` 和可选 camera snapshot；`imgToAction/tools/render-axis-calibration.mjs` 和 `imgToAction/tools/render_action_4view.mjs` 会启动本地静态文件服务，把校准 PMX/VMD 暴露给该页面，再调用 runtime 的 `setCalibrationCaptureMode(true)` 和 `seekVmdFrame(frame, fps)` 对 CSV 帧表中的 target/hold 帧逐帧截图。`render_action_4view.mjs` 可在 WSL 原生 Node 下运行；如果项目根目录存在 `.local-playwright-libs/usr/lib/x86_64-linux-gnu`，脚本会把该路径注入 Chromium 子进程的 `LD_LIBRARY_PATH`，用于补齐无 root WSL 环境里的 Playwright runtime 依赖。校准模式只在脚本捕获时启用：`seekVmdFrame` 直接采样当前 VMD `AnimationClip` 的骨骼 position/quaternion track 并写回 bone transform，而不是依赖 `AnimationMixer` 的非线性 seek；render frame 同时暂停 VMD 时间推进、跳过 MMD helper update、关闭待机 loop、呼吸骨骼偏移和口型/表情叠加，避免截图混入 companion runtime 的 procedural 覆盖；正常 `/companion` 页面仍按原有播放循环和交互状态运行。
+
+`imgToAction` 的 BVH→VMD 思考动作当前走位置驱动 + IK 后处理链路。`imgToAction/tools/gen_v9e.py` 读取 `imgToAction/samples/bvh/sample0_repeat0_len196_ik.bvh`，用统一 torso scale `8.54` 和 PMX Z 轴翻转做 BVH→PMX 坐标映射；arm_down 阶段不再把 BVH wrist 位置直接作为 IK 目标，而是用 ShoulderC 为链根生成左右臂自然下垂姿态，避免手臂被 FABRIK 折到身体前方。raise/hold 阶段用 `smoothstep` 混合自然下垂和摸下巴目标，再通过 FABRIK、关节角限制和多轮 SLERP 平滑输出 `imgToAction/outputs/vmd/front_depth_v9e.vmd`。渲染验证由 Node/Playwright 脚本通过 `/mmd-calibration-render` 生成四视角截图、GIF 和 `rendered_bone_frames.json`，再由 `imgToAction/tools/motion_acceptance_gate.py --source render` 按 G1-G18 验收。G11-G14 检查手部高度、托下巴语义、右臂解剖和半握手型；G15-G18 继续检查接近阶段安全、拇指/食指双点接触、腕掌解剖和稳定接触锁定。当前 G13 稳定段阈值为右肘角 55°-100°、肩腕距离 2.95-4.1 PMX。骨骼 gate 不能覆盖手套和袖口网格厚度，最终仍必须用正/左/右/后四视角截图与 GIF 做网格遮挡、穿脸和动态轨迹复核。G7 的 strict `akimbo` 策略在稳定段同时检查左腕、左肘和完整左手代理 bbox，并只接受 Blender 网格验证过的 `side_down` 轮廓：手指沿髋侧向下，禁止横向插入腰身；`akimbo` 下 G7 是 P0 阻断 gate。
+
+2026-07-14 当前程序化“优雅思考 + 左手叉腰”输出是 `imgToAction/outputs/vmd/eula_elegant_thinking_generated_v13.vmd`，生成脚本为 `imgToAction/tools/gen_elegant_thinking_generated_v13.py`，部署目标为 `03_thinking_waiting/优雅思考_generated_v13.vmd`，并保留 v12。v13 不读取、复制或拼接现有 VMD；从自然下垂开始，左手最终叉腰，右手经收拢接近后托下巴。最终右腕目标 PMX `[-1.35, 17.15, -3.20]`、右肘 pole `[-2.20, 15.05, -1.75]`、右手首 Euler `[-14, -50, -38]`。完整 0-240 逐帧 gate 为 `16 PASS / 2 WARN / 0 FAIL`，G11-G18 全部通过；稳定段右肘角 `55.2°`、肩腕距离 `2.982 PMX`、五指 Y 展开 `0.291 PMX`、腕弯曲 `59.5°`、掌面夹角 `66.9°`、拇指/食指下巴距离 `1.097/0.594 PMX`，接触漂移为 0。两个 P1 WARN 为旧腕点距离 G4 和 f130-f140 翻腕平滑度 G6，符合警告少于 3 的验收规则。最终证据在 `imgToAction/outputs/actions/elegant_thinking_generated_v13_final_review/`，包含 196 张四视角截图、5 个 GIF、review sheet、手部 review sheet、数据表和 `gate_report.json`；网格视觉确认嘴部可见、手套位于下巴下缘且侧视角不穿脸。`asset_registry` 已同步为收藏资产 `3dcdccb8-bd73-4d0b-89e1-e9eddbafac94`。
+
+2026-07-14 专业时序优化版本为 `imgToAction/outputs/vmd/eula_elegant_thinking_generated_v14.vmd`，生成脚本为 `imgToAction/tools/gen_elegant_thinking_generated_v14.py`，收藏资产为 `03_thinking_waiting/优雅思考_generated_v14.vmd`，资产 ID `b1541c79-bc75-457d-8e14-af8d8158b4c2`。v14 保留 v13 最终坐标和接触拓扑，但把右臂改为 f122 到达预备位、f122-f130 蓄势、f130-f150 托起；f126-f149 对右手首和右手捩执行零相位邻域 SLERP，并用 f130-f146 的局部 `Z+5°` 宽缓冲避开中间手部轮廓抬高。完整逐帧 gate 为 `17 PASS / 1 WARN / 0 FAIL`，G6 从 WARN 提升为 PASS：右手首最大加速度 `0.1024 -> 0.0476`、最大 jerk `0.0597 -> 0.0200`，运动平滑违规 `25 -> 0`。最终证据在 `imgToAction/outputs/actions/elegant_thinking_generated_v14_professional_review/`，包含 196 张截图、5 个 GIF、review sheet、手部 review sheet、数据表、`professional_motion_metrics.md` 和 gate 报告。v13、v12 均保留用于回归对比。
+
+2026-07-14 Blender 网格校正版为 `imgToAction/outputs/vmd/eula_elegant_thinking_generated_v15.vmd`，生成脚本为 `imgToAction/tools/gen_elegant_thinking_generated_v15.py`，并以新文件部署到 `03_thinking_waiting/优雅思考_generated_v15.vmd`，不覆盖 v12-v14。v15 不读取或拼接现有 VMD，只保留 v14 的右臂、头颈和下半身时序，并根据优菈 PMX 实际变形网格把左腕目标改为 `[2.52, 13.46, -0.97]`、左手首 Euler 改为 `[-2°, 6°, 0°]`，使手指沿髋侧向下。Blender 审查工程是 `imgToAction/outputs/blender/eula_elegant_thinking_generated_v15_review.blend`；f0-f240 共 241 帧的左手对全模型网格扫描为 0 个碰撞帧，f160 净空 `0.014774 PMX`，左腕最大帧间旋转 `1.7445°`。最终渲染 Gate 为 `17 PASS / 1 WARN / 0 FAIL`，所有 P0 均通过；唯一 G4 WARN 是腕点代理距离，而 G12/G16-G18 的真实手指接触、腕掌解剖和接触锁定均通过。证据目录 `imgToAction/outputs/actions/elegant_thinking_generated_v15_blender_review/` 包含 196 张四视角截图、49 帧四视角 GIF、5 个 GIF、完整 `rendered_bone_frames.json`、review sheets、数据表和 Gate 报告。
+
+2026-07-14 右腕解剖校正版为 `imgToAction/outputs/vmd/eula_elegant_thinking_generated_v16.vmd`，生成脚本为 `imgToAction/tools/gen_elegant_thinking_generated_v16.py`，并以 `03_thinking_waiting/优雅思考_generated_v16.vmd` 新文件部署，保留 v12-v15。用户视觉复核发现 v15 的右掌在厚袖口下接近断腕；根因是 G17 旧上限 65° 过宽，而 v15 实测腕弯曲已达 59.5°。v16 将 G17 上限收紧为 55°，把右手首终态从 `[-14°, -50°, -38°]` 改为 `[-14°, -40°, -38°]`，并通过头手联动与手指微调维持接触。最终稳定段腕弯曲 `52.7°`、掌面夹角 `63.7°`、右肘角 `55.2°`、肩腕距离 `2.982 PMX`、指尖 Y 展开 `0.249 PMX`、拇指/食指到下巴距离 `1.057/0.499 PMX`。完整 Gate 为 `17 PASS / 1 WARN / 0 FAIL`，证据目录 `imgToAction/outputs/actions/elegant_thinking_generated_v16_anatomical_review/` 包含 196 张截图、5 个 GIF、review sheets、数据表和完整骨骼 JSON。
+
+当目标是“尽可能 100% 还原自然思考动作”而不是严格从 BVH 重建时，当前稳定输出是 `imgToAction/outputs/vmd/eula_thinking_100pct_reference.vmd`。它复制自已验证的 `eula_thinking_elegant_reference_v12_single_raise.vmd`，保留社区 VMD 的自然手指、手腕、肩线、下半身节奏和左臂腰前支撑；对应 manifest 是 `imgToAction/outputs/vmd/eula_thinking_100pct_reference_manifest.json`，渲染证据在 `imgToAction/outputs/actions/thinking_100pct_reference_render/`。该 VMD 同步部署到当前模型动作目录 `MMD/usage/vmd/优菈_by_原神_339146e6e418d79e85a515b26414c0b0[动作]/03_thinking_waiting/思考_100pct_reference.vmd`，用于被资产扫描/动作选择链路发现。这个 reference 路线和 `front_depth_v9e` 的语义不同：它是左臂支撑/抱臂式思考动作，因此验收时应使用 `motion_acceptance_gate.py --left-arm-policy support`；默认 `down` 策略仍用于左臂自然下垂的单手动作。`render_v9e_win.mjs` 现在支持 `IMGTOACTION_VMD_NAME` 和 `IMGTOACTION_RENDER_DIR` 环境变量，用同一渲染入口验证不同 VMD 候选。
+
+当目标是“尽可能 100% 还原叉腰动作”时，当前稳定输出是 `imgToAction/outputs/vmd/eula_akimbo_100pct_reference.vmd`。它复制自当前模型已验证社区 VMD `06_strong_personality/叉腰扭头.vmd`，但以 `叉腰_100pct_reference.vmd` 独立部署，避免 OpenClaw 只想表达稳定叉腰时误选带扭头语义的旧命名。渲染证据在 `imgToAction/outputs/actions/akimbo_100pct_reference_render/`，包含四视角 80 张截图、四视角 GIF、review sheet 和 `akimbo_pose_report.json`。该动作是叉腰专用轻量验收，不使用摸下巴 thinking gate；稳定阶段定义为 f120-f190，目标是双腕贴近腰/髋两侧、双肘外张、上半身保持站立姿态。该 VMD 同步部署到当前模型动作目录 `MMD/usage/vmd/优菈_by_原神_339146e6e418d79e85a515b26414c0b0[动作]/06_strong_personality/叉腰_100pct_reference.vmd`，当前资产 ID 是 `0d3b39a3-13d7-47b8-bbab-349bc8079702`。
 
 `imgToAction` 的首版 landmark fitting 也复用同一个渲染入口。参考图人工关键点存放在 `imgToAction/config/reference_landmarks.eula_signature.json`；多角度图片批次可先通过可选的 `imgToAction/tools/extract_mediapipe_landmarks.py` 运行 MediaPipe Pose Landmarker IMAGE mode，生成 `imgToAction/config/reference_landmarks.eula_thinking.json` 和 `imgToAction/outputs/mediapipe/.../raw_mediapipe_landmarks.json`，其中低置信度 wrist/elbow/ankle/toe 点仍需要人工复核。`imgToAction/tools/export-model-landmarks.mjs` 会加载 PMX/VMD、seek 指定帧、把 reference config 中绑定的 PMX 骨骼投影为屏幕坐标；`imgToAction/tools/fit_pose_nodes.py` 用 neck/pelvis/ankle anchors 做 2D similarity alignment 后计算 weighted RMSE 和 worst landmark 列表，避免相机缩放/平移主导评分。`imgToAction/tools/run_landmark_fit_step.py` 是当前拟合 runner：它从 pose node DSL 生成一批语义参数候选 VMD，逐个通过 `/mmd-calibration-render` 导出骨骼投影，再写入 `outputs/fitting/.../candidate_step_*/fit_step_manifest.json`，用于选择下一轮 pose 参数调整。该链路只读主项目渲染 runtime，不改变 `/companion` 的用户动作播放状态。
 
@@ -478,7 +701,7 @@ Pointer up on MMDStage
 | `PATCH /assets/vmd/{asset_id}` | favorite/显示名/模型绑定 |
 | `GET /assets/vmd/file/{asset_id}` | 提供 VMD 文件 |
 
-## 8. 数据落点
+## 9. 数据落点
 
 | 数据 | 落点 |
 | --- | --- |
@@ -493,27 +716,42 @@ Pointer up on MMDStage
 | Codex UI workspace 登记 | SQLite `codex_workspaces` |
 | Codex session/turn/event/approval/artifact | SQLite `codex_interactive_sessions`, `codex_turns`, `codex_events`, `codex_approvals`, `codex_artifacts` |
 | Codex Review Sync | SQLite `codex_openclaw_sync_outbox` 保存待提交/已提交 evidence pack；SQLite `codex_review_items` 保存 OpenClaw 返回的 draft work_summary/pitfall/decision/followup/blocker |
-| desktop-pet Codex session registry | SQLite `desktop_pet_sessions`：metadata-only menu/resume registry，保存 `pet_session_id`、`codex_session_id`、workspace path、`CODEX_HOME` path、title/status/server metadata；prompt preview 和 summary 只保存 length-bounded 摘要字段。仅 Codex agent 写入该 registry；Claude agent 走纯本地 JSONL 链路，不 upsert 到该 registry |
-| desktop-pet 本地设置 | Electron `userData/pet-settings.json`：当前选中的 workspace path、菜单语言、通知详情精度、置顶开关、当前 coding agent（`codex`/`claude`，默认 `codex`）、Pet window x/y；workspace 缺失时回退 `MMD_PET_WORKSPACE_PATH` 或 cwd 默认 workspace，window 恢复时始终固定为 360x420 |
+| Codex Review Control Plane Snapshot | SQLite `codex_review_control_plane_snapshot_state` 按 daily session key 保存最后成功提交的 snapshot cursor 和 ACK；worker 对未变化 cursor 本地去重，不重复 POST |
+| Project Domain Knowledge v2 | SQLite `domain_knowledge_candidates` / `domain_knowledge_candidate_versions` / `domain_knowledge_candidate_evidence` 保存 immutable candidate；`domain_knowledge_candidate_deliveries` 与 `domain_knowledge_control_plane_runs` 保存 outbound delivery 和 durable cursors；`domain_knowledge_control_plane_commands` / `domain_knowledge_review_decisions` / `domain_knowledge_wiki_change_sets` / `domain_knowledge_publication_receipts` 保存审核和发布闭环 |
+| Codex Knowledge Wiki v2 | SQLite `codex_knowledge_extraction_outbox` 保存去重的 pending/sending/succeeded/failed 抽取任务与 evidence pack；SQLite `codex_session_knowledge.raw_response_json` 保存 `disposition`、Wiki 候选、拒绝项和 canonical `code_index`。当前不自动写入 `codex_review_items` 或 `codex_review_memory` |
+| desktop-pet Codex session registry | SQLite `desktop_pet_sessions`：metadata-only menu/resume registry，保存 `pet_session_id`、`codex_session_id`、workspace path、`CODEX_HOME` path、title/status/server metadata；prompt preview 和 summary 只保存 length-bounded 摘要字段，`metadata.facts` 保存 bounded review facts、结构化 `work_items` 和 `methods`，不保存完整 transcript。仅 Codex agent 写入该 registry；Claude agent 走纯本地 JSONL 链路，不 upsert 到该 registry |
+| desktop-pet 本地设置 | Electron `userData/pet-settings.json`：当前选中的 workspace path、菜单语言、通知详情精度、置顶开关、当前 coding agent（`codex`/`claude`，默认 `codex`）、Codex 运行环境（`win`/`wsl`，默认 `win`）、Pet window x/y/width/height；workspace 缺失时回退 `MMD_PET_WORKSPACE_PATH` 或 cwd 默认 workspace，window 默认 360x420，用户可通过原生窗口边缘调整大小并恢复到上次尺寸 |
 | trace event | SQLite `trace_events` + NDJSON |
 | chat mirror | SQLite `chat_mirror` |
 | retry job | SQLite `retry_jobs` |
 | 本地 PMX/PMD/贴图 | `MMD_ROOT_DIR` |
 | 上传/存储的 VMD | `API_DATA_DIR` 下的 storage；收藏副本在 `MMD_ROOT_DIR/usage/vmd/{model}[动作]/`，可按动作意图继续分子目录 |
 
-`companion_shared_config` 只保存 `/companion` 和 `desktop-pet` 共同需要的当前模型与渲染管线选择；不保存 pet camera、pet window position、notification profile 等 desktop-pet 专属状态。Pet camera 由 `desktop-pet` renderer 的 localStorage 独立维护，按 `selectedModel.relative_path + render_pipeline` 隔离，不写入 SQLite，也不复用主站 session 的 `mmdCamera`。Codex workspace 选择、菜单语言、通知详情精度、置顶开关和 Pet window 位置是 desktop-pet 本地设置，由 Electron 主进程 merge 写入 `userData/pet-settings.json` 的 `selectedWorkspacePath`、`menuLanguage`、`notificationProfile`、`alwaysOnTop` 和 `windowBounds`；workspace 路径只影响 Pet 的菜单扫描、VSCode 打开、新建 Codex 和默认恢复目标，不写入 SQLite 或 shared config。`desktop_pet_sessions` 只保存可读菜单、`codex resume` 和 review evidence 所需 metadata，不复制、不移动、不落库 Codex transcripts；`first_prompt_preview` 最多 240 chars，`last_summary` 最多 1000 chars，Codex session 持久化仍留在用户既有 `CODEX_HOME`。desktop-pet 主进程会按 `CODEX_HOME`（默认 `%USERPROFILE%\.codex` 或 `$HOME/.codex`）扫描 `sessions/**/rollout-*.jsonl`，只抽取 `session_meta.payload.id/cwd`、首条真实用户 prompt preview、尾部 assistant summary、尾部事件推断状态，以及 bounded review facts（failed command excerpt、changed file path、approval title、error excerpt、event counts）；扫描限制为当前 workspace 的最近候选文件，不读取全量大 transcript，也不会把完整 JSONL 内容写入 SQLite。当前 `desktop-pet` 是独立 Electron + Vite 子项目，dev 默认 renderer 为 `http://127.0.0.1:5174`；端口冲突时可用 `MMD_PET_DEV_PORT` 覆盖 Vite 端口，并用 `MMD_PET_RENDERER_URL` 指向 Electron dev renderer。`desktop-pet/start-pet.ps1` 是本地一键启动入口：在 `desktop-pet` 工作目录后台启动 `npm run dev` renderer，等待 renderer ready 后用同一 renderer URL 启动 Electron，并把日志写入 `.codex-pet/logs`；renderer helper 作为后台进程隐藏启动，但 Electron Pet GUI 不使用 `-WindowStyle Hidden`，避免 Windows 把交互式 BrowserWindow 也隐藏；如果已存在 `MMD Codex Pet` 窗口，默认会先停止当前 Electron 主进程再重新拉起，传 `-ReuseExisting` 才返回现有 PID，传 `-ForceNew` 才保留旧实例并额外新开。Pet BrowserWindow 的 `webPreferences.backgroundThrottling=false`，常驻窗口即使未聚焦也不会让 renderer 状态刷新和 MMD 动画进入后台节流。renderer 会读取 `/desktop-pet/shared-config`、`/assets/mmd/models` 和 `/assets/vmd`，复用 `web/src/features/stage/MMDStage` 在 transparent bare window 中渲染 MMD；当 shared config 为空时会跳过明显不可加载的 tiny placeholder PMX，选择第一个可加载模型作为 fallback。pet 待机 VMD 只使用当前模型绑定的 favorite VMD，并复用主站 `buildAutoFavoriteInteraction()` 规则：优先 `00_idle_loop` 中的 companion-safe 可播放动作，缺失时回退排除 entry standby 的安全 favorite 池，再缺失才回到 procedural idle；传给 desktop runtime 前会把 lead `vmdUrl`、循环 URL、standby URL 和 emotion map key 转成 API 绝对地址。renderer 用 `buildPetAutoplayIdleState()` 把该结果包装成 `source="autoplay"` 的 stage state；启动、主站同步 remount、点击动作完成或失败后的恢复都回到这份状态，避免首屏停在 procedural idle。
+`companion_shared_config` 只保存 `/companion` 和 `desktop-pet` 共同需要的当前模型与渲染管线选择；不保存 pet camera、pet window position、notification profile 等 desktop-pet 专属状态。Pet camera 由 `desktop-pet` renderer 的 localStorage 独立维护，按 `selectedModel.relative_path + render_pipeline` 隔离，不写入 SQLite，也不复用主站 session 的 `mmdCamera`。Codex workspace 选择、菜单语言、通知详情精度、置顶开关和 Pet window 位置是 desktop-pet 本地设置，由 Electron 主进程 merge 写入 `userData/pet-settings.json` 的 `selectedWorkspacePath`、`menuLanguage`、`notificationProfile`、`alwaysOnTop` 和 `windowBounds`；workspace 路径只影响 Pet 的菜单扫描、VSCode 打开、新建 Codex 和默认恢复目标，不写入 SQLite 或 shared config。`desktop_pet_sessions` 只保存可读菜单、`codex resume` 和 review evidence 所需 metadata，不复制、不移动、不落库 Codex transcripts；`first_prompt_preview` 最多 240 chars，`last_summary` 最多 1000 chars，Codex session 持久化仍留在用户既有 `CODEX_HOME`。desktop-pet 主进程会按 `CODEX_HOME`（默认 `%USERPROFILE%\.codex` 或 `$HOME/.codex`）扫描 `sessions/**/rollout-*.jsonl`，分块读取完整事件序列，但只持久化 `session_meta.payload.id/cwd`、首条真实用户 prompt preview、最后 assistant summary、最后事件推断状态，以及 bounded review facts（failed command excerpt、changed file path、approval title、error excerpt、event counts）；扫描仍限制为当前 workspace 的最近候选文件，不会把完整 JSONL 内容写入 SQLite。当前 `desktop-pet` 是独立 Electron + Vite 子项目，dev 默认 renderer 为 `http://127.0.0.1:5174`；端口冲突时可用 `MMD_PET_DEV_PORT` 覆盖 Vite 端口，并用 `MMD_PET_RENDERER_URL` 指向 Electron dev renderer。`desktop-pet/start-pet.ps1` 是本地一键启动入口：在 `desktop-pet` 工作目录后台启动 `npm run dev` renderer，等待 renderer ready 后用同一 renderer URL 启动 Electron，并把日志写入 `.codex-pet/logs`；renderer helper 作为后台进程隐藏启动，但 Electron Pet GUI 不使用 `-WindowStyle Hidden`，避免 Windows 把交互式 BrowserWindow 也隐藏；如果已存在 `MMD Codex Pet` 窗口，默认会先停止当前 Electron 主进程再重新拉起，传 `-ReuseExisting` 才返回现有 PID，传 `-ForceNew` 才保留旧实例并额外新开。Pet BrowserWindow 的 `webPreferences.backgroundThrottling=false`，常驻窗口即使未聚焦也不会让 renderer 状态刷新和 MMD 动画进入后台节流。renderer 会读取 `/desktop-pet/shared-config`、`/assets/mmd/models` 和 `/assets/vmd`，复用 `web/src/features/stage/MMDStage` 在 transparent bare window 中渲染 MMD；当 shared config 为空时会跳过明显不可加载的 tiny placeholder PMX，选择第一个可加载模型作为 fallback。pet 待机 VMD 只使用当前模型绑定的 favorite VMD，并复用主站 `buildAutoFavoriteInteraction()` 规则：优先 `00_idle_loop` 中的 companion-safe 可播放动作，缺失时回退排除 entry standby 的安全 favorite 池，再缺失才回到 procedural idle；传给 desktop runtime 前会把 lead `vmdUrl`、循环 URL、standby URL 和 emotion map key 转成 API 绝对地址。renderer 用 `buildPetAutoplayIdleState()` 把该结果包装成 `source="autoplay"` 的 stage state；启动、主站同步 remount、点击动作完成或失败后的恢复都回到这份状态，避免首屏停在 procedural idle。
 
-Electron 原生右键菜单当前由主进程构建，API 地址来自 `MMD_PET_API_BASE_URL`（默认 `http://127.0.0.1:8000`），菜单查询身份来自 `MMD_PET_USER_ID`（默认 `admin-1`）。菜单打开时会先用内存缓存和当前 workspace 的本地 Codex JSONL 构建 native menu 并立即 `Menu.popup`；`POST /desktop-pet/sessions` upsert 与 `GET /desktop-pet/sessions?limit=10` 刷新在 popup 后异步执行，避免 API 慢或 500 时阻塞右键菜单。API 不可用时菜单仍使用本地扫描结果作为 fallback。菜单显示标签压缩成 title / time / status 组合，避免在菜单里暴露 UUID-heavy 字符串。当前菜单项包括 `Workspace` / `工作区`（显示当前 workspace，并可通过 `Select Workspace...` / `选择工作区...` 打开系统目录选择器）、`New Codex Session`、`Send Prompt...` / `发送 Prompt...`、`Recent Sessions`、`More Sessions...`、`Interaction Mode`、`Notification Detail`、`Language / 语言`、`Coding Agent` / `编程助手`、`Always on Top` / `固定在顶部`、`Open VSCode Workspace` / `打开 VSCode 工作区`、`Sync from Main Site` / `从主站同步` 和 `Close`；主进程会把带 `submenu` 的模型项转换成 Electron native `type="submenu"`，因此 `Workspace`、`Interaction Mode`、`Notification Detail`、`Language / 语言` 和 `Coding Agent` 在 Windows 原生菜单中以可展开子菜单呈现。其中 `Interaction Mode` 的 `Drag Whole App` / `Adjust Camera` 会立即生效：preload 以 CommonJS `preload.cjs` 加载并暴露 `window.desktopPet`，renderer 始终把 shell、stage 和 WebGL canvas 保持为 `-webkit-app-region: no-drag`，确保透明 frameless window 仍能收到 DOM `contextmenu`；由于 Windows transparent layered window 的全透明像素可能鼠标穿透，pet 会在 WebGL 上方绘制一个真实 DOM 覆盖层 `.pet-input-hit-surface`（`rgba(255,255,255,0.035)`），保证整窗区域有可命中的合成像素。Pet BrowserWindow 固定为 360x420，`resizable=false` 且 min/max 尺寸锁定；整窗拖动优先由 renderer 在 `Drag Whole App` 模式以 document capture listener 捕获左键 pointer，并通过 `pet:window-drag:start|move|end` IPC 让主进程按系统 cursor delta 调整 BrowserWindow bounds，移动时始终保留 drag 起点的 width/height。主进程同时在 Windows 下用 `hookWindowMessage` 监听 `WM_RBUTTONUP`、`WM_LBUTTONDOWN`、`WM_MOUSEMOVE` 和 `WM_LBUTTONUP` 作为透明 WebGL 子窗口不分发 DOM 鼠标事件时的兜底路径；同一次拖动中第一条到达的 IPC/native source 持有 drag 状态，后到 source 不会覆盖 origin bounds，非持有 source 的 move 会被忽略，任一 end 信号都可释放 drag 状态，避免重复事件把拖动变成系统 resize 或把异常尺寸写回。右键菜单优先走 renderer document capture `contextmenu -> pet:menu:open-context({x,y})`，主进程的 `system-context-menu` / `webContents context-menu` / native mouse hook 监听保留为 fallback；renderer/webContents 提供的是窗口内坐标，native/system hook 提供的是屏幕坐标。主进程会把两类输入统一解析成两份坐标：`Menu.popup({ window, x, y })` 使用 clamp 到 Pet window bounds 的窗口内 popup 坐标，避免屏幕坐标被当成窗口 offset 造成菜单远离 Pet；右键去重使用对应屏幕坐标。native/system screen 坐标如果不在当前 Pet BrowserWindow bounds 内，会被直接丢弃，不会 clamp 到窗口边缘打开菜单，并且会记录为一次 native/system 右键触发以压掉随后迟到的 renderer/webcontents fallback，避免 Windows hook 的窗口外 `WM_RBUTTONUP` 造成桌面其他区域也弹 Pet 菜单。主进程对同一次右键做 source-aware 去重：350ms 内所有 popup 请求直接丢弃，1500ms 内同屏幕坐标（4px 容差）的重复请求会丢弃；如果 native popup 已打开或 native/system 外部右键刚被忽略，随后 1500ms 内迟到的 renderer/webcontents fallback 也会丢弃，即使 renderer 坐标失真，避免第二个菜单出现在窗口左上角。去重不依赖 menu close callback 维持右键可用性。切到相机调整时 renderer 停止发送窗口拖动 IPC，native mouse hook 也不会启动窗口拖动；renderer 向 `MMDStage` 传 `cameraLocked=false` 并关闭 bare stage 的角色点击 pointer capture，让 OrbitControls 在 WebGL canvas 上接管 zoom/pan/rotate；切回拖动整窗时重新锁住 camera 并恢复角色点击捕获。需要诊断真实右键/拖动事件时，可用 `MMD_PET_DEBUG_EVENTS=1` 开启主进程 NDJSON 事件日志，默认写入当前工作目录 `desktop-pet-debug-events.ndjson`，也可用 `MMD_PET_DEBUG_EVENTS_LOG` 指定路径；默认不开启。`Notification Detail` 和 `Language / 语言` 由主进程写入 Electron `userData/pet-settings.json`，下次启动会先从 settings 初始化菜单语言和勾选态；语言切换只影响 desktop-pet 右键菜单标签，不切换主站语言，也不写入 SQLite。Pet window bounds 在 drag end 和 close 时保存，恢复时只采用 x/y，width/height 总是归一为固定 360x420。主站 `/companion` 高级面板提供显式 `保存到桌面 Pet` 按钮，用当前模型和渲染管线写入 shared config；pet 右键 `Sync from Main Site` / `从主站同步` 会让 renderer 重新读取模型、动作和 shared-config，成功后显示同步到的模型名与 render pipeline，并递增 stage reload revision 以强制 MMDStage remount 一次。`New Codex Session` 由主进程执行系统启动动作：目标 workspace 优先使用右键 `Workspace -> Select Workspace...` 持久化的 `selectedWorkspacePath`；缺失时才回退 `MMD_PET_WORKSPACE_PATH`，再回退 Electron 当前工作目录（若当前工作目录是 `desktop-pet`，则自动上提到父级项目根目录）。主进程先在目标 workspace 写入 `.codex-pet/vscode-terminal-request.json` 和 `<os.tmpdir()>/mmd-codex-pet/vscode-terminal-request.json`，其中包含 `codex` 或 `codex resume --cd <workspace> <codex_session_id>` 命令，再按 `MMD_PET_VSCODE_HELPER_MODE` 打开 VSCode：默认或未知值为 `development`，使用 `MMD_PET_VSCODE_CLI`（默认 `code`）执行 `code --new-window --user-data-dir <os.tmpdir()/mmd-pet-vscode-ud/...> --extensionDevelopmentPath <desktop-pet/vscode-helper> <workspace>`，确保新窗口加载 helper 并处理 terminal request；`installed` 模式执行 `code --new-window --user-data-dir <os.tmpdir()/mmd-pet-vscode-ud/...> <workspace>`，要求 helper extension 已通过 `desktop-pet/scripts/install-vscode-helper.ps1` 或等效方式安装并启用。Windows shell 启动时会显式 quote VSCode CLI、helper 路径、user-data-dir 和 workspace 路径，确保 `D:\workspace\MMD project` 这类含空格路径不会被拆成 open editors。`MMD_PET_VSCODE_HELPER_EXTENSION_PATH` 可覆盖 development helper extension 路径。VSCode helper 扩展启动后读取该 request，创建或复用 VSCode 内置终端 `Codex Pet`，并在该终端执行 `MMD_PET_CODEX_CLI`（默认 `codex`）或 resume 命令；执行成功后 helper 会删除 request 文件，超过 5 分钟的旧 request 会被忽略并清理，避免后续打开 workspace 时误启动 Codex。Pet 不再启动外部 `cmd.exe`。`Send Prompt...` / `发送 Prompt...` 先在 renderer 打开 `.pet-panel` prompt 面板，preload 通过 `pet:prompt:send` 调主进程；当前优先走 app-server relay，relay 不可用时把 prompt 暴露为状态卡上的 copyable command，不直接写 terminal request。启动后主进程仍会短轮询当前选中 workspace 的本地 JSONL，把新 session metadata 同步到 registry。`Recent Sessions` 子菜单现在会缓存最近 session；点击任一项会打开该 session 记录的 VSCode workspace，并通过同一 helper request 在 VSCode 内置终端执行 `codex resume --cd <workspace> <codex_session_id>`，因此 Codex 原有 `CODEX_HOME` session 存储保持不变，CLI 可正常 resume 会话。主进程会同步维护 `pet:codex-status`：启动前发布 `starting`，成功拉起 terminal request 后发布 `launched`，恢复时发布 `resuming`/`running`，发送 prompt 成功后发布 `running`，本地 JSONL 推断状态会发布 `running`、`command_running`、`waiting_approval`、`completed`、`failed` 或 `disconnected`，失败时发布 `failed` 和错误信息；每次 `pet:codex-status:changed` IPC 发送后都会调用 `webContents.invalidate()` 调度 transparent Pet 窗口重绘，避免未聚焦窗口的状态卡等到 focus/hover 才刷新。preload 暴露 `codexStatus.get/onChanged` 给 renderer，pet 状态条会把该状态作为常驻状态显示（短暂菜单 toast 结束后仍保留，例如 `Codex running · <session title>`）。`Open VSCode Workspace` 和 renderer 审批 fallback 按钮都通过当前选中 workspace 打开新的 VSCode window；focus 成功只在 renderer 里短暂显示 `VSCode workspace open` toast，不发布新的 Codex 状态，也不覆盖当前 running/output/approval 状态。`More Sessions...` 点击后主进程会拉取最多 50 条 session（API registry 加当前 workspace 本地 JSONL fallback），通过 `pet:menu:action` 发送给 renderer，renderer 在 Pet 窗口内显示可搜索 session 面板，按 title/workspace/status/time 生成搜索文本并展示可读 title、workspace、状态和最近时间；点击面板中的 active session 会调用 `pet:sessions:focus-active` IPC，主进程先用内存映射或 `<user-data-dir>/.codex-pet/session-window.json` marker 按 session id 找回已有 VSCode 窗口；marker 缺失时会扫描 VSCode `User/workspaceStorage/*/workspace.json` 做一次性 workspace 兜底，以已有 `user-data-dir` 调 `focusVscodeWorkspace`，不写入精确 session marker；非 active session 才调用 `pet:sessions:restore` IPC，复用 `restore-session` 分支在 VSCode 内置终端执行 `codex resume --cd <workspace> <codex_session_id>`。
+Electron 原生右键菜单当前由主进程构建，API 地址来自 `MMD_PET_API_BASE_URL`（默认 `http://127.0.0.1:8000`），菜单查询身份来自 `MMD_PET_USER_ID`（默认 `admin-1`）。菜单打开时会先用内存缓存和当前 workspace 的本地 Codex JSONL 构建 native menu 并立即 `Menu.popup`；`POST /desktop-pet/sessions` upsert 与 `GET /desktop-pet/sessions?limit=10` 刷新在 popup 后异步执行，避免 API 慢或 500 时阻塞右键菜单。API 不可用时菜单仍使用本地扫描结果作为 fallback。菜单显示标签压缩成 title / time / status 组合，避免在菜单里暴露 UUID-heavy 字符串。当前菜单项包括 `Workspace` / `工作区`（显示当前 workspace，并可通过 `Select Workspace...` / `选择工作区...` 打开系统目录选择器）、`New Codex Session`、`Send Prompt...` / `发送 Prompt...`、`Recent Sessions`、`More Sessions...`、`Interaction Mode`、`Notification Detail`、`Language / 语言`、`Coding Agent` / `编程助手`、`Always on Top` / `固定在顶部`、`Open VSCode Workspace` / `打开 VSCode 工作区`、`Sync from Main Site` / `从主站同步` 和 `Close`；主进程会把带 `submenu` 的模型项转换成 Electron native `type="submenu"`，因此 `Workspace`、`Interaction Mode`、`Notification Detail`、`Language / 语言` 和 `Coding Agent` 在 Windows 原生菜单中以可展开子菜单呈现。其中 `Interaction Mode` 的 `Drag Whole App` / `Adjust Camera` 会立即生效：preload 以 CommonJS `preload.cjs` 加载并暴露 `window.desktopPet`，renderer 始终把 shell、stage 和 WebGL canvas 保持为 `-webkit-app-region: no-drag`，确保透明 frameless window 仍能收到 DOM `contextmenu`；由于 Windows transparent layered window 的全透明像素可能鼠标穿透，pet 会在 WebGL 上方绘制一个真实 DOM 覆盖层 `.pet-input-hit-surface`（`rgba(255,255,255,0.035)`），保证整窗区域有可命中的合成像素。Pet BrowserWindow 默认 360x420，`resizable=true`，最小尺寸为 240x280，不设置最大尺寸，用户可通过原生窗口边缘调整大小；整窗拖动优先由 renderer 在 `Drag Whole App` 模式以 document capture listener 捕获左键 pointer，并通过 `pet:window-drag:start|move|end` IPC 让主进程按系统 cursor delta 调整 BrowserWindow bounds，移动时保留当前 width/height。主进程同时在 Windows 下用 `hookWindowMessage` 监听 `WM_RBUTTONUP`、`WM_LBUTTONDOWN`、`WM_MOUSEMOVE` 和 `WM_LBUTTONUP` 作为透明 WebGL 子窗口不分发 DOM 鼠标事件时的兜底路径；同一次拖动中第一条到达的 IPC/native source 持有 drag 状态，后到 source 不会覆盖 origin bounds，非持有 source 的 move 会被忽略，任一 end 信号都可释放 drag 状态，避免重复事件把拖动变成系统 resize 或把异常尺寸写回。右键菜单优先走 renderer document capture `contextmenu -> pet:menu:open-context({x,y})`，主进程的 `system-context-menu` / `webContents context-menu` / native mouse hook 监听保留为 fallback；renderer/webContents 提供的是窗口内坐标，native/system hook 提供的是屏幕坐标。主进程会把两类输入统一解析成两份坐标：`Menu.popup({ window, x, y })` 使用 clamp 到 Pet window bounds 的窗口内 popup 坐标，避免屏幕坐标被当成窗口 offset 造成菜单远离 Pet；右键去重使用对应屏幕坐标。native/system screen 坐标如果不在当前 Pet BrowserWindow bounds 内，会被直接丢弃，不会 clamp 到窗口边缘打开菜单，并且会记录为一次 native/system 右键触发以压掉随后迟到的 renderer/webcontents fallback，避免 Windows hook 的窗口外 `WM_RBUTTONUP` 造成桌面其他区域也弹 Pet 菜单。主进程对同一次右键做 source-aware 去重：350ms 内所有 popup 请求直接丢弃，1500ms 内同屏幕坐标（4px 容差）的重复请求会丢弃；如果 native popup 已打开或 native/system 外部右键刚被忽略，随后 1500ms 内迟到的 renderer/webcontents fallback 也会丢弃，即使 renderer 坐标失真，避免第二个菜单出现在窗口左上角。去重不依赖 menu close callback 维持右键可用性。切到相机调整时 renderer 停止发送窗口拖动 IPC，native mouse hook 也不会启动窗口拖动；renderer 向 `MMDStage` 传 `cameraLocked=false` 并关闭 bare stage 的角色点击 pointer capture，让 OrbitControls 在 WebGL canvas 上接管 zoom/pan/rotate；切回拖动整窗时重新锁住 camera 并恢复角色点击捕获。需要诊断真实右键/拖动事件时，可用 `MMD_PET_DEBUG_EVENTS=1` 开启主进程 NDJSON 事件日志，默认写入当前工作目录 `desktop-pet-debug-events.ndjson`，也可用 `MMD_PET_DEBUG_EVENTS_LOG` 指定路径；默认不开启。`Notification Detail` 和 `Language / 语言` 由主进程写入 Electron `userData/pet-settings.json`，下次启动会先从 settings 初始化菜单语言和勾选态；语言切换只影响 desktop-pet 右键菜单标签，不切换主站语言，也不写入 SQLite。Pet window bounds 在 move/resize、drag end 和 close 时保存，恢复时采用 x/y/width/height，width/height 会被归一到 240x280 以上。主站 `/companion` 高级面板提供显式 `保存到桌面 Pet` 按钮，用当前模型和渲染管线写入 shared config；pet 右键 `Sync from Main Site` / `从主站同步` 会让 renderer 重新读取模型、动作和 shared-config，成功后显示同步到的模型名与 render pipeline，并递增 stage reload revision 以强制 MMDStage remount 一次。`New Codex Session` 由主进程执行系统启动动作：目标 workspace 优先使用右键 `Workspace -> Select Workspace...` 持久化的 `selectedWorkspacePath`；缺失时才回退 `MMD_PET_WORKSPACE_PATH`，再回退 Electron 当前工作目录（若当前工作目录是 `desktop-pet`，则自动上提到父级项目根目录）。主进程先在目标 workspace 写入 `.codex-pet/vscode-terminal-request.json` 和 `<os.tmpdir()>/mmd-codex-pet/vscode-terminal-request.json`，其中包含 `codex` 或 `codex resume --cd <workspace> <codex_session_id>` 命令，再按 `MMD_PET_VSCODE_HELPER_MODE` 打开 VSCode：默认或未知值为 `development`，使用 `MMD_PET_VSCODE_CLI`（默认 `code`）执行 `code --new-window --user-data-dir <os.tmpdir()/mmd-pet-vscode-ud/...> --extensionDevelopmentPath <desktop-pet/vscode-helper> <workspace>`，确保新窗口加载 helper 并处理 terminal request；`installed` 模式执行 `code --new-window --user-data-dir <os.tmpdir()/mmd-pet-vscode-ud/...> <workspace>`，要求 helper extension 已通过 `desktop-pet/scripts/install-vscode-helper.ps1` 或等效方式安装并启用。Windows shell 启动时会显式 quote VSCode CLI、helper 路径、user-data-dir 和 workspace 路径，确保 `D:\workspace\MMD project` 这类含空格路径不会被拆成 open editors。`MMD_PET_VSCODE_HELPER_EXTENSION_PATH` 可覆盖 development helper extension 路径。VSCode helper 扩展启动后读取该 request，创建或复用 VSCode 内置终端 `Codex Pet`，并在该终端执行 `MMD_PET_CODEX_CLI`（默认 `codex`）或 resume 命令；执行成功后 helper 会删除 request 文件，超过 5 分钟的旧 request 会被忽略并清理，避免后续打开 workspace 时误启动 Codex。Pet 不再启动外部 `cmd.exe`。`Send Prompt...` / `发送 Prompt...` 先在 renderer 打开 `.pet-panel` prompt 面板，preload 通过 `pet:prompt:send` 调主进程；当前优先走 app-server relay，relay 不可用时把 prompt 暴露为状态卡上的 copyable command，不直接写 terminal request。启动后主进程仍会短轮询当前选中 workspace 的本地 JSONL，把新 session metadata 同步到 registry。`Recent Sessions` 子菜单现在会缓存最近 session；点击任一项会打开该 session 记录的 VSCode workspace，并通过同一 helper request 在 VSCode 内置终端执行 `codex resume --cd <workspace> <codex_session_id>`，因此 Codex 原有 `CODEX_HOME` session 存储保持不变，CLI 可正常 resume 会话。主进程会同步维护 `pet:codex-status`：启动前发布 `starting`，成功拉起 terminal request 后发布 `launched`，恢复时发布 `resuming`/`running`，发送 prompt 成功后发布 `running`，本地 JSONL 推断状态会发布 `running`、`command_running`、`waiting_approval`、`completed`、`failed` 或 `disconnected`，失败时发布 `failed` 和错误信息；每次 `pet:codex-status:changed` IPC 发送后都会调用 `webContents.invalidate()` 调度 transparent Pet 窗口重绘，避免未聚焦窗口的状态卡等到 focus/hover 才刷新。preload 暴露 `codexStatus.get/onChanged` 给 renderer，pet 状态条会把该状态作为常驻状态显示（短暂菜单 toast 结束后仍保留，例如 `Codex running · <session title>`）。`Open VSCode Workspace` 和 renderer 审批 fallback 按钮都通过当前选中 workspace 打开新的 VSCode window；focus 成功只在 renderer 里短暂显示 `VSCode workspace open` toast，不发布新的 Codex 状态，也不覆盖当前 running/output/approval 状态。`More Sessions...` 点击后主进程会拉取最多 50 条 session（API registry 加当前 workspace 本地 JSONL fallback），通过 `pet:menu:action` 发送给 renderer，renderer 在 Pet 窗口内显示可搜索 session 面板，按 title/workspace/status/time 生成搜索文本并展示可读 title、workspace、状态和最近时间；点击面板中的 active session 会调用 `pet:sessions:focus-active` IPC，主进程先用内存映射或 `<user-data-dir>/.codex-pet/session-window.json` marker 按 session id 找回已有 VSCode 窗口；marker 缺失时会扫描 VSCode `User/workspaceStorage/*/workspace.json` 做一次性 workspace 兜底，以已有 `user-data-dir` 调 `focusVscodeWorkspace`，不写入精确 session marker；非 active session 才调用 `pet:sessions:restore` IPC，复用 `restore-session` 分支在 VSCode 内置终端执行 `codex resume --cd <workspace> <codex_session_id>`。
 
-Pet window bounds 启动恢复会按当前 Electron `screen.getAllDisplays().workArea` 校验。保存坐标仍有至少 80px 可见边时继续使用原坐标；如果 RDP、多屏切换、DPI 变化或断开副屏导致保存坐标不在任何当前显示器工作区内，主进程会把 360x420 Pet 窗口回退到主显示器工作区居中，并写入 `window-bounds:restored-to-visible-area` debug event，避免窗口只出现在任务栏缩略图而桌面不可见。
+Pet window bounds 启动恢复会按当前 Electron `screen.getAllDisplays().workArea` 校验。保存坐标仍有至少 80px 可见边时继续使用原坐标和保存尺寸；如果 RDP、多屏切换、DPI 变化或断开副屏导致保存坐标不在任何当前显示器工作区内，主进程会按保存 width/height 把 Pet 窗口回退到主显示器工作区居中，并写入 `window-bounds:restored-to-visible-area` debug event，避免窗口只出现在任务栏缩略图而桌面不可见。
 
 右键 `Workspace` / `工作区` 子菜单会基于当前菜单可见的 session 集合额外聚合 `Active Workspaces` / `活跃工作区`：来源包括主进程内存缓存、当前选中 workspace 的本地 JSONL 扫描结果，以及 API registry 成功刷新后的 recent sessions。聚合只统计 `starting`、`running`、`command_running`、`file_changed`、`waiting_approval` 这类仍活跃状态，排除 `completed`、`failed`、`disconnected`。`Active Workspaces` 先按 workspace 分组，每个 workspace 以目录 basename、最近活跃状态和活跃任务数显示为二级子菜单；展开后列出该 workspace 下按最近更新时间排序的活跃任务，点击任务项发送 `focus-active-session`，主进程使用运行时内存映射或 `<user-data-dir>/.codex-pet/session-window.json` marker 按 session id 找回 VSCode `user-data-dir`，再调 `focusVscodeWorkspace({ workspacePath, userDataDir })`，只聚焦该任务已有窗口，不执行 `codex resume` / `claude --resume`。new/restore 启动 VSCode 时会先写 workspace 级 marker，JSONL watcher 识别出真实 session id 后会补写 session 级 marker；Pet 重启后仍可按 marker 聚焦对应任务。若 marker 缺失，主进程会扫描 VSCode `User/workspaceStorage/*/workspace.json` 做一次性 workspace 兜底，但不会把该猜测写成 session marker；完全找不到时才发布 failed 状态提示窗口元数据不可用，仍不退回 restore，以避免同一工作区重复开新 VSCode window。当前选中的 workspace 在分组内显示为已勾选的 `Current workspace`，其他 workspace 分组内提供 `Switch to workspace`，点击后写入 Electron `userData/pet-settings.json` 的 `selectedWorkspacePath`、发布 idle `pet:codex-status`、清空当前菜单 session cache 并后台刷新该 workspace 的 sessions。该切换只影响 desktop-pet 的后续菜单扫描、新建/恢复/打开 VSCode 目标，不写入 SQLite 或主站 shared config。
 
-当前实现准则：`MMD_PET_VSCODE_HELPER_MODE=installed` 不传 `--extensionDevelopmentPath`；新建/恢复 Codex terminal request 使用 `code --new-window --user-data-dir <os.tmpdir()/mmd-pet-vscode-ud/...> <workspace>` 打开目标 workspace 的新 VSCode 窗口，默认 development helper 模式还会额外传 `--extensionDevelopmentPath <desktop-pet/vscode-helper>`，确保新窗口内 helper 能读取 request 并在 `Codex Pet` integrated terminal 执行 `codex` 或 `codex resume --cd <workspace> <session_id>`。Pet prompt fallback 当前不写 terminal request，而是把 prompt 显示成状态卡上的 copyable command。Pet 主进程为 new/restore 写入两份同 payload 的 request：workspace-local 主文件 `<workspace>/.codex-pet/vscode-terminal-request.json`，以及用户临时目录指针 `<os.tmpdir()>/mmd-codex-pet/vscode-terminal-request.json`。VSCode helper 会同时扫描 workspace folders 和临时指针；这是为了覆盖 VSCode development host 已加载 helper 但 `workspaceFolders=[]` 的情况。helper 成功发送 terminal text 或判定 request stale 后会删除两份文件，并在 VSCode output channel `MMD Codex Pet Helper` 记录 activation、workspace folder 可见性和 request id。Pet 主进程会在写入 terminal request 后检查同一 request id 是否被 helper 消费；若 workspace-local request 文件仍残留，会记录 `codex-launch:terminal-request-unhandled` 并把 `pet:codex-status` 标记为 `failed`，提示检查 VSCode 目标窗口和 helper 安装/加载状态。
+当前实现准则（替代上文旧的 workspace/global singleton request 与独立 `--user-data-dir` 描述）：Codex 新建/恢复会在 `<os.tmpdir()>/mmd-codex-pet/vscode-workspaces/<launch-id>/` 生成唯一 `session.code-workspace`，其中只挂载真实目标 workspace；随后执行 `code --new-window --skip-add-to-recently-opened [--extensionDevelopmentPath <desktop-pet/vscode-helper>] <session.code-workspace>`。该命令复用默认 VSCode profile/main process 的 CLI IPC，但唯一 workspace-file URI 会形成独立窗口，因此即使 Windows 的 `vscode-updating` mutex 被更新器占用，只要默认 VSCode 实例仍在运行，也不会再因新建隔离 profile 而进入更新锁等待。`MMD_PET_VSCODE_HELPER_MODE=installed` 仍不传 `--extensionDevelopmentPath`；默认 development 模式加载仓库内 helper。
 
-补充：VSCode window 拉起路径统一规避 VSCode 的同 workspace 去重。`New Codex Session`、恢复 session、右键 `Open VSCode Workspace`、状态卡点击和审批 fallback 的 `pet:vscode:focus` 都通过 `code --new-window --user-data-dir <os.tmpdir()/mmd-pet-vscode-ud/...> <workspace>` 打开目标 workspace；每次调用都会生成新的临时 user-data-dir，避免同一个 workspace 第二次只复用或聚焦已有窗口而无法重复拉起。其中 new/restore 会先写 terminal request 并加载/依赖 helper 自动执行 Codex integrated terminal 命令；纯 focus 路径只打开 workspace，不启动新的 Codex 命令。该临时目录由 desktop-pet 启动时的 stale cleanup 做最佳努力清理，focus 成功仍只显示 renderer toast，不覆盖当前 `pet:codex-status`。
+每个 launch 的 terminal request 和 ACK 都只保存在该临时 workspace 目录的 `.codex-pet/vscode-terminal-request.json` 与 `.codex-pet/vscode-terminal-ack.json`。request 带 `targetWorkspaceFilePath`、`ackPath`、`expiresAt`、真实 `workspacePath` 与 `codex`/resume 命令；helper 从当前 `vscode.workspace.workspaceFile.fsPath` 推导自己的 scoped request，只在目标路径归一化匹配时消费，防止其他已打开 VSCode 窗口通过旧 global pointer 抢单。helper 在 integrated terminal `sendText` 成功后写匹配 request id 的 ACK，ACK 落盘成功才删除 request；ACK 写失败会重试但不会重复发送命令。Pet 主进程保持 `starting`/`resuming`，只有读到匹配 ACK 才发布 `launched`/`running`、缓存窗口目标并启动 JSONL watcher；20 秒内无 ACK 则发布 `failed`，错误会明确提示 VSCode 可能仍在更新或 helper 未加载。request 同时在 20 秒后过期，迟到窗口不会再误启动 Codex。
+
+desktop-pet 的 `Codex Environment` / `Codex 环境` 菜单选择会写入 `pet-settings.json` 的 `codexEnvMode`，菜单每次打开时按当前持久值勾选，并在新建/恢复开始时快照传给 launcher。`win` 模式继续在 integrated terminal 执行 `MMD_PET_CODEX_CLI`（默认 `codex`）或 `codex resume --cd <Windows workspace> <session-id>`；`wsl` 模式先执行 `MMD_PET_WSL_EXEC`（默认 `wsl.exe`）的 `--cd <workspace> --exec` 桥接，再运行 WSL 内的 `MMD_PET_WSL_CODEX_CLI`（默认 `codex`），并附加 `-c model_provider=kscc -c model=gpt-5.5`。`wsl.exe --cd` 可直接接收绝对 Windows 路径或绝对 Linux 路径，因此含空格 workspace 作为单独 quoted 参数传入，无需预先调用 `wslpath`；恢复命令在 WSL 已切换的工作目录中使用 `resume --cd . <session-id>`，不会把 `D:\...` 再交给 Linux Codex。这里的菜单选择只控制 desktop-pet 的 VSCode terminal launcher，与 FastAPI app-server 的 `CODEX_WSL_ENABLED` 是两套独立开关。
+
+补充：纯 `Open VSCode Workspace` / 状态卡 focus 新开窗口时同样生成唯一临时 `.code-workspace`，但不写 terminal request；聚焦已存在的活跃 Codex 任务时则执行 `code <该任务的 session.code-workspace>`，由 VSCode 按 workspace identity 聚焦原窗口，不传 `--new-window`、不执行 resume。主进程内存映射和持久 marker 现在优先保存 `workspaceFilePath`；旧版隔离 profile 的 `userDataDir` marker 仍可读取兼容。启动时会对旧 `<os.tmpdir()>/mmd-pet-vscode-ud/` 与新 `<os.tmpdir()>/mmd-codex-pet/vscode-workspaces/` 中超过 7 天的目录做最佳努力清理。focus 成功仍只显示 renderer toast，不覆盖当前 `pet:codex-status`。
 
 补充：terminal 新建/恢复/fallback prompt 不再只依赖固定 1.5s/5s/12s 短轮询；主进程会启动一个有上限的 JSONL watcher 持续刷新当前 workspace/session 的 `last_output`，让 VSCode 内置终端里启动的 Codex 输出能进入 Pet 状态卡。
+
+watcher 的首轮绑定区分“尚无 session id 的新建会话”和“已绑定/resume 会话”。Codex 与 Claude scanner 的 summary 都带 `sessionStartedAt`，优先取已读取 JSONL 事件中最早的有效 `timestamp`，完全缺失时回退文件 `birthtime`/`ctime`，并通过 payload metadata 的 `session_started_at` 传递。新建 watcher 尚无 session id 时，用 `sessionStartedAt >= launchedAt - 1s` 过滤候选，避免一个启动前已存在、但仍在写入且 file mtime 更新较新的长会话抢占新窗口；首个候选命中后立即固定 `codexSessionId`。已固定 id 的 watcher 与 resume watcher 则继续按精确 session id + file mtime 判断后续更新。Codex scanner 同时读取 Windows `CODEX_HOME` 与可选 WSL Codex home 时，会先合并所有 root candidate、按 mtime 全局降序并去重，再应用全局 `maxFiles`/`limit`，不会因为 Windows root 先填满 limit 而跳过更新的 WSL session。
+
+workspace 比较统一使用 `normalizeWorkspacePathIdentity()`：Windows `<drive>:\...`、正反斜杠/大小写/末尾分隔符差异，以及 WSL `/mnt/<drive>/...` 都折叠为同一个 `<drive>:/...` identity；非 WSL POSIX 路径仍保持大小写敏感。Codex/Claude scanner 的 workspace filter、workspace+agent generation context gate、active-session workspace cache key，以及菜单/background/daily 的当前 workspace publisher 都复用该归一化。因此 Pet 选择 `D:\workspace\Project` 时，WSL rollout 记录的 `cwd=/mnt/d/workspace/Project` 仍属于当前 workspace，不会被过滤、误判为 stale context 或被当成跨 workspace session。
+
+所有可能跨 await 的 session refresh/list/new/restore 操作都捕获 `{ generation, workspacePath, agent }` context。选择或切换 workspace、切换 Coding Agent 时会推进 generation；异步 upsert、API list、background refresh、More Sessions、VSCode helper ACK 以及 new/restore launch 结果在写 cache、发布 status 或启动 watcher 前重新校验 context，旧 generation 或 workspace/agent 不匹配的迟到结果直接丢弃。菜单 immediate publisher、background refresh 和 daily scan 只从当前 workspace/agent 选择 session；只要当前 Pet window 仍有 active watcher，这些普通 publisher 就不覆盖 watcher 状态。watcher 自身继续用 WeakMap identity 复检，已被替换或停止的 tick 即使 await 返回也不会发布。
+
+renderer 的完成气泡使用独立于 `codexStatus` 的 latch。收到新的显式 `completionNoticeKey` 时，新 notice 替换旧 latch；普通 running、历史 completed、菜单/background/daily 等不带显式 key 的状态更新只刷新状态卡，不会让尚未关闭的完成气泡消失。只有用户点击 `x` 才把当前 key 加入 dismissed 有界集合并清空同 key latch；已 dismissed 的 key 不会重新进入 latch。这样 A 气泡显示期间的普通状态刷新会保留 A，新显式 B 会替换为 B，而关闭过 A、B 后再次收到相同 A key 仍保持关闭。
 
 当前实现中，上述 `Send Prompt...` 的 terminal `mode=prompt` 路径只作为 app-server relay 失败后的 fallback；正常情况下 Pet prompt 会优先走 `/codex/interactive/sessions` + websocket relay，审批按钮也只有 relay 状态携带 approval id 时才直接显示。
 
@@ -523,7 +761,7 @@ More Sessions renderer 面板当前在每条 session row 内显示 title、works
 
 desktop-pet 右键菜单还有一个 active 生命周期保护：主进程从准备 `Menu.popup` 到 native menu close callback 结束期间设置 `contextMenuActive`，此时任何 native、renderer、system 或 webcontents 来源的新 popup 请求都会被 dedupe，避免连续右键重入 Electron native menu。`desktop-pet/scripts/stress-pet-right-click.ps1` 使用真实 Windows 输入循环验证菜单 open/popup/closed 计数、`context-menu:error` 数量和 Electron 进程存活；脚本默认拒绝控制真实鼠标，必须显式传 `-AllowMouseControl`，并在退出或失败时释放鼠标按钮、恢复鼠标位置和 Pet 窗口位置。脚本关闭菜单时只向 Pet BrowserWindow owner hwnd 投递 `WM_CANCELMODE`/targeted Escape window message，不使用全局 `keybd_event`，避免把 `Esc` 发送到用户当前命令行或 Codex 终端。该脚本还提供 `-EdgePlacement Right|Bottom|BottomRight`，可把 Pet 移到当前显示器工作区边缘后执行短烟测或压力测，并断言右键后窗口漂移不超过 `MaxWindowDriftPx`、尺寸不变、菜单 popup/closed 数量满足 sequential click 数量且没有 error 事件；`desktop-pet/scripts/desktop-pet-manual-acceptance.md` 固定记录启动、右键、拖动、相机、同步、Codex 新建/恢复的真实桌面验收步骤。Pet 相机状态不走共享配置 API；renderer 在从 `Adjust Camera` 切回 `Drag Whole App` 时 capture 当前 `MMDStage` camera snapshot，归一成 drag-mode 初始化用的 locked snapshot，并按 `selectedModel.relative_path + render_pipeline` 写入 localStorage。后续同一模型和 render pipeline 的 Pet 初始化、同步后 remount 或应用重启会把该 snapshot 传给 `MMDStage.cameraSnapshot`；不同模型或管线不会复用该镜头。Pet 角色点击动作复用主站 `resolveStageCharacterClickInteraction()`：在 `Drag Whole App` 模式下，renderer 顶层透明 hit surface 记录 pointer click，再通过 `MMDStage.hitTestCharacterAtClientPoint()` 确认是否点中角色；命中后优先播放 greeting/soft/strong click reaction favorite VMD，并在有其他可用动作时避开上一条 click VMD，缺失 VMD 时回退 procedural wave。点击动作完成或失败后，Pet 清空 click override，回到当前模型的 idle/autoplay loop；`Adjust Camera` 模式仍关闭角色点击捕获，让 OrbitControls 接管鼠标。
 
-desktop-pet 当前有两类 Codex 状态源。VSCode terminal 新建/恢复流程仍保留用户既有 `CODEX_HOME` session 存储：主进程在 Pet renderer 每次 `did-finish-load` 后、右键菜单打开、`More Sessions...` 打开，以及 terminal 新建/恢复/fallback prompt 后扫描当前 workspace 的 `CODEX_HOME/sessions/**/rollout-*.jsonl`，只读取 head/tail 窗口并抽取 bounded metadata。这样状态卡在 Pet 窗口首次显示时就会同步最近 session/output，不再依赖“先打开一次右键菜单”才看到最新内容。terminal 路径启动后会开启 `codex-session` JSONL watcher：先立即扫描一次，随后约每 2.5s 刷新一次，最长保留 1 小时；新 watcher 会替换同一 Pet 窗口上的旧 watcher，窗口关闭时停止，扫描到 `failed` 或 `disconnected` 会提前停止，`completed` 仍继续观察以便同一 VSCode terminal 后续继续输入时能更新输出。JSONL 状态精度受 Codex CLI 写入时机和 Pet 扫描节奏限制：该源可推断 `running`、`command_running`、`file_changed`、`waiting_approval`、`completed`、`failed` 和 `disconnected`，但没有 approval id 或实时 token stream。Pet 内直接 `Send Prompt...` 在 API 可用且 `MMD_PET_CODEX_RELAY_ENABLED` 未显式设为 `0/false/off/no` 时优先使用 app-server relay：Electron 主进程通过 `CodexInteractiveRelayClient` 登记当前 git workspace、创建 `/codex/interactive/sessions` session（默认 `MMD_PET_CODEX_RELAY_MODE=patch`，可设为 `read_only`）、打开 `/ws/codex/interactive/{session_id}`，发送 `{ type: "user_message", text, mode }`，并把 websocket 事件实时折叠为 `pet:codex-status`。relay 状态源可提供 `approval_required` 的 approval id、审批 title/detail、`text_delta`/`command_output`/`turn_completed` 的最近输出；renderer 因此可以显示 direct `Approve`/`Deny`，并通过 `pet:approval:decide` 调 `POST /codex/interactive/{session_id}/approvals/{approval_id}`。如果 API 不可用、workspace 登记失败、session capacity 限制或 websocket 连接失败，主进程记录 `codex-relay:send-prompt-fallback`，再回退到 VSCode terminal prompt request；该回退仍只向当前 `Codex Pet` 内置终端 `sendText(prompt, true)`，不具备协议级 approval id。
+desktop-pet 当前有两类 Codex 状态源。VSCode terminal 新建/恢复流程仍保留用户既有 `CODEX_HOME` session 存储：主进程在 Pet renderer 每次 `did-finish-load` 后、右键菜单打开、`More Sessions...` 打开，以及 terminal 新建/恢复/fallback prompt 后扫描当前 workspace 的 `CODEX_HOME/sessions/**/rollout-*.jsonl`，分块流式读取完整事件序列并只抽取 bounded metadata。此外，主进程在 Pet 窗口创建后会调度每天凌晨 4 点的定时扫描（`setTimeout` 递归调度），扫描最近 20 条会话并 upsert 到 FastAPI，确保夜间完成的 Codex 会话也会被 review sync 链路捕获；窗口关闭时清除该定时器。白天会话结束时，codex-session output watch 在检测到 `completed` 状态时会立即触发一次完整扫描上报，不需要等到凌晨 4 点；该 sibling scan 使用 `publishStatus=false`，不会再用其他最近 session 覆盖刚完成的状态。这样状态卡在 Pet 窗口首次显示时就会同步最近 session/output，不再依赖“先打开一次右键菜单”才看到最新内容。terminal 路径启动后会开启 `codex-session` JSONL watcher：先立即扫描一次，随后约每 2.5s 刷新一次，最长保留 1 小时；新建 watcher 第一次匹配到 launch 时间之后的 JSONL 后会把 `codexSessionId` 固定到该 session，避免同 workspace 其他并发 rollout 仅凭较新的 mtime 抢占状态。新 watcher 会替换同一 Pet 窗口上的旧 watcher，窗口关闭时停止，扫描到 `failed`、`disconnected` 或 `completed` 都会提前停止；`completed` 路径先发布该 completion、完成一次不发布状态的 scan/upsert，再以 `reason=status:completed` 停止。用户选择/切换 workspace 或切换 Coding Agent 时，主进程也会先停止旧 watcher，并重置 completion transition tracker，旧上下文的迟到异步结果在 watcher identity 复检后直接丢弃。JSONL 状态精度受 Codex CLI 写入时机和 Pet 扫描节奏限制：该源可推断 `running`、`command_running`、`file_changed`、`waiting_approval`、`completed`、`failed` 和 `disconnected`，但没有 approval id 或实时 token stream。Pet 内直接 `Send Prompt...` 在 API 可用且 `MMD_PET_CODEX_RELAY_ENABLED` 未显式设为 `0/false/off/no` 时优先使用 app-server relay：Electron 主进程通过 `CodexInteractiveRelayClient` 登记当前 git workspace、创建 `/codex/interactive/sessions` session（默认 `MMD_PET_CODEX_RELAY_MODE=patch`，可设为 `read_only`）、打开 `/ws/codex/interactive/{session_id}`，发送 `{ type: "user_message", text, mode }`，并把 websocket 事件实时折叠为 `pet:codex-status`。relay 状态源可提供 `approval_required` 的 approval id、审批 title/detail、`text_delta`/`command_output`/`turn_completed` 的最近输出；renderer 因此可以显示 direct `Approve`/`Deny`，并通过 `pet:approval:decide` 调 `POST /codex/interactive/{session_id}/approvals/{approval_id}`。如果 API 不可用、workspace 登记失败、session capacity 限制或 websocket 连接失败，主进程记录 `codex-relay:send-prompt-fallback`，再回退到 VSCode terminal prompt request；该回退仍只向当前 `Codex Pet` 内置终端 `sendText(prompt, true)`，不具备协议级 approval id。
 
 renderer 侧 Codex 状态纯函数把 scanner/relay 状态映射为 `motionIntent`、`statusTone` 和 `shouldInterruptIdle`：`running -> thinking/active`、`command_running -> command/active`、`file_changed -> file_change/attention`、`waiting_approval -> approval/attention`、`completed -> complete/success`、`failed -> failure/danger`、`disconnected -> disconnected/offline`。MMD stage 纯函数再把这些 intent 转为 procedural status interaction；如果当前 click reaction 仍 active，Codex status motion 返回 `click-interaction` 优先级和 blocked reason，不覆盖点击动作。App 在把 Codex status interaction 传给 `MMDStage` 前会先做可播放命中解析：VMD interaction 必须有 runtime 可直接播放的 `vmdUrl`，procedural interaction 必须命中 runtime 支持的 action 或 sequence step；未命中时直接使用当前模型的 `petAutoplayIdleState.interaction`，优先进入 favorite idle/autoplay VMD loop。如果兜底本身也没有可播放 VMD，App 返回 null 并保留当前 stage interaction，不再应用 procedural idle 去触发 runtime 重置，避免停在 base pose。因为 procedural status action 播完后 runtime 会清空当前 action，Pet 对 `starting`、`launched`、`resuming`、`running`、`command_running`、`file_changed`、`waiting_approval` 和 `disconnected` 这类活跃状态会在 completion 回调中递增 replay revision，重新 apply 同一个 Codex status interaction，避免执行中状态只播一个周期后长期回到待机；`completed` 和 `failed` 仍按一次性提示处理，播完后可恢复待机。`Notification Detail` 的 renderer 策略为 low/medium/high：low 只给短状态并省略 workspace/path/session id；medium 给可读 session title、workspace basename 或错误信息，仍不暴露完整 path/id；high 用于诊断，可包含完整 workspace path、Codex session id 和 updatedAt。`waiting_approval` 分两种处理：`source="app-server-relay"` 且状态包含 `pendingApprovals[].id` 时，状态条显示 direct `Approve`/`Deny` 按钮；本地 JSONL scanner 没有 approval id 时仍只显示 fallback message 和 `Open VSCode`，引导用户在 VSCode Codex terminal 内审批。
 
@@ -537,7 +775,7 @@ desktop-pet 右键菜单提供 `Always on Top` / `固定在顶部` checkbox，�
 
 共享配置 API 合约：
 
-Codex 状态卡补充：desktop-pet 的本地 JSONL scanner 除了 session title/status，也会提取最近一条 assistant 文本或 `function_call_output`，通过 registry payload 的 `metadata.last_output` 进入 renderer；app-server relay 则直接从 websocket `text_delta`、`command_output`、`approval_required`、`turn_completed` 等事件折叠最近输出。renderer 的常驻 Codex 状态卡用状态灯表达 `active/attention/success/danger/offline` 状态，文字标题只保留给无障碍文本和 tooltip；当 MMD 模型已加载且没有 active Codex 状态、加载错误或菜单 toast 时，renderer 仍显示 `Codex idle` / `No active Codex output` 占位状态卡，避免桌面 Pet 只剩角色而看不到消息框；完成态会在角色右上角显示独立完成气泡，气泡标题展示完成的 workspace basename，正文可展示 session/task title，主体点击调用 `pet:vscode:focus({ workspacePath })` 打开对应 workspace，新完成事件按 session id 或 workspace/task/output 生成稳定 key，用户点击 `x` 手动关闭后同一完成事件不再重复弹出。输出区域固定为更宽的三行自动换行预览，并在展示前过滤 `Exit code:`、`Wall time:`、`Total output lines:` 这类工具运行元信息，再脱敏 token/password/secret/key/API key 形式的敏感片段；JSONL 源仍不是实时 token stream 或完整 transcript，relay 源也只展示 bounded preview 而非完整 transcript。状态卡点击会把 status 自带的 `workspacePath` 传给 `pet:vscode:focus({ workspacePath })`，因此可以打开对应 session/workspace 的新 VSCode window，而不是只打开当前菜单选中的 workspace；该 focus IPC 成功时不改变 `pet:codex-status`，只让 renderer 的 transient toast 自动清理后回到原 Codex 状态卡。Pet 的角色点击命中和动作选择继续复用主站 `stageCharacterClick` helper：renderer 用共享 `shouldTriggerStageCharacterClick()` 判断 click 手势和共享 `createStageClickRipple()` 生成波纹，Pet stage state 用共享 `resolveStageCharacterClickInteraction()` 选择 click reaction VMD，后续维护只改这一份主站 helper。
+Codex 状态卡补充：desktop-pet 的本地 JSONL scanner 除了 session title/status，也会提取最近一条 assistant 文本或 `function_call_output`，通过 registry payload 的 `metadata.last_output` 进入 renderer；app-server relay 则直接从 websocket `text_delta`、`command_output`、`approval_required`、`turn_completed` 等事件折叠最近输出。renderer 的常驻 Codex 状态卡用状态灯表达 `active/attention/success/danger/offline` 状态，文字标题只保留给无障碍文本和 tooltip；当 MMD 模型已加载且没有 active Codex 状态、加载错误或菜单 toast 时，renderer 仍显示 `Codex idle` / `No active Codex output` 占位状态卡，避免桌面 Pet 只剩角色而看不到消息框。完成态会在角色右上角显示独立完成气泡，气泡标题展示完成的 workspace basename，正文可展示 session/task title，主体点击调用 `pet:vscode:focus({ workspacePath })` 打开对应 workspace。完成气泡不再由 renderer 根据 session/title/output 自行推断：主进程 completion tracker 只有在真实 `running -> completed` transition，或新 watcher 首轮即捕获 launch 后快速完成时，才附加显式 `completionNoticeKey`；key 优先使用 `<codexSessionId>:<last_event_at>`，缺少事件时间时回退 session id。启动、菜单或 background refresh 首次看到的历史 `completed` 只更新状态卡，不携带通知 key，因此不会弹气泡。renderer 只消费显式 key，并把用户点击 `x` 关闭过的 key 以 JSON array 保存在 localStorage `pet:dismissed-completion-notice`；旧版 raw 单 key 会自动迁移，集合去重且只保留最近 100 条，所以 A、B 依次关闭后再次收到同一个 A key 也不会重弹。输出区域固定为更宽的三行自动换行预览，并在展示前过滤 `Exit code:`、`Wall time:`、`Total output lines:` 这类工具运行元信息，再脱敏 token/password/secret/key/API key 形式的敏感片段；JSONL 源仍不是实时 token stream 或完整 transcript，relay 源也只展示 bounded preview 而非完整 transcript。状态卡点击会把 status 自带的 `workspacePath` 传给 `pet:vscode:focus({ workspacePath })`，因此可以打开对应 session/workspace 的新 VSCode window，而不是只打开当前菜单选中的 workspace；该 focus IPC 成功时不改变 `pet:codex-status`，只让 renderer 的 transient toast 自动清理后回到原 Codex 状态卡。Pet 的角色点击命中和动作选择继续复用主站 `stageCharacterClick` helper：renderer 用共享 `shouldTriggerStageCharacterClick()` 判断 click 手势和共享 `createStageClickRipple()` 生成波纹，Pet stage state 用共享 `resolveStageCharacterClickInteraction()` 选择 click reaction VMD，后续维护只改这一份主站 helper。
 
 - `GET /desktop-pet/shared-config`：按 `x-user-id` requester identity 返回该 user 的共享 companion config。
 - `PUT /desktop-pet/shared-config`：按 `x-user-id` requester identity 写入共享配置；body 字段为 `selected_model_path: string | null`（max 1000）与 `render_pipeline: "classic" | "hero-shot" | "genshin" | "mio-reference" | "reze-npr"`（default `classic`）。
@@ -551,9 +789,9 @@ desktop-pet session registry API 合约：
 - `DELETE /desktop-pet/sessions/{pet_session_id}`：删除指定 pet registry row，response shape 为 `{ deleted }`，只影响 `desktop_pet_sessions` registry metadata。
 - 这些接口不读取、不复制、不移动、不落库 Codex transcripts；`codex resume` 仍使用用户既有 `CODEX_HOME` 中的 Codex session 持久化。
 
-## 9. 给其他服务做优化时的交接包
+## 10. 给其他服务做优化时的交接包
 
-### 9.1 给 OpenClaw 服务
+### 10.1 给 OpenClaw 服务
 
 需要说明：
 
@@ -576,7 +814,7 @@ HTTP 请求带 x-openclaw-scopes。
 | `/v1/audio/speech` | 当前返回 404，如要统一音频需 Gateway 侧支持 |
 | WebSocket RPC | Bridge 依赖 `sessions.list`, `chat.history`, `sessions.messages.subscribe`；realtime 可选用 `agent`/`chat` delta 事件 |
 
-### 9.2 给 TTS 服务
+### 10.2 给 TTS 服务
 
 需要说明：
 
@@ -597,7 +835,7 @@ FastAPI 保存 remote_audio_url，不把音频写入 SQLite。
 | audio_url 可访问性 | `/tts/proxy/{tts_id}` 依赖 remote URL 仍可下载 |
 | emotion/pause 参数 | 请求会传 `emotion_label` 和 `pause_profile` |
 
-### 9.3 给前端/MMD 渲染侧
+### 10.3 给前端/MMD 渲染侧
 
 需要说明：
 
@@ -608,6 +846,7 @@ FastAPI 保存 remote_audio_url，不把音频写入 SQLite。
 Chatbox 消息列表使用普通文档流渲染，不再使用绝对定位虚拟行；滚动容器直接依赖 DOM 内容高度，避免长回复、窄面板或 TTS/trace 状态变化时因行高测量失准造成 chat item 重叠。
 MMD 舞台业务状态由 stageInteractionMachine 维护，MMDStage/Runtime 只执行当前 interaction。
 点击人物时，MMDStage 只接受短按、小位移的普通点击；长按和拖动不会触发。通过 runtime raycast 确认真正命中模型后，前端显示一次点击波纹，并切到当前模型 favorite VMD 随机单次动作。点击动作会优先使用 `02_greeting_social`、`05_soft_emotion`、`06_strong_personality` 中有 URL 的 VMD；这些单次点击动作即使 `motion_profile.companion_safe=false` 也允许进入候选池，播放时统一 `lockLowerBody=true`/`disableCrossfade=true`。候选会按 category + 规范化文件名去重，并在存在其它候选时避开上一次点击动作，避免连续触发同一动作；没有分类候选时才回退到安全 favorite 池，再没有则回退 procedural wave。
+Chatbox 消息动作由后端 `motion_resolution` 决定。主路径仍是精确 token 匹配；`think`、`thinking`、`thinking_tilt` 是思考动作的受控语义 fallback，会在当前模型 `03_thinking_waiting` favorite VMD 中优先选择 `100pct/reference/思考` 命名的参考动作；`akimbo`、`hands_on_hips`、`hands-on-hips`、`arms_akimbo`、`arms-akimbo`、`叉腰` 是叉腰动作的受控语义 fallback，会在当前模型 `06_strong_personality` favorite VMD 中优先选择 `100pct/reference/叉腰` 命名的参考动作。Bridge/realtime assistant 消息也复用同一 resolver，但前提是本地绑定 session 已有 `selected_model_path`；没有选中模型时仍保持 `bridge_default_idle`。
 MMD 模型 URL 来自 /assets/mmd/models。
 VMD 动作 URL 来自 /assets/vmd/file/{asset_id}。
 ```
@@ -618,13 +857,13 @@ VMD 动作 URL 来自 /assets/vmd/file/{asset_id}。
 | --- | --- |
 | 消息状态展示 | assistant_message 可能 degraded/fallback |
 | TTS 状态展示 | `tts.status` 可能 ready/pending/failed/expired/partial_failed |
-| 动作 fallback | `motion_resolution.status` 可能 fallback_idle |
+| 动作 fallback | `motion_resolution.status` 可能 fallback_idle；思考和叉腰动作有受控语义 fallback，目标分别是 `03_thinking_waiting/思考_100pct_reference.vmd` 和 `06_strong_personality/叉腰_100pct_reference.vmd` |
 | 人物点击 | 点击命中检测在 `MMDCompanionRuntime.hitTestModelAtClientPoint()`，视觉波纹在 `MMDStage` 层，动作选择在 `stageCharacterClick`；优先随机 `02_greeting_social`、`05_soft_emotion`、`06_strong_personality`，候选会按动作名去重并避开上一次点击动作 |
 | 动作状态机 | `default_idle/autoplay_loop/manual_preview/chat_vmd_action/chat_procedural_action/stage_click_vmd_action/stage_click_procedural_action/recovering` 在 `stageInteractionMachine` 中显式维护，避免页面里多处 setter 各自拼状态 |
 | 动作完成/异常恢复 | 聊天或预览动作正常完成后会重新从当前模型的 `00_idle_loop` 随机生成本次待机 VMD loop interaction，不依赖 `pendingAutoResume` 标记，也不复用上一次固定 lead VMD；没有分类待机循环时回退旧安全收藏动作池，再没有则默认 procedural idle。VMD/动作播放失败会由 Stage 上报页面，页面立即走同一套收藏优先恢复逻辑 |
 | 资源加载错误 | PMX 贴图依赖原包相对路径 |
 
-### 9.4 给 realtime voice 实现侧
+### 10.4 给 realtime voice 实现侧
 
 当前 realtime voice 已有 Phase 1 可用链路：后端提供 session WebSocket、TTS chunk client、session queue、chunk proxy；前端提供 WebSocket URL helper、AudioQueue 和 Companion 页面接入。它仍是语音侧链路，消息文本生成和持久化仍以 Message Service v2 为主链路。
 
@@ -685,7 +924,7 @@ fallback 规则：
 | 会话切换/新建会话/组件卸载 | 发送 `cancel(scope="all")`，清空本地 AudioQueue |
 | 新用户消息 | 不默认取消旧 realtime voice job |
 
-## 10. 排障入口
+## 11. 排障入口
 
 | 症状 | 优先检查 |
 | --- | --- |
@@ -703,7 +942,7 @@ fallback 规则：
 | 模型贴图丢失 | 检查模型包相对路径和 `GET /assets/mmd/{file_path}` |
 | 动作不匹配 | 检查 favorite VMD 是否绑定到当前 selected model |
 
-## 11. 当前已知事实
+## 12. 当前已知事实
 
 | 项 | 当前事实 |
 | --- | --- |
@@ -721,7 +960,7 @@ fallback 规则：
 | Realtime Voice audio proxy | Phase 1 已接入 `/tts/proxy/realtime/{session_id}/{job_id}/{sequence}?user_id={user_id}`，使用内存 chunk registry 代理远端 chunk URL |
 | 本地健康检查 | `/healthz/openclaw` 已用于 models/responses 探测；`/admin/runtime-health` 和前端 `/status` 用于只读查看 API/OpenClaw/Bridge/TTS/SQLite 当前运行状态 |
 
-## 12. 系统边界
+## 13. 系统边界
 
 本项目负责：
 
@@ -749,7 +988,7 @@ API 编排问题 -> api/app/routes + api/app/services
 模型/动作显示问题 -> MMD_ROOT_DIR + assets API + MMDStage
 ```
 
-## 13. Daily Podcast Topology
+## 14. Daily Podcast Topology
 
 Updated: 2026-05-21
 
@@ -872,7 +1111,7 @@ Daily Podcast only: audio/ogg preferred, audio/wav fallback, ranged GET probe.
 Older TTS/realtime audio OGG migration remains deferred.
 ```
 
-## 14. Local ImgToAction Text-to-Motion/VMD Pipeline
+## 15. Local ImgToAction Text-to-Motion/VMD Pipeline
 
 Updated: 2026-06-18
 
@@ -1108,7 +1347,24 @@ body, right wrist near the chin edge, left arm near waist support, conservative
 finger presets, and candidate scoring for contact distance, elbow naturalness,
 head tilt, stance stability, smoothness, and blocking violations.
 
-## 15. Development Code Search Tooling
+For the "100% restorable" display route, the current production candidate is a
+deterministic reference-playback VMD rather than the BVH+IK retarget result. This
+keeps the natural PMX-specific shoulder, wrist, finger, waist-support, and lower
+body details that are not present in the BVH input:
+
+```text
+imgToAction/outputs/vmd/eula_thinking_100pct_reference.vmd
+MMD/usage/vmd/优菈_by_原神_339146e6e418d79e85a515b26414c0b0[动作]/03_thinking_waiting/思考_100pct_reference.vmd
+imgToAction/outputs/actions/thinking_100pct_reference_render/
+```
+
+The rendered gate for this reference route passes `motion_acceptance_gate.py`
+with `--source render --left-arm-policy support` at `10/10 PASS, 0 WARN, 0
+FAIL`. The companion message path now resolves `think`/`thinking_tilt` to this
+category by a controlled semantic fallback after exact token matching, preferring
+VMD names containing `100pct`, `reference`, or `思考`.
+
+## 16. Development Code Search Tooling
 
 Semble CLI is integrated as a development-only semantic code search helper. It
 is not part of the runtime topology and is not called by FastAPI or Next.js.
@@ -1130,7 +1386,13 @@ Operational rules:
 - Track notable token-saving observations in `docs/architecture/semble-code-search-observability.md`.
 - Current integration is CLI-only; Codex global MCP integration is intentionally deferred.
 
-## 16. 文档维护规则
+### 16.1 Blender MCP 动作审查辅助
+
+Blender MCP 是开发期动作审查工具，不进入 FastAPI、Next.js 或桌面 Pet 的生产运行链路。Windows Blender 5.1 的插件监听 `127.0.0.1:9876`，Codex 通过全局 MCP 配置启动 `C:\Users\KSG\.local\bin\uvx.exe blender-mcp`，由 stdio 适配器转发 `get_scene_info`、`execute_code` 等请求。Blender 插件必须先启用并保持 Blender 实例运行；新注册 MCP 后，已打开的 Codex 会话不会热加载工具，需要新开会话。2026-07-14 的连接验证已完成：stdio server 成功连接 Blender，`get_scene_info` 返回默认场景的 Cube、Light 和 Camera；同一实例已持久启用 `bl_ext.blender_org.mmd_tools`，并确认 `mmd_tools.import_model` 和 `mmd_tools.import_vmd` 操作符可用。该链路只用于 PMX/VMD 导入、姿势检查、骨架/网格碰撞分析与离线动作矫正，最终动作仍必须通过 `imgToAction/tools/motion_acceptance_gate.py` 和四视角截图/GIF 视觉审核。
+
+2026-07-15 的 Blender-first 思考动作 POC 使用 `imgToAction/tools/blender_first_thinking_poc.py` 重建 frame 150 控制链，并用 `imgToAction/tools/blender_sleeve_corrective_morph.py` 验证派生 PMX 顶点 Morph 路径。后者只在内存中创建 `思考_右袖修正` Shape Key，不保存源 `.blend`，也不导出 PMX/VMD；它通过每顶点批量 XYZ 微扰 Jacobian，把当前姿势的世界空间推出量反解为 Shape Key 局部位移，并输出 Morph 0/1 四视图、近景和 JSON 指标。当前基础链选为 `pole3d_0227__comp_065`：右肘 `55.553°`、下巴距离 `0.029175`、接触 patch `6`，但有 69 个右袖对 `上半身2` 的重叠和 20 个旧中指手型重叠。Morph-only 虽可把袖口重叠降到 0，网格质量 Gate 会阻断该结果：初版出现 11 个翻转面和明显尖片；加入累计 Laplacian 平滑及最多 8 个前臂拓扑支持环后，仍无法同时满足零重叠、面积比 `0.60-1.50`、零翻转面和最大位移不超过 3 个模型中位边长。因此当前状态是诊断性 `FAIL`，不得据此导出派生 PMX。下一阶段必须联合优化右臂/躯干姿势以先把深穿透降为浅接触，再用局部 Morph 收尾；最终还需叠加已选 G14 半握手型重新检查手指碰撞，并在用户确认 Blender A/B 后才允许 PMX/VMD 导出。
+
+## 17. 文档维护规则
 
 后续只要更新功能、服务拓扑、外部服务集成、环境变量、数据落点、API 契约或运行时行为，都需要同步更新本文。
 
