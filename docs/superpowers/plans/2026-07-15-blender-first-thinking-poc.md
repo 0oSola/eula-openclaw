@@ -129,7 +129,7 @@ Verify that a neutral wrist, pole-facing elbow, lower-jaw contact, and non-penet
 
 - [ ] **Step 2: Add deterministic frame 150 candidate generation**
 
-Sample a staged bounded grid around the calibrated lower-jaw contact for hand-target position, palm orientation, three-dimensional elbow-pole offset, twist allocation, and minimal upper-body compensation. Preserve the v16 finger action, pelvis, left arm, and lower body. Permit at most 4 degrees on `上半身2`, 3 degrees on the right shoulder girdle, and 5 combined degrees on neck/head only after the arm-only search has proven collision-infeasible.
+Sample a staged bounded grid around the calibrated lower-jaw contact for hand-target position, palm orientation, three-dimensional elbow-pole offset, twist allocation, semantic right-finger pose, and minimal upper-body compensation. Preserve the pelvis, left arm, and lower body. Permit at most 4 degrees on `上半身2`, 3 degrees on the right shoulder girdle, and 5 combined degrees on neck/head only after the arm-only search has proven collision-infeasible. Use calibrated local finger axes to let the thumb/index reach the jaw while the other fingers retain a relaxed progressive curl, so the wrist and sleeve do not need to enter the torso.
 
 - [ ] **Step 3: Score candidates before rendering**
 

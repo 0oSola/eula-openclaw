@@ -46,6 +46,8 @@ The bounded upper-body compensation limits are:
 - Combined neck/head compensation toward the hand: at most 5 degrees from the v16 baseline.
 - Pelvis, left arm, and lower body remain unchanged.
 
+The right-hand pose is part of the contact solve rather than being inherited unchanged from v16. Thumb and index controls may extend toward the lower jaw while the middle, ring, and little fingers retain a relaxed progressive curl. Finger deltas must use calibrated PMX local axes and remain inside the verified finger-motion ranges.
+
 Blender native IK, pole, local rotation limits, and tracking constraints provide the control rig. Python supplies coupled anatomical checks, swing-twist evaluation, comfort-zone scoring, reproducible scene construction, measurements, and rendering.
 
 ## Constraint Priority
