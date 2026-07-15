@@ -100,6 +100,22 @@ class StaticCandidateScore:
     reasons: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class TriangleProjection:
+    point: Vector
+    distance: float
+    barycentric: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class ContactBand:
+    mesh_resolution: float
+    target_distance: float
+    warning_distance: float
+    hard_max_distance: float
+    region_radius: float
+
+
 def _vector(value: Iterable[float]) -> Vector:
     components = tuple(float(component) for component in value)
     if len(components) != 3:
@@ -156,6 +172,121 @@ def normalize(value: Iterable[float]) -> Vector:
     if magnitude <= EPSILON:
         raise ValueError("Cannot normalize a zero-length vector")
     return vector_scale(vector, 1.0 / magnitude)
+
+
+def closest_point_on_triangle(
+    point: Iterable[float],
+    first: Iterable[float],
+    second: Iterable[float],
+    third: Iterable[float],
+) -> TriangleProjection:
+    """Project a point onto a non-degenerate triangle, including its boundary."""
+
+    p = _vector(point)
+    a = _vector(first)
+    b = _vector(second)
+    c = _vector(third)
+    ab = vector_subtract(b, a)
+    ac = vector_subtract(c, a)
+    if length(cross(ab, ac)) <= EPSILON:
+        raise ValueError("Triangle must be non-degenerate")
+
+    ap = vector_subtract(p, a)
+    d1 = dot(ab, ap)
+    d2 = dot(ac, ap)
+    if d1 <= 0.0 and d2 <= 0.0:
+        closest = a
+        barycentric = (1.0, 0.0, 0.0)
+    else:
+        bp = vector_subtract(p, b)
+        d3 = dot(ab, bp)
+        d4 = dot(ac, bp)
+        if d3 >= 0.0 and d4 <= d3:
+            closest = b
+            barycentric = (0.0, 1.0, 0.0)
+        else:
+            vc = d1 * d4 - d3 * d2
+            if vc <= 0.0 and d1 >= 0.0 and d3 <= 0.0:
+                v = d1 / (d1 - d3)
+                closest = vector_add(a, vector_scale(ab, v))
+                barycentric = (1.0 - v, v, 0.0)
+            else:
+                cp = vector_subtract(p, c)
+                d5 = dot(ab, cp)
+                d6 = dot(ac, cp)
+                if d6 >= 0.0 and d5 <= d6:
+                    closest = c
+                    barycentric = (0.0, 0.0, 1.0)
+                else:
+                    vb = d5 * d2 - d1 * d6
+                    if vb <= 0.0 and d2 >= 0.0 and d6 <= 0.0:
+                        w = d2 / (d2 - d6)
+                        closest = vector_add(a, vector_scale(ac, w))
+                        barycentric = (1.0 - w, 0.0, w)
+                    else:
+                        va = d3 * d6 - d5 * d4
+                        if va <= 0.0 and (d4 - d3) >= 0.0 and (d5 - d6) >= 0.0:
+                            edge = vector_subtract(c, b)
+                            w = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+                            closest = vector_add(b, vector_scale(edge, w))
+                            barycentric = (0.0, 1.0 - w, w)
+                        else:
+                            denominator = 1.0 / (va + vb + vc)
+                            v = vb * denominator
+                            w = vc * denominator
+                            closest = vector_add(a, vector_add(vector_scale(ab, v), vector_scale(ac, w)))
+                            barycentric = (1.0 - v - w, v, w)
+
+    return TriangleProjection(
+        point=closest,
+        distance=length(vector_subtract(p, closest)),
+        barycentric=barycentric,
+    )
+
+
+def derive_contact_band(local_edge_lengths: Iterable[float]) -> ContactBand:
+    """Derive contact thresholds from the median lower-chin triangle edge length."""
+
+    edges = sorted(float(value) for value in local_edge_lengths)
+    if not edges or not all(math.isfinite(value) and value > 0.0 for value in edges):
+        raise ValueError("Local mesh edge lengths must be finite and positive")
+    midpoint = len(edges) // 2
+    resolution = (
+        edges[midpoint]
+        if len(edges) % 2
+        else (edges[midpoint - 1] + edges[midpoint]) * 0.5
+    )
+    return ContactBand(
+        mesh_resolution=resolution,
+        target_distance=resolution * 1.5,
+        warning_distance=resolution * 2.0,
+        hard_max_distance=resolution * 3.0,
+        region_radius=resolution * 12.0,
+    )
+
+
+def classify_surface_contact(
+    surface_distance: float,
+    intersection_count: int,
+    band: ContactBand,
+) -> tuple[str, tuple[str, ...]]:
+    """Classify measured contact without allowing distance to hide penetration."""
+
+    distance = float(surface_distance)
+    intersections = int(intersection_count)
+    if not math.isfinite(distance) or distance < 0.0:
+        return "FAIL", ("surface distance must be finite and non-negative",)
+    if intersections > 0:
+        return "FAIL", (f"Contact geometry has {intersections} surface intersection(s)",)
+    if distance > band.hard_max_distance:
+        return "FAIL", (
+            f"surface distance {distance:.6f} exceeds hard maximum {band.hard_max_distance:.6f}",
+        )
+    if distance > band.warning_distance:
+        return "WARN", (
+            f"surface distance {distance:.6f} exceeds warning distance {band.warning_distance:.6f}",
+        )
+    return "PASS", ()
 
 
 def project_onto_plane(value: Iterable[float], plane_normal: Iterable[float]) -> Vector:

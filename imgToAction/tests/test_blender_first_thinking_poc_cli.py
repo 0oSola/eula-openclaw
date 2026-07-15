@@ -72,8 +72,20 @@ def valid_solve_cli(tmp_path):
         str(poc_blend),
         "--output-dir",
         str(output_dir),
-        "--solve-static",
+        "--search-static",
+        "--run-id",
+        "run-20260715-001",
     ]
+
+
+def valid_select_cli(tmp_path):
+    argv = valid_solve_cli(tmp_path)
+    argv[argv.index("--search-static")] = "--select-static"
+    argv.extend(["--source-candidate-id", "candidate_0042"])
+    run_dir = Path(argv[argv.index("--output-dir") + 1]) / "runs" / "run-20260715-001"
+    run_dir.mkdir(parents=True)
+    (run_dir / "static_pose_metrics.json").write_text('{"candidates": []}', encoding="utf-8")
+    return argv
 
 
 def test_module_loads_without_blender_python():
@@ -187,7 +199,7 @@ def test_parse_blender_arguments_after_separator_with_deterministic_defaults(cli
     assert config.solve_static is False
 
 
-def test_solve_static_reuses_existing_poc_blend_without_vmd(cli_tmp_path):
+def test_search_static_reuses_existing_poc_blend_without_vmd(cli_tmp_path):
     tool = load_tool()
 
     config = tool.parse_blender_args(valid_solve_cli(cli_tmp_path))
@@ -196,10 +208,12 @@ def test_solve_static_reuses_existing_poc_blend_without_vmd(cli_tmp_path):
     assert config.source_blend.name == tool.OUTPUT_BLEND_NAME
     assert config.vmd is None
     assert config.setup_only is False
-    assert config.solve_static is True
+    assert config.search_static is True
+    assert config.select_static is False
+    assert config.run_id == "run-20260715-001"
 
 
-def test_setup_and_solve_modes_are_mutually_exclusive(cli_tmp_path):
+def test_setup_search_and_select_modes_are_mutually_exclusive(cli_tmp_path):
     tool = load_tool()
     argv = valid_solve_cli(cli_tmp_path)
     argv.append("--setup-only")
@@ -208,7 +222,7 @@ def test_setup_and_solve_modes_are_mutually_exclusive(cli_tmp_path):
         tool.parse_blender_args(argv)
 
 
-def test_solve_static_requires_opening_and_saving_the_same_poc_blend(cli_tmp_path):
+def test_search_static_requires_opening_the_existing_poc_blend(cli_tmp_path):
     tool = load_tool()
     argv = valid_solve_cli(cli_tmp_path)
     other = cli_tmp_path / "other" / tool.OUTPUT_BLEND_NAME
@@ -216,6 +230,170 @@ def test_solve_static_requires_opening_and_saving_the_same_poc_blend(cli_tmp_pat
 
     with pytest.raises(ValueError, match="same existing POC blend"):
         tool.parse_blender_args(argv)
+
+
+def test_select_static_requires_reviewed_source_candidate_and_existing_run(cli_tmp_path):
+    tool = load_tool()
+
+    config = tool.parse_blender_args(valid_select_cli(cli_tmp_path))
+
+    assert config.select_static is True
+    assert config.search_static is False
+    assert config.source_candidate_id == "candidate_0042"
+    assert config.run_metrics_path.name == "static_pose_metrics.json"
+
+
+def test_run_paths_are_isolated_and_require_explicit_overwrite(cli_tmp_path):
+    tool = load_tool()
+    output_dir = cli_tmp_path / tool.OUTPUT_DIRECTORY_NAME
+
+    paths = tool.static_run_paths(output_dir, "run-20260715-001")
+
+    assert paths.temporary.name == ".tmp-run-20260715-001"
+    assert paths.final == output_dir / "runs" / "run-20260715-001"
+    assert paths.metrics == paths.final / tool.STATIC_METRICS_NAME
+
+
+def test_invalid_or_existing_run_id_is_rejected_without_overwrite(cli_tmp_path):
+    tool = load_tool()
+    argv = valid_solve_cli(cli_tmp_path)
+    argv[argv.index("--run-id") + 1] = "../escape"
+    with pytest.raises(ValueError, match="run ID"):
+        tool.parse_blender_args(argv)
+
+    argv = valid_solve_cli(cli_tmp_path)
+    run_dir = Path(argv[argv.index("--output-dir") + 1]) / "runs" / "run-20260715-001"
+    run_dir.mkdir(parents=True)
+    with pytest.raises(ValueError, match="already exists"):
+        tool.parse_blender_args(argv)
+
+
+def test_staged_search_caps_are_bounded():
+    tool = load_tool()
+
+    assert 6 <= tool.STAGE_C_SURVIVOR_LIMIT <= tool.STAGE_B_SURVIVOR_LIMIT
+    assert tool.STAGE_C_SURVIVOR_LIMIT >= 18
+    assert tool.STAGE_C_SURVIVOR_LIMIT == tool.STAGE_B_SURVIVOR_LIMIT
+    assert tool.STAGE_B_SURVIVOR_LIMIT <= tool.STAGE_A_SURVIVOR_LIMIT < len(tool.static_candidate_grid())
+
+
+def test_stage_a_survivors_preserve_each_contact_target_stratum():
+    tool = load_tool()
+    candidates = (
+        tool.StaticCandidate("candidate_001", 0.35, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.0, (0.25, 0.5, 0.25)),
+        tool.StaticCandidate("candidate_002", 0.35, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.0, (0.25, 0.5, 0.25)),
+        tool.StaticCandidate("candidate_003", 1.0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.0, (0.25, 0.5, 0.25)),
+    )
+    records = tuple(
+        (candidate, {"valid": True, "score": score, "source_candidate_id": candidate.candidate_id})
+        for candidate, score in zip(candidates, (1.0, 2.0, 100.0), strict=True)
+    )
+
+    survivors = tool.stage_a_survivors(records, limit=2)
+
+    assert [candidate.candidate_id for candidate, _record in survivors] == [
+        "candidate_001",
+        "candidate_003",
+    ]
+
+
+def test_rank_source_mapping_is_stable_and_rejects_gaps():
+    tool = load_tool()
+    records = [
+        {"rank": 1, "source_candidate_id": "candidate_010"},
+        {"rank": 2, "source_candidate_id": "candidate_003"},
+    ]
+
+    assert tool.rank_source_mapping(records) == {
+        "candidate_001": "candidate_010",
+        "candidate_002": "candidate_003",
+    }
+    with pytest.raises(ValueError, match="contiguous"):
+        tool.rank_source_mapping([{"rank": 2, "source_candidate_id": "candidate_003"}])
+
+
+def test_candidate_state_and_remeasurement_comparisons_are_explicit():
+    tool = load_tool()
+    baseline = {"hand": (1.0, 2.0, 3.0), "enabled": 0.0}
+
+    assert tool.compare_static_state(baseline, dict(baseline), tolerance=1e-6) == ()
+    assert tool.compare_static_state(baseline, {"hand": (1.0, 2.0, 3.01), "enabled": 0.0}, tolerance=1e-3)
+
+    stored = {"surface_contact_distance": 0.002, "elbow_angle_deg": 60.0}
+    measured = {"surface_contact_distance": 0.0020001, "elbow_angle_deg": 60.0001}
+    assert tool.compare_selected_metrics(stored, measured) == ()
+    measured["surface_contact_distance"] = 0.02
+    assert any("surface_contact_distance" in reason for reason in tool.compare_selected_metrics(stored, measured))
+
+    stored = {"hand_contact_world": (0.0, 0.0, 0.0)}
+    measured = {"hand_contact_world": (0.0, 0.0, 0.01)}
+    assert any("hand_contact_world" in reason for reason in tool.compare_selected_metrics(stored, measured))
+
+
+def test_static_selection_requires_contact_patch_margin_and_clear_geometry():
+    tool = load_tool()
+    metrics = {
+        "surface_contact_distance": 0.02,
+        "contact_patch_count": 3,
+        "surface_intersection_count": 0,
+        "head_collision_count": 0,
+        "torso_penetration_count": 0,
+    }
+
+    assert tool.static_selection_eligibility(metrics, warning_distance=0.03) == ()
+    metrics["contact_patch_count"] = 0
+    assert any("patch" in reason for reason in tool.static_selection_eligibility(metrics, 0.03))
+    metrics["contact_patch_count"] = 3
+    metrics["surface_contact_distance"] = 0.031
+    assert any("warning" in reason for reason in tool.static_selection_eligibility(metrics, 0.03))
+
+
+def test_lower_chin_region_uses_bounded_local_head_topology():
+    tool = load_tool()
+    vertices = (
+        (0.0, 0.0, 0.0),
+        (1.0, 0.0, 0.0),
+        (1.0, 1.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (5.0, 5.0, 0.0),
+    )
+    polygons = ((0, 1, 2), (0, 2, 3), (2, 4, 3))
+
+    region = tool.lower_chin_surface_region(
+        vertices,
+        polygons,
+        anchor=(0.5, 0.5, 0.01),
+        radius=1.0,
+    )
+
+    assert region["triangle_indices"] == (0, 1)
+    assert region["triangle_count"] == 2
+    assert region["vertex_count"] == 4
+    assert len(region["edge_lengths"]) == 6
+
+
+def test_surface_contact_evidence_distinguishes_touch_separation_and_intersection():
+    tool = load_tool()
+    vertices = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    triangles = ((0, 1, 2),)
+
+    touching = tool.measure_triangle_surface_contact(
+        {"thumb": ((0.25, 0.25, 0.0),)}, vertices, triangles, patch_distance=0.02
+    )
+    separated = tool.measure_triangle_surface_contact(
+        {"index": ((0.25, 0.25, 0.1),)}, vertices, triangles, patch_distance=0.02
+    )
+    intersecting = tool.measure_triangle_surface_contact(
+        {"side_palm": ((0.25, 0.25, -0.01),)}, vertices, triangles, patch_distance=0.02
+    )
+
+    assert touching["surface_contact_distance"] == pytest.approx(0.0)
+    assert touching["contact_patch_count"] == 1
+    assert touching["hand_contact_world"] == pytest.approx((0.25, 0.25, 0.0))
+    assert touching["nearest_chin_surface_world"] == pytest.approx((0.25, 0.25, 0.0))
+    assert separated["surface_contact_distance"] == pytest.approx(0.1)
+    assert intersecting["surface_intersection_count"] == 1
+    assert intersecting["contact_source"] == "side_palm"
 
 
 def test_pmx_chin_surface_converts_to_verified_blender_rest_point():
@@ -253,6 +431,16 @@ def test_candidate_render_names_cover_top_six_full_body_views():
     assert len(names) == 24
     assert names[0] == "candidate_001/front.png"
     assert names[-1] == "candidate_006/back.png"
+
+
+def test_render_artifact_paths_include_candidate_root(cli_tmp_path):
+    tool = load_tool()
+    run_dir = cli_tmp_path / "run"
+
+    paths = tool.render_artifact_paths(run_dir, 1)
+
+    assert paths[0] == run_dir / "candidates" / "candidate_001" / "front.png"
+    assert paths[-1] == run_dir / "candidates" / "candidate_001" / "back.png"
 
 
 def test_collision_face_classification_rejects_partial_and_adjacent_faces():

@@ -9,7 +9,10 @@ import itertools
 import json
 import math
 from pathlib import Path
+import re
+import shutil
 import sys
+import time
 from typing import Sequence
 
 try:
@@ -155,6 +158,11 @@ STATIC_RENDER_COUNT = 6
 STATIC_METRICS_NAME = "static_pose_metrics.json"
 STATIC_CANDIDATE_DIRECTORY = "candidates"
 STATIC_CAMERA_NAME = "POC Static Full Body Camera"
+STAGE_A_SURVIVOR_LIMIT = 216
+STAGE_B_SURVIVOR_LIMIT = 48
+STAGE_C_SURVIVOR_LIMIT = 48
+RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+SOURCE_CANDIDATE_PATTERN = re.compile(r"^candidate_[0-9]+$")
 
 CONTACT_VERTEX_GROUPS = (
     "右親指０",
@@ -224,6 +232,7 @@ MIN_GROUP_WEIGHT = 1e-4
 MESH_PENETRATION_TOLERANCE = 5e-5
 FULL_BODY_MARGIN = 1.18
 RENDER_RESOLUTION = 768
+CHIN_REGION_BOOTSTRAP_RADIUS = 0.05
 
 
 @dataclass(frozen=True)
@@ -246,6 +255,19 @@ class PocConfig:
     frame_end: int
     setup_only: bool
     solve_static: bool
+    search_static: bool
+    select_static: bool
+    run_id: str | None
+    overwrite_run: bool
+    source_candidate_id: str | None
+    run_metrics_path: Path | None
+
+
+@dataclass(frozen=True)
+class StaticRunPaths:
+    temporary: Path
+    final: Path
+    metrics: Path
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -258,8 +280,24 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--frame-end", type=int, default=240)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--setup-only", action="store_true")
-    mode.add_argument("--solve-static", action="store_true")
+    mode.add_argument("--search-static", action="store_true")
+    mode.add_argument("--select-static", action="store_true")
+    parser.add_argument("--run-id")
+    parser.add_argument("--overwrite-run", action="store_true")
+    parser.add_argument("--source-candidate-id")
     return parser
+
+
+def static_run_paths(output_dir: Path, run_id: str) -> StaticRunPaths:
+    if not RUN_ID_PATTERN.fullmatch(run_id):
+        raise ValueError(f"Invalid static run ID: {run_id!r}")
+    runs = Path(output_dir) / "runs"
+    final = runs / run_id
+    return StaticRunPaths(
+        temporary=runs / f".tmp-{run_id}",
+        final=final,
+        metrics=final / STATIC_METRICS_NAME,
+    )
 
 
 def _validated_config(namespace: argparse.Namespace) -> PocConfig:
@@ -281,12 +319,32 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         raise ValueError(f"Output blend must be named {OUTPUT_BLEND_NAME}")
     if output_dir.name != OUTPUT_DIRECTORY_NAME:
         raise ValueError(f"Output directory must be named {OUTPUT_DIRECTORY_NAME}")
-    if namespace.solve_static and (
+    if (namespace.search_static or namespace.select_static) and (
         source_blend.name != OUTPUT_BLEND_NAME or not _same_path(source_blend, output_blend)
     ):
-        raise ValueError("Solve-static must open and save the same existing POC blend")
+        raise ValueError("Static modes must open the same existing POC blend")
     if namespace.frame_start < 0 or namespace.frame_end < namespace.frame_start:
         raise ValueError("Frame range must be a valid non-negative interval")
+
+    run_metrics_path = None
+    if namespace.search_static or namespace.select_static:
+        if namespace.run_id is None:
+            raise ValueError("Static modes require a run ID")
+        paths = static_run_paths(output_dir, namespace.run_id)
+        run_metrics_path = paths.metrics
+        if namespace.search_static and paths.final.exists() and not namespace.overwrite_run:
+            raise ValueError(f"Static run already exists: {paths.final}")
+        if namespace.search_static and paths.temporary.exists() and not namespace.overwrite_run:
+            raise ValueError(f"Temporary static run already exists: {paths.temporary}")
+    if namespace.select_static:
+        if not namespace.source_candidate_id or not SOURCE_CANDIDATE_PATTERN.fullmatch(
+            namespace.source_candidate_id
+        ):
+            raise ValueError("Select-static requires a reviewed source candidate ID")
+        if run_metrics_path is None or not run_metrics_path.is_file():
+            raise ValueError(f"Select-static run metrics do not exist: {run_metrics_path}")
+    elif namespace.source_candidate_id is not None:
+        raise ValueError("A source candidate ID is only valid with --select-static")
 
     return PocConfig(
         source_blend=source_blend,
@@ -296,7 +354,13 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         frame_start=namespace.frame_start,
         frame_end=namespace.frame_end,
         setup_only=namespace.setup_only,
-        solve_static=namespace.solve_static,
+        solve_static=False,
+        search_static=namespace.search_static,
+        select_static=namespace.select_static,
+        run_id=namespace.run_id,
+        overwrite_run=namespace.overwrite_run,
+        source_candidate_id=namespace.source_candidate_id,
+        run_metrics_path=run_metrics_path,
     )
 
 
@@ -426,6 +490,221 @@ def candidate_render_names(count: int = STATIC_RENDER_COUNT) -> tuple[str, ...]:
         for candidate_index in range(1, count + 1)
         for view in CANDIDATE_VIEWS
     )
+
+
+def render_artifact_paths(run_dir: Path, count: int = STATIC_RENDER_COUNT) -> tuple[Path, ...]:
+    return tuple(
+        Path(run_dir) / STATIC_CANDIDATE_DIRECTORY / relative
+        for relative in candidate_render_names(count)
+    )
+
+
+def rank_source_mapping(records: Sequence[dict[str, object]]) -> dict[str, str]:
+    ordered = sorted(records, key=lambda record: int(record["rank"]))
+    ranks = [int(record["rank"]) for record in ordered]
+    if ranks != list(range(1, len(ordered) + 1)):
+        raise ValueError("Rendered candidate ranks must be contiguous from one")
+    return {
+        f"candidate_{rank:03d}": str(record["source_candidate_id"])
+        for rank, record in zip(ranks, ordered, strict=True)
+    }
+
+
+def compare_static_state(
+    expected: dict[str, object],
+    actual: dict[str, object],
+    tolerance: float,
+) -> tuple[str, ...]:
+    differences: list[str] = []
+    for key in sorted(set(expected) | set(actual)):
+        if key not in expected or key not in actual:
+            differences.append(f"{key} is missing from one state")
+            continue
+        left = expected[key]
+        right = actual[key]
+        if isinstance(left, (tuple, list)) and isinstance(right, (tuple, list)):
+            if len(left) != len(right) or any(
+                abs(float(a) - float(b)) > tolerance
+                for a, b in zip(left, right, strict=False)
+            ):
+                differences.append(f"{key} differs: {left!r} != {right!r}")
+        elif isinstance(left, (int, float)) and isinstance(right, (int, float)):
+            if abs(float(left) - float(right)) > tolerance:
+                differences.append(f"{key} differs: {left!r} != {right!r}")
+        elif left != right:
+            differences.append(f"{key} differs: {left!r} != {right!r}")
+    return tuple(differences)
+
+
+def compare_selected_metrics(
+    stored: dict[str, object],
+    measured: dict[str, object],
+) -> tuple[str, ...]:
+    tolerances = {
+        "surface_contact_distance": 1e-5,
+        "elbow_angle_deg": 1e-3,
+        "wrist_swing_deg": 1e-3,
+        "wrist_twist_deg": 1e-3,
+        "minimum_clearance": 1e-5,
+    }
+    differences: list[str] = []
+    for name, tolerance in tolerances.items():
+        if name not in stored or name not in measured:
+            continue
+        if abs(float(stored[name]) - float(measured[name])) > tolerance:
+            differences.append(
+                f"{name} changed from {float(stored[name]):.9g} to {float(measured[name]):.9g}"
+            )
+    for name in ("head_collision_count", "torso_penetration_count"):
+        if name in stored and name in measured and int(stored[name]) != int(measured[name]):
+            differences.append(f"{name} changed from {stored[name]} to {measured[name]}")
+    for name in ("hand_contact_world", "nearest_chin_surface_world"):
+        if name in stored and name in measured and any(
+            abs(float(left) - float(right)) > 1e-5
+            for left, right in zip(stored[name], measured[name], strict=True)
+        ):
+            differences.append(f"{name} changed from {stored[name]} to {measured[name]}")
+    for name in ("contact_patch_count", "surface_intersection_count"):
+        if name in stored and name in measured and int(stored[name]) != int(measured[name]):
+            differences.append(f"{name} changed from {stored[name]} to {measured[name]}")
+    return tuple(differences)
+
+
+def static_selection_eligibility(
+    metrics: dict[str, object],
+    warning_distance: float,
+) -> tuple[str, ...]:
+    reasons = []
+    if float(metrics["surface_contact_distance"]) > float(warning_distance):
+        reasons.append("Surface contact exceeds the geometry-derived warning distance")
+    if int(metrics["contact_patch_count"]) <= 0:
+        reasons.append("Surface contact patch is empty")
+    if int(metrics["surface_intersection_count"]) > 0:
+        reasons.append("Contact surface intersection is present")
+    if int(metrics["head_collision_count"]) > 0:
+        reasons.append("Head collision is present")
+    if int(metrics["torso_penetration_count"]) > 0:
+        reasons.append("Torso collision is present")
+    return tuple(reasons)
+
+
+def _triangulated_polygons(polygons: Sequence[Sequence[int]]) -> tuple[tuple[int, int, int], ...]:
+    triangles: list[tuple[int, int, int]] = []
+    for polygon in polygons:
+        indices = tuple(int(index) for index in polygon)
+        triangles.extend(
+            (indices[0], indices[offset], indices[offset + 1])
+            for offset in range(1, len(indices) - 1)
+        )
+    return tuple(triangles)
+
+
+def lower_chin_surface_region(
+    vertices: Sequence[Sequence[float]],
+    polygons: Sequence[Sequence[int]],
+    *,
+    anchor: Sequence[float],
+    radius: float,
+) -> dict[str, object]:
+    """Return the connected local triangle patch surrounding the chin anchor."""
+
+    math_module = _load_motion_math()
+    points = tuple(tuple(float(value) for value in vertex) for vertex in vertices)
+    triangles = _triangulated_polygons(polygons)
+    if not triangles or radius <= 0.0:
+        raise ValueError("Lower-chin topology and region radius must be non-empty")
+    projections = tuple(
+        math_module.closest_point_on_triangle(
+            anchor, points[triangle[0]], points[triangle[1]], points[triangle[2]]
+        )
+        for triangle in triangles
+    )
+    seed = min(range(len(triangles)), key=lambda index: projections[index].distance)
+    centroids = tuple(
+        tuple(sum(points[index][axis] for index in triangle) / 3.0 for axis in range(3))
+        for triangle in triangles
+    )
+    local = {
+        index
+        for index, centroid in enumerate(centroids)
+        if math_module.length(math_module.vector_subtract(centroid, anchor)) <= radius
+    }
+    local.add(seed)
+    connected = {seed}
+    frontier = [seed]
+    while frontier:
+        current = frontier.pop()
+        current_vertices = set(triangles[current])
+        for index in sorted(local - connected):
+            if len(current_vertices.intersection(triangles[index])) >= 2:
+                connected.add(index)
+                frontier.append(index)
+    selected_indices = tuple(sorted(connected))
+    selected_triangles = tuple(triangles[index] for index in selected_indices)
+    vertex_indices = tuple(sorted({index for triangle in selected_triangles for index in triangle}))
+    edge_lengths = tuple(
+        math_module.length(math_module.vector_subtract(points[right], points[left]))
+        for triangle in selected_triangles
+        for left, right in ((triangle[0], triangle[1]), (triangle[1], triangle[2]), (triangle[2], triangle[0]))
+    )
+    return {
+        "triangle_indices": selected_indices,
+        "triangles": selected_triangles,
+        "triangle_count": len(selected_triangles),
+        "vertex_indices": vertex_indices,
+        "vertex_count": len(vertex_indices),
+        "edge_lengths": edge_lengths,
+        "seed_triangle_index": seed,
+    }
+
+
+def measure_triangle_surface_contact(
+    contact_points: dict[str, Sequence[Sequence[float]]],
+    surface_vertices: Sequence[Sequence[float]],
+    surface_triangles: Sequence[Sequence[int]],
+    *,
+    patch_distance: float,
+) -> dict[str, object]:
+    """Measure named hand samples against an oriented triangle surface."""
+
+    math_module = _load_motion_math()
+    vertices = tuple(tuple(float(value) for value in vertex) for vertex in surface_vertices)
+    triangles = tuple(tuple(int(index) for index in triangle) for triangle in surface_triangles)
+    samples = []
+    for source in sorted(contact_points):
+        for point in contact_points[source]:
+            nearest = None
+            for triangle_index, triangle in enumerate(triangles):
+                projection = math_module.closest_point_on_triangle(
+                    point, vertices[triangle[0]], vertices[triangle[1]], vertices[triangle[2]]
+                )
+                if nearest is None or projection.distance < nearest[0].distance:
+                    edge_a = math_module.vector_subtract(vertices[triangle[1]], vertices[triangle[0]])
+                    edge_b = math_module.vector_subtract(vertices[triangle[2]], vertices[triangle[0]])
+                    normal = math_module.normalize(math_module.cross(edge_a, edge_b))
+                    signed_distance = math_module.dot(
+                        math_module.vector_subtract(point, projection.point), normal
+                    )
+                    nearest = (projection, signed_distance, triangle_index)
+            if nearest is not None:
+                samples.append((nearest[0].distance, source, tuple(point), nearest[0].point, nearest[1], nearest[2]))
+    if not samples:
+        raise ValueError("Contact measurement requires points and surface triangles")
+    best = min(samples, key=lambda item: (item[0], item[1], item[2]))
+    return {
+        "surface_contact_distance": float(best[0]),
+        "contact_source": best[1],
+        "hand_contact_world": tuple(float(value) for value in best[2]),
+        "nearest_chin_surface_world": tuple(float(value) for value in best[3]),
+        "surface_signed_distance": float(best[4]),
+        "nearest_chin_triangle_index": int(best[5]),
+        "surface_intersection_count": sum(
+            signed_distance < -MESH_PENETRATION_TOLERANCE
+            for _distance, _source, _point, _nearest, signed_distance, _triangle in samples
+        ),
+        "contact_patch_count": sum(distance <= patch_distance for distance, *_rest in samples),
+        "contact_sample_count": len(samples),
+    }
 
 
 def signed_elbow_flex_is_valid(flex_degrees: float) -> bool:
@@ -1249,6 +1528,8 @@ def _polygons_touching(mesh, included: set[int], excluded: set[int] | None = Non
 
 def _mesh_geometry_sets(mesh):
     contact = _vertices_for_groups(mesh, _group_indices(mesh, CONTACT_VERTEX_GROUPS))
+    thumb = _vertices_for_groups(mesh, _group_indices(mesh, ("右親指０", "右親指１", "右親指２")))
+    index = _vertices_for_groups(mesh, _group_indices(mesh, ("右人指１", "右人指２", "右人指３")))
     hand = _vertices_for_groups(mesh, _group_indices(mesh, RIGHT_HAND_VERTEX_GROUPS))
     palm = _vertices_for_groups(mesh, _group_indices(mesh, PALM_VERTEX_GROUPS))
     forearm = _vertices_for_groups(mesh, _group_indices(mesh, RIGHT_FOREARM_VERTEX_GROUPS))
@@ -1261,6 +1542,9 @@ def _mesh_geometry_sets(mesh):
     moving = hand | forearm
     return {
         "contact_vertices": contact,
+        "thumb_vertices": thumb,
+        "index_vertices": index,
+        "side_palm_vertices": palm,
         "hand_vertices": hand,
         "moving_vertices": moving,
         "palm_faces": _polygons_touching(mesh, palm),
@@ -1268,6 +1552,7 @@ def _mesh_geometry_sets(mesh):
         "hand_faces": _polygons_touching(mesh, hand),
         "moving_faces": _polygons_touching(mesh, moving),
         "head_faces": _polygons_touching(mesh, head),
+        "head_vertices": head,
         "torso_faces": _polygons_touching(mesh, torso, adjacent),
         "group_counts": {
             name: len(
@@ -1276,6 +1561,22 @@ def _mesh_geometry_sets(mesh):
             for name in EVIDENCE_VERTEX_GROUPS
         },
     }
+
+
+def _evaluated_world_vertex_subset(mesh, indices: Sequence[int]):
+    requested = tuple(sorted(set(int(index) for index in indices)))
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    evaluated = mesh.evaluated_get(depsgraph)
+    evaluated_mesh = evaluated.to_mesh()
+    try:
+        if len(evaluated_mesh.vertices) != len(mesh.data.vertices):
+            raise RuntimeError("Evaluated mesh topology changed; vertex-group evidence is invalid")
+        return {
+            index: evaluated.matrix_world @ evaluated_mesh.vertices[index].co
+            for index in requested
+        }
+    finally:
+        evaluated.to_mesh_clear()
 
 
 def _evaluated_world_vertices(mesh):
@@ -1340,6 +1641,48 @@ def _mesh_evidence(mesh, geometry, chin_world):
     torso_intersections = len(moving_tree.overlap(torso_tree))
     return {
         "contact_error": float(contact_error),
+        "head_penetration_depth": float(head_evidence["penetration_depth"]),
+        "head_collision_count": int(head_evidence["collision_count"]),
+        "head_intersection_count": int(head_evidence["collision_count"]),
+        "palm_head_intersection_count": palm_intersections,
+        "finger_head_intersection_count": finger_intersections,
+        "full_hand_head_intersection_count": full_hand_intersections,
+        "head_collision_sources": head_evidence["sources"],
+        "torso_penetration_count": int(torso_intersections),
+        "minimum_clearance": float(minimum_clearance),
+    }, vertices
+
+
+def _invariant_collision_context(vertices, geometry):
+    return {
+        "head_tree": _bvh(vertices, geometry["head_faces"]),
+        "torso_tree": _bvh(vertices, geometry["torso_faces"]),
+    }
+
+
+def _full_collision_evidence(mesh, geometry, invariant):
+    vertices = _evaluated_world_vertices(mesh)
+    palm_tree = _bvh(vertices, geometry["palm_faces"])
+    contact_tree = _bvh(vertices, geometry["contact_faces"])
+    hand_tree = _bvh(vertices, geometry["hand_faces"])
+    moving_tree = _bvh(vertices, geometry["moving_faces"])
+    _head_clearance, head_penetration = _nearest_surface_evidence(
+        (vertices[index] for index in geometry["hand_vertices"]), invariant["head_tree"]
+    )
+    palm_intersections = len(palm_tree.overlap(invariant["head_tree"]))
+    finger_intersections = len(contact_tree.overlap(invariant["head_tree"]))
+    full_hand_intersections = len(hand_tree.overlap(invariant["head_tree"]))
+    head_evidence = combine_head_collision_evidence(
+        palm_intersections=palm_intersections,
+        finger_intersections=finger_intersections,
+        full_hand_intersections=full_hand_intersections,
+        signed_penetration_depth=head_penetration,
+    )
+    minimum_clearance, _torso_signed_penetration = _nearest_surface_evidence(
+        (vertices[index] for index in geometry["moving_vertices"]), invariant["torso_tree"]
+    )
+    torso_intersections = len(moving_tree.overlap(invariant["torso_tree"]))
+    return {
         "head_penetration_depth": float(head_evidence["penetration_depth"]),
         "head_collision_count": int(head_evidence["collision_count"]),
         "head_intersection_count": int(head_evidence["collision_count"]),
@@ -1418,6 +1761,207 @@ def _apply_static_candidate(
     armature["POC_enabled"] = 1.0
     armature.update_tag()
     _refresh_frame()
+
+
+def _capture_static_control_state(armature, controls) -> dict[str, object]:
+    return {
+        "hand": tuple(float(value) for value in controls["hand"].location),
+        "pole": tuple(float(value) for value in controls["pole"].location),
+        "palm_basis": tuple(float(value) for row in controls["palm"].matrix_basis for value in row),
+        "enabled": float(armature["POC_enabled"]),
+        "upper_twist_influence": float(armature["POC_upper_twist_influence"]),
+        "hand_twist_influence": float(armature["POC_hand_twist_influence"]),
+        "wrist_influence": float(armature["POC_wrist_influence"]),
+    }
+
+
+def _restore_static_control_state(armature, controls, state: dict[str, object]) -> None:
+    controls["hand"].location = Vector(state["hand"])
+    controls["pole"].location = Vector(state["pole"])
+    controls["palm"].matrix_basis = Matrix(tuple(
+        tuple(float(state["palm_basis"][row * 4 + column]) for column in range(4))
+        for row in range(4)
+    ))
+    armature["POC_enabled"] = float(state["enabled"])
+    armature["POC_upper_twist_influence"] = float(state["upper_twist_influence"])
+    armature["POC_hand_twist_influence"] = float(state["hand_twist_influence"])
+    armature["POC_wrist_influence"] = float(state["wrist_influence"])
+    armature.update_tag()
+    _refresh_frame()
+
+
+def _anatomy_measurements(armature, controls, previous, chin_world):
+    root = _pose_head_world(armature, PROXY_BONE_NAMES[0])
+    elbow = _pose_head_world(armature, PROXY_BONE_NAMES[1])
+    end = _pose_head_world(armature, PROXY_BONE_NAMES[2])
+    elbow_angle = math.degrees((root - elbow).angle(end - elbow))
+    signed_flex, off_axis_flex = _signed_proxy_elbow_flex(armature)
+    pole_side = _proxy_elbow_pole_side(armature, controls["pole"])
+    upper_twist, upper_swing, _upper_total = _local_y_twist_response(
+        previous["local_rotations"]["右腕捩"], _evaluated_local_rotation(armature, "右腕捩")
+    )
+    hand_twist, hand_swing, _hand_total = _local_y_twist_response(
+        previous["local_rotations"]["右手捩"], _evaluated_local_rotation(armature, "右手捩")
+    )
+    wrist_twist, wrist_swing, _wrist_total = _local_y_twist_response(
+        previous["local_rotations"]["右手首"], _evaluated_local_rotation(armature, "右手首")
+    )
+    proxy_names = tuple(
+        name for name in ("右親指２", "右人指３", "右手首") if name in armature.pose.bones
+    )
+    contact_proxy = min(
+        (_pose_head_world(armature, name) - chin_world).length for name in proxy_names
+    )
+    continuity = max(
+        (elbow - previous["elbow"]).length,
+        (_pose_head_world(armature, "右手首") - previous["wrist"]).length,
+    )
+    relevant_matrices = (
+        armature.matrix_world,
+        *(armature.pose.bones[name].matrix for name in (*PROXY_BONE_NAMES, "右腕", "右ひじ", "右手首")),
+        *(control.matrix_world for control in controls.values()),
+    )
+    return {
+        "elbow_angle_deg": elbow_angle,
+        "signed_elbow_flex_deg": signed_flex,
+        "elbow_off_axis_deg": off_axis_flex,
+        "pole_side": pole_side,
+        "wrist_swing_deg": wrist_swing,
+        "wrist_twist_deg": wrist_twist,
+        "forearm_twist_deg": upper_twist + hand_twist,
+        "upper_twist_deg": upper_twist,
+        "hand_twist_deg": hand_twist,
+        "upper_twist_swing_deg": upper_swing,
+        "hand_twist_swing_deg": hand_swing,
+        "continuity_distance": continuity,
+        "matrices_finite": all(_finite_matrix(matrix) for matrix in relevant_matrices),
+        "cheap_contact_proxy_distance": contact_proxy,
+        "hand_target_world": tuple(float(value) for value in controls["hand"].location),
+        "pole_target_world": tuple(float(value) for value in controls["pole"].location),
+        "palm_local_euler_deg": tuple(math.degrees(float(value)) for value in controls["palm"].rotation_euler),
+        "twist_influences": (
+            float(armature["POC_upper_twist_influence"]),
+            float(armature["POC_hand_twist_influence"]),
+            float(armature["POC_wrist_influence"]),
+        ),
+    }
+
+
+def _stage_a_record(math_module, candidate, measurements):
+    anatomy = math_module.score_anatomy(
+        measurements["elbow_angle_deg"],
+        measurements["wrist_swing_deg"],
+        measurements["forearm_twist_deg"],
+    )
+    reasons = list(anatomy.reasons)
+    valid = anatomy.valid
+    if not signed_elbow_flex_is_valid(measurements["signed_elbow_flex_deg"]):
+        valid = False
+        reasons.append("Signed elbow hinge limit failed")
+    if measurements["elbow_off_axis_deg"] > ELBOW_OFF_AXIS_MAX_DEG:
+        valid = False
+        reasons.append("Proxy elbow left its signed hinge axis")
+    if measurements["pole_side"] <= math_module.EPSILON:
+        valid = False
+        reasons.append("Elbow is not on the pole-facing side")
+    if abs(measurements["wrist_twist_deg"]) > math_module.WRIST_TWIST_HARD_MAX_DEG:
+        valid = False
+        reasons.append("Wrist twist exceeds its hard limit")
+    if measurements["continuity_distance"] > math_module.CONTINUITY_HARD_DISTANCE:
+        valid = False
+        reasons.append("Candidate discontinuity exceeds its hard limit")
+    if not measurements["matrices_finite"]:
+        valid = False
+        reasons.append("Candidate contains non-finite matrices")
+    proxy_penalty = (measurements["cheap_contact_proxy_distance"] / 0.1) ** 2
+    score = anatomy.component_penalties["elbow"] * math_module.ELBOW_SCORE_WEIGHT + anatomy.total_penalty * 4.0 + proxy_penalty
+    return {
+        "source_candidate_id": candidate.candidate_id,
+        "parameters": {
+            "alignment_factor": candidate.alignment_factor,
+            "hand_offset": candidate.hand_offset,
+            "palm_euler_deg": candidate.palm_euler_deg,
+            "pole_offset": candidate.pole_offset,
+            "twist_influences": candidate.twist_influences,
+        },
+        "stage": "A",
+        "valid": valid,
+        "verdict": "FAIL" if not valid else ("WARN" if reasons else "PASS"),
+        "reasons": reasons,
+        "score": float(score + (0.0 if valid else math_module.HARD_REJECTION_PENALTY)),
+        "component_penalties": {**anatomy.component_penalties, "cheap_contact_proxy": proxy_penalty},
+        "metrics": measurements,
+    }
+
+
+def _build_chin_surface(mesh, geometry, vertices, chin_world, math_module):
+    bootstrap = lower_chin_surface_region(
+        vertices,
+        geometry["head_faces"],
+        anchor=chin_world,
+        radius=CHIN_REGION_BOOTSTRAP_RADIUS,
+    )
+    band = math_module.derive_contact_band(bootstrap["edge_lengths"])
+    region = lower_chin_surface_region(
+        vertices,
+        geometry["head_faces"],
+        anchor=chin_world,
+        radius=band.region_radius,
+    )
+    band = math_module.derive_contact_band(region["edge_lengths"])
+    tree = _bvh(vertices, region["triangles"])
+    nearest = tree.find_nearest(chin_world)
+    if nearest is None:
+        raise RuntimeError("Unable to project calibrated chin point onto evaluated head surface")
+    location, normal, triangle_index, distance = nearest
+    return {
+        "region": region,
+        "band": band,
+        "tree": tree,
+        "calibrated_nearest_world": location,
+        "calibrated_nearest_normal": normal.normalized(),
+        "calibrated_surface_distance": float(distance),
+        "calibrated_nearest_triangle_index": int(triangle_index),
+    }
+
+
+def _surface_contact_evidence_bvh(mesh, geometry, chin_surface):
+    requested = geometry["thumb_vertices"] | geometry["index_vertices"] | geometry["side_palm_vertices"]
+    vertices = _evaluated_world_vertex_subset(mesh, requested)
+    samples = []
+    groups = {
+        "thumb": geometry["thumb_vertices"],
+        "index": geometry["index_vertices"],
+        "side_palm": geometry["side_palm_vertices"],
+    }
+    for source, indices in groups.items():
+        for index in indices:
+            point = vertices[index]
+            nearest = chin_surface["tree"].find_nearest(point)
+            if nearest is None:
+                continue
+            location, normal, triangle_index, distance = nearest
+            signed_distance = (point - location).dot(normal)
+            samples.append((float(distance), source, index, point, location, float(signed_distance), int(triangle_index)))
+    if not samples:
+        raise RuntimeError("No named hand vertices could be measured against the chin surface")
+    best = min(samples, key=lambda item: (item[0], item[1], item[2]))
+    band = chin_surface["band"]
+    return {
+        "surface_contact_distance": best[0],
+        "contact_error": best[0],
+        "contact_source": best[1],
+        "contact_vertex_index": best[2],
+        "hand_contact_world": tuple(float(value) for value in best[3]),
+        "nearest_chin_surface_world": tuple(float(value) for value in best[4]),
+        "surface_signed_distance": best[5],
+        "nearest_chin_triangle_index": best[6],
+        "surface_intersection_count": sum(
+            signed < -MESH_PENETRATION_TOLERANCE for _distance, _source, _index, _point, _location, signed, _triangle in samples
+        ),
+        "contact_patch_count": sum(distance <= band.warning_distance for distance, *_rest in samples),
+        "contact_sample_count": len(samples),
+    }
 
 
 def _candidate_measurements(armature, mesh, controls, geometry, candidate, previous):
@@ -1519,6 +2063,42 @@ def _rank_key(item):
     )
 
 
+def stage_a_survivors(evaluated, limit: int):
+    if limit <= 0:
+        return []
+    strata = {}
+    for candidate, record in evaluated:
+        if not record["valid"]:
+            continue
+        key = (candidate.alignment_factor, candidate.hand_offset)
+        strata.setdefault(key, []).append((candidate, record))
+    for items in strata.values():
+        items.sort(key=_rank_key)
+    globally_ranked = sorted(
+        (item for item in evaluated if item[1]["valid"]), key=_rank_key
+    )
+    selected = globally_ranked[: max(1, limit // 2)]
+    selected_ids = {candidate.candidate_id for candidate, _record in selected}
+    depth = 0
+    ordered_keys = sorted(strata)
+    while len(selected) < limit:
+        advanced = False
+        for key in ordered_keys:
+            items = strata[key]
+            if depth < len(items):
+                advanced = True
+                candidate_item = items[depth]
+                if candidate_item[0].candidate_id not in selected_ids:
+                    selected.append(candidate_item)
+                    selected_ids.add(candidate_item[0].candidate_id)
+                    if len(selected) == limit:
+                        break
+        if not advanced:
+            break
+        depth += 1
+    return sorted(selected, key=_rank_key)
+
+
 def _full_body_camera(scene, all_vertices):
     minimum = Vector((
         min(vertex.x for vertex in all_vertices),
@@ -1547,7 +2127,7 @@ def _full_body_camera(scene, all_vertices):
 
 
 def _render_candidates(
-    config,
+    output_dir,
     armature,
     controls,
     ranked,
@@ -1558,7 +2138,7 @@ def _render_candidates(
     vertices_by_candidate,
 ):
     scene = bpy.context.scene
-    candidate_root = config.output_dir / STATIC_CANDIDATE_DIRECTORY
+    candidate_root = Path(output_dir) / STATIC_CANDIDATE_DIRECTORY
     candidate_root.mkdir(parents=True, exist_ok=True)
     combined_vertices = tuple(
         vertex
@@ -1593,7 +2173,7 @@ def _render_candidates(
         directory = candidate_root / f"candidate_{rank:03d}"
         directory.mkdir(parents=True, exist_ok=True)
         record["rank"] = rank
-        record["render_directory"] = str(directory)
+        record["render_directory"] = str(Path(STATIC_CANDIDATE_DIRECTORY) / f"candidate_{rank:03d}")
         record["renders"] = {}
         for view, direction in view_directions.items():
             camera.location = center + direction * distance
@@ -1601,8 +2181,9 @@ def _render_candidates(
             output = directory / f"{view}.png"
             scene.render.filepath = str(output)
             bpy.ops.render.render(write_still=True)
-            record["renders"][view] = str(output)
-            rendered.append(str(output))
+            relative_output = Path(STATIC_CANDIDATE_DIRECTORY) / f"candidate_{rank:03d}" / f"{view}.png"
+            record["renders"][view] = str(relative_output)
+            rendered.append(str(relative_output))
     return {
         "camera_name": camera.name,
         "ortho_scale": float(ortho_scale),
@@ -1620,242 +2201,352 @@ def _render_candidates(
     }
 
 
-def solve_static(config: PocConfig) -> None:
-    _require_blender()
-    if not config.solve_static:
-        raise ValueError("Static solver requires --solve-static")
-    current_blend = Path(bpy.data.filepath)
-    if not current_blend or not _same_path(current_blend, config.source_blend):
-        raise RuntimeError(f"Blender must open the existing POC blend: {config.source_blend}")
-    armature, mesh = _validate_scene_objects()
-    controls = _existing_controls()
-    _validate_existing_poc(armature, controls)
-    math_module = _load_motion_math()
-    geometry = _mesh_geometry_sets(mesh)
+def _candidate_from_record(record) -> StaticCandidate:
+    parameters = record["parameters"]
+    return StaticCandidate(
+        candidate_id=record["source_candidate_id"],
+        alignment_factor=float(parameters["alignment_factor"]),
+        hand_offset=tuple(float(value) for value in parameters["hand_offset"]),
+        palm_euler_deg=tuple(float(value) for value in parameters["palm_euler_deg"]),
+        pole_offset=float(parameters["pole_offset"]),
+        twist_influences=tuple(float(value) for value in parameters["twist_influences"]),
+    )
+
+
+def _prepare_static_context(armature, mesh, controls, geometry, math_module):
     scene = bpy.context.scene
     scene.frame_set(VALIDATION_FRAME)
     _reset_static_controls_to_v16(armature, controls)
+    baseline_state = _capture_static_control_state(armature, controls)
     previous = _capture_pose_state(armature, VALIDATION_FRAME - 1)
     scene.frame_set(VALIDATION_FRAME)
     bpy.context.view_layer.update()
     chin_rest, chin_local, chin_world = _calibrated_chin_points(armature)
     controls["chin"].location = chin_world
     baseline_vertices = _evaluated_world_vertices(mesh)
-    baseline_mesh_metrics, _baseline_mesh_vertices = _mesh_evidence(mesh, geometry, chin_world)
+    chin_surface = _build_chin_surface(mesh, geometry, baseline_vertices, chin_world, math_module)
+    contact_indices = geometry["thumb_vertices"] | geometry["index_vertices"] | geometry["side_palm_vertices"]
     contact_anchor = min(
-        (baseline_vertices[index] for index in geometry["contact_vertices"]),
-        key=lambda point: (point - chin_world).length,
+        (baseline_vertices[index] for index in contact_indices),
+        key=lambda point: (point - chin_surface["calibrated_nearest_world"]).length,
+    )
+    target_contact = (
+        chin_surface["calibrated_nearest_world"]
+        + chin_surface["calibrated_nearest_normal"] * chin_surface["band"].target_distance
     )
     base_hand = controls["hand"].location.copy()
-    contact_delta = chin_world - contact_anchor
     base_pole = controls["pole"].location.copy()
     pole_axis = armature.matrix_world.to_3x3() @ Vector((0.0, 1.0, 0.0))
     pole_axis.normalize()
-    print(
-        "POC_STATIC_BASELINE",
-        {
-            "chin": tuple(chin_world),
-            "contact_anchor": tuple(contact_anchor),
-            "contact_delta": tuple(contact_delta),
-            "hand_control": tuple(controls["hand"].location),
-            "base_hand": tuple(base_hand),
-            "wrist": tuple(_pose_head_world(armature, "右手首")),
-            "mesh_metrics": baseline_mesh_metrics,
-            "face_counts": {
-                key: len(geometry[key])
-                for key in ("palm_faces", "moving_faces", "head_faces", "torso_faces")
-            },
-        },
+    return {
+        "baseline_state": baseline_state,
+        "previous": previous,
+        "chin_rest": chin_rest,
+        "chin_local": chin_local,
+        "chin_world": chin_world,
+        "baseline_vertices": baseline_vertices,
+        "chin_surface": chin_surface,
+        "contact_anchor": contact_anchor,
+        "target_contact": target_contact,
+        "base_hand": base_hand,
+        "contact_delta": target_contact - contact_anchor,
+        "base_pole": base_pole,
+        "pole_axis": pole_axis,
+        "invariant_collision": _invariant_collision_context(baseline_vertices, geometry),
+    }
+
+
+def _apply_context_candidate(armature, controls, candidate, context):
+    _apply_static_candidate(
+        armature, controls, candidate,
+        context["base_hand"], context["contact_delta"], context["base_pole"], context["pole_axis"],
     )
 
+
+def _stage_b_update(math_module, record, surface_metrics, band):
+    verdict, contact_reasons = math_module.classify_surface_contact(
+        surface_metrics["surface_contact_distance"],
+        surface_metrics["surface_intersection_count"],
+        band,
+    )
+    record["stage"] = "B"
+    record["metrics"].update(surface_metrics)
+    record["metrics"]["contact_band"] = {
+        "mesh_resolution": band.mesh_resolution,
+        "target_distance": band.target_distance,
+        "warning_distance": band.warning_distance,
+        "hard_max_distance": band.hard_max_distance,
+        "region_radius": band.region_radius,
+        "derivation": "median lower-chin triangle edge length with 1.5x/2x/3x/12x multipliers",
+    }
+    record["reasons"] = list(dict.fromkeys([*record["reasons"], *contact_reasons]))
+    record["valid"] = bool(record["valid"] and verdict != "FAIL")
+    contact_penalty = (
+        abs(surface_metrics["surface_contact_distance"] - band.target_distance)
+        / max(band.mesh_resolution, 1e-9)
+    ) ** 2
+    record["component_penalties"]["surface_contact"] = contact_penalty
+    record["score"] += contact_penalty * 5.0
+    record["verdict"] = "FAIL" if not record["valid"] else ("WARN" if record["reasons"] else "PASS")
+
+
+def _stage_c_update(math_module, record, collision_metrics):
+    record["stage"] = "C"
+    record["metrics"].update(collision_metrics)
+    metrics = record["metrics"]
+    score = math_module.score_static_candidate(
+        elbow_angle_deg=metrics["elbow_angle_deg"],
+        signed_elbow_flex_deg=metrics["signed_elbow_flex_deg"],
+        pole_side=metrics["pole_side"],
+        wrist_swing_deg=metrics["wrist_swing_deg"],
+        wrist_twist_deg=metrics["wrist_twist_deg"],
+        forearm_twist_deg=metrics["forearm_twist_deg"],
+        contact_error=metrics["surface_contact_distance"],
+        head_penetration_depth=metrics["head_penetration_depth"],
+        head_collision_count=metrics["head_collision_count"],
+        torso_penetration_count=metrics["torso_penetration_count"],
+        minimum_clearance=metrics["minimum_clearance"],
+        continuity_distance=metrics["continuity_distance"],
+        matrices_finite=metrics["matrices_finite"],
+    )
+    contact_reasons = tuple(record["reasons"])
+    record["reasons"] = list(dict.fromkeys([*contact_reasons, *score.reasons]))
+    record["valid"] = bool(record["valid"] and score.valid)
+    record["component_penalties"].update(score.component_penalties)
+    record["score"] = float(score.total_score + record["component_penalties"].get("surface_contact", 0.0) * 5.0)
+    record["verdict"] = "FAIL" if not record["valid"] else ("WARN" if record["reasons"] else "PASS")
+    selection_reasons = static_selection_eligibility(
+        metrics, metrics["contact_band"]["warning_distance"]
+    )
+    record["selection_eligible"] = bool(record["valid"] and not selection_reasons)
+    record["selection_reasons"] = list(selection_reasons)
+
+
+def search_static(config: PocConfig) -> None:
+    _require_blender()
+    if not config.search_static or config.run_id is None:
+        raise ValueError("Static search requires --search-static and --run-id")
+    current_blend = Path(bpy.data.filepath)
+    if not current_blend or not _same_path(current_blend, config.source_blend):
+        raise RuntimeError(f"Blender must open the existing POC blend: {config.source_blend}")
+    paths = static_run_paths(config.output_dir, config.run_id)
+    if config.overwrite_run:
+        if paths.temporary.exists():
+            shutil.rmtree(paths.temporary)
+        if paths.final.exists():
+            shutil.rmtree(paths.final)
+    paths.temporary.mkdir(parents=True, exist_ok=False)
+
+    armature, mesh = _validate_scene_objects()
+    controls = _existing_controls()
+    _validate_existing_poc(armature, controls)
+    math_module = _load_motion_math()
+    geometry = _mesh_geometry_sets(mesh)
+    context = _prepare_static_context(armature, mesh, controls, geometry, math_module)
+    stage_metrics = {}
+    candidates = static_candidate_grid()
     evaluated = []
     vertices_by_candidate = {}
-    for candidate in static_candidate_grid():
-        _apply_static_candidate(
-            armature,
-            controls,
-            candidate,
-            base_hand,
-            contact_delta,
-            base_pole,
-            pole_axis,
-        )
-        measurements, vertices = _candidate_measurements(
-            armature,
-            mesh,
-            controls,
-            geometry,
-            candidate,
-            previous,
-        )
-        score = math_module.score_static_candidate(
-            elbow_angle_deg=measurements["elbow_angle_deg"],
-            signed_elbow_flex_deg=measurements["signed_elbow_flex_deg"],
-            pole_side=measurements["pole_side"],
-            wrist_swing_deg=measurements["wrist_swing_deg"],
-            wrist_twist_deg=measurements["wrist_twist_deg"],
-            forearm_twist_deg=measurements["forearm_twist_deg"],
-            contact_error=measurements["contact_error"],
-            head_penetration_depth=measurements["head_penetration_depth"],
-            head_collision_count=measurements["head_collision_count"],
-            torso_penetration_count=measurements["torso_penetration_count"],
-            minimum_clearance=measurements["minimum_clearance"],
-            continuity_distance=measurements["continuity_distance"],
-            matrices_finite=measurements["matrices_finite"],
-        )
-        record = _candidate_record(candidate, measurements, score)
-        evaluated.append((candidate, record))
-        vertices_by_candidate[candidate.candidate_id] = vertices
+    try:
+        started = time.perf_counter()
+        for candidate in candidates:
+            _apply_context_candidate(armature, controls, candidate, context)
+            measurements = _anatomy_measurements(
+                armature, controls, context["previous"], context["chin_world"]
+            )
+            record = _stage_a_record(math_module, candidate, measurements)
+            evaluated.append((candidate, record))
+        stage_a_valid = stage_a_survivors(evaluated, STAGE_A_SURVIVOR_LIMIT)
+        stage_metrics["A"] = {
+            "input_count": len(candidates),
+            "survivor_count": len(stage_a_valid),
+            "rejected_count": len(candidates) - len(stage_a_valid),
+            "duration_seconds": time.perf_counter() - started,
+        }
+        print("POC_STATIC_STAGE_A", stage_metrics["A"])
 
-    ranked = sorted(evaluated, key=_rank_key)
-    valid = [item for item in ranked if item[1]["valid"]]
-    if len(valid) < STATIC_RENDER_COUNT:
-        def meets(record, *, contact=False, elbow=False, head=False, torso=False):
-            metrics = record["metrics"]
-            return (
-                (not contact or metrics["contact_error"] <= math_module.CONTACT_HARD_MAX_DISTANCE)
-                and (not elbow or math_module.ELBOW_COMFORT_MIN_DEG <= metrics["elbow_angle_deg"] <= math_module.ELBOW_COMFORT_MAX_DEG)
-                and (not head or metrics["head_collision_count"] == 0)
-                and (not torso or metrics["torso_penetration_count"] == 0)
+        started = time.perf_counter()
+        for candidate, record in stage_a_valid:
+            _apply_context_candidate(armature, controls, candidate, context)
+            surface_metrics = _surface_contact_evidence_bvh(mesh, geometry, context["chin_surface"])
+            _stage_b_update(math_module, record, surface_metrics, context["chin_surface"]["band"])
+        stage_b_valid = sorted(
+            (item for item in stage_a_valid if item[1]["valid"]), key=_rank_key
+        )[:STAGE_B_SURVIVOR_LIMIT]
+        stage_metrics["B"] = {
+            "input_count": len(stage_a_valid),
+            "survivor_count": len(stage_b_valid),
+            "rejected_count": len(stage_a_valid) - len(stage_b_valid),
+            "duration_seconds": time.perf_counter() - started,
+        }
+        print("POC_STATIC_STAGE_B", stage_metrics["B"])
+
+        started = time.perf_counter()
+        stage_c_input = stage_b_valid[:STAGE_C_SURVIVOR_LIMIT]
+        for candidate, record in stage_c_input:
+            _apply_context_candidate(armature, controls, candidate, context)
+            collision_metrics, vertices = _full_collision_evidence(
+                mesh, geometry, context["invariant_collision"]
+            )
+            _stage_c_update(math_module, record, collision_metrics)
+            vertices_by_candidate[candidate.candidate_id] = vertices
+        stage_c_valid = sorted(
+            (item for item in stage_c_input if item[1]["valid"]), key=_rank_key
+        )
+        stage_metrics["C"] = {
+            "input_count": len(stage_c_input),
+            "survivor_count": len(stage_c_valid),
+            "rejected_count": len(stage_c_input) - len(stage_c_valid),
+            "duration_seconds": time.perf_counter() - started,
+        }
+        print("POC_STATIC_STAGE_C", stage_metrics["C"])
+        if len(stage_c_valid) < STATIC_RENDER_COUNT:
+            print("POC_STATIC_STAGE_C_REJECTIONS", [
+                {
+                    "candidate": record["source_candidate_id"],
+                    "surface_contact_distance": record["metrics"].get("surface_contact_distance"),
+                    "contact_patch_count": record["metrics"].get("contact_patch_count"),
+                    "head_collision_sources": record["metrics"].get("head_collision_sources"),
+                    "head_collision_count": record["metrics"].get("head_collision_count"),
+                    "torso_penetration_count": record["metrics"].get("torso_penetration_count"),
+                    "minimum_clearance": record["metrics"].get("minimum_clearance"),
+                    "reasons": record["reasons"],
+                }
+                for _candidate, record in stage_c_input
+            ])
+            raise RuntimeError(
+                f"Staged static search found only {len(stage_c_valid)} collision-clear candidates; "
+                f"at least {STATIC_RENDER_COUNT} are required"
             )
 
-        diagnostic_counts = {
-            "contact": sum(meets(record, contact=True) for _candidate, record in ranked),
-            "elbow": sum(meets(record, elbow=True) for _candidate, record in ranked),
-            "head_clear": sum(meets(record, head=True) for _candidate, record in ranked),
-            "torso_clear": sum(meets(record, torso=True) for _candidate, record in ranked),
-            "contact_elbow": sum(meets(record, contact=True, elbow=True) for _candidate, record in ranked),
-            "contact_head_clear": sum(meets(record, contact=True, head=True) for _candidate, record in ranked),
-            "contact_torso_clear": sum(meets(record, contact=True, torso=True) for _candidate, record in ranked),
-            "contact_elbow_head_clear": sum(meets(record, contact=True, elbow=True, head=True) for _candidate, record in ranked),
-            "contact_elbow_torso_clear": sum(meets(record, contact=True, elbow=True, torso=True) for _candidate, record in ranked),
-            "all_geometry": sum(meets(record, contact=True, elbow=True, head=True, torso=True) for _candidate, record in ranked),
+        render_ranked = stage_c_valid[:STATIC_RENDER_COUNT]
+        render_evidence = _render_candidates(
+            paths.temporary, armature, controls, render_ranked,
+            context["base_hand"], context["contact_delta"], context["base_pole"], context["pole_axis"],
+            vertices_by_candidate,
+        )
+        _restore_static_control_state(armature, controls, context["baseline_state"])
+        restoration_differences = compare_static_state(
+            context["baseline_state"], _capture_static_control_state(armature, controls), 1e-6
+        )
+        if restoration_differences:
+            raise RuntimeError("Static search failed to restore baseline controls: " + "; ".join(restoration_differences))
+
+        rendered_records = [record for _candidate, record in render_ranked]
+        chin_surface = context["chin_surface"]
+        metrics = {
+            "mode": "search-static",
+            "selection_status": "NEEDS_CONTEXT",
+            "run_id": config.run_id,
+            "frame": VALIDATION_FRAME,
+            "source_blend": str(config.source_blend),
+            "output_blend_unchanged": str(config.output_blend),
+            "candidate_count": len(candidates),
+            "rendered_count": len(rendered_records),
+            "stage_metrics": stage_metrics,
+            "rank_source_mapping": rank_source_mapping(rendered_records),
+            "baseline_restored": True,
+            "chin_calibration": {
+                "pmx_surface": PMX_CHIN_SURFACE,
+                "rest_blender": tuple(float(value) for value in context["chin_rest"]),
+                "head_local": tuple(float(value) for value in context["chin_local"]),
+                "world_frame_150": tuple(float(value) for value in context["chin_world"]),
+            },
+            "chin_surface": {
+                "triangle_count": chin_surface["region"]["triangle_count"],
+                "vertex_count": chin_surface["region"]["vertex_count"],
+                "calibrated_nearest_world": tuple(float(value) for value in chin_surface["calibrated_nearest_world"]),
+                "calibrated_surface_distance": chin_surface["calibrated_surface_distance"],
+                "contact_band": {
+                    "mesh_resolution": chin_surface["band"].mesh_resolution,
+                    "target_distance": chin_surface["band"].target_distance,
+                    "warning_distance": chin_surface["band"].warning_distance,
+                    "hard_max_distance": chin_surface["band"].hard_max_distance,
+                    "region_radius": chin_surface["band"].region_radius,
+                },
+            },
+            "contact_vertex_group_counts": geometry["group_counts"],
+            "baseline_contact_anchor": tuple(float(value) for value in context["contact_anchor"]),
+            "target_contact_world": tuple(float(value) for value in context["target_contact"]),
+            "base_hand_target": tuple(float(value) for value in context["base_hand"]),
+            "contact_alignment_delta": tuple(float(value) for value in context["contact_delta"]),
+            "render_evidence": render_evidence,
+            "ranked_candidates": rendered_records,
+            "candidates": [record for _candidate, record in evaluated],
         }
-        print("POC_STATIC_DIAGNOSTIC_COUNTS", diagnostic_counts)
-        print(
-            "POC_STATIC_BEST_ELBOW_COMFORT",
-            [
-                {
-                    "candidate": record["source_candidate_id"],
-                    "parameters": record["parameters"],
-                    "metrics": record["metrics"],
-                    "reasons": record["reasons"],
-                }
-                for _candidate, record in sorted(
-                    (item for item in ranked if meets(item[1], elbow=True)),
-                    key=lambda item: item[1]["metrics"]["contact_error"],
-                )[:5]
-            ],
+        temporary_metrics = paths.temporary / STATIC_METRICS_NAME
+        temporary_metrics.write_text(
+            json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n",
+            encoding="utf-8",
         )
-        print(
-            "POC_STATIC_BEST_CONTACT_ELBOW_HEAD_CLEAR",
-            [
-                {
-                    "candidate": record["source_candidate_id"],
-                    "parameters": record["parameters"],
-                    "metrics": record["metrics"],
-                    "reasons": record["reasons"],
-                }
-                for _candidate, record in sorted(
-                    (
-                        item
-                        for item in ranked
-                        if meets(item[1], contact=True, elbow=True, head=True)
-                    ),
-                    key=lambda item: (
-                        item[1]["metrics"]["torso_penetration_count"],
-                        item[1]["metrics"]["contact_error"],
-                    ),
-                )[:5]
-            ],
-        )
-        rejection_counts = {}
-        for _candidate, record in ranked:
-            for reason in record["reasons"]:
-                rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
-        print("POC_STATIC_REJECTION_COUNTS", rejection_counts)
-        print(
-            "POC_STATIC_TOP_REJECTED",
-            [
-                {
-                    "candidate": record["source_candidate_id"],
-                    "reasons": record["reasons"],
-                    "metrics": record["metrics"],
-                }
-                for _candidate, record in ranked[:3]
-            ],
-        )
-        raise RuntimeError(
-            f"Static solver found only {len(valid)} valid candidates; at least {STATIC_RENDER_COUNT} are required"
-        )
-    ranked = valid + [item for item in ranked if not item[1]["valid"]]
-    render_evidence = _render_candidates(
-        config,
-        armature,
-        controls,
-        ranked,
-        base_hand,
-        contact_delta,
-        base_pole,
-        pole_axis,
-        vertices_by_candidate,
+        expected_renders = render_artifact_paths(paths.temporary)
+        missing_renders = [str(path) for path in expected_renders if not path.is_file()]
+        if missing_renders:
+            raise RuntimeError("Static run is missing rendered evidence: " + ", ".join(missing_renders))
+        paths.temporary.rename(paths.final)
+        print("POC_STATIC_SEARCH_COMPLETE", {
+            "run_id": config.run_id,
+            "evaluated": len(candidates),
+            "rendered": len(rendered_records),
+            "metrics": str(paths.metrics),
+            "selection_status": "NEEDS_CONTEXT",
+        })
+    finally:
+        _restore_static_control_state(armature, controls, context["baseline_state"])
+
+
+def select_static(config: PocConfig) -> None:
+    _require_blender()
+    if not config.select_static or config.run_metrics_path is None or config.source_candidate_id is None:
+        raise ValueError("Static selection requires --select-static and a reviewed source candidate ID")
+    current_blend = Path(bpy.data.filepath)
+    if not current_blend or not _same_path(current_blend, config.source_blend):
+        raise RuntimeError(f"Blender must open the existing POC blend: {config.source_blend}")
+    stored_run = json.loads(config.run_metrics_path.read_text(encoding="utf-8"))
+    stored_record = next(
+        (record for record in stored_run["candidates"] if record["source_candidate_id"] == config.source_candidate_id),
+        None,
     )
-    selected_candidate, selected_record = ranked[0]
-    _apply_static_candidate(
-        armature,
-        controls,
-        selected_candidate,
-        base_hand,
-        contact_delta,
-        base_pole,
-        pole_axis,
-    )
-    armature["POC_selected_static_candidate"] = selected_candidate.candidate_id
-    armature["POC_selected_static_score"] = selected_record["score"]
-    armature["POC_chin_head_local"] = tuple(float(value) for value in chin_local)
-    armature["POC_chin_rest"] = tuple(float(value) for value in chin_rest)
-    config.output_dir.mkdir(parents=True, exist_ok=True)
-    metrics = {
-        "mode": "solve-static",
-        "frame": VALIDATION_FRAME,
-        "source_blend": str(config.source_blend),
-        "output_blend": str(config.output_blend),
-        "candidate_count": len(evaluated),
-        "valid_count": len(valid),
-        "rejected_count": len(evaluated) - len(valid),
-        "rendered_count": STATIC_RENDER_COUNT,
-        "selected_source_candidate_id": selected_candidate.candidate_id,
-        "selected_rank": 1,
-        "chin_calibration": {
-            "pmx_surface": PMX_CHIN_SURFACE,
-            "rest_blender": tuple(float(value) for value in chin_rest),
-            "head_local": tuple(float(value) for value in chin_local),
-            "world_frame_150": tuple(float(value) for value in chin_world),
-        },
-        "contact_vertex_group_counts": geometry["group_counts"],
-        "baseline_contact_anchor": tuple(float(value) for value in contact_anchor),
-        "base_hand_target": tuple(float(value) for value in base_hand),
-        "contact_alignment_delta": tuple(float(value) for value in contact_delta),
-        "render_evidence": render_evidence,
-        "candidates": [record for _candidate, record in ranked],
-    }
-    metrics_path = config.output_dir / STATIC_METRICS_NAME
-    metrics_path.write_text(
-        json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n",
+    if (
+        stored_record is None
+        or stored_record.get("stage") != "C"
+        or not stored_record.get("valid")
+        or not stored_record.get("selection_eligible")
+    ):
+        raise ValueError(f"Reviewed source candidate is not selection-eligible: {config.source_candidate_id}")
+
+    armature, mesh = _validate_scene_objects()
+    controls = _existing_controls()
+    _validate_existing_poc(armature, controls)
+    math_module = _load_motion_math()
+    geometry = _mesh_geometry_sets(mesh)
+    context = _prepare_static_context(armature, mesh, controls, geometry, math_module)
+    candidate = _candidate_from_record(stored_record)
+    _apply_context_candidate(armature, controls, candidate, context)
+    measured = _anatomy_measurements(armature, controls, context["previous"], context["chin_world"])
+    measured.update(_surface_contact_evidence_bvh(mesh, geometry, context["chin_surface"]))
+    collision_metrics, _vertices = _full_collision_evidence(mesh, geometry, context["invariant_collision"])
+    measured.update(collision_metrics)
+    differences = compare_selected_metrics(stored_record["metrics"], measured)
+    if differences:
+        raise RuntimeError("Selected candidate failed reopen remeasurement: " + "; ".join(differences))
+    armature["POC_selected_static_candidate"] = candidate.candidate_id
+    armature["POC_selected_static_score"] = float(stored_record["score"])
+    armature["POC_chin_head_local"] = tuple(float(value) for value in context["chin_local"])
+    armature["POC_chin_rest"] = tuple(float(value) for value in context["chin_rest"])
+    _save_setup_blend(config.output_blend)
+    verification_path = config.run_metrics_path.parent / "selection_verification.json"
+    verification_path.write_text(
+        json.dumps({
+            "mode": "select-static",
+            "source_candidate_id": candidate.candidate_id,
+            "remeasurement_differences": [],
+            "measured_metrics": measured,
+            "saved_blend": str(config.output_blend),
+        }, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    _save_setup_blend(config.output_blend)
-    print(
-        "POC_STATIC_SOLVED",
-        {
-            "evaluated": len(evaluated),
-            "rejected": len(evaluated) - len(valid),
-            "rendered": STATIC_RENDER_COUNT,
-            "selected": selected_candidate.candidate_id,
-            "score": selected_record["score"],
-            "metrics": str(metrics_path),
-        },
-    )
+    print("POC_STATIC_SELECTED", {"candidate": candidate.candidate_id, "verification": str(verification_path)})
 
 
 def build_setup(config: PocConfig) -> None:
@@ -1886,8 +2577,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = parse_blender_args(argv)
     if config.setup_only:
         build_setup(config)
-    elif config.solve_static:
-        solve_static(config)
+    elif config.search_static:
+        search_static(config)
+    elif config.select_static:
+        select_static(config)
     else:
         raise ValueError("No POC mode selected")
     return 0

@@ -374,3 +374,44 @@ def test_named_warning_reasons_drive_warn_verdict():
     assert any("contact warning" in reason.lower() for reason in result.reasons)
     assert any("clearance warning" in reason.lower() for reason in result.reasons)
     assert any("continuity warning" in reason.lower() for reason in result.reasons)
+
+
+def test_closest_point_on_triangle_handles_touching_and_separated_points():
+    tool = load_tool()
+    triangle = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+
+    touching = tool.closest_point_on_triangle((0.25, 0.25, 0.0), *triangle)
+    separated = tool.closest_point_on_triangle((0.25, 0.25, 0.5), *triangle)
+
+    assert touching.point == pytest.approx((0.25, 0.25, 0.0))
+    assert touching.distance == pytest.approx(0.0)
+    assert sum(touching.barycentric) == pytest.approx(1.0)
+    assert separated.point == pytest.approx((0.25, 0.25, 0.0))
+    assert separated.distance == pytest.approx(0.5)
+
+
+def test_contact_band_is_derived_from_local_mesh_resolution():
+    tool = load_tool()
+
+    band = tool.derive_contact_band([0.001, 0.002, 0.002, 0.003])
+
+    assert band.mesh_resolution == pytest.approx(0.002)
+    assert band.target_distance == pytest.approx(0.003)
+    assert band.warning_distance == pytest.approx(0.004)
+    assert band.hard_max_distance == pytest.approx(0.006)
+    assert band.region_radius == pytest.approx(0.024)
+
+
+def test_surface_contact_classification_distinguishes_separation_and_intersection():
+    tool = load_tool()
+    band = tool.derive_contact_band([0.002, 0.002, 0.002])
+
+    touching = tool.classify_surface_contact(0.0025, 0, band)
+    separated = tool.classify_surface_contact(0.005, 0, band)
+    intersecting = tool.classify_surface_contact(0.0, 1, band)
+
+    assert touching == ("PASS", ())
+    assert separated[0] == "WARN"
+    assert any("surface distance" in reason for reason in separated[1])
+    assert intersecting[0] == "FAIL"
+    assert any("intersection" in reason for reason in intersecting[1])
