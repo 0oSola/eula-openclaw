@@ -1,4 +1,5 @@
 import importlib.util
+import inspect
 import math
 from pathlib import Path
 import shutil
@@ -103,6 +104,25 @@ def valid_gallery_cli(tmp_path):
         "--source-candidate-id", "candidate_764",
         "--source-static-metrics", str(source_metrics),
     ])
+    return argv
+
+
+def valid_chin_support_cli(tmp_path):
+    argv = valid_gallery_cli(tmp_path)
+    argv[argv.index("--orientation-gallery")] = "--chin-support-refinement"
+    argv[argv.index("run-20260715-orientation-001")] = "run-20260715-chin-support-001"
+    argv.extend([
+        "--orientation-source-id",
+        "gallery_14_thumb_opposition_m15_sxp00_tzm10_thumb_opposed_base",
+    ])
+    gallery_metrics = tmp_path / "orientation_gallery_metrics.json"
+    gallery_metrics.write_text(
+        '{"variant_table":[{"source_id":'
+        '"gallery_14_thumb_opposition_m15_sxp00_tzm10_thumb_opposed_base",'
+        '"evaluated_pose_hash":"g14"}]}',
+        encoding="utf-8",
+    )
+    argv.extend(["--orientation-gallery-metrics", str(gallery_metrics)])
     return argv
 
 
@@ -876,6 +896,149 @@ def test_orientation_gallery_run_paths_are_isolated(cli_tmp_path):
     assert paths.temporary.name == ".tmp-run-20260715-orientation-001"
     assert paths.final == output_dir / "runs" / "run-20260715-orientation-001"
     assert paths.metrics == paths.final / "orientation_gallery" / tool.ORIENTATION_GALLERY_METRICS_NAME
+
+
+def test_chin_support_refinement_requires_exact_g14_and_isolated_run(cli_tmp_path):
+    tool = load_tool()
+
+    config = tool.parse_blender_args(valid_chin_support_cli(cli_tmp_path))
+
+    assert config.chin_support_refinement is True
+    assert config.orientation_source_id == tool.G14_ORIENTATION_SOURCE_ID
+    assert config.orientation_gallery_metrics.name == "orientation_gallery_metrics.json"
+    paths = tool.chin_support_run_paths(config.output_dir, config.run_id)
+    assert paths.metrics == paths.final / tool.CHIN_SUPPORT_METRICS_NAME
+
+
+def test_selected_g14_orientation_reconstructs_exact_gallery_targets():
+    tool = load_tool()
+
+    variant = tool.selected_orientation_variant(tool.G14_ORIENTATION_SOURCE_ID)
+
+    assert variant.source_id == tool.G14_ORIENTATION_SOURCE_ID
+    assert variant.axial_angle_deg == pytest.approx(-15.0)
+    assert variant.palm_swing_deg == pytest.approx(0.0)
+    assert variant.palm_tilt_deg == pytest.approx(-10.0)
+    assert variant.thumb_variant == "thumb_opposed"
+    assert variant.index_variant == "base"
+    assert variant.finger_targets_deg == tool.semi_closed_finger_targets()["thumb_opposed"]
+
+
+def test_chin_support_semantics_accept_web_support_not_thumb_tip_contact():
+    tool = load_tool()
+    band = tool.derive_chin_support_band(mesh_resolution=0.012, chin_warning_distance=0.030)
+    metrics = {
+        "support_region_distance": 0.024,
+        "support_region_patch_count": 6,
+        "index_jaw_alignment_deg": 12.0,
+        "thumb_below_chin": True,
+        "thumb_inside_lateral": True,
+        "thumb_tip_surface_distance": 0.090,
+    }
+
+    assert band.support_warning_distance == pytest.approx(0.030)
+    assert tool.chin_support_semantic_reasons(metrics, band) == ()
+
+
+def test_chin_support_semantics_reject_thumb_tip_only_proximity():
+    tool = load_tool()
+    band = tool.derive_chin_support_band(mesh_resolution=0.012, chin_warning_distance=0.030)
+    metrics = {
+        "support_region_distance": 0.050,
+        "support_region_patch_count": 0,
+        "index_jaw_alignment_deg": 10.0,
+        "thumb_below_chin": True,
+        "thumb_inside_lateral": True,
+        "thumb_tip_surface_distance": 0.001,
+    }
+
+    reasons = tool.chin_support_semantic_reasons(metrics, band)
+
+    assert any("support region" in reason.lower() for reason in reasons)
+    assert any("patch" in reason.lower() for reason in reasons)
+    assert all("thumb tip" not in reason.lower() for reason in reasons)
+
+
+def test_chin_support_semantics_enforce_index_and_thumb_relative_pose():
+    tool = load_tool()
+    band = tool.derive_chin_support_band(mesh_resolution=0.012, chin_warning_distance=0.030)
+    base = {
+        "support_region_distance": 0.020,
+        "support_region_patch_count": 4,
+        "index_jaw_alignment_deg": tool.INDEX_JAW_ALIGNMENT_MAX_DEG + 0.1,
+        "thumb_below_chin": False,
+        "thumb_inside_lateral": False,
+        "thumb_tip_surface_distance": 0.080,
+    }
+
+    reasons = tool.chin_support_semantic_reasons(base, band)
+
+    assert any("index" in reason.lower() and "alignment" in reason.lower() for reason in reasons)
+    assert any("below" in reason.lower() for reason in reasons)
+    assert any("inside" in reason.lower() for reason in reasons)
+
+
+def test_g14_chin_support_refinement_grid_is_small_bounded_and_deterministic():
+    tool = load_tool()
+
+    refinements = tool.chin_support_refinement_grid()
+
+    assert refinements == tool.chin_support_refinement_grid()
+    assert 24 <= len(refinements) <= 180
+    assert all(max(abs(value) for value in item.hand_target_offset) <= 0.004 for item in refinements)
+    assert all(item.neck_toward_deg + item.head_toward_deg <= 5.0 for item in refinements)
+    assert all(max(abs(value) for value in item.palm_refinement_deg) <= 4.0 for item in refinements)
+    assert all(max(abs(value) for value in item.thumb_refinement_deg) <= 6.0 for item in refinements)
+
+
+def test_chin_support_region_uses_proximal_web_and_excludes_thumb_tip():
+    tool = load_tool()
+    vertices = {
+        0: (0.00, 0.00, 0.00),
+        1: (0.02, 0.00, 0.00),
+        2: (0.04, 0.00, 0.00),
+        3: (0.00, 0.03, 0.00),
+        4: (0.02, 0.03, 0.00),
+        5: (0.20, 0.00, 0.00),
+    }
+    faces = ((0, 1, 3), (1, 3, 4), (1, 2, 4), (2, 5, 4))
+
+    region = tool.chin_support_region_indices(
+        vertices,
+        thumb_base_indices={0, 1},
+        index_proximal_indices={3, 4},
+        thumb_tip_indices={5},
+        faces=faces,
+    )
+
+    assert region["support_vertices"] >= {0, 1, 3, 4}
+    assert region["web_vertices"] == {0, 1, 3, 4}
+    assert 5 not in region["support_vertices"]
+    assert region["support_faces"] == ((0, 1, 3), (1, 3, 4))
+
+
+def test_existing_surface_evidence_keeps_its_complete_return_path():
+    tool = load_tool()
+    source = inspect.getsource(tool._surface_contact_evidence_bvh)
+
+    assert "for source, indices in groups.items()" in source
+    assert '"surface_contact_distance"' in source
+    assert "def _chin_support_surface_evidence" not in source
+
+
+def test_jaw_guide_tangent_follows_evaluated_character_right_chin_slope():
+    tool = load_tool()
+
+    tangent = tool.jaw_guide_tangent(
+        anchor=(0.0, 0.0, 0.0),
+        surface_points=((0.2, 0.0, 0.1), (-0.1, 0.0, 0.1), (-0.3, 0.0, 0.2)),
+        surface_normal=(0.0, 1.0, 0.0),
+        model_lateral=(1.0, 0.0, 0.0),
+    )
+
+    assert tangent[0] < 0.0
+    assert tangent[2] > 0.0
+    assert sum(value * value for value in tangent) == pytest.approx(1.0)
 
 
 def test_gallery_source_lookup_maps_exact_candidate_and_seed_metrics():

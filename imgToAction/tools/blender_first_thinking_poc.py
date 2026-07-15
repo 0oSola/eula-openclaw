@@ -215,6 +215,13 @@ STATIC_RENDER_COUNT = 6
 STATIC_METRICS_NAME = "static_pose_metrics.json"
 ORIENTATION_GALLERY_DIRECTORY = "orientation_gallery"
 ORIENTATION_GALLERY_METRICS_NAME = "orientation_gallery_metrics.json"
+CHIN_SUPPORT_DIRECTORY = "chin_support_refinement"
+CHIN_SUPPORT_METRICS_NAME = "chin_support_metrics.json"
+G14_ORIENTATION_SOURCE_ID = (
+    "gallery_14_thumb_opposition_m15_sxp00_tzm10_thumb_opposed_base"
+)
+INDEX_JAW_ALIGNMENT_MAX_DEG = 25.0
+THUMB_CHIN_VERTICAL_TOLERANCE = 0.002
 STATIC_CANDIDATE_DIRECTORY = "candidates"
 STATIC_CAMERA_NAME = "POC Static Full Body Camera"
 STAGE_A_SURVIVOR_LIMIT = 216
@@ -380,6 +387,23 @@ class DualContactRefinement:
 
 
 @dataclass(frozen=True)
+class ChinSupportBand:
+    mesh_resolution: float
+    support_target_distance: float
+    support_warning_distance: float
+    derivation: str
+
+
+@dataclass(frozen=True)
+class ChinSupportRefinement:
+    hand_target_offset: tuple[float, float, float]
+    neck_toward_deg: float
+    head_toward_deg: float
+    palm_refinement_deg: tuple[float, float, float]
+    thumb_refinement_deg: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
 class OrientationGalleryVariant:
     source_id: str
     family: str
@@ -408,10 +432,13 @@ class PocConfig:
     search_static: bool
     select_static: bool
     orientation_gallery: bool
+    chin_support_refinement: bool
     run_id: str | None
     overwrite_run: bool
     source_candidate_id: str | None
+    orientation_source_id: str | None
     source_static_metrics: Path | None
+    orientation_gallery_metrics: Path | None
     run_metrics_path: Path | None
 
 
@@ -827,6 +854,155 @@ def orientation_gallery_variants() -> tuple[OrientationGalleryVariant, ...]:
     return tuple(variants)
 
 
+def selected_orientation_variant(source_id: str) -> OrientationGalleryVariant:
+    if source_id != G14_ORIENTATION_SOURCE_ID:
+        raise ValueError(
+            "Chin-support refinement is restricted to the controller-selected G14 family"
+        )
+    for variant in orientation_gallery_variants():
+        if variant.source_id == source_id:
+            return variant
+    raise RuntimeError(f"Selected orientation variant is not defined: {source_id}")
+
+
+def derive_chin_support_band(
+    *, mesh_resolution: float, chin_warning_distance: float
+) -> ChinSupportBand:
+    resolution = float(mesh_resolution)
+    warning = float(chin_warning_distance)
+    if resolution <= 0.0 or warning <= 0.0:
+        raise ValueError("Chin-support geometry scales must be positive")
+    return ChinSupportBand(
+        mesh_resolution=resolution,
+        support_target_distance=min(warning, resolution * 1.5),
+        support_warning_distance=warning,
+        derivation=(
+            "support warning reuses the lower-chin median-edge warning band; "
+            "target is 1.5 median triangle edges capped by that warning"
+        ),
+    )
+
+
+def chin_support_semantic_reasons(
+    metrics, band: ChinSupportBand
+) -> tuple[str, ...]:
+    reasons = []
+    if float(metrics["support_region_distance"]) > band.support_warning_distance:
+        reasons.append("Chin support region exceeds its geometry-derived warning distance")
+    if int(metrics["support_region_patch_count"]) <= 0:
+        reasons.append("Chin support region contact patch is empty")
+    if float(metrics["index_jaw_alignment_deg"]) > INDEX_JAW_ALIGNMENT_MAX_DEG:
+        reasons.append(
+            f"Index proximal jaw alignment exceeds {INDEX_JAW_ALIGNMENT_MAX_DEG:.1f} degrees"
+        )
+    if not bool(metrics["thumb_below_chin"]):
+        reasons.append("Thumb is not below the lower-chin support point")
+    if not bool(metrics["thumb_inside_lateral"]):
+        reasons.append("Thumb is not on the intended inside/lateral side of the chin")
+    return tuple(reasons)
+
+
+def chin_support_refinement_grid() -> tuple[ChinSupportRefinement, ...]:
+    hand_offsets = (
+        (0.0, 0.0, 0.0),
+        (-0.002, 0.0, 0.0),
+        (0.002, 0.0, 0.0),
+        (0.0, -0.002, 0.0),
+        (0.0, 0.002, 0.0),
+        (0.0, 0.0, -0.002),
+        (0.0, 0.0, 0.002),
+    )
+    head_neck = ((0.0, 0.0), (1.5, 2.0))
+    palm = ((0.0, 0.0, 0.0), (2.0, 0.0, -2.0))
+    thumb = ((0.0, 0.0, 0.0), (-4.0, 3.0, 2.0), (4.0, -3.0, -2.0))
+    return tuple(
+        ChinSupportRefinement(offset, neck, head, palm_delta, thumb_delta)
+        for offset, (neck, head), palm_delta, thumb_delta in itertools.product(
+            hand_offsets, head_neck, palm, thumb
+        )
+    )
+
+
+def chin_support_region_indices(
+    vertices,
+    *,
+    thumb_base_indices,
+    index_proximal_indices,
+    thumb_tip_indices,
+    faces,
+):
+    available = set(vertices)
+    thumb_base = set(thumb_base_indices) & available
+    index_proximal = set(index_proximal_indices) & available
+    thumb_tip = set(thumb_tip_indices) & available
+    def nearest_distance(index, targets):
+        point = vertices[index]
+        return min(_point_distance(point, vertices[target]) for target in targets)
+
+    def inside_half(indices, targets):
+        if not indices or not targets:
+            return set()
+        ranked = sorted((nearest_distance(index, targets), index) for index in indices)
+        cutoff = ranked[(len(ranked) - 1) // 2][0]
+        return {index for distance, index in ranked if distance <= cutoff + 1e-12}
+
+    thumb_inside = inside_half(thumb_base, index_proximal)
+    index_radial = inside_half(index_proximal, thumb_base)
+    web_faces = tuple(
+        tuple(int(index) for index in face)
+        for face in faces
+        if set(face) <= (thumb_inside | index_radial)
+        and set(face) & thumb_base
+        and set(face) & index_proximal
+    )
+    web_vertices = set(itertools.chain.from_iterable(web_faces))
+    support_vertices = (thumb_inside | index_radial | web_vertices) - thumb_tip
+    return {
+        "support_vertices": support_vertices,
+        "web_vertices": web_vertices,
+        "support_faces": web_faces,
+        "thumb_base_vertices": thumb_inside - thumb_tip,
+        "index_proximal_vertices": index_radial,
+    }
+
+
+def jaw_guide_tangent(anchor, surface_points, surface_normal, model_lateral):
+    def normalized(values):
+        vector = tuple(float(value) for value in values)
+        length = math.sqrt(sum(value * value for value in vector))
+        if length <= 1e-12:
+            raise ValueError("Jaw guide vectors must be non-zero")
+        return tuple(value / length for value in vector)
+
+    origin = tuple(float(value) for value in anchor)
+    normal = normalized(surface_normal)
+    lateral = normalized(model_lateral)
+    offsets = [
+        tuple(float(value) - origin[index] for index, value in enumerate(point))
+        for point in surface_points
+    ]
+    character_right = [
+        offset for offset in offsets
+        if sum(value * axis for value, axis in zip(offset, lateral, strict=True)) < 0.0
+    ]
+    if not character_right:
+        raise ValueError("Lower-chin surface has no character-right guide points")
+    guide = min(
+        character_right,
+        key=lambda offset: sum(
+            value * axis for value, axis in zip(offset, lateral, strict=True)
+        ),
+    )
+    normal_component = sum(
+        value * axis for value, axis in zip(guide, normal, strict=True)
+    )
+    tangent = tuple(
+        value - normal_component * axis
+        for value, axis in zip(guide, normal, strict=True)
+    )
+    return normalized(tangent)
+
+
 def semi_closed_finger_targets() -> dict[str, dict[str, tuple[float, float, float]]]:
     relaxed = _finger_pose_targets(
         (
@@ -1096,10 +1272,13 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--search-static", action="store_true")
     mode.add_argument("--select-static", action="store_true")
     mode.add_argument("--orientation-gallery", action="store_true")
+    mode.add_argument("--chin-support-refinement", action="store_true")
     parser.add_argument("--run-id")
     parser.add_argument("--overwrite-run", action="store_true")
     parser.add_argument("--source-candidate-id")
+    parser.add_argument("--orientation-source-id")
     parser.add_argument("--source-static-metrics", type=Path)
+    parser.add_argument("--orientation-gallery-metrics", type=Path)
     return parser
 
 
@@ -1128,6 +1307,15 @@ def orientation_gallery_run_paths(output_dir: Path, run_id: str) -> StaticRunPat
     )
 
 
+def chin_support_run_paths(output_dir: Path, run_id: str) -> StaticRunPaths:
+    paths = static_run_paths(output_dir, run_id)
+    return StaticRunPaths(
+        temporary=paths.temporary,
+        final=paths.final,
+        metrics=paths.final / CHIN_SUPPORT_METRICS_NAME,
+    )
+
+
 def _validated_config(namespace: argparse.Namespace) -> PocConfig:
     source_blend = namespace.source_blend.resolve()
     vmd = namespace.vmd.resolve() if namespace.vmd is not None else None
@@ -1136,6 +1324,11 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
     source_static_metrics = (
         namespace.source_static_metrics.resolve()
         if namespace.source_static_metrics is not None
+        else None
+    )
+    orientation_gallery_metrics = (
+        namespace.orientation_gallery_metrics.resolve()
+        if namespace.orientation_gallery_metrics is not None
         else None
     )
 
@@ -1152,7 +1345,12 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         raise ValueError(f"Output blend must be named {OUTPUT_BLEND_NAME}")
     if output_dir.name != OUTPUT_DIRECTORY_NAME:
         raise ValueError(f"Output directory must be named {OUTPUT_DIRECTORY_NAME}")
-    static_mode = namespace.search_static or namespace.select_static or namespace.orientation_gallery
+    static_mode = (
+        namespace.search_static
+        or namespace.select_static
+        or namespace.orientation_gallery
+        or namespace.chin_support_refinement
+    )
     if static_mode and (
         source_blend.name != OUTPUT_BLEND_NAME or not _same_path(source_blend, output_blend)
     ):
@@ -1169,10 +1367,14 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
             if namespace.orientation_gallery
             else static_run_paths(output_dir, namespace.run_id)
         )
-        run_metrics_path = paths.metrics
-        if (namespace.search_static or namespace.orientation_gallery) and paths.final.exists() and not namespace.overwrite_run:
+        if namespace.chin_support_refinement:
+            paths = chin_support_run_paths(output_dir, namespace.run_id)
+            run_metrics_path = paths.metrics
+        else:
+            run_metrics_path = paths.metrics
+        if (namespace.search_static or namespace.orientation_gallery or namespace.chin_support_refinement) and paths.final.exists() and not namespace.overwrite_run:
             raise ValueError(f"Static run already exists: {paths.final}")
-        if (namespace.search_static or namespace.orientation_gallery) and paths.temporary.exists() and not namespace.overwrite_run:
+        if (namespace.search_static or namespace.orientation_gallery or namespace.chin_support_refinement) and paths.temporary.exists() and not namespace.overwrite_run:
             raise ValueError(f"Temporary static run already exists: {paths.temporary}")
     if namespace.select_static:
         if not namespace.source_candidate_id or not SOURCE_CANDIDATE_PATTERN.fullmatch(
@@ -1190,7 +1392,27 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
             raise ValueError(
                 f"Orientation gallery source metrics do not exist: {source_static_metrics}"
             )
-    elif namespace.source_candidate_id is not None or source_static_metrics is not None:
+    elif namespace.chin_support_refinement:
+        if not namespace.source_candidate_id or not SOURCE_CANDIDATE_PATTERN.fullmatch(
+            namespace.source_candidate_id
+        ):
+            raise ValueError("Chin-support refinement requires a source candidate ID")
+        if source_static_metrics is None or not source_static_metrics.is_file():
+            raise ValueError(
+                f"Chin-support source metrics do not exist: {source_static_metrics}"
+            )
+        if namespace.orientation_source_id != G14_ORIENTATION_SOURCE_ID:
+            raise ValueError(
+                "Chin-support refinement requires the controller-selected G14 source ID"
+            )
+        if orientation_gallery_metrics is None or not orientation_gallery_metrics.is_file():
+            raise ValueError("Chin-support refinement requires persisted orientation gallery metrics")
+    elif (
+        namespace.source_candidate_id is not None
+        or namespace.orientation_source_id is not None
+        or source_static_metrics is not None
+        or orientation_gallery_metrics is not None
+    ):
         raise ValueError(
             "Source candidate and source static metrics are only valid with static selection or gallery"
         )
@@ -1207,10 +1429,13 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         search_static=namespace.search_static,
         select_static=namespace.select_static,
         orientation_gallery=namespace.orientation_gallery,
+        chin_support_refinement=namespace.chin_support_refinement,
         run_id=namespace.run_id,
         overwrite_run=namespace.overwrite_run,
         source_candidate_id=namespace.source_candidate_id,
+        orientation_source_id=namespace.orientation_source_id,
         source_static_metrics=source_static_metrics,
+        orientation_gallery_metrics=orientation_gallery_metrics,
         run_metrics_path=run_metrics_path,
     )
 
@@ -2816,6 +3041,11 @@ def _polygon_records(
 
 def _mesh_geometry_sets(mesh):
     contact = _vertices_for_groups(mesh, _group_indices(mesh, CONTACT_VERTEX_GROUPS))
+    thumb0 = _vertices_for_groups(mesh, _group_indices(mesh, ("右親指０",)))
+    thumb1 = _vertices_for_groups(mesh, _group_indices(mesh, ("右親指１",)))
+    thumb2 = _vertices_for_groups(mesh, _group_indices(mesh, ("右親指２",)))
+    index1 = _vertices_for_groups(mesh, _group_indices(mesh, ("右人指１",)))
+    index2 = _vertices_for_groups(mesh, _group_indices(mesh, ("右人指２",)))
     thumb = _vertices_for_groups(mesh, _group_indices(mesh, ("右親指０", "右親指１", "右親指２")))
     index = _vertices_for_groups(mesh, _group_indices(mesh, ("右人指１", "右人指２", "右人指３")))
     hand = _vertices_for_groups(mesh, _group_indices(mesh, RIGHT_HAND_VERTEX_GROUPS))
@@ -2829,6 +3059,17 @@ def _mesh_geometry_sets(mesh):
     )
     moving = hand | forearm
     contact_surface = thumb | index | palm
+    support_region = chin_support_region_indices(
+        {
+            vertex.index: tuple(float(value) for value in vertex.co)
+            for vertex in mesh.data.vertices
+            if vertex.index in (thumb0 | thumb1 | thumb2 | index1 | index2)
+        },
+        thumb_base_indices=thumb0 | thumb1,
+        index_proximal_indices=index1 | index2,
+        thumb_tip_indices=thumb2,
+        faces=tuple(tuple(int(index) for index in polygon.vertices) for polygon in mesh.data.polygons),
+    )
     moving_records = _polygon_records(
         mesh,
         moving,
@@ -2850,7 +3091,13 @@ def _mesh_geometry_sets(mesh):
     return {
         "contact_vertices": contact,
         "thumb_vertices": thumb,
+        "thumb0_vertices": thumb0,
+        "thumb1_vertices": thumb1,
+        "thumb2_vertices": thumb2,
         "index_vertices": index,
+        "index1_vertices": index1,
+        "index2_vertices": index2,
+        "chin_support_region": support_region,
         "side_palm_vertices": palm,
         "hand_vertices": hand,
         "moving_vertices": moving,
@@ -3387,6 +3634,128 @@ def _surface_contact_evidence_bvh(mesh, geometry, chin_surface):
     }
 
 
+def _chin_support_surface_evidence(mesh, geometry, chin_surface, armature):
+    region = geometry["chin_support_region"]
+    support_indices = region["support_vertices"]
+    if not support_indices:
+        raise RuntimeError("Chin support region contains no weighted proximal vertices")
+    diagnostic_regions = {
+        "thumb0_all": geometry["thumb0_vertices"],
+        "thumb1_all": geometry["thumb1_vertices"],
+        "index1_all": geometry["index1_vertices"],
+        "index2_all": geometry["index2_vertices"],
+        "thumb_inside_base": region["thumb_base_vertices"],
+        "index_proximal_radial": region["index_proximal_vertices"],
+        "web": region["web_vertices"],
+    }
+    requested = set().union(*diagnostic_regions.values())
+    vertices = _evaluated_world_vertex_subset(mesh, requested)
+    samples = []
+    for index in sorted(support_indices):
+        point = vertices[index]
+        nearest = chin_surface["tree"].find_nearest(point)
+        if nearest is None:
+            continue
+        location, normal, triangle_index, distance = nearest
+        source = (
+            "thumb_inside_base"
+            if index in region["thumb_base_vertices"]
+            else "index_proximal_radial"
+        )
+        samples.append({
+            "distance": float(distance),
+            "source": source,
+            "vertex_index": int(index),
+            "hand_world": tuple(float(value) for value in point),
+            "chin_surface_world": tuple(float(value) for value in location),
+            "signed_distance": float((point - location).dot(normal)),
+            "triangle_index": int(triangle_index),
+            "normal": normal.normalized(),
+        })
+    if not samples:
+        raise RuntimeError("Chin support region could not be measured against the lower chin")
+    best = min(
+        samples,
+        key=lambda item: (item["distance"], item["source"], item["vertex_index"]),
+    )
+    band = derive_chin_support_band(
+        mesh_resolution=chin_surface["band"].mesh_resolution,
+        chin_warning_distance=chin_surface["band"].warning_distance,
+    )
+    patch = [
+        item for item in samples
+        if item["distance"] <= band.support_warning_distance
+    ]
+    diagnostic_distance_by_region = {}
+    for name, indices in diagnostic_regions.items():
+        distances = []
+        for index in indices:
+            nearest = chin_surface["tree"].find_nearest(vertices[index])
+            if nearest is not None:
+                distances.append(float(nearest[3]))
+        diagnostic_distance_by_region[name] = min(distances) if distances else None
+    index_bone = armature.pose.bones["右人指１"]
+    index_direction = armature.matrix_world.to_3x3() @ (index_bone.tail - index_bone.head)
+    index_direction.normalize()
+    model_lateral = armature.matrix_world.to_3x3() @ Vector((1.0, 0.0, 0.0))
+    model_lateral.normalize()
+    jaw_tangent = Vector(jaw_guide_tangent(
+        best["chin_surface_world"],
+        (tuple(float(value) for value in point) for point in chin_surface["region_vertices"].values()),
+        tuple(float(value) for value in best["normal"]),
+        tuple(float(value) for value in model_lateral),
+    ))
+    alignment = math.degrees(index_direction.angle(jaw_tangent))
+    alignment = min(alignment, 180.0 - alignment)
+    fingertips = _finger_tip_positions(armature)
+    tip_surface = _tip_surface_evidence(armature, chin_surface)
+    thumb_tip = Vector(fingertips["thumb"])
+    chin_point = Vector(best["chin_surface_world"])
+    thumb_vertical_offset = float(thumb_tip.z - chin_point.z)
+    thumb_lateral_offset = float((thumb_tip - chin_point).dot(model_lateral))
+    return {
+        "support_region_distance": best["distance"],
+        "support_region_patch_count": len(patch),
+        "support_region_nearest": {
+            key: value for key, value in best.items() if key != "normal"
+        },
+        "support_region_patch_by_source": {
+            source: sum(item["source"] == source for item in patch)
+            for source in ("thumb_inside_base", "index_proximal_radial")
+        },
+        "support_region_vertex_count": len(support_indices),
+        "support_region_face_count": len(region["support_faces"]),
+        "support_region_web_vertex_count": len(region["web_vertices"]),
+        "support_region_vertex_indices": tuple(sorted(support_indices)),
+        "support_region_face_vertices": region["support_faces"],
+        "support_diagnostic_distance_by_region": diagnostic_distance_by_region,
+        "support_band": {
+            "mesh_resolution": band.mesh_resolution,
+            "support_target_distance": band.support_target_distance,
+            "support_warning_distance": band.support_warning_distance,
+            "derivation": band.derivation,
+        },
+        "index_proximal_direction_world": tuple(float(value) for value in index_direction),
+        "jaw_tangent_world": tuple(float(value) for value in jaw_tangent),
+        "index_jaw_alignment_deg": float(alignment),
+        "index_jaw_alignment_max_deg": INDEX_JAW_ALIGNMENT_MAX_DEG,
+        "thumb_tip_world": tuple(float(value) for value in thumb_tip),
+        "thumb_tip_surface_distance": float(
+            tip_surface["thumb"]["distance"]
+        ),
+        "index_tip_surface_distance": float(tip_surface["index"]["distance"]),
+        "tip_surface_evidence": tip_surface,
+        "thumb_vertical_offset_from_chin": thumb_vertical_offset,
+        "thumb_lateral_offset_from_chin": thumb_lateral_offset,
+        "thumb_below_chin": thumb_vertical_offset <= THUMB_CHIN_VERTICAL_TOLERANCE,
+        "thumb_inside_lateral": thumb_lateral_offset < -THUMB_CHIN_VERTICAL_TOLERANCE,
+        "thumb_position_derivation": (
+            "thumb tip is a sanity check below the nearest support point and on the "
+            "negative model-local X side; it is not a mandatory contact source"
+        ),
+    }
+
+
 def _current_chin_surface(mesh, armature, baseline_surface):
     region = baseline_surface["region"]
     region_vertices = _evaluated_world_vertex_subset(mesh, region["vertex_indices"])
@@ -3400,6 +3769,7 @@ def _current_chin_surface(mesh, armature, baseline_surface):
         "region": region,
         "band": baseline_surface["band"],
         "tree": tree,
+        "region_vertices": region_vertices,
         "calibrated_nearest_world": location,
         "calibrated_nearest_normal": normal.normalized(),
         "calibrated_surface_distance": float(distance),
@@ -4545,6 +4915,76 @@ def _apply_orientation_gallery_variant(
     }
 
 
+def _orientation_gallery_record(metrics, source_id: str):
+    for record in metrics.get("variant_table", ()):
+        if record.get("source_id") == source_id:
+            return record
+    raise ValueError(f"Orientation gallery metrics do not contain {source_id}")
+
+
+def _g14_refined_state(base_candidate, base_variant, refinement, index):
+    source_id = f"g14_refine_{index:03d}"
+    candidate = StaticCandidate(
+        candidate_id=source_id,
+        alignment_factor=base_candidate.alignment_factor,
+        hand_offset=tuple(
+            float(base) + float(delta)
+            for base, delta in zip(
+                base_candidate.hand_offset, refinement.hand_target_offset, strict=True
+            )
+        ),
+        palm_euler_deg=base_candidate.palm_euler_deg,
+        pole_offset=base_candidate.pole_offset,
+        twist_influences=base_variant.twist_distribution,
+        pole_offset_3d=base_candidate.pole_offset_3d,
+        search_family="g14_chin_support",
+    )
+    targets = dict(base_variant.finger_targets_deg)
+    for bone_name, scale in (("右親指０", 1.0), ("右親指１", 0.75), ("右親指２", 0.5)):
+        targets[bone_name] = tuple(
+            float(base) + float(delta) * scale
+            for base, delta in zip(
+                targets[bone_name], refinement.thumb_refinement_deg, strict=True
+            )
+        )
+    swing_delta, axial_delta, tilt_delta = refinement.palm_refinement_deg
+    variant = OrientationGalleryVariant(
+        source_id=source_id,
+        family="g14_chin_support",
+        label=(
+            f"{source_id} hand {refinement.hand_target_offset}\n"
+            f"head {refinement.neck_toward_deg:+.1f}/{refinement.head_toward_deg:+.1f}"
+        ),
+        axial_angle_deg=base_variant.axial_angle_deg + axial_delta,
+        palm_swing_deg=base_variant.palm_swing_deg + swing_delta,
+        palm_tilt_deg=base_variant.palm_tilt_deg + tilt_delta,
+        twist_distribution=base_variant.twist_distribution,
+        thumb_variant="thumb_opposed_refined",
+        index_variant=base_variant.index_variant,
+        comparison_group="g14_chin_support",
+        comparison_dimension="support",
+        finger_targets_deg=targets,
+    )
+    compensation = UpperBodyCompensation(
+        0.0, 0.0, 0.0, 0.0,
+        refinement.neck_toward_deg,
+        refinement.head_toward_deg,
+    )
+    return candidate, variant, compensation
+
+
+def _apply_g14_refinement(
+    armature, controls, base_candidate, base_variant, refinement, index, context
+):
+    candidate, variant, compensation = _g14_refined_state(
+        base_candidate, base_variant, refinement, index
+    )
+    applied = _apply_orientation_gallery_variant(
+        armature, controls, candidate, compensation, variant, context
+    )
+    return candidate, variant, compensation, applied
+
+
 def _tip_surface_evidence(armature, chin_surface):
     fingertips = _finger_tip_positions(armature)
     evidence = {}
@@ -4754,6 +5194,419 @@ def _render_orientation_gallery(output_dir, armature, mesh, controls, states, co
         },
         "closeup_ortho_scale": ORIENTATION_GALLERY_CLOSEUP_SCALE,
     }
+
+
+def _render_chin_support_candidates(
+    output_dir, armature, mesh, controls, states, context, base_candidate, base_variant
+):
+    scene = bpy.context.scene
+    root = Path(output_dir) / CHIN_SUPPORT_DIRECTORY
+    combined_vertices = tuple(
+        vertex for _refinement, _index, _record, vertices in states for vertex in vertices
+    )
+    camera, full_center, distance, full_scale, bbox_min, bbox_max = _full_body_camera(
+        scene, combined_vertices
+    )
+    labels = _ensure_gallery_label(camera)
+    scene.render.resolution_x = RENDER_RESOLUTION
+    scene.render.resolution_y = RENDER_RESOLUTION
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    closeups = []
+    mapping = []
+    for rank, (refinement, refinement_index, record, _vertices) in enumerate(states, start=1):
+        _candidate, variant, _compensation, _applied = _apply_g14_refinement(
+            armature, controls, base_candidate, base_variant,
+            refinement, refinement_index, context,
+        )
+        relative_root = Path(CHIN_SUPPORT_DIRECTORY) / "candidates" / (
+            f"{rank:02d}_{record['source_id']}"
+        )
+        directory = Path(output_dir) / relative_root
+        directory.mkdir(parents=True, exist_ok=True)
+        renders = {
+            "closeup": str(relative_root / "upper_body_hand.png"),
+            **{view: str(relative_root / f"{view}.png") for view in CANDIDATE_VIEWS},
+        }
+        record["rank"] = rank
+        record["renders"] = renders
+        mapping.append({"rank": rank, "source_id": record["source_id"], **renders})
+        support_point = Vector(record["metrics"]["support_region_nearest"]["hand_world"])
+        fingertips = _finger_tip_positions(armature)
+        close_center = (
+            support_point + Vector(fingertips["index"]) + Vector(fingertips["thumb"])
+        ) / 3.0
+        camera.data.ortho_scale = ORIENTATION_GALLERY_CLOSEUP_SCALE
+        camera.location = close_center + Vector((0.0, -1.0, 0.0)) * 2.0
+        camera.rotation_euler = (close_center - camera.location).to_track_quat("-Z", "Y").to_euler()
+        _set_gallery_label(labels, variant.label, ORIENTATION_GALLERY_CLOSEUP_SCALE, True)
+        closeup_path = Path(output_dir) / renders["closeup"]
+        scene.render.filepath = str(closeup_path)
+        bpy.ops.render.render(write_still=True)
+        closeups.append(closeup_path)
+        _set_gallery_label(labels, "", full_scale, False)
+        for view, direction in (
+            ("front", Vector((0.0, -1.0, 0.0))),
+            ("left", Vector((1.0, 0.0, 0.0))),
+            ("right", Vector((-1.0, 0.0, 0.0))),
+            ("back", Vector((0.0, 1.0, 0.0))),
+        ):
+            camera.data.ortho_scale = full_scale
+            camera.location = full_center + direction * distance
+            camera.rotation_euler = (full_center - camera.location).to_track_quat("-Z", "Y").to_euler()
+            scene.render.filepath = str(Path(output_dir) / renders[view])
+            bpy.ops.render.render(write_still=True)
+    _set_gallery_label(labels, "", ORIENTATION_GALLERY_CLOSEUP_SCALE, False)
+    contact_sheet = root / "contact_sheet.png"
+    _write_orientation_contact_sheet(closeups, contact_sheet)
+    return {
+        "contact_sheet": str(Path(CHIN_SUPPORT_DIRECTORY) / "contact_sheet.png"),
+        "render_mapping": mapping,
+        "full_body_camera": {
+            "center": tuple(float(value) for value in full_center),
+            "ortho_scale": float(full_scale),
+            "bbox_min": tuple(float(value) for value in bbox_min),
+            "bbox_max": tuple(float(value) for value in bbox_max),
+        },
+        "closeup_ortho_scale": ORIENTATION_GALLERY_CLOSEUP_SCALE,
+    }
+
+
+def _chin_support_rank(record, band):
+    metrics = record["metrics"]
+    patch_penalty = 0.0 if metrics["support_region_patch_count"] > 0 else 4.0
+    contact_penalty = abs(
+        metrics["support_region_distance"] - band.support_target_distance
+    ) / max(band.mesh_resolution, 1e-9)
+    alignment_penalty = metrics["index_jaw_alignment_deg"] / INDEX_JAW_ALIGNMENT_MAX_DEG
+    thumb_penalty = float(not metrics["thumb_below_chin"]) + float(
+        not metrics["thumb_inside_lateral"]
+    )
+    return (
+        not record.get("eligible", False),
+        not record.get("collision_valid", False),
+        patch_penalty + contact_penalty + alignment_penalty + thumb_penalty,
+        record["source_id"],
+    )
+
+
+def chin_support_refinement(config: PocConfig) -> None:
+    _require_blender()
+    if (
+        not config.chin_support_refinement
+        or config.run_id is None
+        or config.source_candidate_id is None
+        or config.source_static_metrics is None
+        or config.orientation_source_id is None
+        or config.orientation_gallery_metrics is None
+    ):
+        raise ValueError("Chin-support refinement requires source arm and G14 gallery records")
+    current_blend = Path(bpy.data.filepath)
+    if not current_blend or not _same_path(current_blend, config.source_blend):
+        raise RuntimeError(f"Blender must open the existing POC blend: {config.source_blend}")
+    paths = chin_support_run_paths(config.output_dir, config.run_id)
+    if config.overwrite_run and paths.temporary.exists():
+        shutil.rmtree(paths.temporary)
+    paths.temporary.mkdir(parents=True, exist_ok=False)
+
+    armature, mesh = _validate_scene_objects()
+    compensation_controls = _ensure_compensation_controls(armature)
+    _validate_compensation_baseline(armature, compensation_controls)
+    finger_controls = _ensure_finger_controls(armature)
+    _validate_finger_baseline(armature, finger_controls)
+    controls = _existing_controls()
+    _validate_existing_poc(armature, controls)
+    math_module = _load_motion_math()
+    geometry = _mesh_geometry_sets(mesh)
+    context = _prepare_static_context(
+        armature, mesh, controls, geometry, math_module,
+        compensation_controls, finger_controls,
+    )
+    source_document = json.loads(config.source_static_metrics.read_text(encoding="utf-8"))
+    source_candidate, stored_source_metrics = gallery_source_reference(
+        source_document, config.source_candidate_id
+    )
+    base_variant = selected_orientation_variant(config.orientation_source_id)
+    gallery_document = json.loads(
+        config.orientation_gallery_metrics.read_text(encoding="utf-8")
+    )
+    stored_g14 = _orientation_gallery_record(gallery_document, base_variant.source_id)
+    context["orientation_gallery_base_candidate"] = source_candidate
+    context["orientation_gallery_compensation"] = UpperBodyCompensation(
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    )
+    started_total = time.perf_counter()
+    stage_durations = {}
+    records = []
+    try:
+        _set_compensation_identity(compensation_controls)
+        _set_finger_identity(finger_controls)
+        _apply_context_candidate(armature, controls, source_candidate, context)
+        source_surface = _current_chin_surface(mesh, armature, context["chin_surface"])
+        source_actual = _anatomy_measurements(
+            armature, controls, context["previous"], source_surface["chin_world"]
+        )
+        source_actual.update(_surface_contact_evidence_bvh(mesh, geometry, source_surface))
+        source_actual["wrist_world"] = tuple(
+            float(value) for value in _pose_head_world(armature, "右手首")
+        )
+        source_expected = {
+            key: stored_source_metrics[key]
+            for key in (
+                "hand_target_world", "elbow_angle_deg", "pole_side",
+                "surface_contact_distance",
+            )
+        }
+        source_expected["wrist_world"] = source_actual["wrist_world"]
+        source_reasons = gallery_source_reproduction_reasons(source_expected, source_actual)
+        if source_reasons:
+            raise RuntimeError(
+                "Chin-support source arm failed reconstruction: " + "; ".join(source_reasons)
+            )
+
+        base_applied = _apply_orientation_gallery_variant(
+            armature, controls, source_candidate,
+            context["orientation_gallery_compensation"], base_variant, context,
+        )
+        base_fingertips = _finger_tip_positions(armature)
+        base_finger_quaternions = _evaluated_finger_quaternions(armature)
+        base_pose_hash = _orientation_gallery_pose_hash(
+            base_applied["palm_final_quaternion"], base_finger_quaternions, base_fingertips
+        )
+        if base_pose_hash != stored_g14.get("evaluated_pose_hash"):
+            raise RuntimeError(
+                "Selected G14 reconstruction drifted from persisted gallery pose hash: "
+                f"{base_pose_hash} != {stored_g14.get('evaluated_pose_hash')}"
+            )
+        base_surface = _current_chin_surface(mesh, armature, context["chin_surface"])
+        base_support = _chin_support_surface_evidence(
+            mesh, geometry, base_surface, armature
+        )
+        base_collision, _base_vertices = _full_collision_evidence(
+            mesh, geometry, context["invariant_collision"]
+        )
+
+        stage_started = time.perf_counter()
+        refinements = chin_support_refinement_grid()
+        band = derive_chin_support_band(
+            mesh_resolution=context["chin_surface"]["band"].mesh_resolution,
+            chin_warning_distance=context["chin_surface"]["band"].warning_distance,
+        )
+        staged = []
+        for index, refinement in enumerate(refinements, start=1):
+            candidate, variant, compensation, applied = _apply_g14_refinement(
+                armature, controls, source_candidate, base_variant,
+                refinement, index, context,
+            )
+            surface = _current_chin_surface(mesh, armature, context["chin_surface"])
+            metrics = _anatomy_measurements(
+                armature, controls, context["previous"], surface["chin_world"]
+            )
+            metrics.update(_chin_support_surface_evidence(mesh, geometry, surface, armature))
+            metrics.update({
+                "hand_target_world": tuple(float(value) for value in controls["hand"].location),
+                "wrist_world": tuple(float(value) for value in _pose_head_world(armature, "右手首")),
+                "compensation_angles_deg": applied["compensation_angles_deg"],
+                "fingertip_world": _finger_tip_positions(armature),
+            })
+            protected_current = _current_protected_pose_hashes(armature)
+            reasons = []
+            if not metrics["matrices_finite"]:
+                reasons.append("Non-finite pose matrix")
+            if not signed_elbow_flex_is_valid(metrics["signed_elbow_flex_deg"]):
+                reasons.append("Signed elbow hinge limit failed")
+            if metrics["pole_side"] <= math_module.EPSILON:
+                reasons.append("Elbow is not on the pole-facing side")
+            if not math_module.ELBOW_COMFORT_MIN_DEG <= metrics["elbow_angle_deg"] <= math_module.ELBOW_COMFORT_MAX_DEG:
+                reasons.append("Elbow is outside the 55-100 degree comfort range")
+            if abs(metrics["wrist_swing_deg"]) > math_module.WRIST_SWING_HARD_MAX_DEG:
+                reasons.append("Wrist swing exceeds its hard limit")
+            if abs(metrics["wrist_twist_deg"]) > math_module.WRIST_TWIST_HARD_MAX_DEG:
+                reasons.append("Wrist twist exceeds its hard limit")
+            if abs(metrics["forearm_twist_deg"]) > math_module.FOREARM_TWIST_HARD_MAX_DEG:
+                reasons.append("Forearm twist exceeds its hard limit")
+            if metrics["continuity_distance"] > math_module.CONTINUITY_HARD_DISTANCE:
+                reasons.append("Candidate discontinuity exceeds its hard limit")
+            reasons.extend(validate_compensation_angles(applied["compensation_angles_deg"]))
+            reasons.extend(compare_protected_pose_hashes(
+                context["protected_pose_hashes"], protected_current
+            ))
+            semantic_reasons = chin_support_semantic_reasons(metrics, band)
+            record = {
+                "source_id": candidate.candidate_id,
+                "orientation_source_id": base_variant.source_id,
+                "valid": not reasons,
+                "collision_valid": False,
+                "eligible": False,
+                "reasons": list(dict.fromkeys(reasons)),
+                "semantic_reasons": list(semantic_reasons),
+                "parameters": {
+                    "hand_target_offset": refinement.hand_target_offset,
+                    "neck_toward_deg": refinement.neck_toward_deg,
+                    "head_toward_deg": refinement.head_toward_deg,
+                    "palm_refinement_deg": refinement.palm_refinement_deg,
+                    "thumb_refinement_deg": refinement.thumb_refinement_deg,
+                    "absolute_finger_targets_deg": variant.finger_targets_deg,
+                    "palm_final_quaternion": applied["palm_final_quaternion"],
+                },
+                "metrics": metrics,
+                "protected_pose_hashes": protected_current,
+            }
+            records.append(record)
+            if not reasons:
+                staged.append((refinement, index, record))
+        stage_durations["bounded_geometry"] = {
+            "input_count": len(refinements),
+            "survivor_count": len(staged),
+            "duration_seconds": time.perf_counter() - stage_started,
+        }
+
+        stage_started = time.perf_counter()
+        shortlist = sorted(
+            staged, key=lambda item: _chin_support_rank(item[2], band)
+        )[:24]
+        collision_valid = []
+        for refinement, refinement_index, record in shortlist:
+            _candidate, _variant, _compensation, _applied = _apply_g14_refinement(
+                armature, controls, source_candidate, base_variant,
+                refinement, refinement_index, context,
+            )
+            collision, vertices = _full_collision_evidence(
+                mesh, geometry, context["invariant_collision"]
+            )
+            record["metrics"].update(collision)
+            collision_reasons = orientation_gallery_rejection_reasons(record["metrics"])
+            if record["metrics"]["minimum_clearance"] < math_module.CLEARANCE_COMFORT_DISTANCE:
+                record["reasons"].append(
+                    f"Clearance warning below {math_module.CLEARANCE_COMFORT_DISTANCE:.3f} Blender units"
+                )
+            if record["metrics"]["continuity_distance"] > math_module.CONTINUITY_COMFORT_DISTANCE:
+                record["reasons"].append(
+                    f"Continuity warning above {math_module.CONTINUITY_COMFORT_DISTANCE:.3f} Blender units"
+                )
+            record["reasons"] = list(dict.fromkeys([
+                *record["reasons"], *collision_reasons,
+            ]))
+            record["collision_valid"] = not collision_reasons
+            record["eligible"] = bool(
+                record["valid"] and record["collision_valid"] and not record["semantic_reasons"]
+            )
+            record["verdict"] = (
+                "PASS" if record["eligible"]
+                else "WARN" if record["valid"] and record["collision_valid"]
+                else "FAIL"
+            )
+            record["verdict_reasons"] = list(dict.fromkeys([
+                *record["reasons"], *record["semantic_reasons"],
+            ]))
+            if record["collision_valid"]:
+                collision_valid.append((refinement, refinement_index, record, vertices))
+        stage_durations["full_collision"] = {
+            "input_count": len(shortlist),
+            "survivor_count": len(collision_valid),
+            "duration_seconds": time.perf_counter() - stage_started,
+        }
+        ranked = sorted(
+            collision_valid, key=lambda item: _chin_support_rank(item[2], band)
+        )
+        if not ranked:
+            raise RuntimeError("No collision-free G14 chin-support refinements survived")
+        render_states = ranked[:STATIC_RENDER_COUNT]
+        render_evidence = _render_chin_support_candidates(
+            paths.temporary, armature, mesh, controls, render_states, context,
+            source_candidate, base_variant,
+        )
+        _restore_static_control_state(
+            armature, controls, context["baseline_state"],
+            compensation_controls, finger_controls,
+        )
+        restoration_reasons = compare_static_state(
+            context["baseline_state"],
+            _capture_static_control_state(
+                armature, controls, compensation_controls, finger_controls
+            ),
+            tolerance=1e-6,
+        )
+        if restoration_reasons:
+            raise RuntimeError(
+                "Chin-support refinement failed to restore baseline controls: "
+                + "; ".join(restoration_reasons)
+            )
+        metrics_document = {
+            "mode": "chin-support-refinement",
+            "selection_status": "NEEDS_CONTEXT",
+            "run_id": config.run_id,
+            "frame": VALIDATION_FRAME,
+            "source_blend": str(config.source_blend),
+            "output_blend_unchanged": str(config.output_blend),
+            "source_static_metrics": str(config.source_static_metrics),
+            "orientation_gallery_metrics": str(config.orientation_gallery_metrics),
+            "source_arm_candidate_id": config.source_candidate_id,
+            "orientation_source_id": config.orientation_source_id,
+            "source_reconstruction": {
+                "expected": source_expected,
+                "actual": source_actual,
+                "reasons": [],
+            },
+            "g14_reconstruction": {
+                "stored_pose_hash": stored_g14["evaluated_pose_hash"],
+                "reconstructed_pose_hash": base_pose_hash,
+                "support_metrics": base_support,
+                "collision_metrics": base_collision,
+                "finger_targets_deg": base_variant.finger_targets_deg,
+            },
+            "support_band": {
+                "mesh_resolution": band.mesh_resolution,
+                "support_target_distance": band.support_target_distance,
+                "support_warning_distance": band.support_warning_distance,
+                "derivation": band.derivation,
+            },
+            "index_jaw_alignment_max_deg": INDEX_JAW_ALIGNMENT_MAX_DEG,
+            "stage_metrics": stage_durations,
+            "evaluated_count": len(refinements),
+            "collision_evaluated_count": len(shortlist),
+            "collision_valid_count": len(collision_valid),
+            "eligible_count": sum(record["eligible"] for _a, _b, record, _c in ranked),
+            "rendered_count": len(render_states),
+            "duration_seconds": time.perf_counter() - started_total,
+            "render_evidence": render_evidence,
+            "candidates": [record for _refinement, _index, record, _vertices in ranked],
+            "candidate_table": records,
+        }
+        metrics_path = paths.temporary / CHIN_SUPPORT_METRICS_NAME
+        metrics_path.write_text(
+            json.dumps(
+                metrics_document, ensure_ascii=False, indent=2,
+                sort_keys=True, allow_nan=False,
+            ) + "\n",
+            encoding="utf-8",
+        )
+        expected_paths = [metrics_path, paths.temporary / render_evidence["contact_sheet"]]
+        expected_paths.extend(
+            paths.temporary / item[key]
+            for item in render_evidence["render_mapping"]
+            for key in ("closeup", *CANDIDATE_VIEWS)
+        )
+        missing = [str(path) for path in expected_paths if not path.is_file()]
+        if missing:
+            raise RuntimeError("Chin-support refinement is missing artifacts: " + ", ".join(missing))
+        if paths.final.exists():
+            shutil.rmtree(paths.final)
+        paths.temporary.rename(paths.final)
+        print("POC_CHIN_SUPPORT_COMPLETE", {
+            "run_id": config.run_id,
+            "evaluated": len(refinements),
+            "collision_evaluated": len(shortlist),
+            "eligible": metrics_document["eligible_count"],
+            "rendered": len(render_states),
+            "contact_sheet": str(paths.final / render_evidence["contact_sheet"]),
+            "metrics": str(paths.metrics),
+        })
+    finally:
+        _restore_static_control_state(
+            armature, controls, context["baseline_state"],
+            compensation_controls, finger_controls,
+        )
 
 
 def orientation_gallery(config: PocConfig) -> None:
@@ -5829,6 +6682,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         select_static(config)
     elif config.orientation_gallery:
         orientation_gallery(config)
+    elif config.chin_support_refinement:
+        chin_support_refinement(config)
     else:
         raise ValueError("No POC mode selected")
     return 0
