@@ -89,6 +89,13 @@ def valid_select_cli(tmp_path):
     return argv
 
 
+def valid_gallery_cli(tmp_path):
+    argv = valid_solve_cli(tmp_path)
+    argv[argv.index("--search-static")] = "--orientation-gallery"
+    argv[argv.index("run-20260715-001")] = "run-20260715-orientation-001"
+    return argv
+
+
 def test_module_loads_without_blender_python():
     tool = load_tool()
 
@@ -494,6 +501,70 @@ def test_semantic_finger_search_grid_is_bounded():
     assert 6 <= tool.FINGER_STAGE_SURVIVOR_LIMIT <= 48
 
 
+def test_orientation_gallery_variants_are_deterministic_bounded_and_calibrated():
+    tool = load_tool()
+    variants = tool.orientation_gallery_variants()
+
+    assert variants == tool.orientation_gallery_variants()
+    assert len(variants) == 18
+    assert len({variant.source_id for variant in variants}) == len(variants)
+    assert {-45.0, -30.0, -15.0, 0.0, 15.0, 30.0, 45.0} <= {
+        variant.axial_angle_deg for variant in variants
+    }
+    assert all(sum(variant.twist_distribution) == pytest.approx(1.0) for variant in variants)
+    assert all(min(variant.twist_distribution) >= 0.0 for variant in variants)
+    assert all(tool.validate_absolute_finger_targets(variant.finger_targets_deg) == () for variant in variants)
+    assert {variant.family for variant in variants} >= {
+        "axial_sweep", "distribution", "thumb_opposition", "index_alignment"
+    }
+    assert 0.0 < tool.ORIENTATION_GALLERY_OUTWARD_CLEARANCE <= 0.03
+    assert tool.ORIENTATION_GALLERY_FORWARD_CLEARANCE == pytest.approx(0.060)
+
+
+def test_orientation_gallery_rejects_only_hard_anatomy_or_collision_failures():
+    tool = load_tool()
+    valid = {
+        "matrices_finite": True,
+        "signed_elbow_flex_deg": -116.0,
+        "pole_side": 0.1,
+        "wrist_swing_deg": 20.0,
+        "wrist_twist_deg": 18.0,
+        "forearm_twist_deg": 40.0,
+        "head_collision_count": 0,
+        "torso_penetration_count": 0,
+    }
+
+    assert tool.orientation_gallery_rejection_reasons(valid) == ()
+    assert any("head" in reason.lower() for reason in tool.orientation_gallery_rejection_reasons(
+        {**valid, "head_collision_count": 1}
+    ))
+    assert any("wrist twist" in reason.lower() for reason in tool.orientation_gallery_rejection_reasons(
+        {**valid, "wrist_twist_deg": 41.0}
+    ))
+    assert tool.orientation_gallery_rejection_reasons({
+        **valid,
+        "surface_contact_distance": 1.0,
+        "contact_patch_count": 0,
+    }) == ()
+
+
+def test_orientation_gallery_render_mapping_is_stable():
+    tool = load_tool()
+    variants = tool.orientation_gallery_variants()[:3]
+
+    mapping = tool.orientation_gallery_render_mapping(variants)
+
+    assert mapping[0] == {
+        "gallery_index": 1,
+        "source_id": variants[0].source_id,
+        "closeup": f"orientation_gallery/variants/01_{variants[0].source_id}/upper_body_hand.png",
+        "front": f"orientation_gallery/variants/01_{variants[0].source_id}/front.png",
+        "right": f"orientation_gallery/variants/01_{variants[0].source_id}/right.png",
+        "left": f"orientation_gallery/variants/01_{variants[0].source_id}/left.png",
+    }
+    assert [item["gallery_index"] for item in mapping] == [1, 2, 3]
+
+
 def test_absolute_finger_stage_retains_contact_only_failures_for_refinement():
     tool = load_tool()
     records = [
@@ -709,6 +780,29 @@ def test_select_static_requires_reviewed_source_candidate_and_existing_run(cli_t
     assert config.search_static is False
     assert config.source_candidate_id == "candidate_0042"
     assert config.run_metrics_path.name == "static_pose_metrics.json"
+
+
+def test_orientation_gallery_reuses_existing_poc_blend_and_requires_run_id(cli_tmp_path):
+    tool = load_tool()
+
+    config = tool.parse_blender_args(valid_gallery_cli(cli_tmp_path))
+
+    assert config.orientation_gallery is True
+    assert config.search_static is False
+    assert config.select_static is False
+    assert config.run_id == "run-20260715-orientation-001"
+    assert config.vmd is None
+
+
+def test_orientation_gallery_run_paths_are_isolated(cli_tmp_path):
+    tool = load_tool()
+    output_dir = cli_tmp_path / tool.OUTPUT_DIRECTORY_NAME
+
+    paths = tool.orientation_gallery_run_paths(output_dir, "run-20260715-orientation-001")
+
+    assert paths.temporary.name == ".tmp-run-20260715-orientation-001"
+    assert paths.final == output_dir / "runs" / "run-20260715-orientation-001"
+    assert paths.metrics == paths.final / "orientation_gallery" / tool.ORIENTATION_GALLERY_METRICS_NAME
 
 
 def test_run_paths_are_isolated_and_require_explicit_overwrite(cli_tmp_path):

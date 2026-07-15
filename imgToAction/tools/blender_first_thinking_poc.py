@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from array import array
 from dataclasses import dataclass
 import hashlib
 import importlib.util
@@ -212,6 +213,8 @@ PMX_TO_BLENDER_SCALE = 0.08
 CANDIDATE_VIEWS = ("front", "left", "right", "back")
 STATIC_RENDER_COUNT = 6
 STATIC_METRICS_NAME = "static_pose_metrics.json"
+ORIENTATION_GALLERY_DIRECTORY = "orientation_gallery"
+ORIENTATION_GALLERY_METRICS_NAME = "orientation_gallery_metrics.json"
 STATIC_CANDIDATE_DIRECTORY = "candidates"
 STATIC_CAMERA_NAME = "POC Static Full Body Camera"
 STAGE_A_SURVIVOR_LIMIT = 216
@@ -300,6 +303,13 @@ COMPENSATION_STAGE_E_LIMIT = 24
 COMPENSATION_BASELINE_TOLERANCE_DEG = 1e-5
 FINGER_SEED_IDS = ("candidate_764", "candidate_779")
 FINGER_STAGE_SURVIVOR_LIMIT = 36
+ORIENTATION_GALLERY_MIN_RENDER_COUNT = 12
+ORIENTATION_GALLERY_MAX_RENDER_COUNT = 18
+ORIENTATION_GALLERY_CLOSEUP_SCALE = 0.52
+ORIENTATION_GALLERY_CONTACT_SHEET_COLUMNS = 5
+ORIENTATION_GALLERY_CONTACT_SHEET_TILE = 256
+ORIENTATION_GALLERY_OUTWARD_CLEARANCE = 0.025
+ORIENTATION_GALLERY_FORWARD_CLEARANCE = 0.060
 PROTECTED_LOCAL_BONES = (
     "下半身",
     "左肩",
@@ -372,6 +382,18 @@ class DualContactRefinement:
 
 
 @dataclass(frozen=True)
+class OrientationGalleryVariant:
+    source_id: str
+    family: str
+    label: str
+    axial_angle_deg: float
+    twist_distribution: tuple[float, float, float]
+    thumb_variant: str
+    index_variant: str
+    finger_targets_deg: dict[str, tuple[float, float, float]]
+
+
+@dataclass(frozen=True)
 class PocConfig:
     source_blend: Path
     vmd: Path | None
@@ -383,6 +405,7 @@ class PocConfig:
     solve_static: bool
     search_static: bool
     select_static: bool
+    orientation_gallery: bool
     run_id: str | None
     overwrite_run: bool
     source_candidate_id: str | None
@@ -731,6 +754,113 @@ def dual_contact_refinement_grid() -> tuple[DualContactRefinement, ...]:
     )
 
 
+def orientation_gallery_variants() -> tuple[OrientationGalleryVariant, ...]:
+    base = next(
+        preset for preset in semantic_finger_presets()
+        if preset.name == "support_index_long"
+    ).joint_targets_deg
+    thumb_targets = {
+        "base": {name: base[name] for name in ("右親指０", "右親指１", "右親指２")},
+        "open": {
+            "右親指０": (-8.0, -12.0, -8.0),
+            "右親指１": (-15.0, -8.0, 0.0),
+            "右親指２": (-8.0, 0.0, 0.0),
+        },
+        "opposed": {
+            "右親指０": (-20.0, -12.0, -8.0),
+            "右親指１": (-30.0, -10.0, 0.0),
+            "右親指２": (-18.0, 0.0, 0.0),
+        },
+    }
+    index_targets = {
+        "base": {name: base[name] for name in ("右人指１", "右人指２", "右人指３")},
+        "jaw_align": {
+            "右人指１": (-6.0, -6.0, -8.0),
+            "右人指２": (-4.0, -2.0, 0.0),
+            "右人指３": (-2.0, 0.0, 0.0),
+        },
+    }
+    distributions = {
+        "balanced": (0.35, 0.50, 0.15),
+        "forearm": (0.55, 0.35, 0.10),
+        "wrist": (0.20, 0.45, 0.35),
+    }
+    specs = []
+    for angle in (-45.0, -30.0, -15.0, 0.0, 15.0, 30.0, 45.0):
+        specs.append(("axial_sweep", angle, "balanced", "base", "base"))
+    for angle in (-30.0, 15.0):
+        specs.extend((
+            ("distribution", angle, "forearm", "base", "base"),
+            ("distribution", angle, "wrist", "base", "base"),
+        ))
+    for angle in (-30.0, 15.0):
+        specs.extend((
+            ("thumb_opposition", angle, "balanced", "open", "base"),
+            ("thumb_opposition", angle, "balanced", "opposed", "base"),
+        ))
+    for angle in (-30.0, 0.0, 15.0):
+        specs.append(("index_alignment", angle, "balanced", "base", "jaw_align"))
+
+    variants = []
+    for index, (family, angle, distribution, thumb, index_pose) in enumerate(specs, start=1):
+        targets = dict(base)
+        targets.update(thumb_targets[thumb])
+        targets.update(index_targets[index_pose])
+        angle_label = f"p{int(angle):02d}" if angle >= 0 else f"m{abs(int(angle)):02d}"
+        source_id = f"gallery_{index:02d}_{family}_{angle_label}_{distribution}_{thumb}_{index_pose}"
+        variants.append(OrientationGalleryVariant(
+            source_id=source_id,
+            family=family,
+            label=(
+                f"G{index:02d}  axial {angle:+.0f}  {distribution}\n"
+                f"thumb {thumb}  index {index_pose}"
+            ),
+            axial_angle_deg=angle,
+            twist_distribution=distributions[distribution],
+            thumb_variant=thumb,
+            index_variant=index_pose,
+            finger_targets_deg=targets,
+        ))
+    return tuple(variants)
+
+
+def orientation_gallery_rejection_reasons(metrics) -> tuple[str, ...]:
+    math_module = _load_motion_math()
+    reasons = []
+    if not bool(metrics["matrices_finite"]):
+        reasons.append("Non-finite pose matrix")
+    if not signed_elbow_flex_is_valid(float(metrics["signed_elbow_flex_deg"])):
+        reasons.append("Signed elbow hinge limit failed")
+    if float(metrics["pole_side"]) <= math_module.EPSILON:
+        reasons.append("Elbow is not on the pole-facing side")
+    if abs(float(metrics["wrist_swing_deg"])) > math_module.WRIST_SWING_HARD_MAX_DEG:
+        reasons.append("Wrist swing exceeds its hard limit")
+    if abs(float(metrics["wrist_twist_deg"])) > math_module.WRIST_TWIST_HARD_MAX_DEG:
+        reasons.append("Wrist twist exceeds its hard limit")
+    if abs(float(metrics["forearm_twist_deg"])) > math_module.FOREARM_TWIST_HARD_MAX_DEG:
+        reasons.append("Forearm twist exceeds its hard limit")
+    if int(metrics["head_collision_count"]) != 0:
+        reasons.append("Head collision is present")
+    if int(metrics["torso_penetration_count"]) != 0:
+        reasons.append("Non-adjacent torso penetration is present")
+    return tuple(reasons)
+
+
+def orientation_gallery_render_mapping(variants) -> list[dict[str, object]]:
+    mapping = []
+    for index, variant in enumerate(variants, start=1):
+        root = f"{ORIENTATION_GALLERY_DIRECTORY}/variants/{index:02d}_{variant.source_id}"
+        mapping.append({
+            "gallery_index": index,
+            "source_id": variant.source_id,
+            "closeup": f"{root}/upper_body_hand.png",
+            "front": f"{root}/front.png",
+            "right": f"{root}/right.png",
+            "left": f"{root}/left.png",
+        })
+    return mapping
+
+
 def compensated_source_id(arm_source_id: str, compensation_index: int) -> str:
     if compensation_index < 0:
         raise ValueError("Compensation index must be non-negative")
@@ -797,6 +927,7 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--setup-only", action="store_true")
     mode.add_argument("--search-static", action="store_true")
     mode.add_argument("--select-static", action="store_true")
+    mode.add_argument("--orientation-gallery", action="store_true")
     parser.add_argument("--run-id")
     parser.add_argument("--overwrite-run", action="store_true")
     parser.add_argument("--source-candidate-id")
@@ -812,6 +943,19 @@ def static_run_paths(output_dir: Path, run_id: str) -> StaticRunPaths:
         temporary=runs / f".tmp-{run_id}",
         final=final,
         metrics=final / STATIC_METRICS_NAME,
+    )
+
+
+def orientation_gallery_run_paths(output_dir: Path, run_id: str) -> StaticRunPaths:
+    paths = static_run_paths(output_dir, run_id)
+    return StaticRunPaths(
+        temporary=paths.temporary,
+        final=paths.final,
+        metrics=(
+            paths.final
+            / ORIENTATION_GALLERY_DIRECTORY
+            / ORIENTATION_GALLERY_METRICS_NAME
+        ),
     )
 
 
@@ -834,7 +978,8 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         raise ValueError(f"Output blend must be named {OUTPUT_BLEND_NAME}")
     if output_dir.name != OUTPUT_DIRECTORY_NAME:
         raise ValueError(f"Output directory must be named {OUTPUT_DIRECTORY_NAME}")
-    if (namespace.search_static or namespace.select_static) and (
+    static_mode = namespace.search_static or namespace.select_static or namespace.orientation_gallery
+    if static_mode and (
         source_blend.name != OUTPUT_BLEND_NAME or not _same_path(source_blend, output_blend)
     ):
         raise ValueError("Static modes must open the same existing POC blend")
@@ -842,14 +987,18 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         raise ValueError("Frame range must be a valid non-negative interval")
 
     run_metrics_path = None
-    if namespace.search_static or namespace.select_static:
+    if static_mode:
         if namespace.run_id is None:
             raise ValueError("Static modes require a run ID")
-        paths = static_run_paths(output_dir, namespace.run_id)
+        paths = (
+            orientation_gallery_run_paths(output_dir, namespace.run_id)
+            if namespace.orientation_gallery
+            else static_run_paths(output_dir, namespace.run_id)
+        )
         run_metrics_path = paths.metrics
-        if namespace.search_static and paths.final.exists() and not namespace.overwrite_run:
+        if (namespace.search_static or namespace.orientation_gallery) and paths.final.exists() and not namespace.overwrite_run:
             raise ValueError(f"Static run already exists: {paths.final}")
-        if namespace.search_static and paths.temporary.exists() and not namespace.overwrite_run:
+        if (namespace.search_static or namespace.orientation_gallery) and paths.temporary.exists() and not namespace.overwrite_run:
             raise ValueError(f"Temporary static run already exists: {paths.temporary}")
     if namespace.select_static:
         if not namespace.source_candidate_id or not SOURCE_CANDIDATE_PATTERN.fullmatch(
@@ -872,6 +1021,7 @@ def _validated_config(namespace: argparse.Namespace) -> PocConfig:
         solve_static=False,
         search_static=namespace.search_static,
         select_static=namespace.select_static,
+        orientation_gallery=namespace.orientation_gallery,
         run_id=namespace.run_id,
         overwrite_run=namespace.overwrite_run,
         source_candidate_id=namespace.source_candidate_id,
@@ -4133,6 +4283,454 @@ def _stage_c_update(math_module, record, collision_metrics):
     record["selection_reasons"] = list(selection_reasons)
 
 
+def _orientation_gallery_baseline(candidate_by_id):
+    base_candidate = candidate_by_id["candidate_764"]
+    palm_refinement = finger_palm_refinements()[5]
+    candidate = _finger_refined_candidate(
+        base_candidate, palm_refinement, "candidate_764_orientation_gallery"
+    )
+    compensation = finger_search_compensations()[1]
+    preset = next(
+        preset for preset in semantic_finger_presets()
+        if preset.name == "support_index_long"
+    )
+    return candidate, compensation, preset
+
+
+def _right_arm_outward_local(armature):
+    shoulder = _pose_head_world(armature, "右腕")
+    wrist = _pose_head_world(armature, "右手首")
+    model_up = (armature.matrix_world.to_3x3() @ Vector((0.0, 0.0, 1.0))).normalized()
+    outward = wrist - shoulder
+    outward -= model_up * outward.dot(model_up)
+    if outward.length <= 1e-8:
+        raise RuntimeError("Cannot derive right-arm outward direction from shoulder-wrist chain")
+    outward.normalize()
+    return (armature.matrix_world.to_3x3().inverted() @ outward).normalized()
+
+
+def _gallery_candidate(base_candidate, variant):
+    return StaticCandidate(
+        candidate_id=variant.source_id,
+        alignment_factor=base_candidate.alignment_factor,
+        hand_offset=base_candidate.hand_offset,
+        palm_euler_deg=base_candidate.palm_euler_deg,
+        pole_offset=base_candidate.pole_offset,
+        twist_influences=variant.twist_distribution,
+        pole_offset_3d=base_candidate.pole_offset_3d,
+        search_family="orientation_gallery",
+    )
+
+
+def _apply_orientation_gallery_variant(
+    armature, controls, base_candidate, compensation, variant, context
+):
+    candidate = _gallery_candidate(base_candidate, variant)
+    preset = FingerPosePreset(
+        name=f"orientation_gallery_{variant.source_id}",
+        joint_targets_deg=variant.finger_targets_deg,
+    )
+    compensation_quaternions, compensation_angles, finger_quaternions, finger_solution = (
+        _apply_semantic_finger_state(
+            armature, controls, candidate, compensation, preset, context
+        )
+    )
+    controls["hand"].location += (
+        Vector(context["orientation_gallery_outward_local"])
+        * ORIENTATION_GALLERY_OUTWARD_CLEARANCE
+    )
+    controls["hand"].location += (
+        Vector(context["orientation_gallery_forward_local"])
+        * ORIENTATION_GALLERY_FORWARD_CLEARANCE
+    )
+    armature.update_tag()
+    _refresh_frame()
+    palm = controls["palm"]
+    base_quaternion = palm.rotation_euler.to_quaternion().normalized()
+    axial_quaternion = Quaternion(
+        Vector((0.0, 1.0, 0.0)), math.radians(variant.axial_angle_deg)
+    )
+    palm.rotation_mode = "QUATERNION"
+    palm.rotation_quaternion = (base_quaternion @ axial_quaternion).normalized()
+    armature.update_tag()
+    _refresh_frame()
+    return {
+        "candidate": candidate,
+        "preset": preset,
+        "compensation_quaternions": compensation_quaternions,
+        "compensation_angles_deg": compensation_angles,
+        "finger_quaternions": finger_quaternions,
+        "finger_solution": finger_solution,
+        "palm_base_quaternion": tuple(float(value) for value in base_quaternion),
+        "palm_axial_quaternion": tuple(float(value) for value in axial_quaternion),
+        "palm_final_quaternion": tuple(float(value) for value in palm.rotation_quaternion),
+        "outward_clearance_local": tuple(
+            float(value) * ORIENTATION_GALLERY_OUTWARD_CLEARANCE
+            for value in context["orientation_gallery_outward_local"]
+        ),
+        "forward_clearance_local": tuple(
+            float(value) * ORIENTATION_GALLERY_FORWARD_CLEARANCE
+            for value in context["orientation_gallery_forward_local"]
+        ),
+    }
+
+
+def _gallery_emission_material(name, color):
+    material = bpy.data.materials.get(name)
+    if material is None:
+        material = bpy.data.materials.new(name)
+        material.use_nodes = True
+        nodes = material.node_tree.nodes
+        nodes.clear()
+        output = nodes.new("ShaderNodeOutputMaterial")
+        emission = nodes.new("ShaderNodeEmission")
+        emission.inputs["Color"].default_value = color
+        emission.inputs["Strength"].default_value = 1.0
+        material.node_tree.links.new(emission.outputs["Emission"], output.inputs["Surface"])
+    return material
+
+
+def _ensure_gallery_label(camera):
+    collection = bpy.data.collections.get(CONTROL_COLLECTION_NAME)
+    labels = []
+    for suffix, color, offset in (
+        ("OUTLINE", (0.0, 0.0, 0.0, 1.0), 0.006),
+        ("TEXT", (1.0, 0.82, 0.12, 1.0), 0.0),
+    ):
+        name = f"POC_ORIENTATION_GALLERY_{suffix}"
+        text_object = bpy.data.objects.get(name)
+        if text_object is None:
+            curve = bpy.data.curves.new(name, type="FONT")
+            text_object = bpy.data.objects.new(name, curve)
+            collection.objects.link(text_object)
+            curve.align_x = "LEFT"
+            curve.align_y = "TOP"
+            curve.extrude = 0.0
+            curve.offset = offset
+            curve.materials.append(_gallery_emission_material(f"{name}_MAT", color))
+        text_object.parent = camera
+        text_object.matrix_parent_inverse = Matrix.Identity(4)
+        text_object.rotation_euler = (0.0, 0.0, 0.0)
+        labels.append(text_object)
+    return tuple(labels)
+
+
+def _set_gallery_label(labels, text, ortho_scale, visible):
+    for label in labels:
+        label.data.body = text
+        label.data.size = ortho_scale * 0.034
+        label.location = (-ortho_scale * 0.47, ortho_scale * 0.47, -0.4)
+        label.hide_render = not visible
+
+
+def _write_orientation_contact_sheet(closeups, output_path):
+    tile = ORIENTATION_GALLERY_CONTACT_SHEET_TILE
+    columns = ORIENTATION_GALLERY_CONTACT_SHEET_COLUMNS
+    rows = math.ceil(len(closeups) / columns)
+    width = columns * tile
+    height = rows * tile
+    canvas = array("f", (0.055, 0.055, 0.055, 1.0)) * (width * height)
+    loaded = []
+    try:
+        for index, closeup in enumerate(closeups):
+            image = bpy.data.images.load(str(closeup), check_existing=False)
+            loaded.append(image)
+            image.scale(tile, tile)
+            pixels = array("f", image.pixels[:])
+            column = index % columns
+            row_from_top = index // columns
+            target_row = rows - row_from_top - 1
+            for source_y in range(tile):
+                source_start = source_y * tile * 4
+                destination_start = (
+                    (target_row * tile + source_y) * width + column * tile
+                ) * 4
+                canvas[destination_start:destination_start + tile * 4] = (
+                    pixels[source_start:source_start + tile * 4]
+                )
+        sheet = bpy.data.images.new(
+            "POC_ORIENTATION_GALLERY_CONTACT_SHEET",
+            width=width,
+            height=height,
+            alpha=True,
+        )
+        sheet.pixels.foreach_set(canvas)
+        sheet.filepath_raw = str(output_path)
+        sheet.file_format = "PNG"
+        sheet.save()
+        bpy.data.images.remove(sheet)
+    finally:
+        for image in loaded:
+            bpy.data.images.remove(image)
+
+
+def _render_orientation_gallery(output_dir, armature, mesh, controls, states, context):
+    scene = bpy.context.scene
+    gallery_root = Path(output_dir) / ORIENTATION_GALLERY_DIRECTORY
+    variant_root = gallery_root / "variants"
+    variant_root.mkdir(parents=True, exist_ok=True)
+    combined_vertices = tuple(
+        vertex for _variant, _record, vertices in states for vertex in vertices
+    )
+    camera, full_center, distance, full_scale, bbox_min, bbox_max = _full_body_camera(
+        scene, combined_vertices
+    )
+    labels = _ensure_gallery_label(camera)
+    scene.render.resolution_x = RENDER_RESOLUTION
+    scene.render.resolution_y = RENDER_RESOLUTION
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    mapping = orientation_gallery_render_mapping([variant for variant, _record, _vertices in states])
+    closeups = []
+    for item, (variant, record, _vertices) in zip(mapping, states, strict=True):
+        _apply_orientation_gallery_variant(
+            armature,
+            controls,
+            context["orientation_gallery_base_candidate"],
+            context["orientation_gallery_compensation"],
+            variant,
+            context,
+        )
+        directory = Path(output_dir) / Path(item["closeup"]).parent
+        directory.mkdir(parents=True, exist_ok=True)
+        record["gallery_index"] = item["gallery_index"]
+        record["renders"] = {
+            key: item[key] for key in ("closeup", "front", "right", "left")
+        }
+        fingertips = _finger_tip_positions(armature)
+        close_center = (
+            Vector(fingertips["index"])
+            + Vector(fingertips["thumb"])
+            + Vector(_calibrated_chin_points(armature)[2])
+        ) / 3.0
+        camera.data.ortho_scale = ORIENTATION_GALLERY_CLOSEUP_SCALE
+        camera.location = close_center + Vector((0.0, -1.0, 0.0)) * 2.0
+        camera.rotation_euler = (close_center - camera.location).to_track_quat("-Z", "Y").to_euler()
+        _set_gallery_label(
+            labels, variant.label, ORIENTATION_GALLERY_CLOSEUP_SCALE, True
+        )
+        closeup = Path(output_dir) / item["closeup"]
+        scene.render.filepath = str(closeup)
+        bpy.ops.render.render(write_still=True)
+        closeups.append(closeup)
+        _set_gallery_label(labels, variant.label, full_scale, False)
+        for view, direction in (
+            ("front", Vector((0.0, -1.0, 0.0))),
+            ("right", Vector((-1.0, 0.0, 0.0))),
+            ("left", Vector((1.0, 0.0, 0.0))),
+        ):
+            camera.data.ortho_scale = full_scale
+            camera.location = full_center + direction * distance
+            camera.rotation_euler = (full_center - camera.location).to_track_quat("-Z", "Y").to_euler()
+            scene.render.filepath = str(Path(output_dir) / item[view])
+            bpy.ops.render.render(write_still=True)
+    _set_gallery_label(labels, "", ORIENTATION_GALLERY_CLOSEUP_SCALE, False)
+    contact_sheet = gallery_root / "contact_sheet.png"
+    _write_orientation_contact_sheet(closeups, contact_sheet)
+    return {
+        "contact_sheet": str(Path(ORIENTATION_GALLERY_DIRECTORY) / "contact_sheet.png"),
+        "render_mapping": mapping,
+        "full_body_camera": {
+            "center": tuple(float(value) for value in full_center),
+            "ortho_scale": float(full_scale),
+            "bbox_min": tuple(float(value) for value in bbox_min),
+            "bbox_max": tuple(float(value) for value in bbox_max),
+        },
+        "closeup_ortho_scale": ORIENTATION_GALLERY_CLOSEUP_SCALE,
+    }
+
+
+def orientation_gallery(config: PocConfig) -> None:
+    _require_blender()
+    if not config.orientation_gallery or config.run_id is None:
+        raise ValueError("Orientation gallery requires --orientation-gallery and --run-id")
+    current_blend = Path(bpy.data.filepath)
+    if not current_blend or not _same_path(current_blend, config.source_blend):
+        raise RuntimeError(f"Blender must open the existing POC blend: {config.source_blend}")
+    paths = orientation_gallery_run_paths(config.output_dir, config.run_id)
+    if config.overwrite_run:
+        if paths.temporary.exists():
+            shutil.rmtree(paths.temporary)
+    paths.temporary.mkdir(parents=True, exist_ok=False)
+
+    armature, mesh = _validate_scene_objects()
+    compensation_controls = _ensure_compensation_controls(armature)
+    _validate_compensation_baseline(armature, compensation_controls)
+    finger_controls = _ensure_finger_controls(armature)
+    _validate_finger_baseline(armature, finger_controls)
+    controls = _existing_controls()
+    _validate_existing_poc(armature, controls)
+    math_module = _load_motion_math()
+    geometry = _mesh_geometry_sets(mesh)
+    context = _prepare_static_context(
+        armature, mesh, controls, geometry, math_module,
+        compensation_controls, finger_controls,
+    )
+    candidates = {candidate.candidate_id: candidate for candidate in static_candidate_grid()}
+    base_candidate, compensation, base_preset = _orientation_gallery_baseline(candidates)
+    context["orientation_gallery_base_candidate"] = base_candidate
+    context["orientation_gallery_compensation"] = compensation
+    context["orientation_gallery_outward_local"] = tuple(
+        float(value) for value in _right_arm_outward_local(armature)
+    )
+    context["orientation_gallery_forward_local"] = tuple(
+        float(value)
+        for value in (
+            armature.matrix_world.to_3x3().inverted()
+            @ (armature.matrix_world.to_3x3() @ Vector((0.0, -1.0, 0.0))).normalized()
+        ).normalized()
+    )
+    variants = orientation_gallery_variants()
+    evaluated = []
+    valid_states = []
+    started = time.perf_counter()
+    try:
+        for variant in variants:
+            applied = _apply_orientation_gallery_variant(
+                armature, controls, base_candidate, compensation, variant, context
+            )
+            current_surface = _current_chin_surface(
+                mesh, armature, context["chin_surface"]
+            )
+            metrics = _anatomy_measurements(
+                armature, controls, context["previous"], current_surface["chin_world"]
+            )
+            metrics.update(_surface_contact_evidence_bvh(mesh, geometry, current_surface))
+            collision_metrics, vertices = _full_collision_evidence(
+                mesh, geometry, context["invariant_collision"]
+            )
+            metrics.update(collision_metrics)
+            protected_current = _current_protected_pose_hashes(armature)
+            protected_reasons = compare_protected_pose_hashes(
+                context["protected_pose_hashes"], protected_current
+            )
+            reasons = tuple(dict.fromkeys((
+                *orientation_gallery_rejection_reasons(metrics),
+                *protected_reasons,
+            )))
+            record = {
+                "source_id": variant.source_id,
+                "family": variant.family,
+                "label": variant.label,
+                "valid": not reasons,
+                "reasons": list(reasons),
+                "axial_angle_deg": variant.axial_angle_deg,
+                "twist_distribution": variant.twist_distribution,
+                "twist_distribution_degrees": tuple(
+                    variant.axial_angle_deg * influence
+                    for influence in variant.twist_distribution
+                ),
+                "thumb_variant": variant.thumb_variant,
+                "index_variant": variant.index_variant,
+                "finger_absolute_targets_deg": variant.finger_targets_deg,
+                "finger_absolute_solution": applied["finger_solution"],
+                "palm_quaternions": {
+                    key: applied[key]
+                    for key in (
+                        "palm_base_quaternion",
+                        "palm_axial_quaternion",
+                        "palm_final_quaternion",
+                    )
+                },
+                "outward_clearance_local": applied["outward_clearance_local"],
+                "forward_clearance_local": applied["forward_clearance_local"],
+                "compensation_angles_deg": applied["compensation_angles_deg"],
+                "metrics": metrics,
+                "protected_pose_hashes": protected_current,
+            }
+            evaluated.append(record)
+            if not reasons:
+                valid_states.append((variant, record, vertices))
+        if not ORIENTATION_GALLERY_MIN_RENDER_COUNT <= len(valid_states) <= ORIENTATION_GALLERY_MAX_RENDER_COUNT:
+            print("POC_ORIENTATION_GALLERY_REJECTIONS", [
+                {
+                    "source_id": record["source_id"],
+                    "reasons": record["reasons"],
+                    "wrist_swing_deg": record["metrics"]["wrist_swing_deg"],
+                    "wrist_twist_deg": record["metrics"]["wrist_twist_deg"],
+                    "forearm_twist_deg": record["metrics"]["forearm_twist_deg"],
+                    "head_collision_count": record["metrics"]["head_collision_count"],
+                    "torso_penetration_count": record["metrics"]["torso_penetration_count"],
+                }
+                for record in evaluated
+            ])
+            raise RuntimeError(
+                "Orientation gallery requires 12-18 collision-free hard-limit variants; "
+                f"got {len(valid_states)}"
+            )
+        render_evidence = _render_orientation_gallery(
+            paths.temporary, armature, mesh, controls, valid_states, context
+        )
+        _restore_static_control_state(
+            armature, controls, context["baseline_state"], compensation_controls, finger_controls
+        )
+        restoration_differences = compare_static_state(
+            context["baseline_state"],
+            _capture_static_control_state(
+                armature, controls, compensation_controls, finger_controls
+            ),
+            1e-6,
+        )
+        if restoration_differences:
+            raise RuntimeError(
+                "Orientation gallery failed to restore baseline controls: "
+                + "; ".join(restoration_differences)
+            )
+        gallery_root = paths.temporary / ORIENTATION_GALLERY_DIRECTORY
+        metrics_path = gallery_root / ORIENTATION_GALLERY_METRICS_NAME
+        metrics_path.write_text(
+            json.dumps({
+                "mode": "orientation-gallery",
+                "selection_status": "NEEDS_CONTEXT",
+                "run_id": config.run_id,
+                "frame": VALIDATION_FRAME,
+                "source_blend": str(config.source_blend),
+                "output_blend_unchanged": str(config.output_blend),
+                "baseline_source_id": "candidate_764__finger_p05_s03_c01",
+                "baseline": {
+                    "arm_candidate_id": "candidate_764",
+                    "palm_refinement_deg": finger_palm_refinements()[5],
+                    "finger_preset": base_preset.name,
+                    "compensation": {
+                        "neck_toward_deg": compensation.neck_toward_deg,
+                        "head_toward_deg": compensation.head_toward_deg,
+                    },
+                },
+                "raw_variant_count": len(variants),
+                "valid_variant_count": len(valid_states),
+                "rejected_variant_count": len(variants) - len(valid_states),
+                "duration_seconds": time.perf_counter() - started,
+                "render_evidence": render_evidence,
+                "variant_table": evaluated,
+            }, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        expected = [
+            paths.temporary / item[key]
+            for item in render_evidence["render_mapping"]
+            for key in ("closeup", "front", "right", "left")
+        ]
+        expected.append(paths.temporary / render_evidence["contact_sheet"])
+        missing = [str(path) for path in expected if not path.is_file()]
+        if missing:
+            raise RuntimeError("Orientation gallery is missing artifacts: " + ", ".join(missing))
+        if paths.final.exists():
+            shutil.rmtree(paths.final)
+        paths.temporary.rename(paths.final)
+        print("POC_ORIENTATION_GALLERY_COMPLETE", {
+            "run_id": config.run_id,
+            "evaluated": len(variants),
+            "rejected": len(variants) - len(valid_states),
+            "rendered": len(valid_states),
+            "contact_sheet": str(paths.final / render_evidence["contact_sheet"]),
+            "metrics": str(paths.metrics),
+        })
+    finally:
+        _restore_static_control_state(
+            armature, controls, context["baseline_state"], compensation_controls, finger_controls
+        )
+
+
 def search_static(config: PocConfig) -> None:
     _require_blender()
     if not config.search_static or config.run_id is None:
@@ -4923,6 +5521,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         search_static(config)
     elif config.select_static:
         select_static(config)
+    elif config.orientation_gallery:
+        orientation_gallery(config)
     else:
         raise ValueError("No POC mode selected")
     return 0
