@@ -11,10 +11,11 @@ from typing import Sequence
 
 try:
     import bpy  # type: ignore
-    from mathutils import Matrix, Vector  # type: ignore
+    from mathutils import Matrix, Quaternion, Vector  # type: ignore
 except ImportError:
     bpy = None
     Matrix = None
+    Quaternion = None
     Vector = None
 
 
@@ -76,23 +77,29 @@ CONSTRAINT_SPECS = {
     "upper_twist": {
         "owner_bone": "右腕捩",
         "target_bone": PROXY_BONE_NAMES[2],
-        "constraint_type": "CHILD_OF",
+        "constraint_type": "COPY_ROTATION",
+        "owner_space": "LOCAL",
+        "target_space": "LOCAL",
+        "mix_mode": "ADD",
         "rotation_axes": "Y",
-        "calibrate_inverse": True,
     },
     "hand_twist": {
         "owner_bone": "右手捩",
         "target_bone": PROXY_BONE_NAMES[2],
-        "constraint_type": "CHILD_OF",
+        "constraint_type": "COPY_ROTATION",
+        "owner_space": "LOCAL",
+        "target_space": "LOCAL",
+        "mix_mode": "ADD",
         "rotation_axes": "Y",
-        "calibrate_inverse": True,
     },
     "wrist": {
         "owner_bone": "右手首",
         "target_bone": PROXY_BONE_NAMES[2],
-        "constraint_type": "CHILD_OF",
+        "constraint_type": "COPY_ROTATION",
+        "owner_space": "LOCAL",
+        "target_space": "LOCAL",
+        "mix_mode": "ADD",
         "rotation_axes": "XYZ",
-        "calibrate_inverse": True,
     },
 }
 
@@ -112,6 +119,28 @@ LENGTH_TOLERANCE = 1e-5
 ROLL_TOLERANCE = 1e-6
 ENABLED_DELTA_LIMIT_DEG = 10.0
 BASELINE_RESTORE_TOLERANCE_DEG = 1e-4
+
+# Rendered PMX calibration identifies right-elbow +Z as strongest flexion.
+# Axis isolation against v16 maps that motion to proxy local Z: it reproduces
+# the elbow plane at dot=0.999999 while local X misses by 0.2595 Blender units.
+ELBOW_HINGE_AXIS = "Z"
+ELBOW_IK_LOCKS = {"X": True, "Y": True, "Z": False}
+ELBOW_IK_MIN_DEG = -150.0
+ELBOW_IK_MAX_DEG = 0.0
+ELBOW_FLEX_MIN_DEG = -150.0
+ELBOW_FLEX_MAX_DEG = -5.0
+ELBOW_OFF_AXIS_MAX_DEG = 0.1
+ELBOW_ANGLE_MIN_DEG = 20.0
+ELBOW_ANGLE_MAX_DEG = 175.0
+
+HAND_TARGET_DIAGNOSTIC_OFFSET = (0.01, 0.0, 0.0)
+HAND_RESPONSE_MIN_DEG = 0.25
+HAND_RESPONSE_MAX_DEG = 10.0
+PALM_AXIAL_DIAGNOSTIC_DEG = 10.0
+PALM_RESPONSE_TOLERANCE_DEG = 1.0
+PALM_OFF_AXIS_MAX_DEG = 1.0
+
+SAVE_VERSION_OVERRIDE = 0
 
 
 @dataclass(frozen=True)
@@ -176,8 +205,17 @@ def parse_blender_args(argv: Sequence[str] | None = None) -> PocConfig:
     return _validated_config(_parser().parse_args(arguments[arguments.index("--") + 1 :]))
 
 
+def signed_elbow_flex_is_valid(flex_degrees: float) -> bool:
+    flex = float(flex_degrees)
+    return math.isfinite(flex) and ELBOW_FLEX_MIN_DEG <= flex <= ELBOW_FLEX_MAX_DEG
+
+
+def blender_backup_path(output_blend: Path) -> Path:
+    return Path(f"{output_blend}1")
+
+
 def _require_blender() -> None:
-    if bpy is None or Matrix is None or Vector is None:
+    if bpy is None or Matrix is None or Quaternion is None or Vector is None:
         raise RuntimeError("This operation must run inside Blender")
 
 
@@ -361,22 +399,22 @@ def _add_influence_driver(constraint, armature, property_name: str) -> None:
     driver.expression = "enabled * weight"
 
 
-def _new_copy_rotation(armature, name: str, target, spec, *, axial: bool = False):
+def _new_copy_rotation(armature, name: str, target, spec):
     pose_bone = armature.pose.bones[spec["owner_bone"]]
     old = pose_bone.constraints.get(name)
     if old is not None:
         pose_bone.constraints.remove(old)
-    constraint = pose_bone.constraints.new("COPY_ROTATION")
+    constraint = pose_bone.constraints.new(spec.get("constraint_type", "COPY_ROTATION"))
     constraint.name = name
     constraint.target = target
     constraint.subtarget = spec.get("target_bone", "")
     constraint.owner_space = spec["owner_space"]
     constraint.target_space = spec["target_space"]
     constraint.mix_mode = spec["mix_mode"]
-    if axial:
-        constraint.use_x = False
-        constraint.use_y = True
-        constraint.use_z = False
+    axes = spec.get("rotation_axes", "XYZ")
+    constraint.use_x = "X" in axes
+    constraint.use_y = "Y" in axes
+    constraint.use_z = "Z" in axes
     constraint.influence = 0.0
     return constraint
 
@@ -439,6 +477,14 @@ def _create_constraints(armature, controls) -> None:
     ik.chain_count = 2
     ik.use_tail = True
     ik.use_stretch = False
+    proxy_forearm.lock_ik_x = ELBOW_IK_LOCKS["X"]
+    proxy_forearm.lock_ik_y = ELBOW_IK_LOCKS["Y"]
+    proxy_forearm.lock_ik_z = ELBOW_IK_LOCKS["Z"]
+    proxy_forearm.use_ik_limit_x = False
+    proxy_forearm.use_ik_limit_y = False
+    proxy_forearm.use_ik_limit_z = True
+    proxy_forearm.ik_min_z = math.radians(ELBOW_IK_MIN_DEG)
+    proxy_forearm.ik_max_z = math.radians(ELBOW_IK_MAX_DEG)
     bpy.context.scene.frame_set(VALIDATION_FRAME - 1)
     bpy.context.scene.frame_set(VALIDATION_FRAME)
     bpy.context.view_layer.update()
@@ -488,25 +534,28 @@ def _create_constraints(armature, controls) -> None:
             "POC_elbow_influence",
         ),
         (
-            _new_child_of_rotation(
+            _new_copy_rotation(
                 armature,
                 CONSTRAINT_NAMES["upper_twist"],
+                armature,
                 CONSTRAINT_SPECS["upper_twist"],
             ),
             "POC_upper_twist_influence",
         ),
         (
-            _new_child_of_rotation(
+            _new_copy_rotation(
                 armature,
                 CONSTRAINT_NAMES["hand_twist"],
+                armature,
                 CONSTRAINT_SPECS["hand_twist"],
             ),
             "POC_hand_twist_influence",
         ),
         (
-            _new_child_of_rotation(
+            _new_copy_rotation(
                 armature,
                 CONSTRAINT_NAMES["wrist"],
+                armature,
                 CONSTRAINT_SPECS["wrist"],
             ),
             "POC_wrist_influence",
@@ -530,12 +579,142 @@ def _rotation_delta_degrees(before, after) -> float:
     return min(degrees, abs(360.0 - degrees))
 
 
+def _evaluated_local_rotation(armature, bone_name: str):
+    pose_bone = armature.pose.bones[bone_name]
+    parent = pose_bone.parent
+    if parent is None:
+        return (pose_bone.bone.matrix_local.inverted() @ pose_bone.matrix).to_quaternion()
+    current_relative = parent.matrix.inverted() @ pose_bone.matrix
+    rest_relative = parent.bone.matrix_local.inverted() @ pose_bone.bone.matrix_local
+    return (rest_relative.inverted() @ current_relative).to_quaternion()
+
+
+def _signed_proxy_elbow_flex(armature) -> tuple[float, float]:
+    euler = _evaluated_local_rotation(armature, PROXY_BONE_NAMES[1]).to_euler("XYZ")
+    flex_degrees = math.degrees(euler.z)
+    off_axis_degrees = math.degrees(math.hypot(euler.x, euler.y))
+    return flex_degrees, off_axis_degrees
+
+
+def _local_y_twist_response(before, after) -> tuple[float, float, float]:
+    delta = (before.inverted() @ after).normalized()
+    twist = Quaternion((delta.w, 0.0, delta.y, 0.0))
+    if twist.magnitude <= 1e-12:
+        twist = Quaternion((1.0, 0.0, 0.0, 0.0))
+    else:
+        twist.normalize()
+    swing = (delta @ twist.inverted()).normalized()
+    twist_degrees = math.degrees(2.0 * math.atan2(twist.y, twist.w))
+    return twist_degrees, math.degrees(swing.angle), math.degrees(delta.angle)
+
+
 def _set_poc_enabled(armature, scene, enabled: bool) -> None:
     armature["POC_enabled"] = 1.0 if enabled else 0.0
     armature.update_tag()
     scene.frame_set(VALIDATION_FRAME - 1)
     scene.frame_set(VALIDATION_FRAME)
     bpy.context.view_layer.update()
+
+
+def _run_behavior_diagnostics(armature, controls) -> None:
+    scene = bpy.context.scene
+    diagnostic_bones = ("右腕", "右ひじ", "右腕捩", "右手捩", "右手首")
+    baseline_rotations = {name: _world_rotation(armature, name) for name in diagnostic_bones}
+    hand_location = controls["hand"].location.copy()
+    palm_basis = controls["palm"].matrix_basis.copy()
+    failures: list[str] = []
+
+    try:
+        _set_poc_enabled(armature, scene, True)
+        enabled_rotations = {name: _world_rotation(armature, name) for name in diagnostic_bones}
+        enabled_deltas = {
+            name: _rotation_delta_degrees(baseline_rotations[name], enabled_rotations[name])
+            for name in ("右腕", "右ひじ", "右手首")
+        }
+        print("POC_ENABLED_DELTAS_DEG", enabled_deltas)
+        for name, delta in enabled_deltas.items():
+            if delta >= ENABLED_DELTA_LIMIT_DEG:
+                failures.append(f"{name} baseline enable delta is {delta:.6f} degrees")
+
+        controls["hand"].location += armature.matrix_world.to_3x3() @ Vector(
+            HAND_TARGET_DIAGNOSTIC_OFFSET
+        )
+        armature.update_tag()
+        scene.frame_set(VALIDATION_FRAME - 1)
+        scene.frame_set(VALIDATION_FRAME)
+        bpy.context.view_layer.update()
+        translated_rotations = {
+            name: _world_rotation(armature, name) for name in ("右腕", "右ひじ", "右手首")
+        }
+        hand_response = {
+            name: _rotation_delta_degrees(enabled_rotations[name], translated_rotations[name])
+            for name in translated_rotations
+        }
+        print("POC_HAND_TARGET_RESPONSE_DEG", hand_response)
+        for name in ("右腕", "右ひじ"):
+            response = hand_response[name]
+            if not HAND_RESPONSE_MIN_DEG <= response <= HAND_RESPONSE_MAX_DEG:
+                failures.append(f"{name} hand-target response is {response:.6f} degrees")
+
+        controls["hand"].location = hand_location
+        armature.update_tag()
+        scene.frame_set(VALIDATION_FRAME - 1)
+        scene.frame_set(VALIDATION_FRAME)
+        bpy.context.view_layer.update()
+        hand_restore = {
+            name: _rotation_delta_degrees(enabled_rotations[name], _world_rotation(armature, name))
+            for name in diagnostic_bones
+        }
+        if any(delta > BASELINE_RESTORE_TOLERANCE_DEG for delta in hand_restore.values()):
+            failures.append(f"hand target did not restore enabled baseline: {hand_restore}")
+
+        palm_bones = {
+            "右腕捩": "POC_upper_twist_influence",
+            "右手捩": "POC_hand_twist_influence",
+            "右手首": "POC_wrist_influence",
+        }
+        palm_before = {name: _evaluated_local_rotation(armature, name) for name in palm_bones}
+        controls["palm"].rotation_mode = "XYZ"
+        controls["palm"].rotation_euler.y = math.radians(PALM_AXIAL_DIAGNOSTIC_DEG)
+        armature.update_tag()
+        scene.frame_set(VALIDATION_FRAME - 1)
+        scene.frame_set(VALIDATION_FRAME)
+        bpy.context.view_layer.update()
+        palm_response = {}
+        for name, property_name in palm_bones.items():
+            twist, off_axis, total = _local_y_twist_response(
+                palm_before[name],
+                _evaluated_local_rotation(armature, name),
+            )
+            expected = PALM_AXIAL_DIAGNOSTIC_DEG * float(armature[property_name])
+            palm_response[name] = {
+                "twist_y": twist,
+                "off_axis": off_axis,
+                "total": total,
+                "expected": expected,
+            }
+            if abs(abs(twist) - expected) > PALM_RESPONSE_TOLERANCE_DEG:
+                failures.append(
+                    f"{name} palm twist response {twist:.6f} differs from expected {expected:.6f}"
+                )
+            if off_axis > PALM_OFF_AXIS_MAX_DEG:
+                failures.append(f"{name} palm off-axis response is {off_axis:.6f} degrees")
+        print("POC_PALM_AXIAL_RESPONSE_DEG", palm_response)
+    finally:
+        controls["hand"].location = hand_location
+        controls["palm"].matrix_basis = palm_basis
+        _set_poc_enabled(armature, scene, False)
+
+    restored_rotations = {name: _world_rotation(armature, name) for name in diagnostic_bones}
+    restore_deltas = {
+        name: _rotation_delta_degrees(baseline_rotations[name], restored_rotations[name])
+        for name in diagnostic_bones
+    }
+    print("POC_RESTORE_DELTAS_DEG", restore_deltas)
+    if any(delta > BASELINE_RESTORE_TOLERANCE_DEG for delta in restore_deltas.values()):
+        failures.append(f"disabled POC chain did not restore v16 baseline: {restore_deltas}")
+    if failures:
+        raise RuntimeError("POC behavior diagnostics failed: " + "; ".join(failures))
 
 
 def _validate_setup(armature, action, controls) -> None:
@@ -552,6 +731,21 @@ def _validate_setup(armature, action, controls) -> None:
         bone = armature.data.bones.get(name)
         if bone is None or bone.use_deform:
             raise RuntimeError(f"Invalid non-deforming proxy bone: {name}")
+
+    proxy_forearm = armature.pose.bones[PROXY_BONE_NAMES[1]]
+    actual_locks = {
+        "X": proxy_forearm.lock_ik_x,
+        "Y": proxy_forearm.lock_ik_y,
+        "Z": proxy_forearm.lock_ik_z,
+    }
+    if actual_locks != ELBOW_IK_LOCKS:
+        raise RuntimeError(f"Proxy elbow IK locks are invalid: {actual_locks}")
+    if (
+        not proxy_forearm.use_ik_limit_z
+        or abs(math.degrees(proxy_forearm.ik_min_z) - ELBOW_IK_MIN_DEG) > 1e-4
+        or abs(math.degrees(proxy_forearm.ik_max_z) - ELBOW_IK_MAX_DEG) > 1e-4
+    ):
+        raise RuntimeError("Proxy elbow local-Z hinge limits are invalid")
 
     expected_lengths = (
         (armature.data.bones["右ひじ"].head_local - armature.data.bones["右腕"].head_local).length,
@@ -571,8 +765,24 @@ def _validate_setup(armature, action, controls) -> None:
     if _proxy_elbow_pole_side(armature, controls["pole"]) <= 0.0:
         raise RuntimeError("Proxy elbow is not on the pole-facing side")
     bend = math.degrees((root - elbow).angle(end - elbow))
-    if not math.isfinite(bend) or bend <= 0.0 or bend >= 180.0:
+    if not math.isfinite(bend) or not ELBOW_ANGLE_MIN_DEG <= bend <= ELBOW_ANGLE_MAX_DEG:
         raise RuntimeError(f"Proxy elbow bend is invalid: {bend}")
+    signed_flex, off_axis_flex = _signed_proxy_elbow_flex(armature)
+    if not signed_elbow_flex_is_valid(signed_flex):
+        raise RuntimeError(f"Proxy elbow signed flex is reversed or hyperextended: {signed_flex}")
+    if off_axis_flex > ELBOW_OFF_AXIS_MAX_DEG:
+        raise RuntimeError(
+            f"Proxy elbow flex left the local-{ELBOW_HINGE_AXIS} hinge: {off_axis_flex} degrees"
+        )
+    print(
+        "POC_ELBOW_HINGE",
+        {
+            "axis": ELBOW_HINGE_AXIS,
+            "signed_flex_deg": signed_flex,
+            "off_axis_deg": off_axis_flex,
+            "anatomical_angle_deg": bend,
+        },
+    )
 
     expected_targets = {
         CONSTRAINT_NAMES["ik"]: (PROXY_BONE_NAMES[1], controls["hand"], "", controls["pole"]),
@@ -624,12 +834,13 @@ def _validate_setup(armature, action, controls) -> None:
             )
         if pole_target is not None and constraint.pole_target != pole_target:
             raise RuntimeError(f"Missing or mistargeted pole target: {constraint_name}")
+        spec_key = next(
+            key for key, configured_name in CONSTRAINT_NAMES.items() if configured_name == constraint_name
+        )
         expected_type = (
             "IK"
-            if constraint_name == CONSTRAINT_NAMES["ik"]
-            else "COPY_ROTATION"
-            if constraint_name == CONSTRAINT_NAMES["palm_proxy"]
-            else "CHILD_OF"
+            if spec_key == "ik"
+            else CONSTRAINT_SPECS[spec_key].get("constraint_type", "COPY_ROTATION")
         )
         if constraint.type != expected_type:
             raise RuntimeError(
@@ -637,20 +848,21 @@ def _validate_setup(armature, action, controls) -> None:
             )
         if constraint.type == "CHILD_OF" and not _finite_matrix(constraint.inverse_matrix):
             raise RuntimeError(f"Constraint inverse matrix is not finite: {constraint_name}")
-        if constraint.type == "CHILD_OF":
-            spec_key = next(
-                key for key, configured_name in CONSTRAINT_NAMES.items() if configured_name == constraint_name
-            )
+        if "rotation_axes" in CONSTRAINT_SPECS.get(spec_key, {}):
             expected_axes = CONSTRAINT_SPECS[spec_key]["rotation_axes"]
-            actual_axes = "".join(
-                axis
-                for axis, enabled in (
+            if constraint.type == "CHILD_OF":
+                axis_flags = (
                     ("X", constraint.use_rotation_x),
                     ("Y", constraint.use_rotation_y),
                     ("Z", constraint.use_rotation_z),
                 )
-                if enabled
-            )
+            else:
+                axis_flags = (
+                    ("X", constraint.use_x),
+                    ("Y", constraint.use_y),
+                    ("Z", constraint.use_z),
+                )
+            actual_axes = "".join(axis for axis, enabled in axis_flags if enabled)
             if actual_axes != expected_axes:
                 raise RuntimeError(
                     f"Constraint {constraint_name} rotation axes must be {expected_axes}, "
@@ -681,27 +893,27 @@ def _validate_setup(armature, action, controls) -> None:
     ):
         raise RuntimeError("Palm delta constraint uses incompatible rotation spaces")
 
-    diagnostic_bones = ("右腕", "右ひじ", "右手首")
-    disabled_rotations = {name: _world_rotation(armature, name) for name in diagnostic_bones}
-    _set_poc_enabled(armature, scene, True)
-    enabled_rotations = {name: _world_rotation(armature, name) for name in diagnostic_bones}
-    enabled_deltas = {
-        name: _rotation_delta_degrees(disabled_rotations[name], enabled_rotations[name])
-        for name in diagnostic_bones
-    }
-    print("POC_ENABLED_DELTAS_DEG", enabled_deltas)
-    excessive = {name: delta for name, delta in enabled_deltas.items() if delta >= ENABLED_DELTA_LIMIT_DEG}
-    if excessive:
-        raise RuntimeError(f"Enabled POC chain has discontinuous baseline rotations: {excessive}")
+    _run_behavior_diagnostics(armature, controls)
 
-    _set_poc_enabled(armature, scene, False)
-    restored_rotations = {name: _world_rotation(armature, name) for name in diagnostic_bones}
-    restore_deltas = {
-        name: _rotation_delta_degrees(disabled_rotations[name], restored_rotations[name])
-        for name in diagnostic_bones
-    }
-    if any(delta > BASELINE_RESTORE_TOLERANCE_DEG for delta in restore_deltas.values()):
-        raise RuntimeError(f"Disabled POC chain did not restore the v16 baseline: {restore_deltas}")
+
+def _save_setup_blend(output_blend: Path) -> None:
+    backup_path = blender_backup_path(output_blend)
+    if backup_path.exists():
+        backup_path.unlink()
+
+    file_preferences = bpy.context.preferences.filepaths
+    original_save_version = int(file_preferences.save_version)
+    try:
+        file_preferences.save_version = SAVE_VERSION_OVERRIDE
+        result = bpy.ops.wm.save_as_mainfile(filepath=str(output_blend), check_existing=False)
+        if "FINISHED" not in result:
+            raise RuntimeError(f"Failed to save POC blend: {sorted(result)}")
+    finally:
+        file_preferences.save_version = original_save_version
+
+    if backup_path.exists():
+        backup_path.unlink()
+        raise RuntimeError(f"Blender created an unexpected backup artifact: {backup_path}")
 
 
 def build_setup(config: PocConfig) -> None:
@@ -724,7 +936,7 @@ def build_setup(config: PocConfig) -> None:
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
     config.output_blend.parent.mkdir(parents=True, exist_ok=True)
-    bpy.ops.wm.save_as_mainfile(filepath=str(config.output_blend), check_existing=False)
+    _save_setup_blend(config.output_blend)
     print(f"POC_SETUP_SAVED {config.output_blend}")
 
 

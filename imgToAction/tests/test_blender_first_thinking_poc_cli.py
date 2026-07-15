@@ -72,6 +72,20 @@ def test_proxy_bones_preserve_matching_source_rest_orientation():
     }
 
 
+def test_proxy_elbow_uses_calibrated_one_direction_local_z_hinge():
+    tool = load_tool()
+
+    assert tool.ELBOW_HINGE_AXIS == "Z"
+    assert tool.ELBOW_IK_LOCKS == {"X": True, "Y": True, "Z": False}
+    assert tool.ELBOW_IK_MIN_DEG == -150.0
+    assert tool.ELBOW_IK_MAX_DEG == 0.0
+    assert tool.ELBOW_FLEX_MIN_DEG == -150.0
+    assert tool.ELBOW_FLEX_MAX_DEG == -5.0
+    assert tool.signed_elbow_flex_is_valid(-108.27) is True
+    assert tool.signed_elbow_flex_is_valid(1.0) is False
+    assert tool.signed_elbow_flex_is_valid(-170.0) is False
+
+
 def test_deform_constraints_use_inverse_calibrated_proxy_subtargets():
     tool = load_tool()
 
@@ -92,13 +106,17 @@ def test_deform_constraints_use_inverse_calibrated_proxy_subtargets():
     for key in ("upper_twist", "hand_twist"):
         spec = tool.CONSTRAINT_SPECS[key]
         assert spec["target_bone"] == "POC_右手_CTRL"
-        assert spec["constraint_type"] == "CHILD_OF"
+        assert spec["constraint_type"] == "COPY_ROTATION"
+        assert spec["owner_space"] == "LOCAL"
+        assert spec["target_space"] == "LOCAL"
+        assert spec["mix_mode"] == "ADD"
         assert spec["rotation_axes"] == "Y"
-        assert spec["calibrate_inverse"] is True
     assert tool.CONSTRAINT_SPECS["wrist"]["target_bone"] == "POC_右手_CTRL"
-    assert tool.CONSTRAINT_SPECS["wrist"]["constraint_type"] == "CHILD_OF"
+    assert tool.CONSTRAINT_SPECS["wrist"]["constraint_type"] == "COPY_ROTATION"
+    assert tool.CONSTRAINT_SPECS["wrist"]["owner_space"] == "LOCAL"
+    assert tool.CONSTRAINT_SPECS["wrist"]["target_space"] == "LOCAL"
+    assert tool.CONSTRAINT_SPECS["wrist"]["mix_mode"] == "ADD"
     assert tool.CONSTRAINT_SPECS["wrist"]["rotation_axes"] == "XYZ"
-    assert tool.CONSTRAINT_SPECS["wrist"]["calibrate_inverse"] is True
 
 
 def test_palm_control_drives_proxy_hand_as_a_local_delta():
@@ -113,6 +131,24 @@ def test_palm_control_drives_proxy_hand_as_a_local_delta():
         "mix_mode": "REPLACE",
     }
     assert 0.0 < tool.ENABLED_DELTA_LIMIT_DEG <= 10.0
+
+
+def test_behavior_diagnostics_have_nonzero_bounded_thresholds():
+    tool = load_tool()
+
+    assert tool.HAND_TARGET_DIAGNOSTIC_OFFSET == (0.01, 0.0, 0.0)
+    assert 0.0 < tool.HAND_RESPONSE_MIN_DEG < tool.HAND_RESPONSE_MAX_DEG <= 10.0
+    assert tool.PALM_AXIAL_DIAGNOSTIC_DEG == 10.0
+    assert 0.0 < tool.PALM_RESPONSE_TOLERANCE_DEG <= 1.0
+    assert 0.0 < tool.PALM_OFF_AXIS_MAX_DEG <= 1.0
+
+
+def test_backup_path_and_save_version_are_deterministic(cli_tmp_path):
+    tool = load_tool()
+    output = cli_tmp_path / tool.OUTPUT_BLEND_NAME
+
+    assert tool.blender_backup_path(output) == Path(f"{output}1")
+    assert tool.SAVE_VERSION_OVERRIDE == 0
 
 
 def test_parse_blender_arguments_after_separator_with_deterministic_defaults(cli_tmp_path):
