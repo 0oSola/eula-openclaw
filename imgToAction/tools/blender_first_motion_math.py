@@ -37,11 +37,14 @@ WRIST_TWIST_HARD_MAX_DEG = 40.0
 SIGNED_ELBOW_FLEX_MIN_DEG = -150.0
 SIGNED_ELBOW_FLEX_MAX_DEG = -5.0
 CONTACT_COMFORT_DISTANCE = 0.008
+CONTACT_WARNING_DISTANCE = 0.03
+CONTACT_HARD_MAX_DISTANCE = 0.068
 CONTACT_SCALE = 0.02
 CLEARANCE_COMFORT_DISTANCE = 0.004
 CONTINUITY_COMFORT_DISTANCE = 0.025
 CONTINUITY_HARD_DISTANCE = 0.12
 HARD_REJECTION_PENALTY = 1_000_000.0
+ELBOW_SCORE_WEIGHT = 200.0
 
 CONTINUITY_FLIP_PENALTY = 10.0
 
@@ -90,6 +93,7 @@ class AnatomyScore:
 @dataclass(frozen=True)
 class StaticCandidateScore:
     valid: bool
+    verdict: str
     total_score: float
     component_penalties: dict[str, float]
     measurements: dict[str, float | int | bool]
@@ -455,6 +459,7 @@ def score_static_candidate(
     forearm_twist_deg: float,
     contact_error: float,
     head_penetration_depth: float,
+    head_collision_count: int,
     torso_penetration_count: int,
     minimum_clearance: float,
     continuity_distance: float,
@@ -532,23 +537,43 @@ def score_static_candidate(
         reasons.append(
             f"Wrist twist is outside the +/-{WRIST_TWIST_COMFORT_MAX_DEG:.0f} degree comfort range"
         )
+    if numeric_values["contact_error"] > CONTACT_HARD_MAX_DISTANCE:
+        valid = False
+        reasons.append(
+            f"Thinking contact exceeds the maximum {CONTACT_HARD_MAX_DISTANCE:.3f} Blender-unit distance"
+        )
+    elif numeric_values["contact_error"] > CONTACT_WARNING_DISTANCE:
+        reasons.append(
+            f"Contact warning: lower-jaw distance exceeds {CONTACT_WARNING_DISTANCE:.3f} Blender units"
+        )
+    if int(head_collision_count) > 0:
+        valid = False
+        reasons.append(f"Head collision detected in {int(head_collision_count)} evaluated mesh pairs")
     if numeric_values["head_penetration_depth"] > EPSILON:
         valid = False
-        reasons.append("Palm/head penetration is present")
+        reasons.append("Right-hand/head penetration is present")
     if int(torso_penetration_count) > 0 or numeric_values["minimum_clearance"] < -EPSILON:
         valid = False
         reasons.append("Right hand or forearm penetrates non-adjacent torso geometry")
+    elif numeric_values["minimum_clearance"] < CLEARANCE_COMFORT_DISTANCE:
+        reasons.append(
+            f"Clearance warning: minimum torso clearance is below {CLEARANCE_COMFORT_DISTANCE:.3f} Blender units"
+        )
     if numeric_values["continuity_distance"] > CONTINUITY_HARD_DISTANCE:
         valid = False
         reasons.append(
             f"Candidate discontinuity exceeds {CONTINUITY_HARD_DISTANCE:g} Blender units"
+        )
+    elif numeric_values["continuity_distance"] > CONTINUITY_COMFORT_DISTANCE:
+        reasons.append(
+            f"Continuity warning: displacement exceeds {CONTINUITY_COMFORT_DISTANCE:.3f} Blender units"
         )
     if not matrices_finite:
         valid = False
         reasons.append("Candidate contains non-finite matrices or measurements")
 
     weighted_score = (
-        penalties["elbow"] * 2.0
+        penalties["elbow"] * ELBOW_SCORE_WEIGHT
         + penalties["wrist_swing"] * 4.0
         + penalties["forearm_twist"] * 1.5
         + penalties["wrist_twist"] * 2.5
@@ -558,11 +583,13 @@ def score_static_candidate(
     )
     return StaticCandidateScore(
         valid=valid,
+        verdict="FAIL" if not valid else ("WARN" if reasons else "PASS"),
         total_score=weighted_score + (0.0 if valid else HARD_REJECTION_PENALTY),
         component_penalties=penalties,
         measurements={
             **numeric_values,
             "torso_penetration_count": int(torso_penetration_count),
+            "head_collision_count": int(head_collision_count),
             "matrices_finite": bool(matrices_finite),
         },
         reasons=tuple(reasons),

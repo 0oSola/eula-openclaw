@@ -222,7 +222,6 @@ HEAD_VERTEX_GROUPS = ("頭", "首")
 TORSO_VERTEX_GROUPS = ("上半身", "上半身2", "上半身3", "首", "下半身")
 MIN_GROUP_WEIGHT = 1e-4
 MESH_PENETRATION_TOLERANCE = 5e-5
-CONTACT_ALIGNMENT_GAIN = 0.5
 FULL_BODY_MARGIN = 1.18
 RENDER_RESOLUTION = 768
 
@@ -230,6 +229,7 @@ RENDER_RESOLUTION = 768
 @dataclass(frozen=True)
 class StaticCandidate:
     candidate_id: str
+    alignment_factor: float
     hand_offset: tuple[float, float, float]
     palm_euler_deg: tuple[float, float, float]
     pole_offset: float
@@ -316,25 +316,61 @@ def pmx_point_to_blender_rest(point: Sequence[float]) -> tuple[float, float, flo
     return (x * PMX_TO_BLENDER_SCALE, z * PMX_TO_BLENDER_SCALE, y * PMX_TO_BLENDER_SCALE)
 
 
-def static_candidate_grid() -> tuple[StaticCandidate, ...]:
-    hand_offsets = (
-        (0.0, 0.0, 0.0),
-        (-0.012, 0.006, -0.006),
-        (0.012, -0.006, 0.006),
+def contact_target_variants() -> tuple[tuple[float, tuple[float, float, float]], ...]:
+    return (
+        (0.35, (0.0, 0.0, 0.0)),
+        (0.35, (0.0, 0.0, 0.005)),
+        (0.35, (0.0, 0.0, 0.010)),
+        (0.35, (0.0, 0.0, 0.015)),
+        (0.35, (0.005, 0.0, 0.010)),
+        (0.35, (-0.005, 0.0, 0.010)),
+        (0.35, (-0.005, 0.0, 0.015)),
+        (0.35, (-0.0075, 0.0, 0.015)),
+        (0.35, (-0.010, 0.0, 0.010)),
+        (0.35, (-0.010, 0.0, 0.015)),
+        (0.35, (-0.010, 0.0, 0.0175)),
+        (0.35, (-0.008, 0.0, 0.0175)),
+        (0.35, (-0.009, 0.0, 0.0175)),
+        (0.35, (-0.011, 0.0, 0.0175)),
+        (0.35, (-0.012, 0.0, 0.0175)),
+        (0.35, (-0.010, 0.0, 0.0165)),
+        (0.35, (-0.010, 0.0, 0.0185)),
+        (0.35, (-0.012, 0.0, 0.0185)),
+        (0.35, (-0.010, 0.0, 0.020)),
+        (0.35, (-0.015, 0.0, 0.015)),
+        (0.35, (-0.020, 0.0, 0.015)),
+        (0.50, (0.0, 0.0, 0.0)),
+        (0.65, (0.0, 0.0, 0.0)),
+        (0.80, (0.0, 0.0, 0.0)),
+        (1.00, (0.0, 0.0, 0.0)),
+        (0.65, (-0.025, 0.0, 0.015)),
+        (0.65, (0.025, 0.0, -0.015)),
     )
+
+
+def static_candidate_grid() -> tuple[StaticCandidate, ...]:
     palm_orientations = (
         (0.0, 0.0, 0.0),
-        (-12.0, 16.0, -8.0),
-        (10.0, -12.0, 8.0),
+        (-15.0, 20.0, -10.0),
+        (15.0, -20.0, 10.0),
+        (12.0, -18.0, 8.0),
+        (18.0, -22.0, 12.0),
+        (20.0, -25.0, 12.0),
+        (-25.0, 35.0, -15.0),
+        (25.0, -35.0, 15.0),
+        (-35.0, 20.0, 20.0),
+        (35.0, -20.0, -20.0),
+        (0.0, 40.0, 0.0),
+        (0.0, -40.0, 0.0),
     )
-    pole_offsets = (-0.08, 0.0, 0.08)
+    pole_offsets = (-0.16, -0.08, 0.0, 0.08, 0.16)
     twist_allocations = (
         (0.25, 0.50, 0.25),
         (0.35, 0.50, 0.15),
         (0.20, 0.60, 0.20),
     )
     combinations = itertools.product(
-        hand_offsets,
+        contact_target_variants(),
         palm_orientations,
         pole_offsets,
         twist_allocations,
@@ -342,16 +378,44 @@ def static_candidate_grid() -> tuple[StaticCandidate, ...]:
     return tuple(
         StaticCandidate(
             candidate_id=f"candidate_{index:03d}",
-            hand_offset=hand_offset,
+            alignment_factor=target_variant[0],
+            hand_offset=target_variant[1],
             palm_euler_deg=palm_euler_deg,
             pole_offset=pole_offset,
             twist_influences=twist_influences,
         )
-        for index, (hand_offset, palm_euler_deg, pole_offset, twist_influences) in enumerate(
+        for index, (target_variant, palm_euler_deg, pole_offset, twist_influences) in enumerate(
             combinations,
             1,
         )
     )
+
+
+def combine_head_collision_evidence(
+    *,
+    palm_intersections: int,
+    finger_intersections: int,
+    full_hand_intersections: int,
+    signed_penetration_depth: float,
+) -> dict[str, object]:
+    counts = {
+        "palm": int(palm_intersections),
+        "fingers": int(finger_intersections),
+        "full_hand": int(full_hand_intersections),
+    }
+    sources = tuple(name for name, count in counts.items() if count > 0)
+    collision_count = max(counts.values(), default=0)
+    penetration_depth = (
+        max(float(signed_penetration_depth), MESH_PENETRATION_TOLERANCE * 2.0)
+        if collision_count > 0
+        else 0.0
+    )
+    return {
+        "collision_count": collision_count,
+        "penetration_depth": penetration_depth,
+        "sources": sources,
+        "counts": counts,
+    }
 
 
 def candidate_render_names(count: int = STATIC_RENDER_COUNT) -> tuple[str, ...]:
@@ -1200,6 +1264,8 @@ def _mesh_geometry_sets(mesh):
         "hand_vertices": hand,
         "moving_vertices": moving,
         "palm_faces": _polygons_touching(mesh, palm),
+        "contact_faces": _polygons_touching(mesh, contact),
+        "hand_faces": _polygons_touching(mesh, hand),
         "moving_faces": _polygons_touching(mesh, moving),
         "head_faces": _polygons_touching(mesh, head),
         "torso_faces": _polygons_touching(mesh, torso, adjacent),
@@ -1251,16 +1317,22 @@ def _mesh_evidence(mesh, geometry, chin_world):
     head_tree = _bvh(vertices, geometry["head_faces"])
     torso_tree = _bvh(vertices, geometry["torso_faces"])
     palm_tree = _bvh(vertices, geometry["palm_faces"])
+    contact_tree = _bvh(vertices, geometry["contact_faces"])
+    hand_tree = _bvh(vertices, geometry["hand_faces"])
     moving_tree = _bvh(vertices, geometry["moving_faces"])
     _head_clearance, head_penetration = _nearest_surface_evidence(
         (vertices[index] for index in geometry["hand_vertices"]),
         head_tree,
     )
-    head_intersections = len(palm_tree.overlap(head_tree))
-    if head_intersections:
-        head_penetration = max(head_penetration, MESH_PENETRATION_TOLERANCE * 2.0)
-    else:
-        head_penetration = 0.0
+    palm_intersections = len(palm_tree.overlap(head_tree))
+    finger_intersections = len(contact_tree.overlap(head_tree))
+    full_hand_intersections = len(hand_tree.overlap(head_tree))
+    head_evidence = combine_head_collision_evidence(
+        palm_intersections=palm_intersections,
+        finger_intersections=finger_intersections,
+        full_hand_intersections=full_hand_intersections,
+        signed_penetration_depth=head_penetration,
+    )
     minimum_clearance, _torso_signed_penetration = _nearest_surface_evidence(
         (vertices[index] for index in geometry["moving_vertices"]),
         torso_tree,
@@ -1268,8 +1340,13 @@ def _mesh_evidence(mesh, geometry, chin_world):
     torso_intersections = len(moving_tree.overlap(torso_tree))
     return {
         "contact_error": float(contact_error),
-        "head_penetration_depth": float(head_penetration),
-        "head_intersection_count": int(head_intersections),
+        "head_penetration_depth": float(head_evidence["penetration_depth"]),
+        "head_collision_count": int(head_evidence["collision_count"]),
+        "head_intersection_count": int(head_evidence["collision_count"]),
+        "palm_head_intersection_count": palm_intersections,
+        "finger_head_intersection_count": finger_intersections,
+        "full_hand_head_intersection_count": full_hand_intersections,
+        "head_collision_sources": head_evidence["sources"],
         "torso_penetration_count": int(torso_intersections),
         "minimum_clearance": float(minimum_clearance),
     }, vertices
@@ -1314,8 +1391,20 @@ def _reset_static_controls_to_v16(armature, controls):
     _refresh_frame()
 
 
-def _apply_static_candidate(armature, controls, candidate, base_hand, base_pole, pole_axis):
-    controls["hand"].location = base_hand + Vector(candidate.hand_offset)
+def _apply_static_candidate(
+    armature,
+    controls,
+    candidate,
+    base_hand,
+    contact_delta,
+    base_pole,
+    pole_axis,
+):
+    controls["hand"].location = (
+        base_hand
+        + contact_delta * candidate.alignment_factor
+        + Vector(candidate.hand_offset)
+    )
     controls["pole"].location = base_pole + pole_axis * candidate.pole_offset
     controls["palm"].rotation_mode = "XYZ"
     controls["palm"].rotation_euler = Euler(
@@ -1402,15 +1491,11 @@ def _candidate_record(candidate, measurements, score):
             f"{measurements['elbow_off_axis_deg']:.6f} degrees"
         )
     valid = score.valid and measurements["elbow_off_axis_deg"] <= ELBOW_OFF_AXIS_MAX_DEG
-    if not valid:
-        verdict = "FAIL"
-    elif reasons or any(value > 0.0 for value in score.component_penalties.values()):
-        verdict = "WARN"
-    else:
-        verdict = "PASS"
+    verdict = score.verdict if valid else "FAIL"
     return {
         "source_candidate_id": candidate.candidate_id,
         "parameters": {
+            "alignment_factor": candidate.alignment_factor,
             "hand_offset": candidate.hand_offset,
             "palm_euler_deg": candidate.palm_euler_deg,
             "pole_offset": candidate.pole_offset,
@@ -1461,7 +1546,17 @@ def _full_body_camera(scene, all_vertices):
     return camera, center, distance, ortho_scale, minimum, maximum
 
 
-def _render_candidates(config, armature, controls, ranked, base_hand, base_pole, pole_axis, vertices_by_candidate):
+def _render_candidates(
+    config,
+    armature,
+    controls,
+    ranked,
+    base_hand,
+    contact_delta,
+    base_pole,
+    pole_axis,
+    vertices_by_candidate,
+):
     scene = bpy.context.scene
     candidate_root = config.output_dir / STATIC_CANDIDATE_DIRECTORY
     candidate_root.mkdir(parents=True, exist_ok=True)
@@ -1486,7 +1581,15 @@ def _render_candidates(config, armature, controls, ranked, base_hand, base_pole,
     }
     rendered = []
     for rank, (candidate, record) in enumerate(ranked[:STATIC_RENDER_COUNT], 1):
-        _apply_static_candidate(armature, controls, candidate, base_hand, base_pole, pole_axis)
+        _apply_static_candidate(
+            armature,
+            controls,
+            candidate,
+            base_hand,
+            contact_delta,
+            base_pole,
+            pole_axis,
+        )
         directory = candidate_root / f"candidate_{rank:03d}"
         directory.mkdir(parents=True, exist_ok=True)
         record["rank"] = rank
@@ -1543,7 +1646,8 @@ def solve_static(config: PocConfig) -> None:
         (baseline_vertices[index] for index in geometry["contact_vertices"]),
         key=lambda point: (point - chin_world).length,
     )
-    base_hand = controls["hand"].location.copy() + (chin_world - contact_anchor) * CONTACT_ALIGNMENT_GAIN
+    base_hand = controls["hand"].location.copy()
+    contact_delta = chin_world - contact_anchor
     base_pole = controls["pole"].location.copy()
     pole_axis = armature.matrix_world.to_3x3() @ Vector((0.0, 1.0, 0.0))
     pole_axis.normalize()
@@ -1552,7 +1656,7 @@ def solve_static(config: PocConfig) -> None:
         {
             "chin": tuple(chin_world),
             "contact_anchor": tuple(contact_anchor),
-            "contact_delta": tuple(chin_world - contact_anchor),
+            "contact_delta": tuple(contact_delta),
             "hand_control": tuple(controls["hand"].location),
             "base_hand": tuple(base_hand),
             "wrist": tuple(_pose_head_world(armature, "右手首")),
@@ -1567,7 +1671,15 @@ def solve_static(config: PocConfig) -> None:
     evaluated = []
     vertices_by_candidate = {}
     for candidate in static_candidate_grid():
-        _apply_static_candidate(armature, controls, candidate, base_hand, base_pole, pole_axis)
+        _apply_static_candidate(
+            armature,
+            controls,
+            candidate,
+            base_hand,
+            contact_delta,
+            base_pole,
+            pole_axis,
+        )
         measurements, vertices = _candidate_measurements(
             armature,
             mesh,
@@ -1585,6 +1697,7 @@ def solve_static(config: PocConfig) -> None:
             forearm_twist_deg=measurements["forearm_twist_deg"],
             contact_error=measurements["contact_error"],
             head_penetration_depth=measurements["head_penetration_depth"],
+            head_collision_count=measurements["head_collision_count"],
             torso_penetration_count=measurements["torso_penetration_count"],
             minimum_clearance=measurements["minimum_clearance"],
             continuity_distance=measurements["continuity_distance"],
@@ -1597,6 +1710,65 @@ def solve_static(config: PocConfig) -> None:
     ranked = sorted(evaluated, key=_rank_key)
     valid = [item for item in ranked if item[1]["valid"]]
     if len(valid) < STATIC_RENDER_COUNT:
+        def meets(record, *, contact=False, elbow=False, head=False, torso=False):
+            metrics = record["metrics"]
+            return (
+                (not contact or metrics["contact_error"] <= math_module.CONTACT_HARD_MAX_DISTANCE)
+                and (not elbow or math_module.ELBOW_COMFORT_MIN_DEG <= metrics["elbow_angle_deg"] <= math_module.ELBOW_COMFORT_MAX_DEG)
+                and (not head or metrics["head_collision_count"] == 0)
+                and (not torso or metrics["torso_penetration_count"] == 0)
+            )
+
+        diagnostic_counts = {
+            "contact": sum(meets(record, contact=True) for _candidate, record in ranked),
+            "elbow": sum(meets(record, elbow=True) for _candidate, record in ranked),
+            "head_clear": sum(meets(record, head=True) for _candidate, record in ranked),
+            "torso_clear": sum(meets(record, torso=True) for _candidate, record in ranked),
+            "contact_elbow": sum(meets(record, contact=True, elbow=True) for _candidate, record in ranked),
+            "contact_head_clear": sum(meets(record, contact=True, head=True) for _candidate, record in ranked),
+            "contact_torso_clear": sum(meets(record, contact=True, torso=True) for _candidate, record in ranked),
+            "contact_elbow_head_clear": sum(meets(record, contact=True, elbow=True, head=True) for _candidate, record in ranked),
+            "contact_elbow_torso_clear": sum(meets(record, contact=True, elbow=True, torso=True) for _candidate, record in ranked),
+            "all_geometry": sum(meets(record, contact=True, elbow=True, head=True, torso=True) for _candidate, record in ranked),
+        }
+        print("POC_STATIC_DIAGNOSTIC_COUNTS", diagnostic_counts)
+        print(
+            "POC_STATIC_BEST_ELBOW_COMFORT",
+            [
+                {
+                    "candidate": record["source_candidate_id"],
+                    "parameters": record["parameters"],
+                    "metrics": record["metrics"],
+                    "reasons": record["reasons"],
+                }
+                for _candidate, record in sorted(
+                    (item for item in ranked if meets(item[1], elbow=True)),
+                    key=lambda item: item[1]["metrics"]["contact_error"],
+                )[:5]
+            ],
+        )
+        print(
+            "POC_STATIC_BEST_CONTACT_ELBOW_HEAD_CLEAR",
+            [
+                {
+                    "candidate": record["source_candidate_id"],
+                    "parameters": record["parameters"],
+                    "metrics": record["metrics"],
+                    "reasons": record["reasons"],
+                }
+                for _candidate, record in sorted(
+                    (
+                        item
+                        for item in ranked
+                        if meets(item[1], contact=True, elbow=True, head=True)
+                    ),
+                    key=lambda item: (
+                        item[1]["metrics"]["torso_penetration_count"],
+                        item[1]["metrics"]["contact_error"],
+                    ),
+                )[:5]
+            ],
+        )
         rejection_counts = {}
         for _candidate, record in ranked:
             for reason in record["reasons"]:
@@ -1623,6 +1795,7 @@ def solve_static(config: PocConfig) -> None:
         controls,
         ranked,
         base_hand,
+        contact_delta,
         base_pole,
         pole_axis,
         vertices_by_candidate,
@@ -1633,6 +1806,7 @@ def solve_static(config: PocConfig) -> None:
         controls,
         selected_candidate,
         base_hand,
+        contact_delta,
         base_pole,
         pole_axis,
     )
@@ -1661,6 +1835,7 @@ def solve_static(config: PocConfig) -> None:
         "contact_vertex_group_counts": geometry["group_counts"],
         "baseline_contact_anchor": tuple(float(value) for value in contact_anchor),
         "base_hand_target": tuple(float(value) for value in base_hand),
+        "contact_alignment_delta": tuple(float(value) for value in contact_delta),
         "render_evidence": render_evidence,
         "candidates": [record for _candidate, record in ranked],
     }

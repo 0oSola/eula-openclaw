@@ -244,6 +244,7 @@ def candidate_score(tool, **overrides):
         "forearm_twist_deg": 32.0,
         "contact_error": 0.006,
         "head_penetration_depth": 0.0,
+        "head_collision_count": 0,
         "torso_penetration_count": 0,
         "minimum_clearance": 0.004,
         "continuity_distance": 0.015,
@@ -290,6 +291,28 @@ def test_lower_jaw_contact_outranks_distant_contact():
     assert distant.component_penalties["contact"] > lower_jaw.component_penalties["contact"]
 
 
+def test_contact_above_thinking_maximum_is_hard_rejected_with_reason():
+    tool = load_tool()
+
+    result = candidate_score(tool, contact_error=0.0681)
+
+    assert result.valid is False
+    assert result.verdict == "FAIL"
+    assert any("maximum" in reason and "contact" in reason.lower() for reason in result.reasons)
+
+
+def test_contact_and_elbow_comfort_combination_outranks_low_elbow_contact():
+    tool = load_tool()
+
+    comfortable = candidate_score(tool, contact_error=0.025, elbow_angle_deg=62.0)
+    low_elbow = candidate_score(tool, contact_error=0.020, elbow_angle_deg=49.0)
+
+    assert comfortable.valid is True
+    assert low_elbow.valid is True
+    assert comfortable.total_score < low_elbow.total_score
+    assert any("Elbow" in reason and "comfort" in reason for reason in low_elbow.reasons)
+
+
 def test_nonpenetrating_candidate_outranks_and_rejects_face_penetration():
     tool = load_tool()
 
@@ -301,6 +324,16 @@ def test_nonpenetrating_candidate_outranks_and_rejects_face_penetration():
     assert math.isfinite(penetrating.total_score)
     assert clear.total_score < penetrating.total_score
     assert any("head penetration" in reason for reason in penetrating.reasons)
+
+
+def test_head_collision_count_is_hard_rejected_even_without_signed_depth():
+    tool = load_tool()
+
+    result = candidate_score(tool, head_penetration_depth=0.0, head_collision_count=1)
+
+    assert result.valid is False
+    assert result.verdict == "FAIL"
+    assert any("head collision" in reason.lower() for reason in result.reasons)
 
 
 def test_continuous_candidate_outranks_and_rejects_large_discontinuity():
@@ -324,3 +357,20 @@ def test_nonfinite_candidate_measurement_is_rejected_without_raising():
     assert math.isfinite(result.total_score)
     assert result.measurements["contact_error"] == 0.0
     assert any("non-finite" in reason for reason in result.reasons)
+
+
+def test_named_warning_reasons_drive_warn_verdict():
+    tool = load_tool()
+
+    result = candidate_score(
+        tool,
+        contact_error=0.04,
+        minimum_clearance=0.002,
+        continuity_distance=0.04,
+    )
+
+    assert result.valid is True
+    assert result.verdict == "WARN"
+    assert any("contact warning" in reason.lower() for reason in result.reasons)
+    assert any("clearance warning" in reason.lower() for reason in result.reasons)
+    assert any("continuity warning" in reason.lower() for reason in result.reasons)

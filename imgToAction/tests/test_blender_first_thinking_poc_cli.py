@@ -234,12 +234,14 @@ def test_static_candidate_grid_is_deterministic_bounded_and_complete():
     second = tool.static_candidate_grid()
 
     assert first == second
-    assert len(first) == 81
+    assert len(first) >= 900
     assert len({candidate.candidate_id for candidate in first}) == len(first)
     assert all(candidate.candidate_id == f"candidate_{index:03d}" for index, candidate in enumerate(first, 1))
-    assert all(max(abs(value) for value in candidate.hand_offset) <= 0.025 for candidate in first)
-    assert all(max(abs(value) for value in candidate.palm_euler_deg) <= 20.0 for candidate in first)
-    assert all(abs(candidate.pole_offset) <= 0.12 for candidate in first)
+    assert max(candidate.alignment_factor for candidate in first) == pytest.approx(1.0)
+    assert min(candidate.alignment_factor for candidate in first) <= 0.4
+    assert all(max(abs(value) for value in candidate.hand_offset) <= 0.04 for candidate in first)
+    assert max(max(abs(value) for value in candidate.palm_euler_deg) for candidate in first) >= 35.0
+    assert all(abs(candidate.pole_offset) <= 0.18 for candidate in first)
     assert all(sum(candidate.twist_influences) == pytest.approx(1.0) for candidate in first)
 
 
@@ -261,11 +263,31 @@ def test_collision_face_classification_rejects_partial_and_adjacent_faces():
     assert tool.polygon_belongs_to_region((1, 2, 3), {1, 2, 3}, {3}) is False
 
 
-def test_contact_alignment_uses_bounded_response_gain():
+def test_contact_alignment_grid_covers_full_calibrated_delta():
     tool = load_tool()
 
-    assert 0.0 < tool.CONTACT_ALIGNMENT_GAIN < 1.0
-    assert tool.CONTACT_ALIGNMENT_GAIN == pytest.approx(0.5)
+    variants = tool.contact_target_variants()
+
+    assert any(factor == pytest.approx(1.0) and offset == (0.0, 0.0, 0.0) for factor, offset in variants)
+    assert any(factor <= 0.4 and offset[2] >= 0.01 for factor, offset in variants)
+    assert any(factor <= 0.4 and offset[0] <= -0.01 and offset[2] >= 0.01 for factor, offset in variants)
+    assert all(0.0 < factor <= 1.0 for factor, _offset in variants)
+    assert all(max(abs(value) for value in offset) <= 0.04 for _factor, offset in variants)
+
+
+def test_finger_only_head_collision_is_not_overridden_by_clear_palm():
+    tool = load_tool()
+
+    evidence = tool.combine_head_collision_evidence(
+        palm_intersections=0,
+        finger_intersections=2,
+        full_hand_intersections=2,
+        signed_penetration_depth=0.003,
+    )
+
+    assert evidence["collision_count"] == 2
+    assert evidence["penetration_depth"] == pytest.approx(0.003)
+    assert evidence["sources"] == ("fingers", "full_hand")
 
 
 def test_parse_blender_arguments_requires_separator(cli_tmp_path):
