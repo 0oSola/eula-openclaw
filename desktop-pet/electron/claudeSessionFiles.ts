@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { CodexReviewFacts, CodexSessionStatus, DesktopPetSessionPayload } from "./codexSessionFiles.js";
+import { normalizeWorkspacePathIdentity } from "./workspacePathIdentity.js";
 
 // Claude Code reuses the same bounded status vocabulary as Codex so the desktop
 // pet menu, status card, and MMD stage mapping stay agent-agnostic. Claude
@@ -34,6 +35,7 @@ export type ClaudeSessionFileSummary = {
   lastStatus: ClaudeSessionStatus;
   gitBranch: string | null;
   cliVersion: string | null;
+  sessionStartedAt: string;
   lastEventAt: string | null;
   fileModifiedAt: string;
   reviewFacts: CodexReviewFacts;
@@ -53,6 +55,11 @@ const REVIEW_FACT_MAX_ERRORS = 8;
 const REVIEW_FACT_MAX_ERROR_EXCERPT = 500;
 const REVIEW_FACT_MAX_CHANGED_FILES = 40;
 const REVIEW_FACT_MAX_TEXT = 240;
+const REVIEW_FACT_MAX_USER_MESSAGES = 10;
+const REVIEW_FACT_MAX_USER_MESSAGE_CHARS = 500;
+const REVIEW_FACT_MAX_ASSISTANT_MESSAGES = 15;
+const REVIEW_FACT_MAX_ASSISTANT_MESSAGE_CHARS = 800;
+const REVIEW_FACT_MAX_FUNCTION_CALLS = 20;
 
 const FILE_CHANGE_TOOLS = new Set(["edit", "write", "multiedit", "notebookedit", "applypatch"]);
 const COMMAND_TOOLS = new Set(["bash", "bashoutput", "killshell"]);
@@ -96,11 +103,6 @@ function boundedFactText(value: unknown, maxLength = 1000): string {
 function workspaceName(workspacePath: string): string {
   const parts = workspacePath.split(/[\\/]/).filter(Boolean);
   return parts.at(-1) || "workspace";
-}
-
-function normalizeComparablePath(value: string | null | undefined): string {
-  if (!value?.trim()) return "";
-  return path.resolve(value).replace(/[\\/]+$/, "").toLowerCase();
 }
 
 export function resolveClaudeHome(
@@ -158,6 +160,24 @@ function parseJsonLines(text: string): ClaudeSessionJsonEvent[] {
     .split(/\r?\n/)
     .map(parseJsonLine)
     .filter((event): event is ClaudeSessionJsonEvent => event !== null);
+}
+
+function resolveSessionStartedAt(events: ClaudeSessionJsonEvent[], stat: fs.Stats): string {
+  let earliestTimestamp: string | null = null;
+  let earliestTime = Number.POSITIVE_INFINITY;
+
+  for (const event of events) {
+    if (typeof event.timestamp !== "string") continue;
+    const eventTime = Date.parse(event.timestamp);
+    if (!Number.isFinite(eventTime) || eventTime >= earliestTime) continue;
+    earliestTimestamp = event.timestamp;
+    earliestTime = eventTime;
+  }
+
+  if (earliestTimestamp) return earliestTimestamp;
+  const birthtimeMs = stat.birthtime.getTime();
+  const fallback = Number.isFinite(birthtimeMs) && birthtimeMs > 0 ? stat.birthtime : stat.ctime;
+  return fallback.toISOString();
 }
 
 // Claude assistant content is an array of typed blocks. User content is either a
@@ -308,6 +328,11 @@ export function extractClaudeReviewFacts(events: ClaudeSessionJsonEvent[]): Code
     approvals: [],
     errors: [],
     event_counts: {},
+    user_messages: [],
+    assistant_messages: [],
+    function_call_summaries: [],
+    work_items: [],
+    methods: [],
   };
   const pendingCommands = new Map<string, string>();
 
@@ -330,12 +355,26 @@ export function extractClaudeReviewFacts(events: ClaudeSessionJsonEvent[]): Code
           const command = compactText(input.command) || toolKey;
           if (callId) pendingCommands.set(callId, command);
         }
+        if (facts.function_call_summaries.length < REVIEW_FACT_MAX_FUNCTION_CALLS) {
+          facts.function_call_summaries.push({
+            name: truncateText(toolKey, 80) || "unknown",
+            command: truncateText(compactText(input.command), 120),
+          });
+        }
+      }
+      const assistantText = assistantSummaryFromEvent(event);
+      if (assistantText && !facts.assistant_messages.includes(assistantText) && facts.assistant_messages.length < REVIEW_FACT_MAX_ASSISTANT_MESSAGES) {
+        facts.assistant_messages.push(truncateText(assistantText, REVIEW_FACT_MAX_ASSISTANT_MESSAGE_CHARS) || assistantText);
       }
       continue;
     }
 
     if (event.type !== "user") continue;
     const message = asRecord(event.message);
+    const userText = userPromptFromEvent(event);
+    if (userText && !facts.user_messages.includes(userText) && facts.user_messages.length < REVIEW_FACT_MAX_USER_MESSAGES) {
+      facts.user_messages.push(truncateText(userText, REVIEW_FACT_MAX_USER_MESSAGE_CHARS) || userText);
+    }
     for (const block of userBlocks(message)) {
       if (block.type !== "tool_result") continue;
       const excerpt = boundedFactText(block.content, REVIEW_FACT_MAX_FAILED_COMMAND_EXCERPT);
@@ -393,6 +432,7 @@ export function parseClaudeSessionFile(filePath: string, options: ParseOptions =
   const lastSummary = truncateText(events.map(assistantSummaryFromEvent).filter(Boolean).at(-1), 1000);
   const lastOutput = truncateOutput(events.map(outputFromEvent).filter(Boolean).at(-1), 1000);
   const displayTitle = truncateText(firstPromptPreview || workspaceName(meta.workspacePath), 48) || "Claude session";
+  const sessionStartedAt = resolveSessionStartedAt(events, stat);
   const lastEventAt = [...events]
     .reverse()
     .map((event) => (typeof event.timestamp === "string" ? event.timestamp : null))
@@ -406,6 +446,7 @@ export function parseClaudeSessionFile(filePath: string, options: ParseOptions =
     lastSummary,
     lastOutput,
     lastStatus: inferClaudeSessionStatus(events),
+    sessionStartedAt,
     lastEventAt: lastEventAt || null,
     fileModifiedAt: stat.mtime.toISOString(),
     reviewFacts: extractClaudeReviewFacts(events),
@@ -452,7 +493,7 @@ export function scanRecentClaudeSessionFiles(options: {
   maxFiles?: number;
 }): ClaudeSessionFileSummary[] {
   const projectsRoot = path.join(options.claudeHome, "projects");
-  const workspaceFilter = normalizeComparablePath(options.workspacePath);
+  const workspaceFilter = normalizeWorkspacePathIdentity(options.workspacePath);
   const limit = Math.max(1, Math.min(options.limit ?? 10, 50));
   const maxFiles = Math.max(limit, options.maxFiles ?? DEFAULT_SCAN_FILE_LIMIT);
   const summaries: ClaudeSessionFileSummary[] = [];
@@ -460,7 +501,7 @@ export function scanRecentClaudeSessionFiles(options: {
   for (const candidate of findClaudeSessionFiles(projectsRoot).slice(0, maxFiles)) {
     try {
       const summary = parseClaudeSessionFile(candidate.filePath);
-      if (workspaceFilter && normalizeComparablePath(summary.workspacePath) !== workspaceFilter) continue;
+      if (workspaceFilter && normalizeWorkspacePathIdentity(summary.workspacePath) !== workspaceFilter) continue;
       summaries.push(summary);
       if (summaries.length >= limit) break;
     } catch {
@@ -494,6 +535,7 @@ export function buildClaudeDesktopPetSessionPayload(
       agent: "claude",
       session_file: summary.filePath,
       session_file_mtime: summary.fileModifiedAt,
+      session_started_at: summary.sessionStartedAt,
       git_branch: summary.gitBranch,
       cli_version: summary.cliVersion,
       last_event_at: summary.lastEventAt,

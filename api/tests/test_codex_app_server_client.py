@@ -259,7 +259,8 @@ def test_windows_cmd_shim_resolves_to_packaged_native_executable():
 
 
 def test_env_whitelist_excludes_project_secrets():
-    env = CodexAppServerClient.build_env(
+    client = CodexAppServerClient(codex_bin="codex", codex_home=Path("D:/codex-home"))
+    env = client.build_env(
         {
             "PATH": "D:/bin",
             "HOME": "C:/Users/test",
@@ -281,10 +282,11 @@ def test_env_whitelist_excludes_project_secrets():
         codex_home=Path("D:/codex-home"),
     )
 
+    resolved_home = str(Path("D:/codex-home"))
     assert env == {
         "PATH": "D:/bin",
-        "HOME": "D:\\codex-home",
-        "CODEX_HOME": "D:\\codex-home",
+        "HOME": resolved_home,
+        "CODEX_HOME": resolved_home,
         "NO_COLOR": "1",
         "APPDATA": "C:/Users/test/AppData/Roaming",
         "COMSPEC": "C:/Windows/System32/cmd.exe",
@@ -297,3 +299,40 @@ def test_env_whitelist_excludes_project_secrets():
         "USERPROFILE": "C:/Users/test",
         "WINDIR": "C:/Windows",
     }
+
+
+def test_wsl_bridge_command_uses_wsl_exe():
+    client = CodexAppServerClient(
+        codex_bin="codex",
+        codex_home=Path("/home/ksg/.codex"),
+        wsl_enabled=True,
+        wsl_exec="wsl.exe",
+    )
+    cmd = client._app_server_command()
+    assert cmd[0].endswith("wsl.exe") or cmd[0] == "wsl.exe"
+    assert cmd[1:4] == ["--", "bash", "-lc"]
+    assert cmd[4] == "codex app-server --listen stdio://"
+
+
+def test_wsl_bridge_env_excludes_windows_keys():
+    client = CodexAppServerClient(
+        codex_bin="codex",
+        codex_home=Path("/home/ksg/.codex"),
+        wsl_enabled=True,
+    )
+    env = client.build_env(
+        {
+            "PATH": "/usr/bin:/bin",
+            "SystemRoot": "C:/Windows",
+            "WINDIR": "C:/Windows",
+            "OPENCLAW_TOKEN": "secret",
+        },
+        codex_home=Path("/home/ksg/.codex"),
+    )
+    # In WSL mode, the raw path string is used directly (not Path-resolved)
+    assert env["HOME"] == "/home/ksg/.codex"
+    assert env["CODEX_HOME"] == "/home/ksg/.codex"
+    assert env["NO_COLOR"] == "1"
+    assert "SystemRoot" not in env
+    assert "WINDIR" not in env
+    assert "OPENCLAW_TOKEN" not in env

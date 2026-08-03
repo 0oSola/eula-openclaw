@@ -4,6 +4,7 @@ import logging
 import shutil
 import re
 import struct
+import time
 from pathlib import Path
 from threading import RLock
 from urllib.parse import quote
@@ -19,6 +20,19 @@ from app.security import resolve_requester
 router = APIRouter(prefix="/assets", tags=["assets"])
 logger = logging.getLogger(__name__)
 _USAGE_VMD_SYNC_LOCK = RLock()
+
+_MMD_SCAN_CACHE: dict[str, tuple[float, list[Path]]] = {}
+_MMD_SCAN_CACHE_TTL_SECONDS = 15.0
+
+
+def _cached_scan(cache_key: str, scan_fn) -> list[Path]:
+    now = time.monotonic()
+    hit = _MMD_SCAN_CACHE.get(cache_key)
+    if hit and (now - hit[0]) < _MMD_SCAN_CACHE_TTL_SECONDS:
+        return hit[1]
+    result = scan_fn()
+    _MMD_SCAN_CACHE[cache_key] = (now, result)
+    return result
 
 ALLOWED_SLOTS = {"neutral", "happy", "sad", "thinking", "excited", "caring"}
 MMD_MODEL_EXTENSIONS = {".pmx", ".pmd"}
@@ -153,7 +167,7 @@ def _resolve_mmd_request_path(root: Path, file_path: str) -> Path:
     return requested
 
 
-def _iter_mmd_models(root: Path) -> list[Path]:
+def _scan_mmd_models(root: Path) -> list[Path]:
     if not root.exists() or not root.is_dir():
         return []
     models = [
@@ -164,7 +178,11 @@ def _iter_mmd_models(root: Path) -> list[Path]:
     return sorted(models, key=lambda item: item.relative_to(root).as_posix().lower())
 
 
-def _iter_mmd_vmds(root: Path) -> list[Path]:
+def _iter_mmd_models(root: Path) -> list[Path]:
+    return _cached_scan(f"models:{root}", lambda: _scan_mmd_models(root))
+
+
+def _scan_mmd_vmds(root: Path) -> list[Path]:
     motions: list[Path] = []
     for motion_root in (root / "vmd", root / "usage" / "vmd"):
         if not motion_root.exists() or not motion_root.is_dir():
@@ -175,6 +193,10 @@ def _iter_mmd_vmds(root: Path) -> list[Path]:
             if item.is_file() and item.suffix.lower() in MMD_MOTION_EXTENSIONS
         )
     return sorted(motions, key=lambda item: item.relative_to(root).as_posix().lower())
+
+
+def _iter_mmd_vmds(root: Path) -> list[Path]:
+    return _cached_scan(f"vmds:{root}", lambda: _scan_mmd_vmds(root))
 
 
 def _iter_usage_vmds(root: Path) -> list[Path]:

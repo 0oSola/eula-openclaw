@@ -244,8 +244,11 @@ class OpenClawClient:
         endpoint: str,
         payload: dict[str, Any],
         headers: dict[str, str],
+        *,
+        timeout_seconds: float | None = None,
     ) -> httpx.Response:
         url = f"{self.base_url}{endpoint}"
+        request_timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
         last_error: Exception | None = None
         for _ in range(2):
             try:
@@ -253,7 +256,7 @@ class OpenClawClient:
                     url,
                     json=payload,
                     headers=headers,
-                    timeout=self.timeout_seconds,
+                    timeout=request_timeout,
                 )
                 if response.status_code >= 500:
                     last_error = RuntimeError(f"Server status {response.status_code}: {response.text}")
@@ -349,10 +352,24 @@ class OpenClawClient:
             channel_override=channel,
         )
         prompt = (
-            "You are a Codex session review assistant. Only use the evidence_pack below. "
-            "Return exactly one JSON object and no Markdown. Do not invent facts. "
-            "If evidence is insufficient, use null only for object field values, empty arrays "
-            "for item lists, or lower confidence.\n"
+            "You are a Codex session review assistant. Your job is to summarize what the Codex agent "
+            "actually did in this session and extract reusable knowledge for the team.\n\n"
+            "Use the evidence_pack below as your only source. The evidence_pack contains:\n"
+            "- session.first_goal: the user's original request\n"
+            "- session.last_summary: the agent's final output\n"
+            "- facts.user_messages: the user's actual prompts (not injected system context)\n"
+            "- facts.assistant_messages: the agent's reasoning and explanations throughout the session\n"
+            "- facts.work_items: structured timeline of goals, agent updates, file changes, approvals, and errors\n"
+            "- facts.methods: structured tool/command/check/approval methods with outcomes and bounded output excerpts\n"
+            "- facts.function_call_summaries: what tools/commands were executed\n"
+            "- facts.failed_commands, facts.errors: what went wrong\n"
+            "- facts.changed_files, facts.pending_approvals: side effects\n\n"
+            "Read user_messages and assistant_messages carefully — they are the primary source for "
+            "understanding what was attempted, what decisions were made, and why. Do not just "
+            "summarize the last output; reconstruct the session narrative from these messages.\n\n"
+            "Return exactly one JSON object and no Markdown. Do not invent facts not present in the "
+            "evidence. If evidence is insufficient for a field, use null for object values, empty "
+            "arrays for lists, or lower confidence.\n"
             "All user-facing text values MUST be Simplified Chinese. This includes title, summary, "
             "goal, work_done, result, symptom, root_cause, fix, prevention, decision, description, "
             "importance, review_status, suggested_next_action, and user-facing tags. "
@@ -397,6 +414,56 @@ class OpenClawClient:
         text = self._extract_responses_text(response.json())
         if not text:
             raise OpenClawInvocationError("OpenClaw Codex review returned empty content.")
+        return text
+
+    async def generate_codex_knowledge(
+        self,
+        *,
+        user_id: str,
+        session_key: str,
+        evidence_pack: dict[str, Any],
+        skill_instructions: str,
+        prompt_version: str,
+        agent_id: str,
+        channel: str,
+        timeout_seconds: float | None = None,
+    ) -> str:
+        payload_model, _, _ = self._resolve_request_target()
+        headers = self._headers(
+            session_key,
+            agent_id_override=agent_id,
+            channel_override=channel,
+        )
+        skill_contract = skill_instructions.strip() or (
+            "Use the Codex Session Domain Knowledge Synthesis contract for Domain Knowledge v2. "
+            "Return one JSON object with schema_version, disposition, assessment, candidates, and rejected_items. "
+            "Return no_wiki when the session has no durable, evidence-linked project domain topic."
+        )
+        prompt = (
+            "You are OpenClaw executing the codex-session-knowledge-extraction skill for FastAPI.\n"
+            "Use the skill contract below as the authoritative extraction rule. Use the evidence pack "
+            "as your only source. Do not read local files, fetch URLs, resume Codex, approve actions, "
+            "or invent missing facts.\n\n"
+            f"prompt_version: {prompt_version}\n\n"
+            f"skill_contract:\n{skill_contract}\n\n"
+            f"evidence_pack:\n{json.dumps(evidence_pack, ensure_ascii=False)}"
+        )
+        response = await self._post_with_retry(
+            "/v1/responses",
+            {
+                "model": payload_model,
+                "input": prompt,
+                "user": user_id,
+                "stream": False,
+            },
+            headers,
+            timeout_seconds=timeout_seconds,
+        )
+        if not response.is_success:
+            raise OpenClawInvocationError(self._format_error(response))
+        text = self._extract_responses_text(response.json())
+        if not text:
+            raise OpenClawInvocationError("OpenClaw Codex knowledge extraction returned empty content.")
         return text
 
     @staticmethod

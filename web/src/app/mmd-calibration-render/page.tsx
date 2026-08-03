@@ -18,7 +18,9 @@ function readRenderPipeline(value: string | null): RenderPipeline {
     value === "hero-shot" ||
     value === "genshin" ||
     value === "mio-reference" ||
-    value === "reze-npr"
+    value === "reze-npr" ||
+    value === "reze-design" ||
+    value === "k3"
   ) {
     return value;
   }

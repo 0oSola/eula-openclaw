@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import gzip
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -47,7 +48,7 @@ def _normalize_message_visibility(value: str | None) -> str:
 _BRIDGE_ECHO_SUPPRESSION_WINDOW_SECONDS = 5 * 60
 _BRIDGE_DUPLICATE_SUPPRESSION_WINDOW_SECONDS = 30
 _BRIDGE_DUPLICATE_SYNC_SOURCES = {"realtime", "realtime_backfill"}
-COMPANION_RENDER_PIPELINES = ("classic", "hero-shot", "genshin", "mio-reference", "reze-npr")
+COMPANION_RENDER_PIPELINES = ("classic", "hero-shot", "genshin", "mio-reference", "reze-npr", "reze-design", "k3")
 _COMPANION_RENDER_PIPELINE_SET = set(COMPANION_RENDER_PIPELINES)
 _COMPANION_RENDER_PIPELINE_SQL_VALUES = ", ".join(f"'{pipeline}'" for pipeline in COMPANION_RENDER_PIPELINES)
 _DESKTOP_PET_FIRST_PROMPT_PREVIEW_MAX_LENGTH = 240
@@ -300,7 +301,7 @@ class TraceStore:
                 user_id TEXT PRIMARY KEY,
                 selected_model_path TEXT,
                 render_pipeline TEXT NOT NULL DEFAULT 'classic'
-                    CHECK (render_pipeline IN ('classic', 'hero-shot', 'genshin', 'mio-reference', 'reze-npr')),
+                    CHECK (render_pipeline IN ('classic', 'hero-shot', 'genshin', 'mio-reference', 'reze-npr', 'reze-design', 'k3')),
                 updated_at TEXT NOT NULL
             );
 
@@ -597,6 +598,263 @@ class TraceStore:
 
             CREATE INDEX IF NOT EXISTS idx_codex_openclaw_sync_outbox_pending
             ON codex_openclaw_sync_outbox(status, next_attempt_at, created_at);
+
+            CREATE TABLE IF NOT EXISTS codex_knowledge_extraction_outbox (
+                id TEXT PRIMARY KEY,
+                pet_session_id TEXT NOT NULL,
+                codex_session_id TEXT NOT NULL,
+                source_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                last_error TEXT,
+                openclaw_session_key TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                UNIQUE(pet_session_id, source_hash)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_codex_knowledge_extraction_outbox_pending
+            ON codex_knowledge_extraction_outbox(status, next_attempt_at, created_at);
+
+            CREATE TABLE IF NOT EXISTS codex_session_knowledge (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT,
+                pet_session_id TEXT NOT NULL,
+                codex_session_id TEXT NOT NULL,
+                source_hash TEXT NOT NULL,
+                extractor_version TEXT NOT NULL,
+                domain_json TEXT NOT NULL DEFAULT '{}',
+                concepts_json TEXT NOT NULL DEFAULT '[]',
+                rule_concepts_json TEXT NOT NULL DEFAULT '[]',
+                methodologies_json TEXT NOT NULL DEFAULT '[]',
+                failure_taxonomy_json TEXT NOT NULL DEFAULT '[]',
+                verification_rules_json TEXT NOT NULL DEFAULT '[]',
+                timeline_json TEXT NOT NULL DEFAULT '[]',
+                code_blocks_json TEXT NOT NULL DEFAULT '[]',
+                reusable_summary_json TEXT NOT NULL DEFAULT '{}',
+                raw_response_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(pet_session_id, source_hash)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_codex_session_knowledge_workspace
+            ON codex_session_knowledge(workspace_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS codex_concept_deltas (
+                id TEXT PRIMARY KEY,
+                delta_id TEXT NOT NULL UNIQUE,
+                workspace_id TEXT NOT NULL,
+                codex_session_id TEXT NOT NULL,
+                author TEXT NOT NULL,
+                change_kind TEXT NOT NULL,
+                terms_json TEXT NOT NULL DEFAULT '[]',
+                source_hash TEXT NOT NULL,
+                author_text_sha256 TEXT NOT NULL,
+                raw_author_text TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(workspace_id, source_hash)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_codex_concept_deltas_session
+            ON codex_concept_deltas(codex_session_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_evidence_refs (
+                ref_id TEXT PRIMARY KEY,
+                repository_id TEXT NOT NULL,
+                revision TEXT NOT NULL,
+                role TEXT NOT NULL,
+                authority TEXT NOT NULL,
+                locator_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(repository_id, revision, locator_hash)
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_topics (
+                topic_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                topic_identity_key TEXT NOT NULL,
+                title TEXT NOT NULL,
+                aliases_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL,
+                current_candidate_id TEXT,
+                current_candidate_revision INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(workspace_id, topic_identity_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_candidates (
+                candidate_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_hash TEXT NOT NULL,
+                current_revision INTEGER NOT NULL,
+                topic_identity_key TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(workspace_id, source_kind, source_hash)
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_candidate_versions (
+                candidate_id TEXT NOT NULL,
+                candidate_revision INTEGER NOT NULL,
+                content_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(candidate_id, candidate_revision)
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_candidate_evidence (
+                candidate_id TEXT NOT NULL,
+                candidate_revision INTEGER NOT NULL,
+                ref_id TEXT NOT NULL,
+                evidence_role TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(candidate_id, candidate_revision, ref_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_review_decisions (
+                command_id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL,
+                candidate_revision INTEGER NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                payload_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_wiki_change_sets (
+                change_set_id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL,
+                candidate_revision INTEGER NOT NULL,
+                decision_command_id TEXT NOT NULL UNIQUE,
+                approved_document_sha256 TEXT NOT NULL,
+                publish_status TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_publication_receipts (
+                change_set_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                published_content_sha256 TEXT,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_wiki_page_snapshots (
+                id TEXT PRIMARY KEY,
+                topic_id TEXT,
+                path TEXT NOT NULL,
+                git_revision TEXT NOT NULL,
+                content_sha256 TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(path, git_revision, content_sha256)
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_scan_runs (
+                scan_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                revision TEXT NOT NULL,
+                scope_json TEXT NOT NULL DEFAULT '{}',
+                cursor_json TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_term_coverage_findings (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                codex_session_id TEXT,
+                scan_id TEXT,
+                term TEXT NOT NULL,
+                topic_kind TEXT,
+                classification TEXT NOT NULL,
+                status TEXT NOT NULL,
+                source_hash TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(workspace_id, codex_session_id, term, classification, source_hash)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_domain_term_coverage_session
+            ON domain_term_coverage_findings(codex_session_id, status, created_at);
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_extraction_outbox (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(workspace_id, source_kind, source_hash)
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_control_plane_commands (
+                command_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                command_kind TEXT NOT NULL,
+                cursor TEXT,
+                payload_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                result_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_candidate_deliveries (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                candidate_id TEXT NOT NULL,
+                candidate_revision INTEGER NOT NULL,
+                payload_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(run_id, candidate_id, candidate_revision)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_domain_knowledge_candidate_deliveries_pending
+            ON domain_knowledge_candidate_deliveries(status, next_attempt_at, created_at);
+
+            CREATE TABLE IF NOT EXISTS domain_knowledge_control_plane_runs (
+                run_id TEXT PRIMARY KEY,
+                command_cursor TEXT,
+                publish_cursor TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS codex_review_control_plane_snapshot_state (
+                session_key TEXT PRIMARY KEY,
+                snapshot_cursor TEXT NOT NULL,
+                response_json TEXT NOT NULL DEFAULT '{}',
+                submitted_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
 
             CREATE TABLE IF NOT EXISTS codex_review_items (
                 id TEXT PRIMARY KEY,
@@ -1351,6 +1609,1098 @@ class TraceStore:
         self._conn.commit()
         return self.get_codex_openclaw_sync_outbox(outbox_id)
 
+    def _codex_knowledge_extraction_outbox_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["payload"] = self._json_loads(item.pop("payload_json", None), {})
+        return item
+
+    def enqueue_codex_knowledge_extraction(
+        self,
+        *,
+        pet_session_id: str,
+        codex_session_id: str,
+        source_hash: str,
+        payload: dict[str, Any],
+        openclaw_session_key: str,
+        requeue_failed: bool = False,
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        outbox_id = f"codex_knowledge_extraction_{uuid4().hex}"
+        self._conn.execute(
+            """
+            INSERT INTO codex_knowledge_extraction_outbox (
+                id, pet_session_id, codex_session_id, source_hash, payload_json,
+                status, attempt_count, next_attempt_at, last_error,
+                openclaw_session_key, created_at, updated_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?, ?, ?, NULL)
+            ON CONFLICT(pet_session_id, source_hash) DO UPDATE SET
+                updated_at = codex_knowledge_extraction_outbox.updated_at
+            """,
+            (
+                outbox_id,
+                pet_session_id,
+                codex_session_id,
+                source_hash,
+                json.dumps(payload, ensure_ascii=False),
+                now,
+                openclaw_session_key,
+                now,
+                now,
+            ),
+        )
+        self._conn.commit()
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_knowledge_extraction_outbox
+            WHERE pet_session_id = ? AND source_hash = ?
+            """,
+            (pet_session_id, source_hash),
+        ).fetchone()
+        item = self._codex_knowledge_extraction_outbox_row(row) or {}
+        if requeue_failed and item.get("status") == "failed":
+            self._conn.execute(
+                """
+                UPDATE codex_knowledge_extraction_outbox
+                SET codex_session_id = ?,
+                    payload_json = ?,
+                    status = 'pending',
+                    attempt_count = 0,
+                    next_attempt_at = ?,
+                    last_error = NULL,
+                    openclaw_session_key = ?,
+                    updated_at = ?,
+                    completed_at = NULL
+                WHERE id = ? AND status = 'failed'
+                """,
+                (
+                    codex_session_id,
+                    json.dumps(payload, ensure_ascii=False),
+                    now,
+                    openclaw_session_key,
+                    now,
+                    item["id"],
+                ),
+            )
+            self._conn.commit()
+            return self.get_codex_knowledge_extraction_outbox(item["id"]) or {}
+        return item
+
+    def get_codex_knowledge_extraction_outbox(self, outbox_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM codex_knowledge_extraction_outbox WHERE id = ?",
+            (outbox_id,),
+        ).fetchone()
+        return self._codex_knowledge_extraction_outbox_row(row)
+
+    def claim_next_codex_knowledge_extraction(self, *, now_iso: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_knowledge_extraction_outbox
+            WHERE status = 'pending'
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (now_iso,),
+        ).fetchone()
+        if row is None:
+            return None
+        item = self._codex_knowledge_extraction_outbox_row(row)
+        if item is None:
+            return None
+        self._conn.execute(
+            """
+            UPDATE codex_knowledge_extraction_outbox
+            SET status = 'sending',
+                attempt_count = attempt_count + 1,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now_iso, item["id"]),
+        )
+        self._conn.commit()
+        return self.get_codex_knowledge_extraction_outbox(item["id"])
+
+    def mark_codex_knowledge_extraction_succeeded(self, outbox_id: str) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE codex_knowledge_extraction_outbox
+            SET status = 'succeeded',
+                last_error = NULL,
+                completed_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now, now, outbox_id),
+        )
+        self._conn.commit()
+        return self.get_codex_knowledge_extraction_outbox(outbox_id)
+
+    def mark_codex_knowledge_extraction_failed(self, outbox_id: str, *, last_error: str) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE codex_knowledge_extraction_outbox
+            SET status = 'failed',
+                last_error = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (last_error, now, outbox_id),
+        )
+        self._conn.commit()
+        return self.get_codex_knowledge_extraction_outbox(outbox_id)
+
+    def _codex_session_knowledge_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["domain"] = self._json_loads(item.pop("domain_json", None), {})
+        item["concepts"] = self._json_loads(item.pop("concepts_json", None), [])
+        item["rule_concepts"] = self._json_loads(item.pop("rule_concepts_json", None), [])
+        item["methodologies"] = self._json_loads(item.pop("methodologies_json", None), [])
+        item["failure_taxonomy"] = self._json_loads(item.pop("failure_taxonomy_json", None), [])
+        item["verification_rules"] = self._json_loads(item.pop("verification_rules_json", None), [])
+        item["timeline"] = self._json_loads(item.pop("timeline_json", None), [])
+        item["code_blocks"] = self._json_loads(item.pop("code_blocks_json", None), [])
+        item["reusable_summary"] = self._json_loads(item.pop("reusable_summary_json", None), {})
+        raw_response = self._json_loads(item.pop("raw_response_json", None), {})
+        item["raw_response"] = raw_response
+        item["disposition"] = raw_response.get("disposition")
+        item["assessment"] = raw_response.get("assessment") or {}
+        item["wiki_candidates"] = raw_response.get("wiki_candidates") or []
+        item["domain_knowledge_candidates"] = raw_response.get("candidates") or []
+        item["rejected_items"] = raw_response.get("rejected_items") or []
+        item["code_index"] = raw_response.get("code_index") or []
+        return item
+
+    def upsert_codex_session_knowledge(
+        self,
+        *,
+        workspace_id: str | None,
+        pet_session_id: str,
+        codex_session_id: str,
+        source_hash: str,
+        extractor_version: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        knowledge_id = f"codex_session_knowledge_{uuid4().hex}"
+        self._conn.execute(
+            """
+            INSERT INTO codex_session_knowledge (
+                id, workspace_id, pet_session_id, codex_session_id, source_hash,
+                extractor_version, domain_json, concepts_json, rule_concepts_json,
+                methodologies_json, failure_taxonomy_json, verification_rules_json,
+                timeline_json, code_blocks_json, reusable_summary_json, raw_response_json,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(pet_session_id, source_hash) DO UPDATE SET
+                workspace_id = excluded.workspace_id,
+                codex_session_id = excluded.codex_session_id,
+                extractor_version = excluded.extractor_version,
+                domain_json = excluded.domain_json,
+                concepts_json = excluded.concepts_json,
+                rule_concepts_json = excluded.rule_concepts_json,
+                methodologies_json = excluded.methodologies_json,
+                failure_taxonomy_json = excluded.failure_taxonomy_json,
+                verification_rules_json = excluded.verification_rules_json,
+                timeline_json = excluded.timeline_json,
+                code_blocks_json = excluded.code_blocks_json,
+                reusable_summary_json = excluded.reusable_summary_json,
+                raw_response_json = excluded.raw_response_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                knowledge_id,
+                workspace_id,
+                pet_session_id,
+                codex_session_id,
+                source_hash,
+                extractor_version,
+                json.dumps(payload.get("domain") or {}, ensure_ascii=False),
+                json.dumps(payload.get("concepts") or [], ensure_ascii=False),
+                json.dumps(payload.get("rule_concepts") or [], ensure_ascii=False),
+                json.dumps(payload.get("methodologies") or [], ensure_ascii=False),
+                json.dumps(payload.get("failure_taxonomy") or [], ensure_ascii=False),
+                json.dumps(payload.get("verification_rules") or [], ensure_ascii=False),
+                json.dumps(payload.get("timeline") or [], ensure_ascii=False),
+                json.dumps(payload.get("code_blocks") or [], ensure_ascii=False),
+                json.dumps(payload.get("reusable_summary") or {}, ensure_ascii=False),
+                json.dumps(payload, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        self._conn.commit()
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_session_knowledge
+            WHERE pet_session_id = ? AND source_hash = ?
+            """,
+            (pet_session_id, source_hash),
+        ).fetchone()
+        return self._codex_session_knowledge_row(row) or {}
+
+    def get_latest_codex_session_knowledge(self, pet_session_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_session_knowledge
+            WHERE pet_session_id = ?
+            ORDER BY updated_at DESC, created_at DESC, id ASC
+            LIMIT 1
+            """,
+            (pet_session_id,),
+        ).fetchone()
+        return self._codex_session_knowledge_row(row)
+
+    def list_codex_session_knowledge(
+        self,
+        *,
+        pet_session_id: str | None = None,
+        workspace_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if pet_session_id is not None:
+            clauses.append("pet_session_id = ?")
+            params.append(pet_session_id)
+        if workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        try:
+            bounded_limit = max(1, min(int(limit), 100))
+        except (TypeError, ValueError, OverflowError):
+            bounded_limit = 50
+        rows = self._conn.execute(
+            f"""
+            SELECT *
+            FROM codex_session_knowledge
+            {where}
+            ORDER BY updated_at DESC, created_at DESC, id ASC
+            LIMIT ?
+            """,
+            (*params, bounded_limit),
+        ).fetchall()
+        return [self._codex_session_knowledge_row(row) for row in rows if row is not None]
+
+    def _codex_concept_delta_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["terms"] = self._json_loads(item.pop("terms_json", None), [])
+        item["payload"] = self._json_loads(item.pop("payload_json", None), {})
+        return item
+
+    def upsert_codex_concept_delta(
+        self,
+        *,
+        payload: dict[str, Any],
+        raw_author_text: str,
+        source_hash: str,
+        author_text_sha256: str,
+    ) -> dict[str, Any]:
+        delta_id = str(payload.get("delta_id") or "").strip()
+        if not delta_id:
+            raise ValueError("Concept Delta delta_id is required")
+        existing = self._conn.execute(
+            "SELECT * FROM codex_concept_deltas WHERE delta_id = ?",
+            (delta_id,),
+        ).fetchone()
+        if existing is not None:
+            item = self._codex_concept_delta_row(existing) or {}
+            if item.get("source_hash") != source_hash or item.get("author_text_sha256") != author_text_sha256:
+                raise ValueError(f"Concept Delta {delta_id} is immutable")
+            return item
+
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO codex_concept_deltas (
+                id, delta_id, workspace_id, codex_session_id, author,
+                change_kind, terms_json, source_hash, author_text_sha256,
+                raw_author_text, payload_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                delta_id,
+                delta_id,
+                payload["workspace_id"],
+                payload["codex_session_id"],
+                payload["author"],
+                payload["change_kind"],
+                json.dumps(payload.get("terms") or [], ensure_ascii=False),
+                source_hash,
+                author_text_sha256,
+                raw_author_text,
+                json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                now,
+                now,
+            ),
+        )
+        self._conn.commit()
+        row = self._conn.execute(
+            "SELECT * FROM codex_concept_deltas WHERE delta_id = ?",
+            (delta_id,),
+        ).fetchone()
+        return self._codex_concept_delta_row(row) or {}
+
+    def list_codex_concept_deltas(
+        self,
+        *,
+        workspace_id: str | None = None,
+        codex_session_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+        if codex_session_id is not None:
+            clauses.append("codex_session_id = ?")
+            params.append(codex_session_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        bounded_limit = max(1, min(int(limit), 500))
+        rows = self._conn.execute(
+            f"""
+            SELECT * FROM codex_concept_deltas
+            {where}
+            ORDER BY created_at ASC, delta_id ASC
+            LIMIT ?
+            """,
+            (*params, bounded_limit),
+        ).fetchall()
+        return [item for row in rows if (item := self._codex_concept_delta_row(row)) is not None]
+
+    def _domain_term_coverage_finding_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["details"] = self._json_loads(item.pop("details_json", None), {})
+        return item
+
+    def upsert_domain_term_coverage_finding(
+        self,
+        *,
+        workspace_id: str,
+        codex_session_id: str | None,
+        scan_id: str | None,
+        term: str,
+        topic_kind: str | None,
+        classification: str,
+        source_hash: str,
+        details: dict[str, Any],
+        status: str = "open",
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        finding_id = f"domain_term_finding_{uuid4().hex}"
+        self._conn.execute(
+            """
+            INSERT INTO domain_term_coverage_findings (
+                id, workspace_id, codex_session_id, scan_id, term, topic_kind,
+                classification, status, source_hash, details_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id, codex_session_id, term, classification, source_hash) DO UPDATE SET
+                updated_at = domain_term_coverage_findings.updated_at
+            """,
+            (
+                finding_id,
+                workspace_id,
+                codex_session_id,
+                scan_id,
+                term,
+                topic_kind,
+                classification,
+                status,
+                source_hash,
+                json.dumps(details, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                now,
+                now,
+            ),
+        )
+        self._conn.commit()
+        row = self._conn.execute(
+            """
+            SELECT * FROM domain_term_coverage_findings
+            WHERE workspace_id = ?
+              AND codex_session_id IS ?
+              AND term = ?
+              AND classification = ?
+              AND source_hash = ?
+            """,
+            (workspace_id, codex_session_id, term, classification, source_hash),
+        ).fetchone()
+        return self._domain_term_coverage_finding_row(row) or {}
+
+    def list_domain_term_coverage_findings(
+        self,
+        *,
+        workspace_id: str | None = None,
+        codex_session_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+        if codex_session_id is not None:
+            clauses.append("codex_session_id = ?")
+            params.append(codex_session_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        bounded_limit = max(1, min(int(limit), 500))
+        rows = self._conn.execute(
+            f"""
+            SELECT * FROM domain_term_coverage_findings
+            {where}
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            """,
+            (*params, bounded_limit),
+        ).fetchall()
+        return [item for row in rows if (item := self._domain_term_coverage_finding_row(row)) is not None]
+
+    def get_codex_review_control_plane_snapshot_state(self, session_key: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM codex_review_control_plane_snapshot_state WHERE session_key = ?",
+            (session_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["response"] = self._json_loads(item.pop("response_json", None), {})
+        return item
+
+    def mark_codex_review_control_plane_snapshot_submitted(
+        self,
+        *,
+        session_key: str,
+        snapshot_cursor: str,
+        response: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO codex_review_control_plane_snapshot_state (
+                session_key, snapshot_cursor, response_json, submitted_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(session_key) DO UPDATE SET
+                snapshot_cursor = excluded.snapshot_cursor,
+                response_json = excluded.response_json,
+                submitted_at = excluded.submitted_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                session_key,
+                snapshot_cursor,
+                json.dumps(response, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                now,
+                now,
+            ),
+        )
+        self._conn.commit()
+        return self.get_codex_review_control_plane_snapshot_state(session_key) or {}
+
+    @staticmethod
+    def _domain_knowledge_payload_json(payload: dict[str, Any]) -> str:
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    def _domain_knowledge_candidate_version_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["payload"] = self._json_loads(item.pop("payload_json", None), {})
+        return item
+
+    def persist_domain_knowledge_candidate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        candidate_id = str(payload.get("candidate_id") or "").strip()
+        candidate_revision = int(payload.get("candidate_revision") or 0)
+        if not candidate_id or candidate_revision < 1:
+            raise ValueError("candidate_id and candidate_revision are required")
+        payload_json = self._domain_knowledge_payload_json(payload)
+        existing_version = self._conn.execute(
+            """
+            SELECT * FROM domain_knowledge_candidate_versions
+            WHERE candidate_id = ? AND candidate_revision = ?
+            """,
+            (candidate_id, candidate_revision),
+        ).fetchone()
+        if existing_version is not None:
+            existing = self._domain_knowledge_candidate_version_row(existing_version) or {}
+            if existing.get("content_hash") != payload.get("content_hash") or self._domain_knowledge_payload_json(
+                existing.get("payload") or {}
+            ) != payload_json:
+                raise ValueError(f"Domain Knowledge candidate revision {candidate_id}:{candidate_revision} is immutable")
+            return existing
+
+        workspace_id = str(payload.get("workspace_id") or "").strip()
+        source_kind = str(payload.get("source_kind") or "").strip()
+        source_hash = str(payload.get("source_hash") or "").strip()
+        topic_match = payload.get("topic_match") if isinstance(payload.get("topic_match"), dict) else {}
+        topic_identity_key = str(topic_match.get("topic_identity_key") or "").strip()
+        if not all((workspace_id, source_kind, source_hash, topic_identity_key, payload.get("content_hash"))):
+            raise ValueError("candidate persistence fields are incomplete")
+
+        now = _utc_now_iso()
+        parent = self._conn.execute(
+            "SELECT * FROM domain_knowledge_candidates WHERE candidate_id = ?",
+            (candidate_id,),
+        ).fetchone()
+        if parent is not None:
+            current = dict(parent)
+            immutable_parent = (workspace_id, source_kind, source_hash, topic_identity_key)
+            if immutable_parent != (
+                current["workspace_id"],
+                current["source_kind"],
+                current["source_hash"],
+                current["topic_identity_key"],
+            ):
+                raise ValueError(f"Domain Knowledge candidate {candidate_id} identity is immutable")
+            if candidate_revision <= int(current["current_revision"]):
+                raise ValueError(f"Domain Knowledge candidate revision {candidate_id}:{candidate_revision} is immutable")
+        try:
+            self._conn.execute("BEGIN")
+            if parent is None:
+                self._conn.execute(
+                    """
+                    INSERT INTO domain_knowledge_candidates (
+                        candidate_id, workspace_id, source_kind, source_hash,
+                        current_revision, topic_identity_key, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        candidate_id,
+                        workspace_id,
+                        source_kind,
+                        source_hash,
+                        candidate_revision,
+                        topic_identity_key,
+                        payload.get("status") or "draft",
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                self._conn.execute(
+                    """
+                    UPDATE domain_knowledge_candidates
+                    SET current_revision = ?, status = ?, updated_at = ?
+                    WHERE candidate_id = ?
+                    """,
+                    (candidate_revision, payload.get("status") or "draft", now, candidate_id),
+                )
+            self._conn.execute(
+                """
+                INSERT INTO domain_knowledge_candidate_versions (
+                    candidate_id, candidate_revision, content_hash, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (candidate_id, candidate_revision, payload["content_hash"], payload_json, now),
+            )
+            for raw_ref in payload.get("evidence_index") or []:
+                if not isinstance(raw_ref, dict):
+                    continue
+                ref_id = str(raw_ref.get("ref_id") or "").strip()
+                if not ref_id:
+                    continue
+                locator_payload = {
+                    key: raw_ref.get(key)
+                    for key in (
+                        "repository_id",
+                        "revision",
+                        "role",
+                        "path",
+                        "symbol",
+                        "line_start",
+                        "line_end",
+                        "snippet_sha256",
+                        "resolver_uri",
+                        "command",
+                    )
+                }
+                locator_hash = "sha256:" + hashlib.sha256(
+                    self._domain_knowledge_payload_json(locator_payload).encode("utf-8")
+                ).hexdigest()
+                ref_json = self._domain_knowledge_payload_json(raw_ref)
+                existing_ref = self._conn.execute(
+                    "SELECT payload_json FROM domain_knowledge_evidence_refs WHERE ref_id = ?",
+                    (ref_id,),
+                ).fetchone()
+                if existing_ref is not None and str(existing_ref["payload_json"]) != ref_json:
+                    raise ValueError(f"Domain Knowledge evidence reference {ref_id} is immutable")
+                self._conn.execute(
+                    """
+                    INSERT OR IGNORE INTO domain_knowledge_evidence_refs (
+                        ref_id, repository_id, revision, role, authority,
+                        locator_hash, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ref_id,
+                        raw_ref.get("repository_id"),
+                        raw_ref.get("revision"),
+                        raw_ref.get("role"),
+                        raw_ref.get("authority"),
+                        locator_hash,
+                        ref_json,
+                        now,
+                    ),
+                )
+                self._conn.execute(
+                    """
+                    INSERT INTO domain_knowledge_candidate_evidence (
+                        candidate_id, candidate_revision, ref_id, evidence_role, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (candidate_id, candidate_revision, ref_id, raw_ref.get("role"), now),
+                )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return self.get_domain_knowledge_candidate_version(candidate_id, candidate_revision) or {}
+
+    def get_domain_knowledge_candidate_version(
+        self,
+        candidate_id: str,
+        candidate_revision: int,
+    ) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM domain_knowledge_candidate_versions
+            WHERE candidate_id = ? AND candidate_revision = ?
+            """,
+            (candidate_id, candidate_revision),
+        ).fetchone()
+        return self._domain_knowledge_candidate_version_row(row)
+
+    def _domain_knowledge_candidate_delivery_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["payload"] = self._json_loads(item.pop("payload_json", None), {})
+        return item
+
+    def enqueue_domain_knowledge_candidate_delivery(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        candidate_revision: int,
+        payload_hash: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload_json = self._domain_knowledge_payload_json(payload)
+        existing_row = self._conn.execute(
+            """
+            SELECT * FROM domain_knowledge_candidate_deliveries
+            WHERE run_id = ? AND candidate_id = ? AND candidate_revision = ?
+            """,
+            (run_id, candidate_id, candidate_revision),
+        ).fetchone()
+        if existing_row is not None:
+            existing = self._domain_knowledge_candidate_delivery_row(existing_row) or {}
+            if existing.get("payload_hash") != payload_hash or self._domain_knowledge_payload_json(
+                existing.get("payload") or {}
+            ) != payload_json:
+                raise ValueError(f"Domain Knowledge candidate delivery {run_id}:{candidate_id}:{candidate_revision} is immutable")
+            now = _utc_now_iso()
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO domain_knowledge_control_plane_runs (
+                    run_id, command_cursor, publish_cursor, created_at, updated_at
+                ) VALUES (?, NULL, NULL, ?, ?)
+                """,
+                (run_id, now, now),
+            )
+            self._conn.commit()
+            return existing
+        now = _utc_now_iso()
+        delivery_id = f"domain_knowledge_delivery_{uuid4().hex}"
+        self._conn.execute(
+            """
+            INSERT INTO domain_knowledge_candidate_deliveries (
+                id, run_id, candidate_id, candidate_revision, payload_hash,
+                payload_json, status, attempt_count, next_attempt_at,
+                last_error, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?, ?)
+            """,
+            (
+                delivery_id,
+                run_id,
+                candidate_id,
+                candidate_revision,
+                payload_hash,
+                payload_json,
+                now,
+                now,
+                now,
+            ),
+        )
+        self._conn.execute(
+            """
+            INSERT OR IGNORE INTO domain_knowledge_control_plane_runs (
+                run_id, command_cursor, publish_cursor, created_at, updated_at
+            ) VALUES (?, NULL, NULL, ?, ?)
+            """,
+            (run_id, now, now),
+        )
+        self._conn.commit()
+        return self.get_domain_knowledge_candidate_delivery(delivery_id) or {}
+
+    def get_domain_knowledge_candidate_delivery(self, delivery_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM domain_knowledge_candidate_deliveries WHERE id = ?",
+            (delivery_id,),
+        ).fetchone()
+        return self._domain_knowledge_candidate_delivery_row(row)
+
+    def get_domain_knowledge_candidate_delivery_for_candidate(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        candidate_revision: int,
+    ) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM domain_knowledge_candidate_deliveries
+            WHERE run_id = ? AND candidate_id = ? AND candidate_revision = ?
+            """,
+            (run_id, candidate_id, candidate_revision),
+        ).fetchone()
+        return self._domain_knowledge_candidate_delivery_row(row)
+
+    def claim_next_domain_knowledge_candidate_delivery(self, *, now_iso: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM domain_knowledge_candidate_deliveries
+            WHERE status = 'pending'
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (now_iso,),
+        ).fetchone()
+        item = self._domain_knowledge_candidate_delivery_row(row)
+        if item is None:
+            return None
+        self._conn.execute(
+            """
+            UPDATE domain_knowledge_candidate_deliveries
+            SET status = 'sending', attempt_count = attempt_count + 1, updated_at = ?
+            WHERE id = ?
+            """,
+            (now_iso, item["id"]),
+        )
+        self._conn.commit()
+        return self.get_domain_knowledge_candidate_delivery(item["id"])
+
+    def mark_domain_knowledge_candidate_delivery_accepted(self, delivery_id: str) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE domain_knowledge_candidate_deliveries
+            SET status = 'accepted', last_error = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, delivery_id),
+        )
+        self._conn.commit()
+        return self.get_domain_knowledge_candidate_delivery(delivery_id)
+
+    def get_domain_knowledge_control_plane_cursors(self, run_id: str) -> dict[str, Any]:
+        row = self._conn.execute(
+            "SELECT run_id, command_cursor, publish_cursor FROM domain_knowledge_control_plane_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return {"run_id": run_id, "command_cursor": None, "publish_cursor": None}
+        return dict(row)
+
+    def list_domain_knowledge_control_plane_run_ids(self, *, limit: int = 20) -> list[str]:
+        bounded_limit = max(1, min(int(limit), 100))
+        rows = self._conn.execute(
+            """
+            SELECT run_id
+            FROM domain_knowledge_control_plane_runs
+            ORDER BY updated_at ASC, run_id ASC
+            LIMIT ?
+            """,
+            (bounded_limit,),
+        ).fetchall()
+        return [str(row["run_id"]) for row in rows]
+
+    def update_domain_knowledge_control_plane_cursors(
+        self,
+        *,
+        run_id: str,
+        command_cursor: str | None = None,
+        publish_cursor: str | None = None,
+    ) -> dict[str, Any]:
+        current = self.get_domain_knowledge_control_plane_cursors(run_id)
+        next_command_cursor = command_cursor if command_cursor is not None else current["command_cursor"]
+        next_publish_cursor = publish_cursor if publish_cursor is not None else current["publish_cursor"]
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            INSERT INTO domain_knowledge_control_plane_runs (
+                run_id, command_cursor, publish_cursor, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                command_cursor = excluded.command_cursor,
+                publish_cursor = excluded.publish_cursor,
+                updated_at = excluded.updated_at
+            """,
+            (run_id, next_command_cursor, next_publish_cursor, now, now),
+        )
+        self._conn.commit()
+        return self.get_domain_knowledge_control_plane_cursors(run_id)
+
+    def _domain_knowledge_control_plane_command_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["payload"] = self._json_loads(item.pop("payload_json", None), {})
+        item["result"] = self._json_loads(item.pop("result_json", None), None)
+        return item
+
+    def get_domain_knowledge_control_plane_command(self, command_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM domain_knowledge_control_plane_commands WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
+        return self._domain_knowledge_control_plane_command_row(row)
+
+    def _domain_knowledge_wiki_change_set_row(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["payload"] = self._json_loads(item.pop("payload_json", None), {})
+        return item
+
+    def get_domain_knowledge_wiki_change_set(self, change_set_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM domain_knowledge_wiki_change_sets WHERE change_set_id = ?",
+            (change_set_id,),
+        ).fetchone()
+        item = self._domain_knowledge_wiki_change_set_row(row)
+        if item is None:
+            return None
+        return {**(item.get("payload") or {}), **item}
+
+    def list_pending_domain_knowledge_wiki_change_sets(
+        self,
+        *,
+        run_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(int(limit), 100))
+        if run_id is None:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM domain_knowledge_wiki_change_sets
+                WHERE publish_status = 'pending'
+                ORDER BY created_at ASC, change_set_id ASC
+                LIMIT ?
+                """,
+                (bounded_limit,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT cs.*
+                FROM domain_knowledge_wiki_change_sets cs
+                JOIN domain_knowledge_control_plane_commands cmd
+                  ON cmd.command_id = cs.decision_command_id
+                WHERE cs.publish_status = 'pending' AND cmd.run_id = ?
+                ORDER BY cs.created_at ASC, cs.change_set_id ASC
+                LIMIT ?
+                """,
+                (run_id, bounded_limit),
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = self._domain_knowledge_wiki_change_set_row(row)
+            if item is not None:
+                items.append({**(item.get("payload") or {}), **item})
+        return items
+
+    def mark_domain_knowledge_wiki_change_set_publishing(self, change_set_id: str) -> dict[str, Any] | None:
+        now = _utc_now_iso()
+        self._conn.execute(
+            """
+            UPDATE domain_knowledge_wiki_change_sets
+            SET publish_status = 'publishing', updated_at = ?
+            WHERE change_set_id = ? AND publish_status IN ('pending', 'publishing')
+            """,
+            (now, change_set_id),
+        )
+        self._conn.commit()
+        return self.get_domain_knowledge_wiki_change_set(change_set_id)
+
+    def persist_domain_knowledge_review_application(
+        self,
+        *,
+        run_id: str,
+        cursor: str | None,
+        command_payload: dict[str, Any],
+        command_payload_hash: str,
+        decision_payload: dict[str, Any],
+        change_set_payload: dict[str, Any] | None,
+        result: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        command_id = str(decision_payload.get("command_id") or "").strip()
+        command_json = self._domain_knowledge_payload_json(command_payload)
+        existing = self.get_domain_knowledge_control_plane_command(command_id)
+        if existing is not None:
+            if existing.get("payload_hash") != command_payload_hash or self._domain_knowledge_payload_json(
+                existing.get("payload") or {}
+            ) != command_json:
+                raise ValueError(f"Domain Knowledge command {command_id} is immutable")
+            return existing.get("result") or {}, True
+
+        now = _utc_now_iso()
+        decision_json = self._domain_knowledge_payload_json(decision_payload)
+        result_json = self._domain_knowledge_payload_json(result)
+        try:
+            self._conn.execute("BEGIN")
+            self._conn.execute(
+                """
+                INSERT INTO domain_knowledge_control_plane_commands (
+                    command_id, run_id, command_kind, cursor, payload_hash,
+                    payload_json, status, result_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    command_id,
+                    run_id,
+                    decision_payload.get("kind") or "project_domain_knowledge_review_decision",
+                    cursor,
+                    command_payload_hash,
+                    command_json,
+                    "applied",
+                    result_json,
+                    now,
+                    now,
+                ),
+            )
+            self._conn.execute(
+                """
+                INSERT INTO domain_knowledge_review_decisions (
+                    command_id, candidate_id, candidate_revision, idempotency_key,
+                    payload_hash, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    command_id,
+                    decision_payload["candidate_id"],
+                    decision_payload["candidate_revision"],
+                    decision_payload["idempotency_key"],
+                    command_payload_hash,
+                    decision_json,
+                    now,
+                ),
+            )
+            if change_set_payload is not None:
+                self._conn.execute(
+                    """
+                    INSERT INTO domain_knowledge_wiki_change_sets (
+                        change_set_id, candidate_id, candidate_revision,
+                        decision_command_id, approved_document_sha256,
+                        publish_status, payload_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        change_set_payload["change_set_id"],
+                        change_set_payload["candidate_id"],
+                        change_set_payload["candidate_revision"],
+                        command_id,
+                        change_set_payload["approved_document_sha256"],
+                        change_set_payload["publish_status"],
+                        self._domain_knowledge_payload_json(change_set_payload),
+                        now,
+                        now,
+                    ),
+                )
+            current = self.get_domain_knowledge_control_plane_cursors(run_id)
+            self._conn.execute(
+                """
+                INSERT INTO domain_knowledge_control_plane_runs (
+                    run_id, command_cursor, publish_cursor, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    command_cursor = excluded.command_cursor,
+                    publish_cursor = excluded.publish_cursor,
+                    updated_at = excluded.updated_at
+                """,
+                (run_id, cursor, current["publish_cursor"], now, now),
+            )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return result, False
+
+    def persist_domain_knowledge_publication_receipt(self, payload: dict[str, Any]) -> dict[str, Any]:
+        change_set_id = str(payload.get("change_set_id") or "").strip()
+        payload_json = self._domain_knowledge_payload_json(payload)
+        existing = self._conn.execute(
+            "SELECT payload_json FROM domain_knowledge_publication_receipts WHERE change_set_id = ?",
+            (change_set_id,),
+        ).fetchone()
+        if existing is not None:
+            existing_payload = self._json_loads(existing["payload_json"], {})
+            if self._domain_knowledge_payload_json(existing_payload) != payload_json:
+                raise ValueError(f"Domain Knowledge publication receipt {change_set_id} is immutable")
+            return existing_payload
+        now = _utc_now_iso()
+        try:
+            self._conn.execute("BEGIN")
+            self._conn.execute(
+                """
+                INSERT INTO domain_knowledge_publication_receipts (
+                    change_set_id, status, published_content_sha256,
+                    payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    change_set_id,
+                    payload["status"],
+                    payload.get("published_content_sha256"),
+                    payload_json,
+                    now,
+                    now,
+                ),
+            )
+            self._conn.execute(
+                """
+                UPDATE domain_knowledge_wiki_change_sets
+                SET publish_status = ?, updated_at = ?
+                WHERE change_set_id = ?
+                """,
+                (payload["status"], now, change_set_id),
+            )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return payload
+
     def create_codex_review_item(
         self,
         *,
@@ -1514,19 +2864,30 @@ class TraceStore:
         limit: int = 20,
         now_iso: str | None = None,
         include_unscoped: bool = False,
+        updated_from_iso: str | None = None,
+        updated_before_iso: str | None = None,
     ) -> list[dict[str, Any]]:
         try:
             bounded_limit = max(1, min(int(limit), 100))
         except (TypeError, ValueError, OverflowError):
             bounded_limit = 20
+        clauses = ["ri.status IN ('draft', 'snoozed')"]
+        params: list[Any] = []
+        if updated_from_iso is not None:
+            clauses.append("ri.updated_at >= ?")
+            params.append(updated_from_iso)
+        if updated_before_iso is not None:
+            clauses.append("ri.updated_at < ?")
+            params.append(updated_before_iso)
         rows = self._conn.execute(
-            """
+            f"""
             SELECT ri.*, dps.workspace_id AS review_workspace_id
             FROM codex_review_items ri
             LEFT JOIN desktop_pet_sessions dps ON dps.pet_session_id = ri.pet_session_id
-            WHERE ri.status IN ('draft', 'snoozed')
+            WHERE {' AND '.join(clauses)}
             ORDER BY ri.created_at ASC, ri.id ASC
-            """
+            """,
+            params,
         ).fetchall()
         now = _parse_iso_datetime(now_iso or _utc_now_iso()) or datetime.now(UTC)
         items: list[dict[str, Any]] = []
@@ -1838,13 +3199,15 @@ class TraceStore:
 
     def mark_codex_review_memory_export_failed(self, memory_id: str, *, error: str) -> dict[str, Any] | None:
         now = _utc_now_iso()
+        # Don't overwrite terminal 'synced' state - a memory that was already
+        # successfully published should not be regressed by a stale publish-status poll.
         self._conn.execute(
             """
             UPDATE codex_review_memory
             SET export_status = 'export_failed',
                 export_error = ?,
                 updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND export_status != 'synced'
             """,
             (error, now, memory_id),
         )

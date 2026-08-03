@@ -10,7 +10,14 @@ import {
 import type { CompanionSharedConfig, MmdCameraSnapshot, MmdModelAsset, RenderPipeline, VmdAsset } from "@/lib/types";
 
 import { getCodexStatusPresentation, type CodexStatus } from "./codex/codexStatus";
-import { buildCodexCompletionNotice } from "./codex/completionNotice";
+import {
+  addDismissedCompletionNoticeKey,
+  DISMISSED_COMPLETION_NOTICE_STORAGE_KEY,
+  parseDismissedCompletionNoticeKeys,
+  resolveLatchedCodexCompletionNotice,
+  serializeDismissedCompletionNoticeKeys,
+  type CodexCompletionNotice,
+} from "./codex/completionNotice";
 import { buildCodexStatusCard, buildIdleCodexStatusCardFallback } from "./codex/codexStatusCard";
 import { buildApprovalFallback } from "./codex/approvalFallback";
 import { formatCodexStatusNotification } from "./codex/notificationDetail";
@@ -78,8 +85,7 @@ type DesktopPetMenuAction =
   | { type: "workspace-selected"; workspacePath: string }
   | { type: "new-session" }
   | { type: "send-prompt" }
-  | { type: "prompt-sent"; source?: "app-server-relay" | "terminal" }
-  | { type: "approval-decided"; approvalId: string; decision: "approve_once" | "deny" }
+  | { type: "prompt-sent"; source?: "terminal" }
   | { type: "restore-session"; petSessionId: string }
   | { type: "focus-active-session"; petSessionId: string }
   | { type: "more-sessions"; sessions?: DesktopPetSession[] }
@@ -87,9 +93,11 @@ type DesktopPetMenuAction =
   | { type: "notification-detail"; profile: NotificationProfile }
   | { type: "menu-language"; language: MenuLanguage }
   | { type: "agent"; agent: DesktopPetAgent }
+  | { type: "codex-env"; envMode: "win" | "wsl" }
   | { type: "always-on-top"; enabled: boolean }
   | { type: "focus-vscode" }
-  | { type: "sync-main-site" };
+  | { type: "sync-main-site" }
+  | { type: "close" };
 type PetStageInteractionState = ReturnType<typeof resetPetStageInteractionState>;
 type StageClickRipple = {
   id: string;
@@ -132,7 +140,18 @@ export function App() {
   const [interactionMode, setInteractionMode] = useState<PetInteractionMode>("window-drag");
   const [notificationProfile, setNotificationProfile] = useState<NotificationProfile>("medium");
   const [codexStatus, setCodexStatus] = useState<CodexStatus | null>(null);
-  const [dismissedCompletionNoticeKey, setDismissedCompletionNoticeKey] = useState<string | null>(null);
+  const [dismissedCompletionNoticeKeys, setDismissedCompletionNoticeKeys] = useState<string[]>(
+    () => {
+      try {
+        return parseDismissedCompletionNoticeKeys(
+          window.localStorage.getItem(DISMISSED_COMPLETION_NOTICE_STORAGE_KEY),
+        );
+      } catch {
+        return [];
+      }
+    },
+  );
+  const [completionNotice, setCompletionNotice] = useState<CodexCompletionNotice | null>(null);
   const [agent, setAgent] = useState<DesktopPetAgent>("codex");
   const [commandCopied, setCommandCopied] = useState(false);
   const [menuStatus, setMenuStatus] = useState<string | null>(null);
@@ -189,6 +208,17 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        DISMISSED_COMPLETION_NOTICE_STORAGE_KEY,
+        serializeDismissedCompletionNoticeKeys(dismissedCompletionNoticeKeys),
+      );
+    } catch {
+      // Completion notices remain dismissible for the current renderer lifetime.
+    }
+  }, [dismissedCompletionNoticeKeys]);
+
+  useEffect(() => {
     window.desktopPet?.agent
       ?.get()
       .then((value) => setAgent(value))
@@ -219,6 +249,16 @@ export function App() {
     [api, selectedModel, vmdAssets],
   );
   const agentLabel = agent === "claude" ? "Claude" : "Codex";
+  useEffect(() => {
+    setCompletionNotice((current) =>
+      resolveLatchedCodexCompletionNotice(
+        current,
+        codexStatus,
+        dismissedCompletionNoticeKeys,
+        agentLabel,
+      ),
+    );
+  }, [agentLabel, codexStatus, dismissedCompletionNoticeKeys]);
   const codexStatusPresentation = useMemo(() => getCodexStatusPresentation(codexStatus), [codexStatus]);
   const codexStatusCard = useMemo(
     () => buildCodexStatusCard(codexStatus, notificationProfile, agentLabel),
@@ -235,10 +275,6 @@ export function App() {
     [agentLabel, loadError, loading, selectedModel],
   );
   const visibleCodexStatusCard = codexStatusCard ?? idleCodexStatusCard;
-  const completionNotice = useMemo(
-    () => buildCodexCompletionNotice(codexStatus, dismissedCompletionNoticeKey, agentLabel),
-    [agentLabel, codexStatus, dismissedCompletionNoticeKey],
-  );
   const codexStatusResolution = useMemo(
     () =>
       buildCodexStatusPetStageResolution(codexStatusPresentation, {
@@ -487,39 +523,6 @@ export function App() {
       });
   }, [codexStatus?.workspacePath, showVscodeFocusSuccess]);
 
-  const decideApprovalFromStatus = useCallback(
-    ({ decision }: { decision: "approve_once" | "deny" }) => {
-      const approval = codexStatus?.pendingApprovals?.find((item) => item.id);
-      const codexSessionId = codexStatus?.codexSessionId;
-      if (!approval || !codexSessionId) {
-        setMenuStatus("Approval id unavailable");
-        window.setTimeout(() => setMenuStatus(null), 2400);
-        return;
-      }
-      setMenuStatus(decision === "approve_once" ? "Approving Codex request..." : "Denying Codex request...");
-      const decisionRequest = window.desktopPet?.approvals?.decide({
-        codexSessionId,
-        approvalId: approval.id,
-        decision,
-      });
-      if (!decisionRequest) {
-        setMenuStatus("Approval unavailable");
-        window.setTimeout(() => setMenuStatus(null), 2800);
-        return;
-      }
-      decisionRequest
-        .then(() => {
-          setMenuStatus(decision === "approve_once" ? "Codex request approved" : "Codex request denied");
-          window.setTimeout(() => setMenuStatus(null), 2200);
-        })
-        .catch((error: Error) => {
-          setMenuStatus(`Approval failed: ${error.message}`);
-          window.setTimeout(() => setMenuStatus(null), 4200);
-        });
-    },
-    [codexStatus?.codexSessionId, codexStatus?.pendingApprovals],
-  );
-
   const focusVscodeForStatus = useCallback(() => {
     if (!codexStatus?.workspacePath) return;
     setMenuStatus("Opening VSCode workspace...");
@@ -624,12 +627,6 @@ export function App() {
   }, [codexStatus?.state, codexStatusResolution.shouldApply, recoverPetStageInteraction, stageInteractionState.source]);
 
   useEffect(() => {
-    function handleContextMenu(event: MouseEvent) {
-      event.preventDefault();
-      event.stopPropagation();
-      void window.desktopPet?.menu?.openContextMenu({ x: event.clientX, y: event.clientY });
-    }
-
     function handlePointerDown(event: PointerEvent) {
       if (event.target instanceof Element && event.target.closest(".pet-panel, .pet-status-action, .pet-completion-bubble")) return;
       if (event.target instanceof Element && event.target.closest(".pet-status-main")) return;
@@ -706,7 +703,6 @@ export function App() {
       finishActiveDrag();
     }
 
-    document.addEventListener("contextmenu", handleContextMenu, true);
     document.addEventListener("pointerdown", handlePointerDown, true);
     document.addEventListener("pointermove", handlePointerMove, true);
     document.addEventListener("pointerup", finishPointerDrag, true);
@@ -714,7 +710,6 @@ export function App() {
     window.addEventListener("blur", handleBlur);
 
     return () => {
-      document.removeEventListener("contextmenu", handleContextMenu, true);
       document.removeEventListener("pointerdown", handlePointerDown, true);
       document.removeEventListener("pointermove", handlePointerMove, true);
       document.removeEventListener("pointerup", finishPointerDrag, true);
@@ -789,7 +784,13 @@ export function App() {
             type="button"
             className="pet-completion-dismiss"
             aria-label="Close completed task"
-            onClick={() => setDismissedCompletionNoticeKey(completionNotice.key)}
+            onClick={() => {
+              const noticeKey = completionNotice.key;
+              setDismissedCompletionNoticeKeys((keys) =>
+                addDismissedCompletionNoticeKey(keys, noticeKey),
+              );
+              setCompletionNotice((current) => (current?.key === noticeKey ? null : current));
+            }}
           >
             x
           </button>
@@ -927,26 +928,7 @@ export function App() {
               </span>
             </span>
           )}
-          {approvalFallback?.canApprove ? (
-            <>
-              <button
-                type="button"
-                className="pet-status-action"
-                onClick={() => decideApprovalFromStatus({ decision: "approve_once" })}
-              >
-                {approvalFallback.primaryAction.label}
-              </button>
-              {approvalFallback.secondaryAction ? (
-                <button
-                  type="button"
-                  className="pet-status-action pet-status-action-secondary"
-                  onClick={() => decideApprovalFromStatus({ decision: "deny" })}
-                >
-                  {approvalFallback.secondaryAction.label}
-                </button>
-              ) : null}
-            </>
-          ) : approvalFallback ? (
+          {approvalFallback ? (
             <button
               type="button"
               className="pet-status-action"

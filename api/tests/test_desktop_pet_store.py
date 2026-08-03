@@ -95,6 +95,24 @@ def test_shared_companion_config_normalizes_render_pipeline():
     assert reze["render_pipeline"] == "reze-npr"
     assert store.get_companion_shared_config("admin-1")["render_pipeline"] == "reze-npr"
 
+    k3 = store.upsert_companion_shared_config(
+        user_id="admin-1",
+        selected_model_path="Eula/Eula.pmx",
+        render_pipeline=" K3 ",
+    )
+
+    assert k3["render_pipeline"] == "k3"
+    assert store.get_companion_shared_config("admin-1")["render_pipeline"] == "k3"
+
+    reze_design = store.upsert_companion_shared_config(
+        user_id="admin-1",
+        selected_model_path="Eula/Eula.pmx",
+        render_pipeline=" REZE-DESIGN ",
+    )
+
+    assert reze_design["render_pipeline"] == "reze-design"
+    assert store.get_companion_shared_config("admin-1")["render_pipeline"] == "reze-design"
+
 
 def test_shared_companion_config_migrates_old_render_pipeline_check_constraint():
     path = _case_dir()

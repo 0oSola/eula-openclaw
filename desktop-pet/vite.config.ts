@@ -7,6 +7,14 @@ const devPort = Number.isFinite(configuredDevPort) ? configuredDevPort : 5174;
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        menu: fileURLToPath(new URL("./menu.html", import.meta.url)),
+      },
+    },
+  },
   server: {
     host: "127.0.0.1",
     port: devPort,

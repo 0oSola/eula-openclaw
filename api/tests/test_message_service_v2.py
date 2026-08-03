@@ -1084,6 +1084,141 @@ def test_message_send_uses_later_motion_plan_template_when_action_and_first_temp
     assert resolution["resolved_asset_url"] == f"/assets/vmd/file/{asset_id}"
 
 
+def test_message_send_resolves_thinking_template_to_100pct_reference_vmd():
+    client, app = _client()
+    model_path = "Eula/Eula.pmx"
+    _write_model_stub(app, model_path)
+
+    reference_upload = client.post(
+        "/assets/vmd",
+        headers={"x-user-id": "u1"},
+        files={
+            "file": (
+                "思考_100pct_reference.vmd",
+                b"Vocaloid Motion Data 0002".ljust(64, b"\x00"),
+                "application/octet-stream",
+            )
+        },
+        data={
+            "user_id": "u1",
+            "slot": "neutral",
+            "source_relative_path": "usage/vmd/Eula[动作]/03_thinking_waiting/思考_100pct_reference.vmd",
+        },
+    )
+    reference_asset_id = reference_upload.json()["asset_id"]
+    client.patch(
+        f"/assets/vmd/{reference_asset_id}",
+        headers={"x-user-id": "u1"},
+        json={"favorite": True, "model_relative_path": model_path, "display_name": "思考_100pct_reference.vmd"},
+    )
+
+    watch_time_upload = client.post(
+        "/assets/vmd",
+        headers={"x-user-id": "u1"},
+        files={"file": ("看时间.vmd", b"Vocaloid Motion Data 0002".ljust(64, b"\x00"), "application/octet-stream")},
+        data={
+            "user_id": "u1",
+            "slot": "neutral",
+            "source_relative_path": "usage/vmd/Eula[动作]/03_thinking_waiting/看时间.vmd",
+        },
+    )
+    watch_time_asset_id = watch_time_upload.json()["asset_id"]
+    client.patch(
+        f"/assets/vmd/{watch_time_asset_id}",
+        headers={"x-user-id": "u1"},
+        json={"favorite": True, "model_relative_path": model_path, "display_name": "看时间.vmd"},
+    )
+
+    app.state.openclaw_client = FakeOpenClawClient(
+        raw_text=(
+            '{"text":"Let me think.","emotion":"thinking","action":"think",'
+            '"motion_plan":{"sequence":[{"template":"thinking_tilt","duration_ms":1700,"intensity":0.6}]},'
+            '"memory_ops":[]}'
+        )
+    )
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+
+    sent = client.post(
+        f"/sessions/{session_id}/messages",
+        json={"content": "what should we do?", "tts_enabled": False, "selected_model_path": model_path},
+        headers={"x-user-id": "u1"},
+    )
+
+    assert sent.status_code == 200
+    resolution = sent.json()["assistant_message"]["motion_resolution"]
+    assert resolution["status"] == "matched"
+    assert resolution["source_action"] == "think"
+    assert resolution["source_template"] == "thinking_tilt"
+    assert resolution["resolved_asset_id"] == reference_asset_id
+    assert resolution["resolved_asset_url"] == f"/assets/vmd/file/{reference_asset_id}"
+    assert resolution["resolved_display_name"] == "思考_100pct_reference.vmd"
+
+
+def test_message_send_resolves_akimbo_action_to_100pct_reference_vmd():
+    client, app = _client()
+    model_path = "Eula/Eula.pmx"
+    _write_model_stub(app, model_path)
+
+    reference_upload = client.post(
+        "/assets/vmd",
+        headers={"x-user-id": "u1"},
+        files={
+            "file": (
+                "叉腰_100pct_reference.vmd",
+                b"Vocaloid Motion Data 0002".ljust(64, b"\x00"),
+                "application/octet-stream",
+            )
+        },
+        data={
+            "user_id": "u1",
+            "slot": "neutral",
+            "source_relative_path": "usage/vmd/Eula[动作]/06_strong_personality/叉腰_100pct_reference.vmd",
+        },
+    )
+    reference_asset_id = reference_upload.json()["asset_id"]
+    client.patch(
+        f"/assets/vmd/{reference_asset_id}",
+        headers={"x-user-id": "u1"},
+        json={"favorite": True, "model_relative_path": model_path, "display_name": "叉腰_100pct_reference.vmd"},
+    )
+
+    older_upload = client.post(
+        "/assets/vmd",
+        headers={"x-user-id": "u1"},
+        files={"file": ("叉腰扭头.vmd", b"Vocaloid Motion Data 0002".ljust(64, b"\x00"), "application/octet-stream")},
+        data={
+            "user_id": "u1",
+            "slot": "neutral",
+            "source_relative_path": "usage/vmd/Eula[动作]/06_strong_personality/叉腰扭头.vmd",
+        },
+    )
+    older_asset_id = older_upload.json()["asset_id"]
+    client.patch(
+        f"/assets/vmd/{older_asset_id}",
+        headers={"x-user-id": "u1"},
+        json={"favorite": True, "model_relative_path": model_path, "display_name": "叉腰扭头.vmd"},
+    )
+
+    app.state.openclaw_client = FakeOpenClawClient(
+        raw_text='{"text":"叉腰确认。","emotion":"neutral","action":"akimbo","memory_ops":[]}'
+    )
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+
+    sent = client.post(
+        f"/sessions/{session_id}/messages",
+        json={"content": "show akimbo", "tts_enabled": False, "selected_model_path": model_path},
+        headers={"x-user-id": "u1"},
+    )
+
+    assert sent.status_code == 200
+    resolution = sent.json()["assistant_message"]["motion_resolution"]
+    assert resolution["status"] == "matched"
+    assert resolution["source_action"] == "akimbo"
+    assert resolution["resolved_asset_id"] == reference_asset_id
+    assert resolution["resolved_asset_url"] == f"/assets/vmd/file/{reference_asset_id}"
+    assert resolution["resolved_display_name"] == "叉腰_100pct_reference.vmd"
+
+
 def test_latest_motion_context_export_returns_most_recent_snapshot_for_model():
     client, app = _client()
     model_path = "Eula/Eula.pmx"

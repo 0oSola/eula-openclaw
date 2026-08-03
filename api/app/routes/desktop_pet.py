@@ -7,6 +7,7 @@ from fastapi import APIRouter, Header, HTTPException, Path, Request
 from pydantic import BaseModel, Field, field_validator
 
 from app.security import resolve_requester
+from app.services.codex_knowledge_extraction import enqueue_codex_knowledge_extraction
 from app.services.codex_openclaw_review_sync import enqueue_codex_review_sync
 
 
@@ -17,7 +18,7 @@ _CODEX_REVIEWABLE_STATUSES = {"completed", "failed", "waiting_approval", "file_c
 
 class CompanionSharedConfigPayload(BaseModel):
     selected_model_path: str | None = Field(default=None, max_length=1000)
-    render_pipeline: Literal["classic", "hero-shot", "genshin", "mio-reference", "reze-npr"] = "classic"
+    render_pipeline: Literal["classic", "hero-shot", "genshin", "mio-reference", "reze-npr", "reze-design", "k3"] = "classic"
 
 
 class DesktopPetSessionPayload(BaseModel):
@@ -81,6 +82,17 @@ def upsert_pet_session(
         and session.get("last_status") in _CODEX_REVIEWABLE_STATUSES
     ):
         enqueue_codex_review_sync(request.app.state.trace_store, session["pet_session_id"])
+    if (
+        settings.codex_knowledge_extraction_enabled
+        and settings.openclaw_token
+        and session.get("last_status") in _CODEX_REVIEWABLE_STATUSES
+    ):
+        enqueue_codex_knowledge_extraction(
+            request.app.state.trace_store,
+            session["pet_session_id"],
+            min_signal_score=settings.codex_knowledge_min_signal_score,
+            prompt_version=settings.codex_knowledge_prompt_version,
+        )
     return session
 
 

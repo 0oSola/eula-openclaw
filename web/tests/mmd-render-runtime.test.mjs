@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 
 import * as THREE from "three";
@@ -16,6 +16,7 @@ const {
   pickSequentialLoopMotionUrl,
   resetLowerBodyBonesToBase,
   resetBonesNotAnimatedByClip,
+  tuneK3MMDMaterial,
   tuneRezeNprMMDMaterial,
 } = runtimeModule;
 
@@ -473,13 +474,13 @@ test("expression targets vary by emotion and action without using blink morphs",
 
 test("renderFrame restores root transport anchors and bones outside the active VMD clip", () => {
   const allParent = new THREE.Bone();
-  allParent.name = "全ての親";
+  allParent.name = "鍏ㄣ仸銇Κ";
   allParent.position.set(0, 0, 0);
   const leftLegIk = new THREE.Bone();
-  leftLegIk.name = "左足ＩＫ";
+  leftLegIk.name = "宸﹁冻锛╋极";
   leftLegIk.position.set(0, 0, 0);
   const finger = new THREE.Bone();
-  finger.name = "右小指１";
+  finger.name = "鍙冲皬鎸囷紤";
   finger.position.set(0, 0, 0);
 
   const mesh = {
@@ -521,10 +522,10 @@ test("renderFrame restores root transport anchors and bones outside the active V
 
 test("captureBones does not treat leg IK targets as fixed VMD anchors", () => {
   const leftLegIkParent = new THREE.Bone();
-  leftLegIkParent.name = "左足IK親";
+  leftLegIkParent.name = "宸﹁冻IK瑕?;
   leftLegIkParent.position.set(0, 0, 0);
   const leftLegIk = new THREE.Bone();
-  leftLegIk.name = "左足ＩＫ";
+  leftLegIk.name = "宸﹁冻锛╋极";
   leftLegIk.position.set(0, 0, 0);
 
   const mesh = {
@@ -546,7 +547,7 @@ test("captureBones does not treat leg IK targets as fixed VMD anchors", () => {
 
 test("playVmd builds clips against the captured base skeleton instead of the live animated mesh", async () => {
   const rightLegIk = new THREE.Bone();
-  rightLegIk.name = "右足ＩＫ";
+  rightLegIk.name = "鍙宠冻锛╋极";
   rightLegIk.position.set(1, 2, 3);
   const mesh = {
     isSkinnedMesh: true,
@@ -580,7 +581,7 @@ test("playVmd builds clips against the captured base skeleton instead of the liv
     loader: {
       loadAnimation(_url, object, onLoad) {
         loaderTarget = object;
-        loaderBasePosition = object.skeleton.getBoneByName("右足ＩＫ").position.toArray();
+        loaderBasePosition = object.skeleton.getBoneByName("鍙宠冻锛╋极").position.toArray();
         onLoad({ duration: 1 });
       },
     },
@@ -730,6 +731,71 @@ test("stage presentation config exposes reze-npr as an isolated experimental ren
   assert.equal(reze.postfx.bloomThreshold, 0.5);
   assert.equal(reze.renderer.toneMapping, "aces");
   assert.ok(reze.lights.key.intensity > classic.lights.key.intensity);
+});
+
+test("stage presentation config applies the supplied Reze Design lighting while preserving the MIO stage base", () => {
+  const rezeDesign = getStagePresentationConfig("reze-design");
+
+  assert.equal(rezeDesign.background, null);
+  assert.equal(rezeDesign.camera.fov, 32);
+  assert.deepEqual(rezeDesign.camera.position, [0, 11.4, 26.2]);
+  assert.deepEqual(rezeDesign.camera.target, [0, 11.4, 0]);
+  assert.equal(rezeDesign.camera.minDistance, 21);
+  assert.equal(rezeDesign.camera.maxDistance, 72);
+  assert.equal(rezeDesign.lights.ambient.color, "#fef2f2");
+  assert.equal(rezeDesign.lights.ambient.intensity, 0.4);
+  assert.equal(rezeDesign.lights.key.intensity, 1.35);
+  assert.deepEqual(rezeDesign.lights.key.position, [-20.45, 14.08, -14.32]);
+  assert.equal(rezeDesign.floor.kind, "shadowCatcher");
+  assert.equal(rezeDesign.floor.size, 44);
+  assert.equal(rezeDesign.backdrop.enabled, false);
+  assert.equal(rezeDesign.postfx.bloomStrength, 0.09);
+  assert.equal(rezeDesign.postfx.bloomThreshold, 0.81);
+  assert.equal(rezeDesign.outline.enabled, true);
+});
+
+test("stage presentation config exposes k3 as a high-fidelity preset with postfx and fine outline", () => {
+  const classic = getStagePresentationConfig("classic");
+  const k3 = getStagePresentationConfig("k3");
+
+  assert.equal(classic.postfx.enabled, false);
+  assert.equal(classic.outline.enabled, false);
+  assert.equal(classic.renderer, undefined);
+  assert.equal(classic.lights.key.shadowMapSize, undefined);
+
+  assert.equal(k3.background, null);
+  assert.equal(k3.camera.locked, false);
+  assert.equal(k3.camera.fov, classic.camera.fov);
+  assert.deepEqual(k3.camera.position, classic.camera.position);
+  assert.equal(k3.character.targetHeight, 19.5);
+  assert.equal(k3.renderer.toneMapping, "aces");
+  assert.equal(k3.renderer.pixelRatioCap, 3);
+  assert.equal(k3.lights.key.shadowMapSize, 4096);
+  assert.equal(k3.shadowMapType, THREE.PCFSoftShadowMap);
+  assert.equal(k3.outline.enabled, true);
+  assert.ok(k3.outline.scale < 1.02);
+  assert.equal(k3.postfx.enabled, true);
+  // UnrealBloomPass 浼氭秱榛戦€忔槑鑳屾櫙锛孠3 鐨?bloom 蹇呴』淇濇寔鍏抽棴
+  assert.equal(k3.postfx.bloomStrength, 0);
+  assert.equal(k3.floor.kind, "shadowCatcher");
+  assert.equal(k3.floor.contactShadow.enabled, true);
+  assert.equal(k3.backdrop.enabled, false);
+});
+
+test("stage presentation config k3 is cloned per call and leaves other presets untouched", () => {
+  const k3a = getStagePresentationConfig("k3");
+  k3a.renderer.pixelRatioCap = 1;
+  k3a.lights.key.shadowMapSize = 1024;
+  k3a.outline.enabled = false;
+
+  const k3b = getStagePresentationConfig("k3");
+  assert.equal(k3b.renderer.pixelRatioCap, 3);
+  assert.equal(k3b.lights.key.shadowMapSize, 4096);
+  assert.equal(k3b.outline.enabled, true);
+
+  const classic = getStagePresentationConfig("classic");
+  assert.equal(classic.outline.enabled, false);
+  assert.equal(classic.postfx.enabled, false);
 });
 
 test("reze-npr material tuning maps PMX material names to renderer-inspired presets", () => {
@@ -1090,7 +1156,7 @@ test("classic and genshin material tuners diverge while preserving cutout safety
 
 test("genshin material tuning preserves authored toon ramps while keeping hair presentation readable", () => {
   const existingGradientMap = { id: "authored-ramp" };
-  const hair = makeMaterial({ name: "前髪", transparent: false, specular: 0.7, shininess: 40 });
+  const hair = makeMaterial({ name: "鍓嶉", transparent: false, specular: 0.7, shininess: 40 });
   hair.gradientMap = existingGradientMap;
 
   runtimeModule.tuneGenshinMMDMaterial?.(hair, { id: "generated-ramp" });
@@ -1241,6 +1307,98 @@ test("loadModel selects material tuning by renderPipeline", async () => {
   assert.equal(mioReferenceMaterial.gradientMap.id, "mio-reference-ramp");
   assert.equal(mioReferenceMaterial.shininess, genshinFaceMaterial.shininess);
   assert.equal(mioReferenceMaterial.emissive.getHex(), genshinFaceMaterial.emissive.getHex());
+});
+
+test("k3 material tuning softens skin, keeps hair sheen, and boosts eye highlights", () => {
+  const face = makeMaterial({ name: "face01", specular: 1, shininess: 80 });
+  const hair = makeMaterial({ name: "hair01", specular: 1, shininess: 80 });
+  const eye = makeMaterial({ name: "eye pupil", specular: 1, shininess: 12 });
+  tuneK3MMDMaterial(face, null);
+  tuneK3MMDMaterial(hair, null);
+  tuneK3MMDMaterial(eye, null);
+
+  assert.equal(face.side, THREE.DoubleSide);
+  assert.equal(face.alphaTest, 0.5);
+  assert.ok(face.shininess <= 12);
+  assert.ok(face.specular.r <= 0.45);
+  assert.equal(face.emissive.getHex(), 0x1c100c);
+  assert.equal(face.emissiveIntensity, 0.14);
+
+  assert.equal(hair.shininess, 32);
+  assert.ok(hair.specular.r > face.specular.r);
+
+  assert.equal(eye.shininess, 40);
+  assert.ok(eye.envMapIntensity > hair.envMapIntensity);
+  assert.ok(eye.emissiveIntensity >= 0.2);
+});
+
+test("k3 material tuning boosts explicit glow and suppresses project2-style masks", () => {
+  const glow = makeMaterial({ name: "emissive glow" });
+  const mask = makeMaterial({ name: "face mask" });
+  tuneK3MMDMaterial(glow, null);
+  tuneK3MMDMaterial(mask, null);
+
+  assert.equal(glow.emissive.getHex(), 0x9d00ff);
+  assert.equal(glow.emissiveIntensity, 1);
+  assert.notEqual(glow.visible, false);
+
+  assert.equal(mask.visible, false);
+  assert.equal(mask.opacity, 0);
+});
+
+test("loadModel routes k3 materials through k3 tuning instead of genshin or classic", async () => {
+  const k3FaceMaterial = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
+  const genshinFaceMaterial = makeMaterial({ name: "Face Skin", transparent: true, specular: 1, shininess: 80 });
+
+  const k3Runtime = makeRuntime({
+    renderPipeline: "k3",
+    toonRampTexture: { id: "k3-ramp" },
+    toonSkinRampTexture: { id: "k3-skin-ramp" },
+  });
+  k3Runtime.loader = {
+    load(_url, onLoad) {
+      onLoad(makeMesh({ materials: [k3FaceMaterial] }));
+    },
+  };
+
+  const genshinRuntime = makeRuntime({ renderPipeline: "genshin", toonRampTexture: { id: "genshin-ramp" } });
+  genshinRuntime.loader = {
+    load(_url, onLoad) {
+      onLoad(makeMesh({ materials: [genshinFaceMaterial] }));
+    },
+  };
+
+  await k3Runtime.loadModel("/k3-model.pmx");
+  await genshinRuntime.loadModel("/genshin-face-model.pmx");
+
+  assert.equal(k3FaceMaterial.gradientMap.id, "k3-skin-ramp");
+  assert.equal(k3FaceMaterial.emissive.getHex(), 0x1c100c);
+  assert.equal(k3FaceMaterial.emissiveIntensity, 0.14);
+  assert.equal(genshinFaceMaterial.emissive.getHex(), 0x000000);
+  assert.equal(genshinFaceMaterial.emissiveIntensity, 0);
+});
+
+test("k3 skin materials use the warm skin ramp while hair keeps the global ramp", () => {
+  const globalRamp = { id: "k3-global-ramp" };
+  const skinRamp = { id: "k3-skin-ramp" };
+  const skin = makeMaterial({ name: "skin body", specular: 1, shininess: 40 });
+  const face = makeMaterial({ name: "face01", specular: 1, shininess: 40 });
+  const hair = makeMaterial({ name: "hair01", specular: 1, shininess: 40 });
+  const eye = makeMaterial({ name: "eye pupil", specular: 1, shininess: 40 });
+
+  tuneK3MMDMaterial(skin, globalRamp, skinRamp);
+  tuneK3MMDMaterial(face, globalRamp, skinRamp);
+  tuneK3MMDMaterial(hair, globalRamp, skinRamp);
+  tuneK3MMDMaterial(eye, globalRamp, skinRamp);
+
+  assert.equal(skin.gradientMap.id, "k3-skin-ramp");
+  assert.equal(face.gradientMap.id, "k3-skin-ramp");
+  assert.equal(hair.gradientMap.id, "k3-global-ramp");
+  assert.equal(eye.gradientMap.id, "k3-global-ramp");
+
+  const fallback = makeMaterial({ name: "skin arm", specular: 1, shininess: 40 });
+  tuneK3MMDMaterial(fallback, globalRamp, null);
+  assert.equal(fallback.gradientMap.id, "k3-global-ramp");
 });
 
 test("loadModel routes hero-shot face materials through hero-shot tuning instead of classic tuning", async () => {
@@ -1474,6 +1632,23 @@ test("setupFloor keeps mio-reference to shadow catching plus contact grounding o
   });
 });
 
+test("setupFloor keeps reze-design on the MIO-compatible shadow and contact grounding base", () => {
+  withStubbedDocument(() => {
+    const adds = [];
+    const runtime = makeRuntime({
+      renderPipeline: "reze-design",
+      scene: { add(node) { adds.push(node); }, remove() {} },
+    });
+
+    runtime.setupFloor(getStagePresentationConfig("reze-design"));
+
+    assert.equal(adds.length, 1);
+    assert.ok(runtime.floorGroup);
+    assert.equal(runtime.floorGroup.children.length, 2);
+    assert.equal(runtime.floorTextures.length, 1);
+  });
+});
+
 test("renderScene uses direct renderer for both classic and project2-style genshin", () => {
   const classicCalls = [];
   const classicRuntime = makeRuntime({
@@ -1627,12 +1802,16 @@ test("shouldUsePostFX follows the active presentation config", () => {
   assert.equal(genshinRuntime.shouldUsePostFX(), false);
 });
 
-test("genshin bloom stays disabled when the project2-style stage bypasses postfx", () => {
+test("transparent stages disable bloom so their canvas alpha remains available to the CSS background", () => {
   const runtime = makeRuntime({ presentation: getStagePresentationConfig("genshin") });
   const genshinPresentation = getStagePresentationConfig("genshin");
+  const rezeNprPresentation = getStagePresentationConfig("reze-npr");
+  const rezeDesignPresentation = getStagePresentationConfig("reze-design");
 
   assert.equal(runtime.shouldUseBloom(genshinPresentation), false);
   assert.equal(runtime.shouldUseBloom(getStagePresentationConfig("classic")), false);
+  assert.equal(runtime.shouldUseBloom(rezeNprPresentation), false);
+  assert.equal(runtime.shouldUseBloom(rezeDesignPresentation), false);
 });
 
 test("loadModel keeps genshin base skeleton capture aligned with classic integration semantics", async () => {
@@ -2308,10 +2487,10 @@ test("companion loop lower-body lock restores leg bones even when the VMD animat
 });
 
 test("lower-body detection covers IK parents and waist chain bones", () => {
-  assert.equal(isLowerBodyBoneName("右足IK親"), true);
-  assert.equal(isLowerBodyBoneName("腰"), true);
+  assert.equal(isLowerBodyBoneName("鍙宠冻IK瑕?), true);
+  assert.equal(isLowerBodyBoneName("鑵?), true);
   assert.equal(isLowerBodyBoneName("pelvis"), true);
-  assert.equal(isLowerBodyBoneName("右腕"), false);
+  assert.equal(isLowerBodyBoneName("鍙宠厱"), false);
 });
 
 test("updateVmdLoop starts another built-in idle motion after the current clip duration elapses", () => {

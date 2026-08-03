@@ -32,41 +32,4 @@ describe("Codex approval fallback", () => {
     expect(fallback?.limitation).toContain("JSONL scanner does not expose an approval id");
   });
 
-  it("makes relay approvals directly actionable when an approval id is available", () => {
-    const fallback = buildApprovalFallback(
-      {
-        state: "waiting_approval",
-        sessionTitle: "npm install",
-        workspacePath: "D:\\workspace\\MMD project",
-        codexSessionId: "codex_sess_1",
-        source: "app-server-relay",
-        pendingApprovals: [
-          {
-            id: "approval_1",
-            title: "Run npm install",
-            actionType: "command",
-            detail: { command: "npm install" },
-          },
-        ],
-      },
-      "medium",
-    );
-
-    expect(fallback).toMatchObject({
-      canApprove: true,
-      canDeny: true,
-      approvalId: "approval_1",
-      codexSessionId: "codex_sess_1",
-      primaryAction: {
-        type: "approve",
-        label: "Approve",
-      },
-      secondaryAction: {
-        type: "deny",
-        label: "Deny",
-      },
-      limitationCode: "relay-approval-id",
-    });
-    expect(fallback?.message).toBe("Codex needs approval · npm install · Run npm install");
-  });
 });

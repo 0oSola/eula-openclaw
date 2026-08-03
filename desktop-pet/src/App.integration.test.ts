@@ -37,11 +37,12 @@ describe("Desktop Pet App integration wiring", () => {
     const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
     const styles = readFileSync(path.resolve(__dirname, "styles.css"), "utf8");
 
-    expect(source).toContain("buildCodexCompletionNotice");
-    expect(source).toContain("dismissedCompletionNoticeKey");
+    expect(source).toContain("resolveLatchedCodexCompletionNotice");
+    expect(source).toContain("dismissedCompletionNoticeKeys");
+    expect(source).toContain("setCompletionNotice");
     expect(source).toContain("pet-completion-bubble");
     expect(source).toContain("focusWorkspaceFromCompletionNotice");
-    expect(source).toContain("setDismissedCompletionNoticeKey(completionNotice.key)");
+    expect(source).toContain("addDismissedCompletionNoticeKey(keys, noticeKey)");
     expect(source).toContain('closest(".pet-panel, .pet-status-action, .pet-completion-bubble")');
     expect(styles).toContain(".pet-completion-bubble");
     expect(styles).toContain(".pet-completion-dismiss");
@@ -75,16 +76,6 @@ describe("Desktop Pet App integration wiring", () => {
     expect(source).toContain("focusActiveSessionFromPanel");
     expect(source).toContain("window.desktopPet?.sessions?.focusActive");
     expect(source).toContain("item.isActive ? focusActiveSessionFromPanel(item.petSessionId) : restoreSessionFromPanel(item.petSessionId)");
-  });
-
-  it("renders direct approve and deny actions for relay approvals", () => {
-    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
-
-    expect(source).toContain("decideApprovalFromStatus");
-    expect(source).toContain("window.desktopPet?.approvals?.decide");
-    expect(source).toContain('approvalFallback.secondaryAction');
-    expect(source).toContain('decision: "approve_once"');
-    expect(source).toContain('decision: "deny"');
   });
 
   it("observes API runtime status and retries MMD state loading when API becomes available", () => {
@@ -140,5 +131,13 @@ describe("Desktop Pet App integration wiring", () => {
     expect(source).toContain("createStageClickRipple");
     expect(petStageState).toContain('from "@/features/stage/stageCharacterClick.js"');
     expect(petStageState).toContain("resolveStageCharacterClickInteraction({");
+  });
+
+  it("keeps the right-click menu out of the MMD renderer", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+
+    expect(source).not.toContain("window.desktopPet?.menu?.onShow");
+    expect(source).not.toContain("pet-context-menu");
+    expect(source).toContain('closest(".pet-panel, .pet-status-action, .pet-completion-bubble")');
   });
 });

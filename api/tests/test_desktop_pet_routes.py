@@ -85,7 +85,7 @@ def test_shared_config_round_trip():
 def test_shared_config_accepts_full_render_pipeline_contract():
     client = _client()
 
-    for render_pipeline in ["mio-reference", "reze-npr"]:
+    for render_pipeline in ["mio-reference", "reze-npr", "reze-design", "k3"]:
         response = client.put(
             "/desktop-pet/shared-config",
             json={"selected_model_path": "Eula/Eula.pmx", "render_pipeline": render_pipeline},

@@ -98,6 +98,8 @@ class Settings:
     codex_session_idle_timeout_seconds: int
     codex_turn_timeout_seconds: int
     codex_process_start_timeout_seconds: int
+    codex_wsl_enabled: bool
+    codex_wsl_exec: str
     codex_max_prompt_chars: int
     codex_require_git_repo: bool
     codex_require_git_clean_for_apply: bool
@@ -109,12 +111,23 @@ class Settings:
     codex_openclaw_review_sync_interval_seconds: float
     codex_openclaw_review_max_payload_chars: int
     codex_openclaw_review_dump_debug_files: bool
+    codex_knowledge_extraction_enabled: bool
+    codex_knowledge_agent_id: str
+    codex_knowledge_channel: str
+    codex_knowledge_sync_interval_seconds: float
+    codex_knowledge_max_payload_chars: int
+    codex_knowledge_min_signal_score: int
+    codex_knowledge_timeout_seconds: int
+    codex_knowledge_prompt_version: str
+    codex_knowledge_skill_path: Path
+    codex_knowledge_dump_debug_files: bool
     codex_openclaw_control_plane_enabled: bool
     codex_openclaw_control_plane_base_url: str
     codex_openclaw_control_plane_token: str
     codex_openclaw_control_plane_workspace_id: str
     codex_openclaw_control_plane_sync_interval_seconds: float
     codex_openclaw_control_plane_snapshot_limit: int
+    domain_knowledge_control_plane_enabled: bool
     codex_review_memory_enabled: bool
     codex_review_memory_export_root: Path
     codex_review_memory_target: str
@@ -307,6 +320,13 @@ class Settings:
             codex_process_start_timeout_seconds=int(
                 resolve_value("codex_process_start_timeout_seconds", "CODEX_PROCESS_START_TIMEOUT_SECONDS", 30)
             ),
+            codex_wsl_enabled=_parse_bool(
+                resolve_value("codex_wsl_enabled", "CODEX_WSL_ENABLED", False),
+                default=False,
+            ),
+            codex_wsl_exec=str(
+                resolve_value("codex_wsl_exec", "CODEX_WSL_EXEC", "wsl.exe")
+            ).strip() or "wsl.exe",
             codex_max_prompt_chars=int(resolve_value("codex_max_prompt_chars", "CODEX_MAX_PROMPT_CHARS", 12000)),
             codex_require_git_repo=_parse_bool(
                 resolve_value("codex_require_git_repo", "CODEX_REQUIRE_GIT_REPO", True),
@@ -350,6 +370,50 @@ class Settings:
                 resolve_value("codex_openclaw_review_dump_debug_files", "CODEX_OPENCLAW_REVIEW_DUMP_DEBUG_FILES", False),
                 default=False,
             ),
+            codex_knowledge_extraction_enabled=_parse_bool(
+                resolve_value("codex_knowledge_extraction_enabled", "CODEX_KNOWLEDGE_EXTRACTION_ENABLED", False),
+                default=False,
+            ),
+            codex_knowledge_agent_id=str(
+                resolve_value("codex_knowledge_agent_id", "CODEX_KNOWLEDGE_AGENT_ID", "codex-manager")
+            ).strip()
+            or "codex-manager",
+            codex_knowledge_channel=str(
+                resolve_value("codex_knowledge_channel", "CODEX_KNOWLEDGE_CHANNEL", "codex-pet")
+            ).strip()
+            or "codex-pet",
+            codex_knowledge_sync_interval_seconds=float(
+                resolve_value("codex_knowledge_sync_interval_seconds", "CODEX_KNOWLEDGE_SYNC_INTERVAL_SECONDS", 10)
+            ),
+            codex_knowledge_max_payload_chars=int(
+                resolve_value("codex_knowledge_max_payload_chars", "CODEX_KNOWLEDGE_MAX_PAYLOAD_CHARS", 12000)
+            ),
+            codex_knowledge_min_signal_score=int(
+                resolve_value("codex_knowledge_min_signal_score", "CODEX_KNOWLEDGE_MIN_SIGNAL_SCORE", 5)
+            ),
+            codex_knowledge_timeout_seconds=int(
+                resolve_value("codex_knowledge_timeout_seconds", "CODEX_KNOWLEDGE_TIMEOUT_SECONDS", 300)
+            ),
+            codex_knowledge_prompt_version=str(
+                resolve_value(
+                    "codex_knowledge_prompt_version",
+                    "CODEX_KNOWLEDGE_PROMPT_VERSION",
+                    "codex-domain-knowledge-v3",
+                )
+            ).strip()
+            or "codex-domain-knowledge-v3",
+            codex_knowledge_skill_path=_resolve_setting_path(
+                resolve_value(
+                    "codex_knowledge_skill_path",
+                    "CODEX_KNOWLEDGE_SKILL_PATH",
+                    "openclaw/skills/codex-session-knowledge-extraction/SKILL.md",
+                ),
+                base_dir=project_root,
+            ),
+            codex_knowledge_dump_debug_files=_parse_bool(
+                resolve_value("codex_knowledge_dump_debug_files", "CODEX_KNOWLEDGE_DUMP_DEBUG_FILES", False),
+                default=False,
+            ),
             codex_openclaw_control_plane_enabled=_parse_bool(
                 resolve_value(
                     "codex_openclaw_control_plane_enabled",
@@ -387,6 +451,14 @@ class Settings:
                     "CODEX_OPENCLAW_CONTROL_PLANE_SNAPSHOT_LIMIT",
                     20,
                 )
+            ),
+            domain_knowledge_control_plane_enabled=_parse_bool(
+                resolve_value(
+                    "domain_knowledge_control_plane_enabled",
+                    "DOMAIN_KNOWLEDGE_CONTROL_PLANE_ENABLED",
+                    False,
+                ),
+                default=False,
             ),
             codex_review_memory_enabled=_parse_bool(
                 resolve_value("codex_review_memory_enabled", "CODEX_REVIEW_MEMORY_ENABLED", False),

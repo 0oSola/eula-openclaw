@@ -10,7 +10,13 @@ declare global {
         onChanged: (callback: (status: DesktopPetApiRuntimeStatus | null) => void) => () => void;
       };
       menu: {
-        openContextMenu: (position?: { x: number; y: number }) => Promise<boolean>;
+        onShow: (callback: (payload: DesktopPetContextMenuPayload) => void) => () => void;
+        execute: (action: DesktopPetMenuAction) => Promise<boolean>;
+        close: () => void;
+        requestPaint: () => void;
+        reportReceived: (openedAtMs: number) => void;
+        reportCommitted: (openedAtMs: number) => void;
+        reportPainted: (openedAtMs: number) => void;
         onAction: (callback: (action: DesktopPetMenuAction) => void) => () => void;
       };
       windowDrag: {
@@ -28,13 +34,6 @@ declare global {
       prompt: {
         send: (prompt: string) => Promise<boolean>;
       };
-      approvals: {
-        decide: (options: {
-          codexSessionId: string;
-          approvalId: string;
-          decision: "approve_once" | "deny";
-        }) => Promise<boolean>;
-      };
       vscode: {
         focus: (options?: { workspacePath?: string }) => Promise<boolean>;
       };
@@ -51,6 +50,10 @@ declare global {
         get: () => Promise<DesktopPetAgent>;
         onChanged: (callback: (agent: DesktopPetAgent) => void) => () => void;
       };
+      codexEnv: {
+        get: () => Promise<DesktopPetCodexEnvMode>;
+        onChanged: (callback: (envMode: DesktopPetCodexEnvMode) => void) => () => void;
+      };
       clipboard: {
         writeText: (text: string) => Promise<boolean>;
       };
@@ -59,6 +62,23 @@ declare global {
 }
 
 type DesktopPetAgent = "codex" | "claude";
+type DesktopPetCodexEnvMode = "win" | "wsl";
+
+type DesktopPetMenuItem = {
+  id: string;
+  label?: string;
+  type?: "normal" | "separator" | "radio" | "checkbox";
+  checked?: boolean;
+  enabled?: boolean;
+  action?: DesktopPetMenuAction;
+  submenu?: DesktopPetMenuItem[];
+};
+
+type DesktopPetContextMenuPayload = {
+  items: DesktopPetMenuItem[];
+  position: { x: number; y: number };
+  openedAtMs: number;
+};
 
 type DesktopPetMenuAction =
   | { type: "select-workspace" }
@@ -66,17 +86,19 @@ type DesktopPetMenuAction =
   | { type: "workspace-selected"; workspacePath: string }
   | { type: "new-session" }
   | { type: "send-prompt" }
-  | { type: "prompt-sent"; source?: "app-server-relay" | "terminal" }
-  | { type: "approval-decided"; approvalId: string; decision: "approve_once" | "deny" }
+  | { type: "prompt-sent"; source?: "terminal" }
   | { type: "restore-session"; petSessionId: string }
   | { type: "focus-active-session"; petSessionId: string }
   | { type: "more-sessions"; sessions?: DesktopPetSession[] }
+  | { type: "interaction-mode"; mode: "window-drag" | "camera-adjust" }
   | { type: "notification-detail"; profile: "low" | "medium" | "high" }
   | { type: "menu-language"; language: "en" | "zh-CN" }
   | { type: "agent"; agent: DesktopPetAgent }
+  | { type: "codex-env"; envMode: DesktopPetCodexEnvMode }
   | { type: "always-on-top"; enabled: boolean }
   | { type: "focus-vscode" }
-  | { type: "sync-main-site" };
+  | { type: "sync-main-site" }
+  | { type: "close" };
 
 type DesktopPetCodexStatus = {
   state:
@@ -95,17 +117,12 @@ type DesktopPetCodexStatus = {
   workspacePath?: string;
   sessionTitle?: string;
   codexSessionId?: string;
+  completionNoticeKey?: string;
   lastOutput?: string;
   error?: string;
   updatedAt?: string;
   commandLine?: string;
-  source?: "app-server-relay" | "codex-jsonl" | "claude-jsonl" | "terminal";
-  pendingApprovals?: Array<{
-    id: string;
-    title: string;
-    actionType: string;
-    detail: Record<string, unknown>;
-  }>;
+  source?: "codex-jsonl" | "claude-jsonl" | "terminal";
 };
 
 type DesktopPetApiRuntimeStatus = {

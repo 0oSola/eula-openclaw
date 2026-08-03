@@ -1,6 +1,6 @@
 # Desktop Pet Manual Acceptance Checklist
 
-更新时间：2026-06-04
+更新时间：2026-07-10
 
 本清单用于补齐需要真实桌面、真实鼠标或用户视觉确认的 desktop-pet 交互验收。执行前先启动 API、主站和 desktop-pet，并确认 Pet 窗口中已经加载真实 MMD 模型。
 
@@ -83,8 +83,11 @@
 - [ ] 右键菜单打开 `Workspace`，确认当前 workspace 名称正确。
 - [ ] 点击 `New Codex Session`。
 - [ ] VSCode 新开一个当前 workspace 窗口；同一 workspace 连续触发时也应出现新的窗口，而不是只复用/聚焦已有窗口。
-- [ ] VSCode 内置终端 `Codex Pet` 执行 `codex`，并删除 `<workspace>\.codex-pet\vscode-terminal-request.json`。
+- [ ] 新窗口由 `%TEMP%\mmd-codex-pet\vscode-workspaces\<launch-id>\session.code-workspace` 打开，VSCode Recent Workspaces 不新增该临时项。
+- [ ] VSCode 内置终端 `Codex Pet` 执行 `codex`；同目录 `.codex-pet\vscode-terminal-ack.json` 记录匹配 request id，request 文件随后删除。
+- [ ] 保持另一个已加载 Pet helper 的 VSCode 窗口打开，确认它不会抢走本次 request 或新建 `Codex Pet` 终端。
 - [ ] Pet 常驻状态条从 `starting` / `launched` 进入 running 类状态。
+- [ ] 若目标 helper 未加载，Pet 在约 20 秒后显示 failed，而不是误报 launched。
 
 ### Codex 恢复
 
@@ -92,6 +95,50 @@
 - [ ] 选择一条最近 session。
 - [ ] VSCode 内置终端执行 `codex resume --cd <workspace> <session_id>`。
 - [ ] Pet 常驻状态条显示恢复中的 session 状态，且没有创建外部 `cmd.exe`。
+
+### Codex WSL 模式
+
+- [ ] 在右键菜单 `Codex Environment` / `Codex 环境` 选择 `WSL`；关闭并重新打开菜单后仍勾选 `WSL`，重启 Pet 后选择保持。
+- [ ] 在含空格的 workspace 点击 `New Codex Session`，确认 `Codex Pet` 终端执行 `wsl.exe --cd <workspace> --exec codex ...`，Codex 内工作目录为对应 `/mnt/<drive>/...` 路径。
+- [ ] 恢复一条会话，确认命令为 `wsl.exe --cd <workspace> --exec codex ... resume --cd . <session_id>`，Linux Codex 参数中没有 `D:\...` workspace。
+- [ ] 切回 `Windows` 后新建/恢复，确认仍执行原生 `codex` / `codex resume --cd <workspace> <session_id>`，不经过 `wsl.exe`。
+
+### PET-INT-077 / 078 完成气泡去重
+
+- [ ] 准备两个可快速完成的 session A、B；A 完成后先不要关闭气泡，打开右键菜单并等待 background refresh，确认普通 running/历史 completed/status card 更新不会让 A 气泡消失。
+- [ ] 让 B 产生新的显式完成事件，确认 B 气泡替换当前 A latch；点击 `x` 后 B 气泡立即消失。
+- [ ] 依次关闭 A、B 后，通过受控状态 fixture 或重复 publisher 按 A → B → A 重放相同 completion key，确认 A、B 都不重新弹出。
+- [ ] 重启 Pet，确认历史 completed session 仍可显示在常驻状态卡或最近会话列表中，但没有 `completionNoticeKey` 时不弹完成气泡。
+- [ ] 检查 Electron Local Storage 中 `pet:dismissed-completion-notice` 已迁移为 JSON array；连续关闭超过 100 个测试 key 时只保留最近 100 个且无重复项。
+
+### PET-INT-079 completed watcher 停止
+
+- [ ] 开启 `MMD_PET_DEBUG_EVENTS=1`，新建或恢复一个 Codex session，并等待任务进入 `completed`。
+- [ ] 日志先出现该 session 的 completed `codex-status:changed`，随后出现 `codex-session:watch-stop` 且 `reason=status:completed`。
+- [ ] 完成后的 sibling scan/upsert 不再次发布其他 session 状态；等待至少两个原 watcher interval，确认同一 watcher 不再刷新状态。
+
+### PET-INT-080 workspace / agent 切换清理 watcher
+
+- [ ] 在 session 仍为 running 时通过 `Workspace -> Select Workspace...` 或 `Switch to workspace` 切换目录；日志出现 `codex-session:watch-stop`，reason 分别为 `workspace-selected` 或 `workspace-switched`。
+- [ ] 在另一条 running session 中切换 `Coding Agent`；日志出现 `codex-session:watch-stop` 且 `reason=agent-changed`。
+- [ ] 在 API list、More Sessions 或 background refresh 尚未返回时切换 workspace/agent，确认旧请求返回后不更新 menu cache、session panel 或状态卡。
+- [ ] 在 `New Session` / restore 已发出但 helper ACK 尚未返回时切换 workspace/agent，确认日志记录 `new-session-stale` / `restore-session-stale`，旧 launch 结果不发布 launched/running，也不启动 watcher。
+- [ ] 切换后等待旧 session 继续产生 JSONL 输出，确认旧 generation 的迟到扫描结果不会覆盖新上下文的 idle/running 状态，也不会触发完成气泡。
+
+### PET-INT-081 当前 workspace publisher 与 watcher 优先级
+
+- [ ] 准备 workspace A、B 各至少一条最近 session；当前选择 A 时打开菜单并等待 background refresh/daily scan，状态卡只能选择 A 的 session，不得显示 B。
+- [ ] 在 A 中启动 active watcher，再触发右键菜单、background refresh 和 session API 返回；确认普通 publisher 不覆盖 watcher 正在发布的 A 状态。
+- [ ] 切换到 B 后重复检查，确认 cache 中残留的 A session 不会成为 B 的状态卡来源，旧 A publisher 的迟到结果被丢弃。
+
+### PET-INT-082 new watcher 起始时间与 Windows / WSL 合并
+
+- [ ] 保持一个启动前已存在的旧长会话 O 持续写 JSONL，使其 file mtime 晚于新建动作；随后点击 `New Codex Session` 创建 N，确认 `codex-session:watch-session-bound` 绑定 N，而不是仅因 mtime 更新选择 O。
+- [ ] N 绑定后继续在同一 session 发送一轮输入，确认 watcher 使用精确 session id + file mtime 跟踪后续输出；restore session 同样能继续更新。
+- [ ] 同时准备 Windows `CODEX_HOME` 与 `CODEX_WSL_HOME` 候选，让 Windows root 的旧 session 数量足以填满 limit，并让 WSL root 有更新 session；打开 Recent/More Sessions，确认更新的 WSL session 仍进入结果。
+- [ ] 当前 Pet workspace 选择 Windows 路径（例如 `D:\workspace\MMD project`），让 WSL session JSONL 写入等价 `cwd=/mnt/d/workspace/MMD project`；确认 scanner 不过滤该 session、workspace+agent context gate 仍判定 current，菜单/background publisher 可把它作为当前 workspace 状态显示。
+- [ ] 对同一 workspace 混用盘符大小写、`/`/`\` 和末尾分隔符后重复检查，确认都归一为同一 identity；另一个 drive 或不同 tail 路径仍必须被排除。
+- [ ] 检查对应 payload/debug 信息包含 `session_started_at`；无事件 timestamp 的测试文件使用 birthtime/ctime fallback，不因旧文件后来被 touch 而伪装成新 session。
 
 ## 记录
 
@@ -101,4 +148,9 @@
 - Windows 显示器布局：
 - PET-INT-024 脚本输出摘要：
 - PET-INT-025 重启恢复结果：
+- PET-INT-077 / 078 完成气泡结果：
+- PET-INT-079 completed watcher 日志：
+- PET-INT-080 workspace / agent watcher-stop 日志：
+- PET-INT-081 当前 workspace publisher 结果：
+- PET-INT-082 watcher 绑定与 Windows / WSL 合并结果：
 - 异常与日志路径：

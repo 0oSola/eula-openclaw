@@ -13,6 +13,7 @@ from app.db.store import TraceStore
 from app.routes.assets import router as assets_router
 from app.routes.chat import router as chat_router
 from app.routes.codex_interactive import router as codex_interactive_router
+from app.routes.codex_knowledge import router as codex_knowledge_router
 from app.routes.codex_review import router as codex_review_router
 from app.routes.config import router as config_router
 from app.routes.desktop_pet import router as desktop_pet_router
@@ -28,6 +29,7 @@ from app.services.message_tts_reference import create_or_enqueue_message_tts_ref
 from app.services.message_tts_worker import run_message_tts_worker
 from app.services.codex_app_server_client import CodexAppServerClient
 from app.services.codex_interactive_provider import CodexInteractiveProvider, DeterministicCodexInteractiveProvider
+from app.services.codex_knowledge_extraction import run_codex_knowledge_extraction_worker
 from app.services.codex_openclaw_review_sync import run_codex_review_sync_worker
 from app.services.codex_worktree_manager import CodexWorktreeManager
 from app.services.message_bridge import MessageBridgeService, OpenClawGatewayProvider
@@ -97,6 +99,8 @@ def create_app(overrides: dict | None = None) -> FastAPI:
                 codex_home=settings.codex_home,
                 request_timeout_seconds=settings.codex_turn_timeout_seconds,
                 process_start_timeout_seconds=settings.codex_process_start_timeout_seconds,
+                wsl_enabled=settings.codex_wsl_enabled,
+                wsl_exec=settings.codex_wsl_exec,
             ),
             turn_timeout_seconds=settings.codex_turn_timeout_seconds,
         )
@@ -110,6 +114,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         worker_task = None
         bridge_task = None
         codex_review_task = None
+        codex_knowledge_task = None
         codex_review_control_plane_task = None
         if settings.tts_service_enabled:
             worker_task = asyncio.create_task(run_message_tts_worker(app))
@@ -129,6 +134,13 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         )
         if should_start_codex_review_worker:
             codex_review_task = asyncio.create_task(run_codex_review_sync_worker(app))
+        should_start_codex_knowledge_worker = (
+            settings.codex_knowledge_extraction_enabled
+            and bool(settings.openclaw_token)
+            and (overrides is None or bool(overrides.get("enable_codex_knowledge_extraction_worker")))
+        )
+        if should_start_codex_knowledge_worker:
+            codex_knowledge_task = asyncio.create_task(run_codex_knowledge_extraction_worker(app))
         should_start_codex_review_control_plane_worker = (
             settings.codex_openclaw_control_plane_enabled
             and app.state.openclaw_control_plane_client is not None
@@ -152,6 +164,10 @@ def create_app(overrides: dict | None = None) -> FastAPI:
                 codex_review_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await codex_review_task
+            if codex_knowledge_task is not None:
+                codex_knowledge_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await codex_knowledge_task
             if codex_review_control_plane_task is not None:
                 codex_review_control_plane_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -243,6 +259,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(chat_router)
     app.include_router(codex_interactive_router)
+    app.include_router(codex_knowledge_router)
     app.include_router(codex_review_router)
     app.include_router(openclaw_tools_router)
     app.include_router(message_bridge_router)

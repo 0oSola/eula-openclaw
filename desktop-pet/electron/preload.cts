@@ -64,7 +64,17 @@ contextBridge.exposeInMainWorld("desktopPet", {
     },
   },
   menu: {
-    openContextMenu: (position?: { x: number; y: number }) => ipcRenderer.invoke("pet:menu:open-context", position),
+    onShow: (callback: (payload: any) => void) => {
+      const listener = (_event: unknown, payload: any) => callback(payload);
+      ipcRenderer.on("pet:menu:show", listener);
+      return () => ipcRenderer.removeListener("pet:menu:show", listener);
+    },
+    execute: (action: any) => ipcRenderer.invoke("pet:menu:execute", action),
+    close: () => ipcRenderer.send("pet:menu:closed"),
+    requestPaint: () => ipcRenderer.send("pet:menu:request-paint"),
+    reportReceived: (openedAtMs: number) => ipcRenderer.send("pet:menu:received", { openedAtMs }),
+    reportCommitted: (openedAtMs: number) => ipcRenderer.send("pet:menu:committed", { openedAtMs }),
+    reportPainted: (openedAtMs: number) => ipcRenderer.send("pet:menu:painted", { openedAtMs }),
     onAction: (callback: (action: any) => void) => {
       const listener = (_event: unknown, action: any) => callback(action);
       ipcRenderer.on("pet:menu:action", listener);
@@ -86,10 +96,6 @@ contextBridge.exposeInMainWorld("desktopPet", {
   prompt: {
     send: (prompt: string) => ipcRenderer.invoke("pet:prompt:send", prompt),
   },
-  approvals: {
-    decide: (options: { codexSessionId: string; approvalId: string; decision: "approve_once" | "deny" }) =>
-      ipcRenderer.invoke("pet:approval:decide", options),
-  },
   vscode: {
     focus: (options?: { workspacePath?: string }) => ipcRenderer.invoke("pet:vscode:focus", options),
   },
@@ -110,6 +116,14 @@ contextBridge.exposeInMainWorld("desktopPet", {
       const listener = (_event: unknown, agent: string) => callback(agent);
       ipcRenderer.on("pet:agent:changed", listener);
       return () => ipcRenderer.removeListener("pet:agent:changed", listener);
+    },
+  },
+  codexEnv: {
+    get: () => ipcRenderer.invoke("pet:codex-env:get"),
+    onChanged: (callback: (envMode: string) => void) => {
+      const listener = (_event: unknown, envMode: string) => callback(envMode);
+      ipcRenderer.on("pet:codex-env:changed", listener);
+      return () => ipcRenderer.removeListener("pet:codex-env:changed", listener);
     },
   },
   interactionMode: {

@@ -153,6 +153,38 @@ Optional parameters / 可选参数:
 powershell -File scripts/dev-stack.ps1 -Action start -ApiPort 8200 -WebPort 3200 -AdminUserIds "admin-1,admin-2"
 ```
 
+### WSL Mode / WSL 模式
+
+Set `-RunEnv wsl` to launch the API and Web inside WSL instead of Windows. This is useful when Codex / Claude run inside WSL and you want the backend to share the same filesystem and process space.
+
+使用 `-RunEnv wsl` 可以让 API 和 Web 在 WSL 内启动，而不是 Windows。当 Codex / Claude 跑在 WSL 内时，后端需要与它们共享文件系统和进程空间，此时应使用 WSL 模式。
+
+```powershell
+# WSL mode - API and Web start inside WSL via wsl.exe
+powershell -File scripts/dev-stack.ps1 -Action start -RunEnv wsl
+
+# Or via the wrapper script
+.\\start-dev.ps1 -RunEnv wsl
+```
+
+What changes in WSL mode / WSL 模式下的区别:
+
+- `CODEX_HOME`, `CODEX_WORKSPACE_*`, `CODEX_WORKTREE_ROOT` in `api/.env` are converted from Windows paths to WSL paths via `wslpath` (e.g. `C:\\Users\\KSG\\.codex` → `/mnt/c/Users/KSG/.codex`); `api/.env` 中的 `CODEX_HOME`、`CODEX_WORKSPACE_*`、`CODEX_WORKTREE_ROOT` 会从 Windows 路径自动转为 WSL 路径。
+- uvicorn and Next.js start inside WSL using `python3` and `npm` from WSL; uvicorn 和 Next.js 在 WSL 内用 `python3` 和 `npm` 启动。
+- Switching back to `-RunEnv win` auto-restores Windows-native paths in `api/.env`; 切回 `-RunEnv win` 时自动将 `api/.env` 中的 WSL 路径还原为 Windows 路径。
+- WSL2 localhost forwarding lets Windows browsers and the desktop pet reach the services on `127.0.0.1` without extra config; WSL2 的 localhost 转发让 Windows 浏览器和桌面宠物通过 `127.0.0.1` 即可访问服务。
+
+Prerequisites for WSL mode / WSL 模式前提条件:
+
+```bash
+# Inside WSL: install Python deps and Node.js if not already available
+sudo apt install python3-pip
+pip3 install -r api/requirements.txt
+
+# Ensure npm is available (e.g. via nvm or system package)
+# 确保 WSL 内有 npm（通过 nvm 或系统包安装）
+```
+
 ## API Endpoints (MVP) / API 接口（MVP）
 
 - `POST /chat`

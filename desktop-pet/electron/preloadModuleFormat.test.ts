@@ -49,17 +49,6 @@ describe("Electron preload module format", () => {
     expect(mainSource).toContain('ipcMain.on("pet:renderer-error"');
   });
 
-  it("exposes Codex approval decisions through the protected preload bridge", () => {
-    const preloadSource = readFileSync(path.resolve(__dirname, "preload.cts"), "utf8");
-    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
-
-    expect(preloadSource).toContain("approvals:");
-    expect(preloadSource).toContain('"pet:approval:decide"');
-    expect(preloadSource).toContain("decision: \"approve_once\" | \"deny\"");
-    expect(mainSource).toContain('"pet:approval:decide"');
-    expect(mainSource).toContain("decideCodexApprovalFromPet");
-  });
-
   it("exposes API runtime retry and change events through the protected preload bridge", () => {
     const preloadSource = readFileSync(path.resolve(__dirname, "preload.cts"), "utf8");
 

@@ -149,11 +149,41 @@ def _build_settings_with_openclaw_config(current: Settings, saved: dict[str, Any
         codex_session_idle_timeout_seconds=current.codex_session_idle_timeout_seconds,
         codex_turn_timeout_seconds=current.codex_turn_timeout_seconds,
         codex_process_start_timeout_seconds=current.codex_process_start_timeout_seconds,
+        codex_wsl_enabled=current.codex_wsl_enabled,
+        codex_wsl_exec=current.codex_wsl_exec,
         codex_max_prompt_chars=current.codex_max_prompt_chars,
         codex_require_git_repo=current.codex_require_git_repo,
         codex_require_git_clean_for_apply=current.codex_require_git_clean_for_apply,
         codex_require_human_approval=current.codex_require_human_approval,
         codex_trace_redact_secrets=current.codex_trace_redact_secrets,
+        codex_openclaw_review_enabled=current.codex_openclaw_review_enabled,
+        codex_openclaw_review_agent_id=current.codex_openclaw_review_agent_id,
+        codex_openclaw_review_channel=current.codex_openclaw_review_channel,
+        codex_openclaw_review_sync_interval_seconds=current.codex_openclaw_review_sync_interval_seconds,
+        codex_openclaw_review_max_payload_chars=current.codex_openclaw_review_max_payload_chars,
+        codex_openclaw_review_dump_debug_files=current.codex_openclaw_review_dump_debug_files,
+        codex_knowledge_extraction_enabled=current.codex_knowledge_extraction_enabled,
+        codex_knowledge_agent_id=current.codex_knowledge_agent_id,
+        codex_knowledge_channel=current.codex_knowledge_channel,
+        codex_knowledge_sync_interval_seconds=current.codex_knowledge_sync_interval_seconds,
+        codex_knowledge_max_payload_chars=current.codex_knowledge_max_payload_chars,
+        codex_knowledge_min_signal_score=current.codex_knowledge_min_signal_score,
+        codex_knowledge_timeout_seconds=current.codex_knowledge_timeout_seconds,
+        codex_knowledge_prompt_version=current.codex_knowledge_prompt_version,
+        codex_knowledge_skill_path=current.codex_knowledge_skill_path,
+        codex_knowledge_dump_debug_files=current.codex_knowledge_dump_debug_files,
+        codex_openclaw_control_plane_enabled=current.codex_openclaw_control_plane_enabled,
+        codex_openclaw_control_plane_base_url=current.codex_openclaw_control_plane_base_url,
+        codex_openclaw_control_plane_token=current.codex_openclaw_control_plane_token,
+        codex_openclaw_control_plane_workspace_id=current.codex_openclaw_control_plane_workspace_id,
+        codex_openclaw_control_plane_sync_interval_seconds=current.codex_openclaw_control_plane_sync_interval_seconds,
+        codex_openclaw_control_plane_snapshot_limit=current.codex_openclaw_control_plane_snapshot_limit,
+        codex_review_memory_enabled=current.codex_review_memory_enabled,
+        codex_review_memory_export_root=current.codex_review_memory_export_root,
+        codex_review_memory_target=current.codex_review_memory_target,
+        openkb_sync_enabled=current.openkb_sync_enabled,
+        openkb_base_url=current.openkb_base_url,
+        openkb_token=current.openkb_token,
     )
 
 
@@ -276,4 +306,3 @@ def get_resolved_mappings(user_id: str, request: Request, x_user_id: str | None 
     merged = store.get_default_mappings()
     merged.update(store.get_user_mappings(user_id))
     return {"mappings": merged}
-
