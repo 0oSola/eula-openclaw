@@ -11,10 +11,25 @@ import {
   createIdleVmdFallbackInteraction,
   createVmdPreviewInteraction,
   excludeEntryStandbyAssets,
+  resolveAutoplayVmdAssetPool,
   resolveVmdPlaybackRate,
 } from "@/features/mapping/vmdPreview.js";
 import { resolvePlaybackPlan, shouldUseIdleVmdFallbackForUnmatchedMotion } from "@/features/mapping/resolveAction.js";
 import { MMDStage, type MMDStageHandle } from "@/features/stage/MMDStage";
+import {
+  createDefaultRezeStageDocument,
+  normalizeRezeStageDocument,
+  rezeEditorStorageKey,
+  REZE_EXECUTABLE_MATERIAL_PRESETS,
+  REZE_GRADE_PRESETS,
+  REZE_BACKGROUND_EFFECTS,
+  type RezeExecutableMaterialPreset,
+  type RezeStageDocument,
+} from "@/features/stage/rezeEditorScene";
+import {
+  REZE_DESIGN_SCENE_DEFAULTS,
+  type RezeSceneDebugSettings,
+} from "@/features/stage/rezeDesignDefaults";
 import { CompanionCommandBar } from "./CompanionCommandBar";
 import { MioModeBackground } from "./MioModeBackground";
 import { CompanionRightRail, type RightPanelView } from "./CompanionRightRail";
@@ -124,6 +139,83 @@ type InteractionState = {
 };
 
 type InteractionSource = "default" | "autoplay" | "manual-preview" | "chat" | "stage-click";
+type StageDebugTab = "scene" | "materials" | "assets" | "render";
+type StageMaterialDebugEntry = {
+  id: string;
+  name: string;
+  meshName: string;
+  preset: string;
+  visible: boolean;
+  opacity: number;
+  emissiveIntensity: number;
+  supportsOpacity?: boolean;
+  supportsEmissive?: boolean;
+};
+type RezeMaterialStyleGroupId = "body" | "eye" | "face" | "hair" | "smooth-cloth" | "ungrouped";
+type RezeMaterialStyleGroup = {
+  id: RezeMaterialStyleGroupId;
+  label: string;
+  preset: RezeExecutableMaterialPreset | null;
+};
+type RezeLocalModelImport = {
+  revision: number;
+  files: File[];
+  pmxFile: File;
+};
+const REZE_SCENE_DEBUG_DEFAULTS = REZE_DESIGN_SCENE_DEFAULTS;
+
+// Reze NPR 仍使用 Three.js 的独立相机与灯光构图。不能把 Reze Design 的
+// targetY=11.4 / distance=26.2 套入 NPR，否则编辑器首次同步场景参数时会把
+// 角色移出 NPR 相机的可视范围。
+const REZE_NPR_SCENE_DEBUG_DEFAULTS: RezeSceneDebugSettings = {
+  sunAzimuth: 0,
+  sunElevation: 28,
+  keyIntensity: 1.86,
+  ambientIntensity: 0.82,
+  bloomThreshold: 0.5,
+  bloomKnee: 0.5,
+  bloomRadius: 4.0,
+  bloomStrength: 0.06,
+  cameraDistance: 31.5,
+  cameraTargetX: -1.2,
+  cameraTargetY: 1.05,
+  cameraTargetZ: 0.45,
+  sunColor: "#fff7f0",
+  worldColor: "#8ea6c9",
+  bloomColor: "#ff9bce",
+  backgroundColor: "#0f172b",
+  groundColor: "#0f172b",
+  groundSize: 44,
+  groundOpacity: 0.16,
+  groundShadow: true,
+  groundGridColor: "#fafaf9",
+  groundGridEnabled: false,
+};
+
+const REZE_MATERIAL_STYLE_GROUPS: readonly RezeMaterialStyleGroup[] = [
+  { id: "body", label: "Body", preset: "角色皮肤" },
+  { id: "eye", label: "Eye", preset: "眼睛" },
+  { id: "face", label: "Face", preset: "面部" },
+  { id: "hair", label: "Hair", preset: "头发" },
+  { id: "smooth-cloth", label: "Smooth Cloth", preset: "柔滑布料" },
+  { id: "ungrouped", label: "未分组", preset: null },
+];
+
+function resolveRezeMaterialStyleGroup(entry: StageMaterialDebugEntry): RezeMaterialStyleGroupId {
+  const description = `${entry.name} ${entry.meshName} ${entry.preset}`.toLowerCase();
+  if (/(eye|brow|lash|瞳|眉|睫)/.test(description)) return "eye";
+  if (/(face|teeth|tongue|mouth|lip|脸|牙|舌|嘴)/.test(description)) return "face";
+  if (/(hair|发)/.test(description)) return "hair";
+  if (/(body|skin|stocking|肌肤|皮肤|丝袜)/.test(description)) return "body";
+  if (/(cloth|cape|shoe|glove|pants|pouch|top|dress|skirt|coat|jacket|shirt|布|披风|鞋|手套|裤|裙|上衣)/.test(description)) {
+    return "smooth-cloth";
+  }
+  return "ungrouped";
+}
+
+function getRezeSceneDebugDefaults(pipeline: RenderPipeline): RezeSceneDebugSettings {
+  return pipeline === "reze-npr" ? REZE_NPR_SCENE_DEBUG_DEFAULTS : REZE_SCENE_DEBUG_DEFAULTS;
+}
 type StageInteractionMode =
   | "default_idle"
   | "autoplay_loop"
@@ -207,8 +299,12 @@ const DEFAULT_ASSISTANT_COPY =
 const INPUT_LABEL =
   "\u8f93\u5165\u4f60\u7684\u6307\u4ee4 / \u4efb\u52a1 / \u95ee\u9898...\uff08Enter \u53d1\u9001\uff0cShift + Enter \u6362\u884c\uff09";
 
+function isRezeEditorPipeline(pipeline: RenderPipeline): boolean {
+  return pipeline === "reze-design" || pipeline === "reze-npr";
+}
+
 function normalizeRenderPipeline(value?: string): RenderPipeline {
-  if (value === "classic" || value === "hero-shot" || value === "genshin" || value === "mio-reference" || value === "reze-npr") {
+  if (value === "classic" || value === "hero-shot" || value === "genshin" || value === "mio-reference" || value === "reze-npr" || value === "reze-design" || value === "k3") {
     return value;
   }
   return "mio-reference";
@@ -301,10 +397,12 @@ const traceRows = [
 
 const renderPipelineOptions: { value: RenderPipeline; label: string; description: string }[] = [
   { value: "mio-reference", label: "MIO Reference", description: "设计稿星海舞台" },
+  { value: "k3", label: "K3", description: "精细渲染·高清阴影·轮廓线" },
   { value: "classic", label: "Classic", description: "\u7a33\u5b9a MMD \u821e\u53f0" },
   { value: "hero-shot", label: "Hero Shot", description: "\u7535\u5f71\u611f\u6784\u56fe" },
   { value: "genshin", label: "Genshin", description: "Project2 \u900f\u660e\u98ce\u683c" },
   { value: "reze-npr", label: "Reze NPR", description: "reze-engine \u5b9e\u9a8c\u98ce\u683c" },
+  { value: "reze-design", label: "Reze Design", description: "Reze \u706f\u5149\u00b7MIO \u661f\u6d77\u821e\u53f0" },
 ];
 
 const MIO_REFERENCE_CAMERA_DEFAULT: MmdCameraSnapshot = {
@@ -437,6 +535,7 @@ export default function CompanionPage() {
   const [backgroundActivityPulse, setBackgroundActivityPulse] = useState(0);
   const [renderPipeline, setRenderPipeline] = useState<RenderPipeline>("mio-reference");
   const [isAdvancedPanelOpen, setIsAdvancedPanelOpen] = useState(false);
+  const [isRezeEditorOpen, setIsRezeEditorOpen] = useState(false);
   const [advancedTab, setAdvancedTab] = useState<"library" | "favorites">("library");
   const [advancedSlot, setAdvancedSlot] = useState<(typeof EMOTION_SLOTS)[number]>("happy");
   const [advancedFavoriteSlotFilter, setAdvancedFavoriteSlotFilter] = useState<"all" | (typeof EMOTION_SLOTS)[number]>(
@@ -449,6 +548,13 @@ export default function CompanionPage() {
   const [sharedConfigSaving, setSharedConfigSaving] = useState(false);
   const [latestMotionContextExport, setLatestMotionContextExport] = useState<MotionContextExport | null>(null);
   const [cameraEditMode, setCameraEditMode] = useState(false);
+  const [stageDebugTab, setStageDebugTab] = useState<StageDebugTab>("scene");
+  const [stageMaterialDebugEntries, setStageMaterialDebugEntries] = useState<StageMaterialDebugEntry[]>([]);
+  const [selectedRezeMaterialId, setSelectedRezeMaterialId] = useState("");
+  const [isRezeMaterialLibraryOpen, setIsRezeMaterialLibraryOpen] = useState(false);
+  const [rezeLocalModelImport, setRezeLocalModelImport] = useState<RezeLocalModelImport | null>(null);
+  const [rezeSceneDebugSettings, setRezeSceneDebugSettings] = useState<RezeSceneDebugSettings>(REZE_SCENE_DEBUG_DEFAULTS);
+  const [rezeStageDocument, setRezeStageDocument] = useState<RezeStageDocument>(() => createDefaultRezeStageDocument(REZE_SCENE_DEBUG_DEFAULTS));
   const [renameTarget, setRenameTarget] = useState<VmdAsset | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [isCompactHud, setIsCompactHud] = useState(false);
@@ -463,6 +569,18 @@ export default function CompanionPage() {
   const [openClawSaving, setOpenClawSaving] = useState(false);
   const [openClawTesting, setOpenClawTesting] = useState(false);
   const [openClawError, setOpenClawError] = useState("");
+
+  const rezeMaterialGroups = useMemo(
+    () => REZE_MATERIAL_STYLE_GROUPS.map((group) => ({
+      ...group,
+      entries: stageMaterialDebugEntries.filter((entry) => resolveRezeMaterialStyleGroup(entry) === group.id),
+    })).filter((group) => group.entries.length > 0),
+    [stageMaterialDebugEntries],
+  );
+  const selectedRezeMaterial = useMemo(
+    () => stageMaterialDebugEntries.find((entry) => entry.id === selectedRezeMaterialId) ?? null,
+    [selectedRezeMaterialId, stageMaterialDebugEntries],
+  );
   const [openClawMessage, setOpenClawMessage] = useState("");
   const [messageBridgeStatus, setMessageBridgeStatus] = useState<MessageBridgeStatus | null>(null);
   const [messageBridgeSessions, setMessageBridgeSessions] = useState<MessageBridgeExternalSession[]>([]);
@@ -626,6 +744,13 @@ export default function CompanionPage() {
   }
 
   function handleCompanionNavigation(key: (typeof navIcons)[number]["key"]) {
+    if (key === "tools" && isRezeEditorPipeline(renderPipeline)) {
+      setIsRezeEditorOpen((open) => !open);
+      setIsAdvancedPanelOpen(false);
+      setStageDebugTab("scene");
+      setAdvancedError("");
+      return;
+    }
     const target = resolveCompanionNavTarget(key);
     if (target.kind === "page") {
       router.push(target.href);
@@ -948,6 +1073,12 @@ export default function CompanionPage() {
     );
   }, [selectedModel?.relative_path, visibleRecentVmdAssets]);
 
+  const currentModelLibraryAssets = useMemo(() => {
+    return visibleRecentVmdAssets.filter(
+      (asset) => !asset.is_favorite || asset.favorite_model_relative_path === selectedModel?.relative_path,
+    );
+  }, [selectedModel?.relative_path, visibleRecentVmdAssets]);
+
   const currentModelAutoplayAssets = useMemo(() => {
     if (!selectedModel?.relative_path) return [];
     return recentVmdAssets.filter(
@@ -955,18 +1086,29 @@ export default function CompanionPage() {
     );
   }, [selectedModel?.relative_path, recentVmdAssets]);
 
+  const sharedIdleAutoplayAssets = useMemo(() => {
+    return recentVmdAssets.filter(
+      (asset) => asset.is_favorite && asset.favorite_model_relative_path !== selectedModel?.relative_path,
+    );
+  }, [recentVmdAssets, selectedModel?.relative_path]);
+
+  const autoplayVmdAssets = useMemo(
+    () => resolveAutoplayVmdAssetPool(currentModelAutoplayAssets, sharedIdleAutoplayAssets),
+    [currentModelAutoplayAssets, sharedIdleAutoplayAssets],
+  );
+
   const filteredFavoriteAssets = useMemo(() => {
     if (advancedFavoriteSlotFilter === "all") return currentModelFavoriteAssets;
     return currentModelFavoriteAssets.filter((asset) => asset.slot === advancedFavoriteSlotFilter);
   }, [advancedFavoriteSlotFilter, currentModelFavoriteAssets]);
 
   const autoFavoriteInteraction = useMemo<InteractionState | null>(() => {
-    return buildAutoFavoriteInteraction(currentModelAutoplayAssets) as InteractionState | null;
-  }, [currentModelAutoplayAssets]);
+    return buildAutoFavoriteInteraction(autoplayVmdAssets) as InteractionState | null;
+  }, [autoplayVmdAssets]);
 
   const autoplayResumeInteraction = useMemo<InteractionState | null>(() => {
-    return buildAutoplayResumeInteraction(currentModelAutoplayAssets) as InteractionState | null;
-  }, [currentModelAutoplayAssets]);
+    return buildAutoplayResumeInteraction(autoplayVmdAssets) as InteractionState | null;
+  }, [autoplayVmdAssets]);
 
   const currentChatSession = useMemo(
     () => chatSessions.find((item) => item.id === chatSessionId) || null,
@@ -990,10 +1132,10 @@ export default function CompanionPage() {
       startAutoplayLoop({
         interaction: autoFavoriteInteraction,
         activeVmdAssetId:
-          currentModelAutoplayAssets.find((asset) => asset.url === autoFavoriteInteraction.vmdUrl)?.asset_id || "",
+          autoplayVmdAssets.find((asset) => asset.url === autoFavoriteInteraction.vmdUrl)?.asset_id || "",
       }) as StageInteractionViewState,
     );
-  }, [autoFavoriteInteraction, currentModelAutoplayAssets, interactionSource, selectedModel?.relative_path]);
+  }, [autoFavoriteInteraction, autoplayVmdAssets, interactionSource, selectedModel?.relative_path]);
 
   useEffect(() => {
     if (autoFavoriteInteraction || interactionSource !== "autoplay") return;
@@ -1006,7 +1148,35 @@ export default function CompanionPage() {
 
   useEffect(() => {
     setCameraEditMode(false);
+    setStageMaterialDebugEntries([]);
+    setRezeSceneDebugSettings(getRezeSceneDebugDefaults(renderPipeline));
+    setRezeLocalModelImport(null);
   }, [renderPipeline, selectedModelPath]);
+
+  useEffect(() => {
+    if (!session?.userId || !selectedModelPath || !isRezeEditorPipeline(renderPipeline)) return;
+    const defaults = getRezeSceneDebugDefaults(renderPipeline);
+    const key = rezeEditorStorageKey(session.userId, selectedModelPath, renderPipeline);
+    const raw = window.localStorage.getItem(key);
+    const next = normalizeRezeStageDocument(raw ? JSON.parse(raw) : null, defaults);
+    setRezeStageDocument(next);
+    setRezeSceneDebugSettings(next.scene);
+  }, [renderPipeline, selectedModelPath, session?.userId]);
+
+  useEffect(() => {
+    if (!session?.userId || !selectedModelPath || !isRezeEditorPipeline(renderPipeline)) return;
+    const next = { ...rezeStageDocument, scene: rezeSceneDebugSettings, updatedAt: new Date().toISOString() };
+    window.localStorage.setItem(rezeEditorStorageKey(session.userId, selectedModelPath, renderPipeline), JSON.stringify(next));
+  }, [renderPipeline, rezeSceneDebugSettings, rezeStageDocument, selectedModelPath, session?.userId]);
+
+  useEffect(() => {
+    if (!isRezeEditorOpen || !isRezeEditorPipeline(renderPipeline)) return;
+    const timer = window.setTimeout(() => {
+      stageRef.current?.setSceneDebugSettings?.(rezeSceneDebugSettings);
+      refreshStageMaterialDebug();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [isRezeEditorOpen, renderPipeline, rezeSceneDebugSettings]);
 
   useEffect(() => {
     return () => {
@@ -1017,6 +1187,13 @@ export default function CompanionPage() {
 
   function previewVmdAsset(asset: VmdAsset) {
     setAdvancedError("");
+    if (asset.is_favorite && asset.favorite_model_relative_path !== selectedModel?.relative_path) {
+      const favoriteModel = models.find((model) => model.relative_path === asset.favorite_model_relative_path);
+      const favoriteModelLabel = favoriteModel ? getModelDisplayLabel(favoriteModel) : "收藏角色";
+      setAdvancedMessage("");
+      setAdvancedError(`该 VMD 已收藏到${favoriteModelLabel}，切换到对应角色后才能预览。`);
+      return;
+    }
     setAdvancedMessage(`Previewing ${asset.display_name || asset.filename}`);
     const preview = createVmdPreviewInteraction(asset, Number(advancedPlaybackRate) || 1);
     setStageInteractionState(
@@ -1051,6 +1228,12 @@ export default function CompanionPage() {
 
   async function handleFavoriteAsset(asset: VmdAsset) {
     if (!session || !selectedModel?.relative_path) return;
+    if (asset.is_favorite && asset.favorite_model_relative_path !== selectedModel.relative_path) {
+      const favoriteModel = models.find((model) => model.relative_path === asset.favorite_model_relative_path);
+      const favoriteModelLabel = favoriteModel ? getModelDisplayLabel(favoriteModel) : "其他角色";
+      setAdvancedError(`该 VMD 已收藏到${favoriteModelLabel}，不能从当前角色取消收藏。`);
+      return;
+    }
     setAdvancedBusy(true);
     setAdvancedError("");
     setAdvancedMessage("");
@@ -1379,10 +1562,130 @@ export default function CompanionPage() {
   function handleRenderPipelineChange(nextPipeline: RenderPipeline) {
     setRenderPipeline(nextPipeline);
     setCameraEditMode(false);
+    setStageDebugTab("scene");
+    setStageMaterialDebugEntries([]);
+    setRezeSceneDebugSettings(getRezeSceneDebugDefaults(nextPipeline));
+    setIsRezeEditorOpen(false);
+    setIsAdvancedPanelOpen(false);
     if (!session) return;
     const nextSession = { ...session, renderPipeline: nextPipeline };
     setSession(nextSession);
     saveSession(nextSession);
+  }
+
+  function handleRezePmxImport(files: FileList | null) {
+    const importedFiles = files ? Array.from(files) : [];
+    const pmxFiles = importedFiles.filter((file) => file.name.toLowerCase().endsWith(".pmx"));
+    if (!pmxFiles.length) {
+      setAdvancedError("请选择包含一个 PMX 文件及其贴图的完整模型目录，或多选 PMX 与贴图文件。");
+      return;
+    }
+    if (pmxFiles.length > 1) {
+      setAdvancedError("本次选择包含多个 PMX，请一次只导入一个模型目录。");
+      return;
+    }
+    const pmxFile = pmxFiles[0]!;
+    setAdvancedError("");
+    setAdvancedMessage(`正在导入 ${pmxFile.name}（${importedFiles.length} 个文件）…`);
+    setRezeLocalModelImport({ revision: Date.now(), files: importedFiles, pmxFile });
+  }
+
+  function refreshStageMaterialDebug() {
+    const entries = stageRef.current?.getMaterialDebugEntries?.() ?? [];
+    entries.forEach((entry) => {
+      const preset = rezeStageDocument.materialPresets[entry.id];
+      if (preset) stageRef.current?.setMaterialPreset?.(entry.id, preset);
+    });
+    const nextEntries = entries.map((entry) => ({
+      ...entry,
+      preset: rezeStageDocument.materialPresets[entry.id] ?? entry.preset,
+    }));
+    setStageMaterialDebugEntries(nextEntries);
+    setSelectedRezeMaterialId((current) => nextEntries.some((entry) => entry.id === current) ? current : nextEntries[0]?.id ?? "");
+  }
+
+  function handleStageMaterialDebugChange(
+    id: string,
+    patch: Partial<Pick<StageMaterialDebugEntry, "visible" | "opacity" | "emissiveIntensity">>,
+  ) {
+    const next = stageRef.current?.updateMaterialDebug?.(id, patch);
+    if (!next) return;
+    setStageMaterialDebugEntries((entries) =>
+      entries.map((entry) => (entry.id === id ? { ...entry, ...next } : entry)),
+    );
+  }
+
+  function handleResetStageMaterialDebug(id: string) {
+    const next = stageRef.current?.resetMaterialDebug?.(id);
+    if (!next) return;
+    setStageMaterialDebugEntries((entries) =>
+      entries.map((entry) => (entry.id === id ? { ...entry, ...next } : entry)),
+    );
+  }
+
+  function handleRezeSceneDebugChange<K extends keyof RezeSceneDebugSettings>(key: K, value: RezeSceneDebugSettings[K]) {
+    const next = { ...rezeSceneDebugSettings, [key]: value };
+    setRezeSceneDebugSettings(next);
+    setRezeStageDocument((current) => ({ ...current, scene: next, updatedAt: new Date().toISOString() }));
+    stageRef.current?.setSceneDebugSettings?.(next);
+  }
+
+  function handleResetRezeSceneDebug() {
+    const next = stageRef.current?.resetSceneDebugSettings?.() as RezeSceneDebugSettings | null;
+    const fallback = getRezeSceneDebugDefaults(renderPipeline);
+    setRezeSceneDebugSettings(next ?? fallback);
+    setRezeStageDocument((current) => ({ ...current, scene: next ?? fallback, updatedAt: new Date().toISOString() }));
+  }
+
+  function handleRezeMaterialPreset(id: string, preset: RezeExecutableMaterialPreset) {
+    const applied = stageRef.current?.setMaterialPreset?.(id, preset);
+    if (!applied) return;
+    setRezeStageDocument((current) => ({
+      ...current,
+      materialPresets: { ...current.materialPresets, [id]: preset },
+      updatedAt: new Date().toISOString(),
+    }));
+    setStageMaterialDebugEntries((entries) => entries.map((entry) => (entry.id === id ? { ...entry, preset } : entry)));
+  }
+
+  function handleRezeStyleGroupPreset(group: RezeMaterialStyleGroup) {
+    const preset = group.preset;
+    if (!preset) return;
+    const targets = stageMaterialDebugEntries.filter((entry) => resolveRezeMaterialStyleGroup(entry) === group.id);
+    if (!targets.length) {
+      setAdvancedMessage(`${group.label} 样式组中没有可应用的材质。`);
+      return;
+    }
+    const appliedIds = new Set<string>();
+    targets.forEach((entry) => {
+      if (stageRef.current?.setMaterialPreset?.(entry.id, preset)) appliedIds.add(entry.id);
+    });
+    if (!appliedIds.size) return;
+    setRezeStageDocument((current) => ({
+      ...current,
+      materialPresets: Object.fromEntries([
+        ...Object.entries(current.materialPresets),
+        ...Array.from(appliedIds, (id) => [id, preset] as const),
+      ]),
+      updatedAt: new Date().toISOString(),
+    }));
+    setStageMaterialDebugEntries((entries) => entries.map((entry) => (
+      appliedIds.has(entry.id) ? { ...entry, preset } : entry
+    )));
+    setAdvancedError("");
+    setAdvancedMessage(`已将 ${preset} 应用到 ${group.label} 样式组（${appliedIds.size} 个材质）。`);
+  }
+
+  function handleExportRezeStagePng() {
+    const dataUrl = stageRef.current?.captureStagePng?.();
+    if (!dataUrl) {
+      setAdvancedError("舞台尚未准备好，无法导出截图。");
+      return;
+    }
+    const anchor = document.createElement("a");
+    anchor.href = dataUrl;
+    anchor.download = `${rezeStageDocument.name || "reze-stage"}.png`;
+    anchor.click();
   }
 
   async function handleSaveCompanionSharedConfig() {
@@ -1824,7 +2127,7 @@ export default function CompanionPage() {
   }
 
   function setIdleVmdFallbackStageInteraction(message: MessageServiceMessage) {
-    const fallback = createIdleVmdFallbackInteraction(currentModelAutoplayAssets, {
+    const fallback = createIdleVmdFallbackInteraction(autoplayVmdAssets, {
       emotion: message.emotion || "neutral",
       action: "idle",
     }) as { interaction: InteractionState; activeVmdAssetId: string } | null;
@@ -2380,14 +2683,14 @@ export default function CompanionPage() {
 
   function getAutoplayResumeAssetId(nextAutoplayResumeInteraction = autoplayResumeInteraction) {
     if (!nextAutoplayResumeInteraction) return "";
-    return currentModelAutoplayAssets.find((asset) => asset.url === nextAutoplayResumeInteraction.vmdUrl)?.asset_id || "";
+    return autoplayVmdAssets.find((asset) => asset.url === nextAutoplayResumeInteraction.vmdUrl)?.asset_id || "";
   }
 
   function resumeStageAfterInteractionComplete() {
     const nextState = completeStageInteraction({
       autoplayResumeInteraction,
       createAutoplayResumeInteraction: () =>
-        buildAutoplayResumeInteraction(currentModelAutoplayAssets) as InteractionState | null,
+        buildAutoplayResumeInteraction(autoplayVmdAssets) as InteractionState | null,
       defaultInteraction: createDefaultInteractionState(),
       resolveAutoplayAssetId: (nextAutoplayResumeInteraction: InteractionState | null) =>
         getAutoplayResumeAssetId(nextAutoplayResumeInteraction),
@@ -2430,9 +2733,10 @@ export default function CompanionPage() {
       className={`mio-hud${isCompactHud ? " is-compact" : ""}`}
       data-testid="mio-hud"
       data-render-pipeline={renderPipeline}
+      data-reze-grade={rezeStageDocument.grade}
     >
       <MioModeBackground
-        active={renderPipeline === "mio-reference"}
+        active={renderPipeline === "mio-reference" || renderPipeline === "reze-npr"}
         speaking={speaking}
         emotion={interaction.emotion}
         action={interaction.action}
@@ -2788,10 +3092,10 @@ export default function CompanionPage() {
           {navIcons.map((icon) => (
             <button
               key={icon.label}
-              className={`mio-nav-button ${activeRightPanelView === icon.view ? "is-active" : ""}`}
+              className={`mio-nav-button ${(icon.key === "tools" && isRezeEditorOpen) || activeRightPanelView === icon.view ? "is-active" : ""}`}
               type="button"
-              aria-label={icon.label}
-              aria-pressed={activeRightPanelView === icon.view}
+              aria-label={icon.key === "tools" && isRezeEditorPipeline(renderPipeline) ? "打开 Reze 材质与场景编辑器" : icon.label}
+              aria-pressed={(icon.key === "tools" && isRezeEditorOpen) || activeRightPanelView === icon.view}
               onClick={() => handleCompanionNavigation(icon.key)}
             >
               <span className="mio-nav-glyph" aria-hidden="true">
@@ -2908,8 +3212,12 @@ export default function CompanionPage() {
             models={models}
             selectedModelPath={selectedModelPath}
             modelUrl={selectedModel?.url || ""}
+            rezeLocalModelImport={renderPipeline === "reze-design" ? rezeLocalModelImport : null}
             modelLabel={selectedModel ? getModelDisplayLabel(selectedModel) : ""}
             renderPipeline={renderPipeline}
+            rezeBackgroundEffect={rezeStageDocument.backgroundEffect}
+            rezeGrade={rezeStageDocument.grade}
+            rezeGradeIntensity={rezeStageDocument.gradeIntensity}
             cameraSnapshot={stageCameraSnapshot}
             onModelChange={handleCharacterSwitch}
           />
@@ -2955,14 +3263,14 @@ export default function CompanionPage() {
         ttsEnabled={ttsEnabled}
         isAdvancedPanelOpen={isAdvancedPanelOpen}
         advancedPanel={
-          isAdvancedPanelOpen ? (
+          isAdvancedPanelOpen || isRezeEditorOpen ? (
             <section
               id="mio-advanced-panel"
-              className="mio-advanced-panel"
+              className={`mio-advanced-panel${isRezeEditorOpen ? " mio-advanced-panel--reze-editor" : ""}`}
               data-testid="mio-advanced-panel"
               role="dialog"
               aria-modal="false"
-              aria-label={"\u9ad8\u7ea7\u529f\u80fd"}
+              aria-label={isRezeEditorOpen ? "Reze 材质与场景编辑器" : "\u9ad8\u7ea7\u529f\u80fd"}
             >
               <header className="mio-advanced-panel-head">
                 <div>
@@ -2975,6 +3283,7 @@ export default function CompanionPage() {
                   aria-label="Close advanced panel"
                   onClick={() => {
                     setIsAdvancedPanelOpen(false);
+                    setIsRezeEditorOpen(false);
                     closeRenameDialog();
                   }}
                 >
@@ -3042,6 +3351,355 @@ export default function CompanionPage() {
                     </button>
                   </div>
                 </section>
+
+                {isRezeEditorOpen && isRezeEditorPipeline(renderPipeline) ? (
+                  <section className="mio-stage-debugger" data-testid="mio-stage-debugger" aria-label="Reze Design 实时调试">
+                    <nav className="mio-reze-editor-rail" aria-label="Reze Design 编辑器导航">
+                      <span className="mio-reze-editor-logo" aria-hidden="true">✦</span>
+                      <button type="button" className={`mio-reze-editor-tool ${stageDebugTab === "materials" ? "is-active" : ""}`} aria-label="材质" onClick={() => { setStageDebugTab("materials"); window.setTimeout(refreshStageMaterialDebug, 0); }}><span aria-hidden="true">◐</span><small>材质</small></button>
+                      <button type="button" className={`mio-reze-editor-tool ${stageDebugTab === "scene" ? "is-active" : ""}`} aria-label="场景" onClick={() => setStageDebugTab("scene")}><span aria-hidden="true">☼</span><small>场景</small></button>
+                      <button type="button" className={`mio-reze-editor-tool ${stageDebugTab === "assets" ? "is-active" : ""}`} aria-label="资产" onClick={() => setStageDebugTab("assets")}><span aria-hidden="true">□</span><small>资产</small></button>
+                      <button type="button" className={`mio-reze-editor-tool ${stageDebugTab === "render" ? "is-active" : ""}`} aria-label="渲染" onClick={() => setStageDebugTab("render")}><span aria-hidden="true">▣</span><small>渲染</small></button>
+                      <span className="mio-reze-editor-rail-spacer" />
+                      <button type="button" className="mio-reze-editor-tool" aria-label="关闭 Reze 编辑器" onClick={() => setIsRezeEditorOpen(false)}><span aria-hidden="true">×</span><small>关闭</small></button>
+                    </nav>
+                    <div className="mio-reze-editor-body">
+                    <div className="mio-camera-controls-head mio-reze-editor-head">
+                      <div><strong>Reze Design</strong><span>My first scene</span></div>
+                      <button
+                        type="button"
+                        className="mio-advanced-mini"
+                        data-testid="mio-stage-debug-reset"
+                        onClick={handleResetRezeSceneDebug}
+                      >
+                        恢复默认
+                      </button>
+                    </div>
+
+                    <div className="mio-stage-debug-tabs" role="tablist" aria-label="Reze Design 调试类别">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={stageDebugTab === "scene"}
+                        className={`mio-stage-debug-tab ${stageDebugTab === "scene" ? "is-active" : ""}`}
+                        onClick={() => setStageDebugTab("scene")}
+                      >
+                        场景
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={stageDebugTab === "materials"}
+                        className={`mio-stage-debug-tab ${stageDebugTab === "materials" ? "is-active" : ""}`}
+                        onClick={() => {
+                          setStageDebugTab("materials");
+                          window.setTimeout(refreshStageMaterialDebug, 0);
+                        }}
+                      >
+                        材质
+                      </button>
+                    </div>
+
+                    {stageDebugTab === "scene" ? (
+                      <div className="mio-stage-debug-controls" role="tabpanel" aria-label="场景调试">
+                        <section className="mio-reze-inspector-section mio-reze-scene-document">
+                          <header>场景文档</header>
+                          <label>
+                            <span>名称</span>
+                            <input
+                              value={rezeStageDocument.name}
+                              aria-label="场景名称"
+                              onChange={(event) => setRezeStageDocument((current) => ({ ...current, name: event.target.value.slice(0, 60), updatedAt: new Date().toISOString() }))}
+                            />
+                          </label>
+                          <div className="mio-reze-document-actions">
+                            <button type="button" className="mio-advanced-mini" onClick={() => {
+                              const payload = JSON.stringify({ ...rezeStageDocument, scene: rezeSceneDebugSettings }, null, 2);
+                              const blob = new Blob([payload], { type: "application/json" });
+                              const href = URL.createObjectURL(blob);
+                              const anchor = document.createElement("a");
+                              anchor.href = href;
+                              anchor.download = `${rezeStageDocument.name || "reze-scene"}.json`;
+                              anchor.click();
+                              URL.revokeObjectURL(href);
+                            }}>导出 JSON</button>
+                            <label className="mio-advanced-mini mio-reze-import-button">导入 JSON<input type="file" accept="application/json" onChange={(event) => {
+                              const file = event.target.files?.[0];
+                              if (!file) return;
+                              void file.text().then((text) => {
+                                try {
+                                  const next = normalizeRezeStageDocument(JSON.parse(text), getRezeSceneDebugDefaults(renderPipeline));
+                                  setRezeStageDocument(next);
+                                  setRezeSceneDebugSettings(next.scene);
+                                  stageRef.current?.setSceneDebugSettings?.(next.scene);
+                                } catch {
+                                  setAdvancedError("场景 JSON 无法读取。");
+                                }
+                              });
+                              event.currentTarget.value = "";
+                            }} /></label>
+                          </div>
+                        </section>
+                        <section className="mio-reze-inspector-section">
+                          <header>调色</header>
+                          <label className="mio-stage-material-preset">
+                            <span>预设</span>
+                            <select value={rezeStageDocument.grade} aria-label="调色预设" onChange={(event) => setRezeStageDocument((current) => ({ ...current, grade: event.target.value as RezeStageDocument["grade"], updatedAt: new Date().toISOString() }))}>
+                              {REZE_GRADE_PRESETS.map((preset) => <option key={preset} value={preset}>{preset}</option>)}
+                            </select>
+                          </label>
+                          <label className="mio-stage-debug-control">
+                            <span>强度</span>
+                            <output>{rezeStageDocument.gradeIntensity.toFixed(2)}</output>
+                            <input type="range" min="0" max="1" step="0.01" value={rezeStageDocument.gradeIntensity} aria-label="调色强度" onChange={(event) => setRezeStageDocument((current) => ({ ...current, gradeIntensity: Number(event.target.value), updatedAt: new Date().toISOString() }))} />
+                          </label>
+                        </section>
+                        <section className="mio-reze-inspector-section">
+                          <header>背景</header>
+                          <label className="mio-stage-color-control">
+                            <span>颜色</span>
+                            <input type="color" value={rezeSceneDebugSettings.backgroundColor} aria-label="背景颜色" onChange={(event) => handleRezeSceneDebugChange("backgroundColor", event.target.value)} />
+                            <output>{rezeSceneDebugSettings.backgroundColor}</output>
+                          </label>
+                          <label className="mio-stage-material-preset"><span>特效</span><select value={rezeStageDocument.backgroundEffect} aria-label="背景特效" onChange={(event) => setRezeStageDocument((current) => ({ ...current, backgroundEffect: event.target.value as RezeStageDocument["backgroundEffect"], updatedAt: new Date().toISOString() }))}>{REZE_BACKGROUND_EFFECTS.map((effect) => <option key={effect} value={effect}>{effect}</option>)}</select></label>
+                        </section>
+                        <section className="mio-reze-inspector-section">
+                          <header>太阳</header>
+                          <label className="mio-stage-color-control">
+                            <span>颜色</span>
+                            <input type="color" value={rezeSceneDebugSettings.sunColor} aria-label="主光颜色" onChange={(event) => handleRezeSceneDebugChange("sunColor", event.target.value)} />
+                            <output>{rezeSceneDebugSettings.sunColor}</output>
+                          </label>
+                        {([
+                          ["keyIntensity", "主光强度", 0, 3, 0.01],
+                          ["sunAzimuth", "主光方位", -360, 360, 1],
+                          ["sunElevation", "主光仰角", 0, 89, 1],
+                        ] as Array<["keyIntensity" | "sunAzimuth" | "sunElevation", string, number, number, number]>).map(([key, label, min, max, step]) => (
+                          <label className="mio-stage-debug-control" key={key}>
+                            <span>{label}</span>
+                            <output>{step >= 1 ? rezeSceneDebugSettings[key].toFixed(0) : rezeSceneDebugSettings[key].toFixed(step === 0.1 ? 1 : 2)}</output>
+                            <input type="range" min={min} max={max} step={step} value={rezeSceneDebugSettings[key]} aria-label={label} onChange={(event) => handleRezeSceneDebugChange(key, Number(event.target.value))} />
+                          </label>
+                        ))}
+                        </section>
+                        <section className="mio-reze-inspector-section">
+                          <header>世界光</header>
+                          <label className="mio-stage-color-control">
+                            <span>颜色</span>
+                            <input type="color" value={rezeSceneDebugSettings.worldColor} aria-label="世界光颜色" onChange={(event) => handleRezeSceneDebugChange("worldColor", event.target.value)} />
+                            <output>{rezeSceneDebugSettings.worldColor}</output>
+                          </label>
+                          {([ ["ambientIntensity", "强度", 0, 2, 0.01] ] as Array<["ambientIntensity", string, number, number, number]>).map(([key, label, min, max, step]) => (
+                            <label className="mio-stage-debug-control" key={key}><span>{label}</span><output>{rezeSceneDebugSettings[key].toFixed(2)}</output><input type="range" min={min} max={max} step={step} value={rezeSceneDebugSettings[key]} aria-label={`世界光${label}`} onChange={(event) => handleRezeSceneDebugChange(key, Number(event.target.value))} /></label>
+                          ))}
+                        </section>
+                        <section className="mio-reze-inspector-section">
+                          <header>泛光</header>
+                          <label className="mio-stage-color-control">
+                            <span>颜色</span>
+                            <input type="color" value={rezeSceneDebugSettings.bloomColor} aria-label="泛光颜色" onChange={(event) => handleRezeSceneDebugChange("bloomColor", event.target.value)} />
+                            <output>{rezeSceneDebugSettings.bloomColor}</output>
+                          </label>
+                          {([
+                            ["bloomThreshold", "阈值", 0, 1, 0.01],
+                            ["bloomKnee", "膝点", 0, 1, 0.01],
+                            ["bloomRadius", "半径", 0, 8, 0.1],
+                            ["bloomStrength", "强度", 0, 1, 0.01],
+                          ] as Array<["bloomThreshold" | "bloomKnee" | "bloomRadius" | "bloomStrength", string, number, number, number]>).map(([key, label, min, max, step]) => (
+                            <label className="mio-stage-debug-control" key={key}><span>{label}</span><output>{rezeSceneDebugSettings[key].toFixed(2)}</output><input type="range" min={min} max={max} step={step} value={rezeSceneDebugSettings[key]} aria-label={`泛光${label}`} onChange={(event) => handleRezeSceneDebugChange(key, Number(event.target.value))} /></label>
+                          ))}
+                        </section>
+                        <section className="mio-reze-inspector-section">
+                          <header>地面</header>
+                          <label className="mio-stage-color-control"><span>颜色</span><input type="color" value={rezeSceneDebugSettings.groundColor} aria-label="地面颜色" onChange={(event) => handleRezeSceneDebugChange("groundColor", event.target.value)} /><output>{rezeSceneDebugSettings.groundColor}</output></label>
+                          <div className="mio-stage-debug-toggle"><span>不透明度</span><output>{rezeSceneDebugSettings.groundOpacity.toFixed(2)}</output><input type="range" min="0" max="1" step="0.01" value={rezeSceneDebugSettings.groundOpacity} aria-label="地面不透明度" onChange={(event) => handleRezeSceneDebugChange("groundOpacity", Number(event.target.value))} /></div>
+                          <label className="mio-stage-material-toggle"><span>阴影</span><input type="checkbox" checked={rezeSceneDebugSettings.groundShadow} aria-label="地面阴影" onChange={(event) => handleRezeSceneDebugChange("groundShadow", event.target.checked)} /></label>
+                          <label className="mio-stage-color-control"><span>网格颜色</span><input type="color" value={rezeSceneDebugSettings.groundGridColor} aria-label="地面网格颜色" onChange={(event) => handleRezeSceneDebugChange("groundGridColor", event.target.value)} /><output>{rezeSceneDebugSettings.groundGridColor}</output></label>
+                          <label className="mio-stage-material-toggle"><span>网格线</span><input type="checkbox" checked={rezeSceneDebugSettings.groundGridEnabled} aria-label="地面网格线" onChange={(event) => handleRezeSceneDebugChange("groundGridEnabled", event.target.checked)} /></label>
+                          <label className="mio-stage-debug-control"><span>尺寸</span><output>{rezeSceneDebugSettings.groundSize.toFixed(0)}</output><input type="range" min="20" max="240" step="1" value={rezeSceneDebugSettings.groundSize} aria-label="地面尺寸" onChange={(event) => handleRezeSceneDebugChange("groundSize", Number(event.target.value))} /></label>
+                        </section>
+                        <section className="mio-reze-inspector-section">
+                          <header>相机</header>
+                          {([
+                          ["cameraDistance", "相机距离", 8, 72, 0.1],
+                          ["cameraTargetX", "目标点 X", -20, 20, 0.1],
+                          ["cameraTargetY", "目标点 Y", -10, 30, 0.1],
+                          ["cameraTargetZ", "目标点 Z", -20, 20, 0.1],
+                        ] as Array<["cameraDistance" | "cameraTargetX" | "cameraTargetY" | "cameraTargetZ", string, number, number, number]>).map(([key, label, min, max, step]) => (
+                          <label className="mio-stage-debug-control" key={key}>
+                            <span>{label}</span>
+                            <output>{step >= 1 ? rezeSceneDebugSettings[key].toFixed(0) : rezeSceneDebugSettings[key].toFixed(step === 0.1 ? 1 : 2)}</output>
+                            <input
+                              type="range"
+                              min={min}
+                              max={max}
+                              step={step}
+                              value={rezeSceneDebugSettings[key]}
+                              aria-label={label}
+                              onChange={(event) => handleRezeSceneDebugChange(key, Number(event.target.value))}
+                            />
+                          </label>
+                        ))}
+                        </section>
+                      </div>
+                    ) : stageDebugTab === "materials" ? (
+                      <div className="mio-reze-material-browser" role="tabpanel" aria-label="Reze 材质库">
+                        <div className="mio-reze-material-browser-head">
+                          <span>样式组</span>
+                          <div>
+                            <button type="button" className="mio-reze-add-style-group" aria-label="新增样式组" disabled title="当前版本按 PMX 实际材质自动分组">＋</button>
+                            <button
+                              type="button"
+                              className="mio-reze-material-library-button"
+                              aria-expanded={isRezeMaterialLibraryOpen}
+                              aria-controls="mio-reze-material-library"
+                              onClick={() => setIsRezeMaterialLibraryOpen((open) => !open)}
+                            >
+                              ◌ 素材库
+                            </button>
+                          </div>
+                        </div>
+
+                        {isRezeMaterialLibraryOpen ? (
+                          <section id="mio-reze-material-library" className="mio-reze-material-library" aria-label="材质库预设">
+                            <header>
+                              <strong>材质库</strong>
+                              <button type="button" aria-label="关闭材质库" onClick={() => setIsRezeMaterialLibraryOpen(false)}>×</button>
+                            </header>
+                            <p>选择预设后会应用到当前选中的 PMX 材质。</p>
+                            <div>
+                              {REZE_EXECUTABLE_MATERIAL_PRESETS.map((preset) => (
+                                <button
+                                  key={preset}
+                                  type="button"
+                                  className={selectedRezeMaterial?.preset === preset ? "is-active" : ""}
+                                  disabled={!selectedRezeMaterial}
+                                  onClick={() => selectedRezeMaterial && handleRezeMaterialPreset(selectedRezeMaterial.id, preset)}
+                                >
+                                  {preset}
+                                </button>
+                              ))}
+                            </div>
+                          </section>
+                        ) : null}
+
+                        {rezeMaterialGroups.length ? (
+                          <div className="mio-reze-material-tree" aria-label="PMX 材质样式组">
+                            {rezeMaterialGroups.map((group) => (
+                              <details key={group.id} className="mio-reze-material-group" open>
+                                <summary>
+                                  <span>{group.label}</span>
+                                  {group.preset ? (
+                                    <button
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        handleRezeStyleGroupPreset(group);
+                                      }}
+                                      title={`将 ${group.preset} 应用到 ${group.label} 样式组`}
+                                    >
+                                      {group.preset}
+                                    </button>
+                                  ) : <small>未映射</small>}
+                                </summary>
+                                <div className="mio-reze-material-leaves">
+                                  {group.entries.map((entry) => (
+                                    <button
+                                      key={entry.id}
+                                      type="button"
+                                      className={`mio-reze-material-leaf ${selectedRezeMaterial?.id === entry.id ? "is-selected" : ""} ${entry.visible ? "" : "is-hidden"}`}
+                                      aria-pressed={selectedRezeMaterial?.id === entry.id}
+                                      onClick={() => setSelectedRezeMaterialId(entry.id)}
+                                    >
+                                      <span>{entry.name}</span>
+                                      {!entry.visible ? <i aria-label="已隐藏">◉</i> : null}
+                                    </button>
+                                  ))}
+                                </div>
+                              </details>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mio-advanced-empty">模型尚未完成加载，或请点击“刷新材质”重新读取。</p>
+                        )}
+
+                        {selectedRezeMaterial ? (
+                          <section className="mio-reze-material-inspector" aria-label={`${selectedRezeMaterial.name} 材质详情`}>
+                            <header>
+                              <div><strong>{selectedRezeMaterial.name}</strong><span>{selectedRezeMaterial.meshName}</span></div>
+                              <button type="button" className="mio-advanced-mini" onClick={refreshStageMaterialDebug}>刷新材质</button>
+                            </header>
+                            <label className="mio-stage-material-preset">
+                              <span>材质图</span>
+                              <select
+                                value={(rezeStageDocument.materialPresets[selectedRezeMaterial.id] ?? selectedRezeMaterial.preset ?? "默认") as RezeExecutableMaterialPreset}
+                                aria-label={`${selectedRezeMaterial.name} 材质图`}
+                                onChange={(event) => handleRezeMaterialPreset(selectedRezeMaterial.id, event.target.value as RezeExecutableMaterialPreset)}
+                              >
+                                {REZE_EXECUTABLE_MATERIAL_PRESETS.map((preset) => <option key={preset} value={preset}>{preset}</option>)}
+                              </select>
+                            </label>
+                            <label className="mio-stage-material-toggle">
+                              <span>可见</span>
+                              <input type="checkbox" checked={selectedRezeMaterial.visible} aria-label={`${selectedRezeMaterial.name} 可见`} onChange={(event) => handleStageMaterialDebugChange(selectedRezeMaterial.id, { visible: event.target.checked })} />
+                            </label>
+                            <label className="mio-stage-debug-control">
+                              <span>透明度</span><output>{selectedRezeMaterial.opacity.toFixed(2)}</output>
+                              <input type="range" min="0" max="1" step="0.01" value={selectedRezeMaterial.opacity} aria-label={`${selectedRezeMaterial.name} 透明度`} disabled={selectedRezeMaterial.supportsOpacity === false} onChange={(event) => handleStageMaterialDebugChange(selectedRezeMaterial.id, { opacity: Number(event.target.value) })} />
+                            </label>
+                            <label className="mio-stage-debug-control">
+                              <span>发光强度</span><output>{selectedRezeMaterial.emissiveIntensity.toFixed(2)}</output>
+                              <input type="range" min="0" max="2" step="0.01" value={selectedRezeMaterial.emissiveIntensity} aria-label={`${selectedRezeMaterial.name} 发光强度`} disabled={selectedRezeMaterial.supportsEmissive === false} onChange={(event) => handleStageMaterialDebugChange(selectedRezeMaterial.id, { emissiveIntensity: Number(event.target.value) })} />
+                            </label>
+                            {selectedRezeMaterial.supportsOpacity === false || selectedRezeMaterial.supportsEmissive === false ? <small className="mio-stage-material-limitation">WebGPU 当前通过 WGSL 材质图控制外观；单材质透明度与发光滑块尚未映射。</small> : null}
+                            <button type="button" className="mio-advanced-mini mio-stage-material-reset" onClick={() => handleResetStageMaterialDebug(selectedRezeMaterial.id)}>重置此材质</button>
+                          </section>
+                        ) : null}
+                      </div>
+                    ) : stageDebugTab === "assets" ? (
+                      <div className="mio-stage-debug-controls" role="tabpanel" aria-label="资产">
+                        <section className="mio-reze-inspector-section">
+                          <header>角色模型</header>
+                          <label className="mio-stage-material-preset"><span>当前模型</span><select aria-label="Reze 编辑器模型" value={selectedModel?.relative_path || ""} onChange={(event) => handleCharacterSwitch(event.target.value)}>{models.map((model) => <option key={model.relative_path} value={model.relative_path}>{getModelDisplayLabel(model)}</option>)}</select></label>
+                          <label className="mio-advanced-upload" title="选择含 PMX 与贴图的模型根目录">
+                            <span>导入本地 PMX 模型目录</span>
+                            <input
+                              type="file"
+                              multiple
+                              ref={(element) => element?.setAttribute("webkitdirectory", "")}
+                              onChange={(event) => {
+                                handleRezePmxImport(event.target.files);
+                                event.currentTarget.value = "";
+                              }}
+                            />
+                          </label>
+                          <p className="mio-reze-panel-note">请选择包含 PMX 与全部贴图的完整模型目录。导入内容仅保留在当前浏览器会话，刷新页面后需重新导入。</p>
+                          {rezeLocalModelImport ? <p className="mio-reze-panel-note">当前本地导入：{rezeLocalModelImport.pmxFile.name}（{rezeLocalModelImport.files.length} 个文件）</p> : null}
+                        </section>
+                        <section className="mio-reze-inspector-section">
+                          <header>动作</header>
+                          <label className={`mio-advanced-upload ${advancedBusy ? "is-busy" : ""}`}><span>{advancedBusy ? "正在导入…" : "导入 VMD"}</span><input type="file" accept=".vmd" multiple disabled={advancedBusy} onChange={(event) => { if (event.target.files?.length) void handleAdvancedUpload(event.target.files); event.currentTarget.value = ""; }} /></label>
+                          <p className="mio-reze-panel-note">导入后的 VMD 会进入现有动作库；WebGPU 预览使用 reze-engine 自己的 IK/物理实现，不复用 Three.js 的 Grant solver。当前模型如显示兼容性错误，请切回 Reze NPR（WebGL）。</p>
+                        </section>
+                      </div>
+                    ) : (
+                      <div className="mio-stage-debug-controls" role="tabpanel" aria-label="渲染">
+                        <section className="mio-reze-inspector-section">
+                          <header>静帧导出</header>
+                          <p className="mio-reze-panel-note">导出当前 WebGPU 舞台画布的 PNG。MIO CSS 背景与视频导出将在画布合成路径完成后提供。</p>
+                          <button type="button" className="mio-advanced-mini is-active" onClick={handleExportRezeStagePng}>导出 PNG</button>
+                        </section>
+                        <section className="mio-reze-inspector-section">
+                          <header>画面状态</header>
+                          <div className="mio-stage-effect-row"><span>调色</span><output>{rezeStageDocument.grade}</output></div>
+                          <div className="mio-stage-effect-row"><span>背景</span><output>{rezeStageDocument.backgroundEffect}</output></div>
+                          <div className="mio-stage-effect-row"><span>渲染器</span><output>{stageRef.current?.getRendererLabel?.() ?? "准备中…"}</output></div>
+                        </section>
+                      </div>
+                    )}
+                    </div>
+                  </section>
+                ) : null}
 
                 <section className="mio-camera-controls" data-testid="mio-camera-controls" aria-label="MMD camera controls">
                   <div className="mio-camera-controls-head">
@@ -3200,7 +3858,7 @@ export default function CompanionPage() {
                     <div className="mio-advanced-list-head">
                       <span>{advancedTab === "library" ? "Recent VMD Assets" : "Current Model Favorites"}</span>
                       <strong>
-                        {(advancedTab === "library" ? visibleRecentVmdAssets.length : filteredFavoriteAssets.length)
+                        {(advancedTab === "library" ? currentModelLibraryAssets.length : filteredFavoriteAssets.length)
                           .toString()
                           .padStart(2, "0")}
                       </strong>
@@ -3228,14 +3886,14 @@ export default function CompanionPage() {
                     ) : null}
 
                     <div className="mio-advanced-list-scroll">
-                      {(advancedTab === "library" ? visibleRecentVmdAssets : filteredFavoriteAssets).length === 0 ? (
+                      {(advancedTab === "library" ? currentModelLibraryAssets : filteredFavoriteAssets).length === 0 ? (
                         <p className="mio-advanced-empty">
                           {advancedTab === "library"
                             ? "No VMD assets are ready for preview yet."
                             : "No favorited VMD assets match this slot filter."}
                         </p>
                       ) : (
-                        (advancedTab === "library" ? visibleRecentVmdAssets : filteredFavoriteAssets).map((asset) => (
+                        (advancedTab === "library" ? currentModelLibraryAssets : filteredFavoriteAssets).map((asset) => (
                           <div key={asset.asset_id} className="mio-advanced-asset" data-testid="mio-advanced-asset">
                             <button
                               type="button"
@@ -3325,6 +3983,7 @@ export default function CompanionPage() {
           setAdvancedError("");
           setAdvancedTab("library");
           setAdvancedFavoriteSlotFilter("all");
+          setIsRezeEditorOpen(false);
         }}
       />
       <div className="mio-toast-layer" aria-live="polite" aria-atomic="true">

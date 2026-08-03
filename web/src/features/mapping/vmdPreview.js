@@ -106,6 +106,18 @@ export function selectAutoplayIdleVmdAssets(assets = []) {
   return getPlayableVmdAssets(excludeEntryStandbyAssets(assets));
 }
 
+/**
+ * 待机播放与收藏归属是两层语义：当前模型的收藏永远优先；只有它没有任何
+ * 可播放待机时，才从其它模型的已收藏安全 VMD 中借用一个只读待机池。
+ *
+ * 调用方不得把 returned fallback 用于资源库、收藏/取消收藏、聊天意图解析或
+ * 点击动作；它只用于避免 PMX 在没有本模型待机时回到 T 姿 bind pose。
+ */
+export function resolveAutoplayVmdAssetPool(currentModelAssets = [], sharedIdleAssets = []) {
+  if (selectAutoplayIdleVmdAssets(currentModelAssets).length) return currentModelAssets;
+  return Array.isArray(sharedIdleAssets) ? sharedIdleAssets : [];
+}
+
 export function selectIdleFallbackVmdAsset(assets = [], { randomValue = Math.random() } = {}) {
   return pickRandomItem(selectAutoplayIdleVmdAssets(assets), randomValue);
 }

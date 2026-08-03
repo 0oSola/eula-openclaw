@@ -8,6 +8,7 @@ import {
   createVmdPreviewInteraction,
   createDefaultFavoriteLoopInteraction,
   excludeCompanionUnsafeAssets,
+  resolveAutoplayVmdAssetPool,
 } from "../src/features/mapping/vmdPreview.js";
 
 function makeAsset(filename, companionSafe = true, category = "") {
@@ -105,4 +106,12 @@ test("idle VMD fallback chooses idle loop motions before legacy safe favorites",
   assert.equal(fallback.interaction.vmdUrl, secondIdle.url);
   assert.deepEqual(fallback.interaction.vmdLoopUrls, []);
   assert.deepEqual(fallback.interaction.vmdLoopEmotionByUrl, { [secondIdle.url]: "thinking" });
+});
+
+test("other models borrow a safe shared idle only when their own favorite idle pool is empty", () => {
+  const eulaIdle = makeAsset("eula-idle.vmd", true, "00_idle_loop");
+  const ayakaIdle = makeAsset("ayaka-idle.vmd", true, "00_idle_loop");
+
+  assert.deepEqual(resolveAutoplayVmdAssetPool([ayakaIdle], [eulaIdle]), [ayakaIdle]);
+  assert.deepEqual(resolveAutoplayVmdAssetPool([], [eulaIdle]), [eulaIdle]);
 });

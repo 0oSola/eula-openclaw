@@ -18,6 +18,63 @@ const FIXED_EMOTION_MORPH_HINTS = {
   excited: ["smile", "happy", "excited", "\u5f00\u5fc3", "\u9ad8\u5174"],
 };
 
+function isRezeEditorPipeline(pipeline) {
+  return pipeline === "reze-design" || pipeline === "reze-npr";
+}
+
+function getRezeSceneDebugDefaults(pipeline) {
+  if (pipeline === "reze-npr") {
+    return {
+      sunAzimuth: 0,
+      sunElevation: 28,
+      keyIntensity: 1.86,
+      ambientIntensity: 0.82,
+      bloomThreshold: 0.5,
+      bloomKnee: 0.5,
+      bloomRadius: 4.0,
+      bloomStrength: 0.06,
+      cameraDistance: 31.5,
+      cameraTargetX: -1.2,
+      cameraTargetY: 1.05,
+      cameraTargetZ: 0.45,
+      sunColor: "#fff7f0",
+      worldColor: "#8ea6c9",
+      bloomColor: "#ff9bce",
+      backgroundColor: "#0f172b",
+      groundColor: "#0f172b",
+      groundSize: 44,
+      groundOpacity: 0.16,
+      groundShadow: true,
+      groundGridColor: "#fafaf9",
+      groundGridEnabled: false,
+    };
+  }
+  return {
+    sunAzimuth: 205,
+    sunElevation: 21,
+    keyIntensity: 2.0,
+    ambientIntensity: 0.66,
+    bloomThreshold: 0.5,
+    bloomKnee: 0.5,
+    bloomRadius: 4.0,
+    bloomStrength: 0.05,
+    cameraDistance: 26.2,
+    cameraTargetX: 0,
+    cameraTargetY: 11.4,
+    cameraTargetZ: 0,
+    sunColor: "#ffffff",
+    worldColor: "#ed6aff",
+    bloomColor: "#ffc9c9",
+    backgroundColor: "#4b004f",
+    groundColor: "#c800de",
+    groundSize: 160,
+    groundOpacity: 0.42,
+    groundShadow: true,
+    groundGridColor: "#fafaf9",
+    groundGridEnabled: true,
+  };
+}
+
 const FIXED_FACE_MATERIAL_HINTS = [
   "face",
   "eye",
@@ -583,6 +640,116 @@ const STAGE_PRESENTATION_PRESETS = {
       },
     },
   },
+  "reze-design": {
+    // 灯光、泛光和构图遵循用户提供的 Reze Design 参数；背景与接地保持透明，
+    // 由页面的 MIO 星海背景与 MIO 阴影接地层统一提供。
+    background: null,
+    fog: null,
+    renderer: { toneMapping: "aces", exposure: 1 },
+    camera: {
+      fov: 32,
+      position: [0, 11.4, 26.2],
+      target: [0, 11.4, 0],
+      minDistance: 21,
+      maxDistance: 72,
+      maxPolarAngle: 1.5079644737231006,
+      locked: false,
+    },
+    character: {
+      targetHeight: 19.5,
+    },
+    lights: {
+      ambient: { color: "#fef2f2", intensity: 0.4 },
+      hemisphere: { sky: "#fef2f2", ground: "#0f172b", intensity: 0.4 },
+      // 截图参数：方位角 55°、仰角 28°；反向位置表示光线由该方向射向角色。
+      key: { color: "#ffffff", intensity: 1.35, position: [-20.45, 14.08, -14.32] },
+      fill: { color: "#fef2f2", intensity: 0.14, position: [15, 10, -20] },
+      rim: { color: "#fef2e2", intensity: 0.09, position: [-10, 14, -18] },
+    },
+    shadowMapType: THREE.PCFSoftShadowMap,
+    floor: {
+      // 与 MIO Reference 一致：只保留阴影捕捉和接触阴影，底图及海面由 CSS
+      // MIO 舞台背景提供，不在 WebGL 中叠加一块独立颜色/网格平面。
+      kind: "shadowCatcher",
+      size: 44,
+      y: -9.75,
+      opacity: 0.22,
+      contactShadow: {
+        enabled: true,
+        size: [10.4, 6.8],
+        opacity: 0.12,
+        position: [0, -9.73, 0.2],
+      },
+    },
+    outline: { enabled: true, color: "#2a152d", opacity: 0.72, scale: 1.02 },
+    backdrop: { enabled: false },
+    postfx: {
+      enabled: true,
+      bloomStrength: 0.09,
+      bloomRadius: 0.24,
+      bloomThreshold: 0.81,
+      grade: {
+        exposure: 1,
+        contrast: 1,
+        saturation: 1,
+        warmth: 0,
+        shadowLift: 0,
+      },
+    },
+  },
+  k3: {
+    background: null,
+    fog: null,
+    renderer: { toneMapping: "none", exposure: 1.22, pixelRatioCap: 3 },
+    camera: {
+      fov: 33,
+      position: [-2.075385, 0.017334, 46.985286],
+      target: [-2.075385, -2.771828, 0.642287],
+      minDistance: 6,
+      maxDistance: 60,
+      maxPolarAngle: Math.PI * 0.5,
+      locked: false,
+    },
+    character: {
+      targetHeight: 19.5,
+    },
+    lights: {
+      ambient: { color: 0xffffff, intensity: 0.7 },
+      hemisphere: { sky: "#f4f7fa", ground: "#3a4046", intensity: 0.65 },
+      key: { color: "#f7f4ef", intensity: 1.15, position: [-14, 20, 28], shadowMapSize: 4096 },
+      fill: { color: "#dbe8ff", intensity: 0.5, position: [16, 10, 18] },
+      rim: { color: "#e8f4ff", intensity: 0.65, position: [-10, 14, -18] },
+    },
+    shadowMapType: THREE.PCFSoftShadowMap,
+    floor: {
+      kind: "shadowCatcher",
+      size: 44,
+      y: -9.75,
+      opacity: 0.2,
+      contactShadow: {
+        enabled: true,
+        size: [10.8, 7],
+        opacity: 0.12,
+        position: [0, -9.73, 0.2],
+      },
+    },
+    outline: { enabled: true, color: "#16121c", opacity: 0.78, scale: 1.014 },
+    backdrop: { enabled: false },
+    postfx: {
+      enabled: true,
+      // bloom 淇濇寔 0锛歵hree-stdlib UnrealBloomPass 鍦ㄩ€忔槑鐢诲竷涓婁細鎶?background:null 鐨勮垶鍙版秱榛?      // 锛坮eze-npr 鍚屾牱鍙楀奖鍝嶏級锛孠3 鐢ㄨ壊褰╁垎绾ф浛浠ｆ硾鍏夋潵缁存寔閫氶€忔劅銆?      bloomStrength: 0,
+      bloomRadius: 0.22,
+      bloomThreshold: 0.72,
+      grade: {
+        exposure: 1.0,
+        contrast: 1.05,
+        saturation: 1.05,
+        warmth: 0.004,
+        shadowLift: 0.002,
+        linearToSRGB: true,
+      },
+    },
+  },
 };
 
 function cloneStagePresentationConfig(config) {
@@ -913,7 +1080,7 @@ export function inferRezeMaterialPreset(material) {
   return "default";
 }
 
-function createToonRampTexture(pipeline = "classic") {
+function createToonRampTexture(pipeline = "classic", variant = "default") {
   const canvas = document.createElement("canvas");
   canvas.width = 256;
   canvas.height = 1;
@@ -928,12 +1095,30 @@ function createToonRampTexture(pipeline = "classic") {
     gradient.addColorStop(0.46, "#92a0b8");
     gradient.addColorStop(0.76, "#92a0b8");
     gradient.addColorStop(0.77, "#eef7ff");
-  } else if (pipeline === "reze-npr") {
+  } else if (pipeline === "reze-npr" || pipeline === "reze-design") {
     gradient.addColorStop(0, "#3d3745");
     gradient.addColorStop(0.296, "#3d3745");
     gradient.addColorStop(0.302, "#c98d83");
     gradient.addColorStop(0.54, "#f2b8a6");
     gradient.addColorStop(0.545, "#fff1de");
+  } else if (pipeline === "k3" && variant === "skin") {
+    // 皮肤专用暖色渐变：全局 K3 渐变的暗部是冷蓝灰，乘在暖色皮肤贴图上会
+    // 变成灰暗色（不像人类皮肤），这里暗部改用暖棕粉阶。
+    gradient.addColorStop(0, "#a97a6c");
+    gradient.addColorStop(0.249, "#a97a6c");
+    gradient.addColorStop(0.25, "#e0ab97");
+    gradient.addColorStop(0.449, "#e0ab97");
+    gradient.addColorStop(0.45, "#ffe9dc");
+    gradient.addColorStop(0.749, "#ffe9dc");
+    gradient.addColorStop(0.75, "#ffffff");
+  } else if (pipeline === "k3") {
+    gradient.addColorStop(0, "#7d8492");
+    gradient.addColorStop(0.249, "#7d8492");
+    gradient.addColorStop(0.25, "#b9c0cb");
+    gradient.addColorStop(0.449, "#b9c0cb");
+    gradient.addColorStop(0.45, "#f2f4f8");
+    gradient.addColorStop(0.749, "#f2f4f8");
+    gradient.addColorStop(0.75, "#ffffff");
   } else if (pipeline === "genshin" || pipeline === "mio-reference") {
     gradient.addColorStop(0, "#505050");
     gradient.addColorStop(0.3, "#b4b4b4");
@@ -1210,6 +1395,7 @@ function createColorGradeShader(grade = {}) {
       saturation: { value: grade.saturation ?? 1 },
       warmth: { value: grade.warmth ?? 0 },
       shadowLift: { value: grade.shadowLift ?? 0 },
+      linearToSRGB: { value: grade.linearToSRGB ? 1 : 0 },
     },
     vertexShader: `
       varying vec2 vUv;
@@ -1225,6 +1411,7 @@ function createColorGradeShader(grade = {}) {
       uniform float saturation;
       uniform float warmth;
       uniform float shadowLift;
+      uniform float linearToSRGB;
       varying vec2 vUv;
 
       void main() {
@@ -1236,6 +1423,14 @@ function createColorGradeShader(grade = {}) {
         color.r += warmth;
         color.b -= warmth * 0.7;
         color = max(color, vec3(shadowLift));
+        // postfx 链在渲染目标里是线性空间，而 ShaderPass 不带色彩空间转换。
+        // 只有最后一步才允许做 linear→sRGB，否则整条链会以线性值直接上屏（画面发暗）。
+        if (linearToSRGB > 0.5) {
+          vec3 clamped = clamp(color, 0.0, 1.0);
+          color = mix(clamped * 12.92, 1.055 * pow(clamped, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, clamped));
+        }
+        // 保留输入纹理 alpha。这样 Reze 的调色后处理不会把透明舞台填成黑底，
+        // 页面底下的 MIO 星海背景可以继续透过最终 canvas 显示。
         gl_FragColor = vec4(color, texel.a);
       }
     `,
@@ -1387,6 +1582,100 @@ function applyPresentationMaterialAdjustments(material, profile, presentation) {
   material.needsUpdate = true;
 }
 
+export function tuneK3MMDMaterial(material, rampTexture, skinRampTexture = null) {
+  if (!material) return;
+  const { profile } = primeMMDMaterial(material);
+  const materialName = `${material.name || ""}`;
+  const normalizedName = normalizeGenshinMaterialName(materialName);
+  const isGlowMaterial = isGenshinGlowMaterial(materialName);
+  const isHeadFxMaterial = isGlowMaterial && normalizedName.includes("head");
+  const isEyeMaterial = hasMaterialHint(describeMaterial(material), REZE_EYE_MATERIAL_HINTS);
+
+  cleanLegacyMMDMaterialFlags(material);
+
+  // 眼部高光/阴影叠加层（如克莱妲的 Eyes+ / EyeShadow，贴图 eyeblend 的 alpha
+  // 大部分低于 0.5）：统一 alphaTest=0.5 会把高光弧和眼窝阴影整层裁掉，眼睛显得
+  // 发闷无光。叠加层保留完整 alpha 渐变并按透明层渲染。
+  const isEyeOverlayMaterial =
+    isEyeMaterial && /(\+|plus|blend|shadow|hl|highlight)/i.test(materialName);
+
+  if (isEyeOverlayMaterial) {
+    material.alphaTest = 0;
+    material.transparent = true;
+    material.depthWrite = false;
+    // 叠加层网格贴在眼球曲面内侧，正常深度测试会被眼球表面挡掉（高光弧不可见），
+    // 用 polygonOffset 把它拉向镜头。
+    material.polygonOffset = true;
+    material.polygonOffsetFactor = -2;
+    material.polygonOffsetUnits = -2;
+  } else {
+    material.alphaTest = Math.max(material.alphaTest || 0, 0.5);
+  }
+  material.side = THREE.DoubleSide;
+
+  const profileTuning = {
+    face: { shininessCap: 12, specular: 0.42, envMapIntensity: 0.08 },
+    skin: { shininessCap: 14, specular: 0.5, envMapIntensity: 0.1 },
+    hair: { shininessCap: 32, specular: 0.85, envMapIntensity: 0.18 },
+    cloth: { shininessCap: 22, specular: 0.6, envMapIntensity: 0.12 },
+    metal: { shininessCap: 96, specular: 1, envMapIntensity: 0.5 },
+    default: { shininessCap: 24, specular: 0.7, envMapIntensity: 0.12 },
+  };
+  const tuning = isEyeMaterial
+    ? { shininessFloor: 40, shininessCap: 72, specular: 1.15, envMapIntensity: 0.3 }
+    : profileTuning[profile] || profileTuning.default;
+
+  if ("shininess" in material && typeof material.shininess === "number") {
+    if (Number.isFinite(tuning.shininessFloor)) {
+      material.shininess = Math.max(material.shininess, tuning.shininessFloor);
+    }
+    if (Number.isFinite(tuning.shininessCap)) {
+      material.shininess = Math.min(material.shininess, tuning.shininessCap);
+    }
+  }
+  if ("specular" in material && material.specular?.isColor) {
+    material.specular.multiplyScalar(tuning.specular);
+  }
+  if ("envMapIntensity" in material) material.envMapIntensity = tuning.envMapIntensity;
+
+  if (isGlowMaterial) {
+    material.emissive?.setHex?.(0x9d00ff);
+    if ("emissiveIntensity" in material) material.emissiveIntensity = 1;
+  } else if (isEyeMaterial) {
+    // loader 按 PMX ambient 写入的灰色 emissive 取中档：既能抬起虹膜的蓝紫色
+    // （克莱妲虹膜贴图本身是深海军蓝），又不至于像满档那样把色彩洗灰。
+    if ("emissiveIntensity" in material) {
+      material.emissiveIntensity = 0.55;
+    }
+    // 高光叠加层用加法混合，让白色高光弧真正亮起来
+    if (isEyeOverlayMaterial && /(\+|plus|hl|highlight)/i.test(materialName)) {
+      material.blending = THREE.AdditiveBlending;
+    }
+  } else if (profile === "face" || profile === "skin") {
+    material.emissive?.setHex?.(0x1a110d);
+    if ("emissiveIntensity" in material) material.emissiveIntensity = 0.14;
+  } else {
+    // 保留 MMDLoader 从 PMX ambient 写入的自发光（ambient×0.2，线性空间），只按
+    // 材质类型打折。克莱妲等深色系模型的 albedo 极低，清零 emissive 会把暗部压成
+    // 死黑；classic 管线正是靠保留这层自发光才有可读的灰蓝外套。头发全保留会发灰，
+    // 金属少保留，布料/默认保留约一半，对齐 GFL2 实机的柔亮观感。
+    const emissiveIntensity = { cloth: 0.65, metal: 0.3, hair: 0.05, default: 0.45 };
+    if ("emissiveIntensity" in material) {
+      material.emissiveIntensity = emissiveIntensity[profile] ?? emissiveIntensity.default;
+    }
+  }
+
+  if (isGenshinSuppressedMaskMaterial(materialName) || isHeadFxMaterial) {
+    material.visible = false;
+    material.transparent = true;
+    material.opacity = 0;
+  }
+
+  const isSkinMaterial = !isGlowMaterial && !isEyeMaterial && (profile === "face" || profile === "skin");
+  const effectiveRamp = isSkinMaterial && skinRampTexture ? skinRampTexture : rampTexture;
+  finalizeMMDMaterial(material, effectiveRamp);
+}
+
 export function tuneRezeNprMMDMaterial(material, rampTexture) {
   if (!material) return;
   const { needsCutout } = primeMMDMaterial(material);
@@ -1474,9 +1763,10 @@ export function tuneRezeNprMMDMaterial(material, rampTexture) {
   finalizeMMDMaterial(material, rampTexture);
 }
 
-function tuneMaterialByPipeline(material, toonRampTexture, pipeline, presentation = null) {
-  if (pipeline === "reze-npr") return tuneRezeNprMMDMaterial(material, toonRampTexture);
+function tuneMaterialByPipeline(material, toonRampTexture, pipeline, presentation = null, skinRampTexture = null) {
+  if (pipeline === "reze-npr" || pipeline === "reze-design") return tuneRezeNprMMDMaterial(material, toonRampTexture);
   if (pipeline === "hero-shot") return tuneHeroShotMMDMaterial(material, toonRampTexture);
+  if (pipeline === "k3") return tuneK3MMDMaterial(material, toonRampTexture, skinRampTexture);
   if (pipeline === "genshin" || pipeline === "mio-reference") return tuneGenshinMMDMaterial(material, toonRampTexture, presentation);
   return tuneClassicMMDMaterial(material, toonRampTexture);
 }
@@ -1610,6 +1900,8 @@ export class MMDCompanionRuntime {
     this.bloomPass = null;
     this.cameraLocked = false;
     this.resizeObserver = null;
+    this.stageLights = null;
+    this.materialDebugIndex = new Map();
   }
 
   setStatus(text) {
@@ -1670,7 +1962,8 @@ export class MMDCompanionRuntime {
   setupRenderer(presentation) {
     const size = this.syncStageCanvasBox();
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const pixelRatioCap = Math.max(1, Number(presentation.renderer?.pixelRatioCap) || 2);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, pixelRatioCap));
     this.renderer.setSize(size?.width || this.container.clientWidth, size?.height || this.container.clientHeight);
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -1681,6 +1974,7 @@ export class MMDCompanionRuntime {
     this.container.replaceChildren(this.renderer.domElement);
 
     this.toonRampTexture = createToonRampTexture(this.renderPipeline);
+    this.toonSkinRampTexture = this.renderPipeline === "k3" ? createToonRampTexture("k3", "skin") : null;
   }
 
   setupCamera(presentation) {
@@ -1747,19 +2041,20 @@ export class MMDCompanionRuntime {
   }
 
   setupLights(presentation) {
-    this.scene.add(new THREE.AmbientLight(presentation.lights.ambient.color, presentation.lights.ambient.intensity));
-    this.scene.add(
-      new THREE.HemisphereLight(
-        presentation.lights.hemisphere.sky,
-        presentation.lights.hemisphere.ground,
-        presentation.lights.hemisphere.intensity,
-      ),
+    const ambient = new THREE.AmbientLight(presentation.lights.ambient.color, presentation.lights.ambient.intensity);
+    const hemisphere = new THREE.HemisphereLight(
+      presentation.lights.hemisphere.sky,
+      presentation.lights.hemisphere.ground,
+      presentation.lights.hemisphere.intensity,
     );
+    this.scene.add(ambient);
+    this.scene.add(hemisphere);
 
     const key = new THREE.DirectionalLight(presentation.lights.key.color, presentation.lights.key.intensity);
     key.position.fromArray(presentation.lights.key.position);
     key.castShadow = true;
-    key.shadow.mapSize.set(2048, 2048);
+    const keyShadowMapSize = Math.max(512, Number(presentation.lights?.key?.shadowMapSize) || 2048);
+    key.shadow.mapSize.set(keyShadowMapSize, keyShadowMapSize);
     key.shadow.normalBias = 0.012;
     key.shadow.bias = -0.00025;
     key.shadow.camera.left = -16;
@@ -1775,6 +2070,173 @@ export class MMDCompanionRuntime {
     const rim = new THREE.DirectionalLight(presentation.lights.rim.color, presentation.lights.rim.intensity);
     rim.position.fromArray(presentation.lights.rim.position);
     this.scene.add(rim);
+    this.stageLights = { ambient, hemisphere, key, fill, rim };
+  }
+
+  getMaterialDebugEntries() {
+    if (!this.model) return [];
+    const entries = [];
+    this.materialDebugIndex = new Map();
+    let meshIndex = 0;
+    this.model.traverse((child) => {
+      if (!child?.isMesh) return;
+      const currentMeshIndex = meshIndex++;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      materials.filter(Boolean).forEach((material, materialIndex) => {
+        // PMX is reloaded into fresh Three.js objects each time, so UUIDs cannot
+        // persist editor assignments. Traversal order + material slot is stable
+        // for a model file and survives remounts without modifying the asset.
+        const id = `mesh:${currentMeshIndex}:material:${materialIndex}`;
+        this.materialDebugIndex.set(id, material);
+        entries.push({
+          id,
+          name: material.name || child.name || `Material ${entries.length + 1}`,
+          meshName: child.name || "Mesh",
+          preset: material.userData?.rezePreset || inferMaterialProfile(material),
+          visible: material.visible !== false,
+          opacity: Number.isFinite(Number(material.opacity)) ? Number(material.opacity) : 1,
+          emissiveIntensity: Number.isFinite(Number(material.emissiveIntensity)) ? Number(material.emissiveIntensity) : 0,
+        });
+      });
+    });
+    return entries;
+  }
+
+  updateMaterialDebug(id, patch = {}) {
+    const material = this.materialDebugIndex.get(id);
+    if (!material) return null;
+    const base = material.userData?.stageDebugBase || {
+      visible: material.visible !== false,
+      opacity: Number.isFinite(Number(material.opacity)) ? Number(material.opacity) : 1,
+      transparent: Boolean(material.transparent),
+      depthWrite: material.depthWrite !== false,
+      emissiveIntensity: Number.isFinite(Number(material.emissiveIntensity)) ? Number(material.emissiveIntensity) : 0,
+    };
+    material.userData = { ...(material.userData || {}), stageDebugBase: base };
+    if (typeof patch.visible === "boolean") material.visible = patch.visible;
+    if (Number.isFinite(Number(patch.opacity))) {
+      const opacity = THREE.MathUtils.clamp(Number(patch.opacity), 0, 1);
+      material.opacity = opacity;
+      material.transparent = opacity < 0.999 || base.transparent;
+      material.depthWrite = opacity >= 0.999 && base.depthWrite;
+    }
+    if (Number.isFinite(Number(patch.emissiveIntensity)) && "emissiveIntensity" in material) {
+      material.emissiveIntensity = Math.max(0, Number(patch.emissiveIntensity));
+    }
+    material.needsUpdate = true;
+    return {
+      id,
+      visible: material.visible !== false,
+      opacity: Number(material.opacity ?? 1),
+      emissiveIntensity: Number(material.emissiveIntensity ?? 0),
+    };
+  }
+
+  resetMaterialDebug(id) {
+    const material = this.materialDebugIndex.get(id);
+    const base = material?.userData?.stageDebugBase;
+    if (!material || !base) return null;
+    material.visible = base.visible;
+    material.opacity = base.opacity;
+    material.transparent = base.transparent;
+    material.depthWrite = base.depthWrite;
+    if ("emissiveIntensity" in material) material.emissiveIntensity = base.emissiveIntensity;
+    material.needsUpdate = true;
+    return this.updateMaterialDebug(id, {});
+  }
+
+  setMaterialPreset(id, preset) {
+    const material = this.materialDebugIndex.get(id);
+    if (!material || !isRezeEditorPipeline(this.renderPipeline)) return null;
+    const base = material.userData?.stagePresetBase || {
+      shininess: Number(material.shininess ?? 30),
+      emissiveIntensity: Number(material.emissiveIntensity ?? 0),
+      opacity: Number(material.opacity ?? 1),
+      transparent: Boolean(material.transparent),
+      alphaTest: Number(material.alphaTest ?? 0),
+    };
+    material.userData = { ...(material.userData || {}), stagePresetBase: base, rezeEditorPreset: preset };
+    if (preset === "默认") {
+      material.shininess = base.shininess;
+      material.emissiveIntensity = base.emissiveIntensity;
+      material.opacity = base.opacity;
+      material.transparent = base.transparent;
+      material.alphaTest = base.alphaTest;
+    } else if (preset === "眼睛") {
+      material.emissiveIntensity = Math.max(base.emissiveIntensity, 0.45);
+      material.shininess = Math.max(base.shininess, 90);
+    } else if (preset === "金属") {
+      material.shininess = Math.max(base.shininess, 110);
+      material.emissiveIntensity = Math.min(base.emissiveIntensity, 0.05);
+    } else if (preset === "半透材质") {
+      material.transparent = true;
+      material.opacity = Math.min(base.opacity, 0.58);
+      material.alphaTest = Math.max(base.alphaTest, 0.08);
+    } else if (preset === "角色皮肤" || preset === "面部") {
+      material.shininess = Math.min(base.shininess, 18);
+      material.emissiveIntensity = Math.max(base.emissiveIntensity, preset === "面部" ? 0.08 : 0.04);
+    } else if (preset === "头发") {
+      material.shininess = Math.max(base.shininess, 48);
+    } else if (preset === "柔滑布料") {
+      material.shininess = Math.max(base.shininess, 38);
+    }
+    material.needsUpdate = true;
+    return { id, preset };
+  }
+
+  setSceneDebugSettings(settings = {}) {
+    if (!this.presentation || !isRezeEditorPipeline(this.renderPipeline)) return null;
+    const current = this.presentation.sceneDebugSettings || getRezeSceneDebugDefaults(this.renderPipeline);
+    const next = { ...current, ...settings };
+    this.presentation.sceneDebugSettings = next;
+    const azimuth = THREE.MathUtils.degToRad(Number(next.sunAzimuth) || 0);
+    const elevation = THREE.MathUtils.degToRad(Number(next.sunElevation) || 0);
+    const keyRadius = 28;
+    const keyPosition = [
+      -keyRadius * Math.cos(elevation) * Math.sin(azimuth),
+      keyRadius * Math.sin(elevation),
+      -keyRadius * Math.cos(elevation) * Math.cos(azimuth),
+    ];
+    if (this.stageLights) {
+      if (typeof next.worldColor === "string") {
+        this.stageLights.ambient.color.set(next.worldColor);
+        this.stageLights.hemisphere.color.set(next.worldColor);
+      }
+      if (typeof next.sunColor === "string") this.stageLights.key.color.set(next.sunColor);
+      this.stageLights.ambient.intensity = Math.max(0, Number(next.ambientIntensity) || 0);
+      this.stageLights.hemisphere.intensity = Math.max(0, Number(next.ambientIntensity) || 0);
+      this.stageLights.key.intensity = Math.max(0, Number(next.keyIntensity) || 0);
+      this.stageLights.key.position.fromArray(keyPosition);
+    }
+    if (this.bloomPass) {
+      this.bloomPass.threshold = THREE.MathUtils.clamp(Number(next.bloomThreshold) || 0, 0, 1);
+      this.bloomPass.strength = Math.max(0, Number(next.bloomStrength) || 0);
+    }
+    if (this.floorGroup) {
+      this.floorGroup.traverse((child) => {
+        if (!child?.material) return;
+        const material = Array.isArray(child.material) ? child.material : [child.material];
+        if (child.userData?.stageDebugRole === "shadow-catcher") {
+          material.forEach((item) => {
+            item.opacity = next.groundShadow === false ? 0 : THREE.MathUtils.clamp(Number(next.groundOpacity) || 0, 0, 1);
+            item.needsUpdate = true;
+          });
+        }
+      });
+    }
+    if (this.camera && this.controls) {
+      const target = [Number(next.cameraTargetX) || 0, Number(next.cameraTargetY) || 0, Number(next.cameraTargetZ) || 0];
+      this.controls.target.fromArray(target);
+      this.camera.position.set(target[0], target[1], target[2] + Math.max(1, Number(next.cameraDistance) || 1));
+      this.camera.updateProjectionMatrix();
+      this.controls.update();
+    }
+    return { ...next };
+  }
+
+  resetSceneDebugSettings() {
+    if (!isRezeEditorPipeline(this.renderPipeline)) return null;
+    return this.setSceneDebugSettings(getRezeSceneDebugDefaults(this.renderPipeline));
   }
 
   setupFloor(presentation) {
@@ -1790,8 +2252,43 @@ export class MMDCompanionRuntime {
     );
     shadowCatcher.rotation.x = -Math.PI / 2;
     shadowCatcher.position.y = presentation.floor.y;
+    shadowCatcher.userData.stageDebugRole = "shadow-catcher";
     shadowCatcher.receiveShadow = true;
     floorGroup.add(shadowCatcher);
+
+    if (presentation.floor.kind === "rezeDesignGround") {
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(presentation.floor.size, presentation.floor.size),
+        new THREE.MeshBasicMaterial({
+          color: presentation.floor.color || "#c800de",
+          transparent: true,
+          opacity: presentation.floor.opacity,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = presentation.floor.y - 0.002;
+      floorGroup.add(ground);
+
+      if (presentation.floor.grid?.enabled) {
+        const grid = new THREE.GridHelper(
+          presentation.floor.size,
+          presentation.floor.grid.divisions || 32,
+          presentation.floor.grid.color || "#fafaf9",
+          presentation.floor.grid.color || "#fafaf9",
+        );
+        grid.position.y = presentation.floor.y + 0.003;
+        const materials = Array.isArray(grid.material) ? grid.material : [grid.material];
+        materials.forEach((material) => {
+          material.transparent = true;
+          material.opacity = presentation.floor.grid.opacity ?? 0.4;
+          material.depthWrite = false;
+          material.toneMapped = false;
+        });
+        floorGroup.add(grid);
+      }
+    }
 
     if (presentation.floor.glow?.enabled) {
       const glowTexture = createHaloTexture(presentation.floor.glow.color);
@@ -2062,6 +2559,10 @@ export class MMDCompanionRuntime {
 
   shouldUseBloom(presentation = this.presentation) {
     if (!presentation?.postfx?.enabled) return false;
+    // three-stdlib 的 UnrealBloomPass 会先以不透明的基础材质回填最终帧。
+    // 对 background:null 的 Reze 舞台，这会把本应透明的区域写成黑色；
+    // 因此透明舞台仅保留 alpha 安全的调色链，MIO CSS 背景继续作为背景层。
+    if (presentation.background == null) return false;
     return Number(presentation.postfx.bloomStrength) > 0;
   }
 
@@ -2071,11 +2572,11 @@ export class MMDCompanionRuntime {
     if (!this.renderer?.getSize || !this.renderer?.getPixelRatio) return;
 
     this.composer = new EffectComposer(this.renderer);
-    this.renderPass = new RenderPass(this.scene, this.camera);
-    if (presentation.background == null) {
-      this.renderPass.clearColor = 0x000000;
-      this.renderPass.clearAlpha = 0;
-    }
+    // 为透明舞台显式指定 0 alpha，而非依赖 RenderPass/renderer 的默认值。
+    // 后续调色 ShaderPass 保留该 alpha；会回填不透明底色的 Bloom Pass 已在透明模式禁用。
+    const clearColor = presentation.background == null ? new THREE.Color(0x000000) : undefined;
+    const clearAlpha = presentation.background == null ? 0 : 1;
+    this.renderPass = new RenderPass(this.scene, this.camera, undefined, clearColor, clearAlpha);
     this.composer.addPass(this.renderPass);
 
     this.colorGradePass = new ShaderPass(createColorGradeShader(presentation.postfx.grade));
@@ -2135,9 +2636,20 @@ export class MMDCompanionRuntime {
     return raycaster.intersectObject(this.model, true).some((hit) => hit?.object?.visible !== false);
   }
 
+  capturePngDataUrl() {
+    if (!this.renderer?.domElement || !this.scene || !this.camera) return null;
+    this.renderScene();
+    try {
+      return this.renderer.domElement.toDataURL("image/png");
+    } catch {
+      return null;
+    }
+  }
+
   clearModel() {
     this.disposeCharacterOutline();
     this.disposeFaceDetails();
+    this.materialDebugIndex.clear();
     if (!this.model) return;
     try {
       this.helper.remove(this.model);
@@ -2194,7 +2706,7 @@ export class MMDCompanionRuntime {
       child.receiveShadow = true;
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       for (const material of materials) {
-        tuneMaterialByPipeline(material, this.toonRampTexture, this.renderPipeline, this.presentation);
+        tuneMaterialByPipeline(material, this.toonRampTexture, this.renderPipeline, this.presentation, this.toonSkinRampTexture);
       }
     });
     fitModelToPresentation(mesh, this.presentation);
@@ -2202,11 +2714,37 @@ export class MMDCompanionRuntime {
     this.model = mesh;
     this.helper.add(mesh, { physics: this.hasPhysicsSupport });
     this.captureBones(mesh);
+    this.getMaterialDebugEntries();
     this.attachFaceDetails(mesh, this.presentation);
     if (this.presentation?.outline?.enabled) {
       this.attachCharacterOutline(mesh, this.presentation);
     }
     this.setStatus("Model ready.");
+    // MMDLoader 会为 toonIndex 指向空贴图路径（如克莱妲 PMX 里的 'spa/'）的材质
+    // 挂上永远加载失败的 gradientMap（image 为空），导致 MeshToonMaterial 的 direct
+    // light 被 ramp 采样成 0，材质只剩环境光而发闷（眼睛的蓝色虹膜就是这样变黑的）。
+    // 等正常贴图加载落定后统一把坏 gradientMap 替换成管线 ramp。
+    window.setTimeout(() => this.repairBrokenGradientMaps(), 1500);
+  }
+
+  repairBrokenGradientMaps(root = this.model) {
+    if (!root) return;
+    root.traverse((child) => {
+      if (!child.isMesh) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      for (const material of materials) {
+        const gm = material.gradientMap;
+        if (!gm) continue;
+        const img = gm.image;
+        if (img && Number(img.width) > 0) continue;
+        const profile = inferMaterialProfile(material);
+        const isEye = hasMaterialHint(describeMaterial(material), REZE_EYE_MATERIAL_HINTS);
+        const useSkin =
+          this.toonSkinRampTexture && !isEye && (profile === "face" || profile === "skin");
+        material.gradientMap = useSkin ? this.toonSkinRampTexture : this.toonRampTexture;
+        material.needsUpdate = true;
+      }
+    });
   }
 
   attachFaceDetails(_mesh, presentation = this.presentation) {
@@ -2511,6 +3049,7 @@ export class MMDCompanionRuntime {
     }
     if (this.calibrationCaptureMode) {
       applyClipBoneTracksAtTime(this.model, this.currentClip, seconds);
+      this.model?.skeleton?.update?.();
     } else {
       mixer?.setTime?.(seconds);
       this.helper?.update?.(0);
@@ -2523,6 +3062,15 @@ export class MMDCompanionRuntime {
       this.stabilizeVmdAnchorBones();
       this.resetBonesNotAnimatedByClip(this.currentClip);
       if (this.currentVmdLockLowerBody) this.resetLowerBodyBonesToBase();
+    }
+    // Re-sync bone matrices to GPU after stabilize/reset calls modified matrixWorld
+    if (this.calibrationCaptureMode) {
+      this.model?.updateMatrixWorld?.(true);
+      // Apply Grant (浠樹笌) bone transforms so deform bones follow control bones
+      const grantSolver = this.helper?.objects?.get?.(this.model)?.grantSolver;
+      if (grantSolver) grantSolver.update?.();
+      this.model?.updateMatrixWorld?.(true);
+      this.model?.skeleton?.update?.();
     }
     this.renderScene?.();
     return true;
@@ -3050,6 +3598,15 @@ export class MMDCompanionRuntime {
       this.updateBonePose(delta, nowMs);
       this.updateMorph(delta, nowMs);
     }
+    // Sync bone world matrices to GPU bone texture so skinning reflects manual bone changes
+    if (this.calibrationCaptureMode) {
+      this.model?.updateMatrixWorld?.(true);
+      // Apply Grant (浠樹笌) bone transforms so deform bones follow control bones
+      const grantSolver = this.helper?.objects?.get?.(this.model)?.grantSolver;
+      if (grantSolver) grantSolver.update?.();
+      this.model?.updateMatrixWorld?.(true);
+      this.model?.skeleton?.update?.();
+    }
     this.flushExpiredVmdActionCleanups(nowMs);
     this.controls?.update();
     this.renderScene();
@@ -3076,6 +3633,8 @@ export class MMDCompanionRuntime {
     this.disposeFloor();
     this.disposeBackdrop();
     this.disposePostprocessing();
+    this.stageLights = null;
+    this.materialDebugIndex.clear();
     this.renderer?.dispose();
     this.toonRampTexture?.dispose?.();
   }

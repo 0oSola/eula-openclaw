@@ -5,6 +5,8 @@ import { ChangeEvent, PointerEvent, forwardRef, useEffect, useImperativeHandle, 
 import { getModelDisplayLabel } from "@/features/stage/modelCatalog.js";
 import { shouldTriggerStageCharacterClick } from "@/features/stage/stageCharacterClick.js";
 import { applyStageRuntimeState, MMDCompanionRuntime } from "@/features/stage/mmdCompanionRuntime.js";
+import { RezeWebGpuStage } from "@/features/stage/RezeWebGpuStage";
+import type { RezeBackgroundEffect, RezeGradePreset } from "@/features/stage/rezeDesignDefaults";
 import type { MmdCameraSnapshot, MmdModelAsset, RenderPipeline } from "@/lib/types";
 
 declare global {
@@ -75,6 +77,25 @@ export type MMDStageHandle = {
   getStageRect: () => DOMRect | null;
   setSpeechLevel: (level: number) => void;
   setSpeechViseme: (frame: { viseme: string; weight?: number } | null) => void;
+  getMaterialDebugEntries: () => Array<{
+    id: string;
+    name: string;
+    meshName: string;
+    preset: string;
+    visible: boolean;
+    opacity: number;
+    emissiveIntensity: number;
+  }>;
+  updateMaterialDebug: (
+    id: string,
+    patch: { visible?: boolean; opacity?: number; emissiveIntensity?: number },
+  ) => { id: string; visible: boolean; opacity: number; emissiveIntensity: number } | null;
+  resetMaterialDebug: (id: string) => { id: string; visible: boolean; opacity: number; emissiveIntensity: number } | null;
+  setMaterialPreset: (id: string, preset: string) => { id: string; preset: string } | null;
+  captureStagePng: () => string | null;
+  setSceneDebugSettings: (settings: Record<string, number | string | boolean>) => Record<string, number | string | boolean> | null;
+  resetSceneDebugSettings: () => Record<string, number | string | boolean> | null;
+  getRendererLabel?: () => string;
 };
 
 type MMDStageProps = {
@@ -83,6 +104,11 @@ type MMDStageProps = {
   models: MmdModelAsset[];
   selectedModelPath: string;
   modelUrl: string;
+  rezeLocalModelImport?: {
+    revision: number;
+    files: File[];
+    pmxFile: File;
+  } | null;
   modelLabel: string;
   onModelChange: (nextPath: string) => void;
   onInteractionComplete?: () => void;
@@ -94,6 +120,9 @@ type MMDStageProps = {
   chrome?: "panel" | "bare";
   enableCharacterClickCapture?: boolean;
   cameraLocked?: boolean;
+  rezeBackgroundEffect?: RezeBackgroundEffect;
+  rezeGrade?: RezeGradePreset;
+  rezeGradeIntensity?: number;
 };
 
 export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDStage({
@@ -102,6 +131,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   models,
   selectedModelPath,
   modelUrl,
+  rezeLocalModelImport = null,
   modelLabel,
   onModelChange,
   onInteractionComplete,
@@ -113,10 +143,14 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   chrome = "panel",
   enableCharacterClickCapture = true,
   cameraLocked,
+  rezeBackgroundEffect = "Shining Stars",
+  rezeGrade = "中性",
+  rezeGradeIntensity = 1,
 }: MMDStageProps, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const statusRef = useRef<HTMLParagraphElement | null>(null);
   const runtimeRef = useRef<any>(null);
+  const webGpuStageRef = useRef<MMDStageHandle | null>(null);
   const currentInteractionRef = useRef(interaction);
   const currentSpeakingRef = useRef(speaking);
   const cameraSnapshotRef = useRef<MmdCameraSnapshot | null>(cameraSnapshot);
@@ -134,19 +168,19 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
     ref,
     () => ({
       unlockCamera() {
-        return runtimeRef.current?.setCameraLocked?.(false) ?? null;
+        return webGpuStageRef.current?.unlockCamera?.() ?? runtimeRef.current?.setCameraLocked?.(false) ?? null;
       },
       lockCamera() {
-        return runtimeRef.current?.setCameraLocked?.(true) ?? null;
+        return webGpuStageRef.current?.lockCamera?.() ?? runtimeRef.current?.setCameraLocked?.(true) ?? null;
       },
       captureCamera() {
-        return runtimeRef.current?.getCameraSnapshot?.() ?? null;
+        return webGpuStageRef.current?.captureCamera?.() ?? runtimeRef.current?.getCameraSnapshot?.() ?? null;
       },
       resetCamera() {
-        return runtimeRef.current?.resetCameraToDefault?.() ?? null;
+        return webGpuStageRef.current?.resetCamera?.() ?? runtimeRef.current?.resetCameraToDefault?.() ?? null;
       },
       hitTestCharacterAtClientPoint(clientX: number, clientY: number) {
-        return Boolean(runtimeRef.current?.hitTestModelAtClientPoint?.(clientX, clientY));
+        return webGpuStageRef.current?.hitTestCharacterAtClientPoint?.(clientX, clientY) ?? Boolean(runtimeRef.current?.hitTestModelAtClientPoint?.(clientX, clientY));
       },
       getStageRect() {
         return containerRef.current?.getBoundingClientRect() ?? null;
@@ -157,12 +191,40 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       setSpeechViseme(frame: { viseme: string; weight?: number } | null) {
         runtimeRef.current?.setSpeechViseme?.(frame);
       },
+      getMaterialDebugEntries() {
+        return webGpuStageRef.current?.getMaterialDebugEntries?.() ?? runtimeRef.current?.getMaterialDebugEntries?.() ?? [];
+      },
+      updateMaterialDebug(id, patch) {
+        return webGpuStageRef.current?.updateMaterialDebug?.(id, patch) ?? runtimeRef.current?.updateMaterialDebug?.(id, patch) ?? null;
+      },
+      resetMaterialDebug(id) {
+        return webGpuStageRef.current?.resetMaterialDebug?.(id) ?? runtimeRef.current?.resetMaterialDebug?.(id) ?? null;
+      },
+      setMaterialPreset(id, preset) {
+        return webGpuStageRef.current?.setMaterialPreset?.(id, preset) ?? runtimeRef.current?.setMaterialPreset?.(id, preset) ?? null;
+      },
+      captureStagePng() {
+        return webGpuStageRef.current?.captureStagePng?.() ?? runtimeRef.current?.capturePngDataUrl?.() ?? null;
+      },
+      setSceneDebugSettings(settings) {
+        return webGpuStageRef.current?.setSceneDebugSettings?.(settings) ?? runtimeRef.current?.setSceneDebugSettings?.(settings) ?? null;
+      },
+      resetSceneDebugSettings() {
+        return webGpuStageRef.current?.resetSceneDebugSettings?.() ?? runtimeRef.current?.resetSceneDebugSettings?.() ?? null;
+      },
+      getRendererLabel() {
+        return webGpuStageRef.current?.getRendererLabel?.() ?? "Three.js MMD";
+      },
     }),
     [],
   );
 
   useEffect(() => {
     if (!containerRef.current || !statusRef.current) return;
+    if (renderPipeline === "reze-design") {
+      runtimeRef.current = null;
+      return;
+    }
     if (!modelUrl) {
       runtimeRef.current = null;
       statusRef.current.textContent = "No MMD models found.";
@@ -365,11 +427,26 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       <section
         className="mio-stage"
         aria-label="MMD companion stage"
+        data-active-vmd-url={interaction.mode === "vmd" ? interaction.vmdUrl || "" : ""}
         onPointerDown={handleStagePointerDown}
         onPointerUp={handleStagePointerUp}
         onPointerCancel={handleStagePointerCancel}
       >
-        <div ref={containerRef} className="mio-stage-canvas" />
+        {renderPipeline === "reze-design" ? (
+          <RezeWebGpuStage
+            ref={webGpuStageRef}
+            modelUrl={toAbsolute(modelUrl)}
+            localModelImport={rezeLocalModelImport}
+            interaction={interaction}
+            backgroundEffect={rezeBackgroundEffect}
+            grade={rezeGrade}
+            gradeIntensity={rezeGradeIntensity}
+            cameraSnapshot={cameraSnapshot}
+            onReadyChange={(ready, detail) => {
+              if (statusRef.current) statusRef.current.textContent = detail || (ready ? "WebGPU 舞台已就绪。" : "WebGPU 舞台初始化失败。");
+            }}
+          />
+        ) : <div ref={containerRef} className="mio-stage-canvas" />}
         {renderClickRipples()}
         <p ref={statusRef} className="mio-stage-status mio-stage-status--sr-only" aria-live="polite" hidden>
           Initializing stage...
@@ -403,19 +480,25 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
           </select>
         </label>
       </header>
-      <div
-        ref={containerRef}
-        onPointerDown={handleStagePointerDown}
-        onPointerUp={handleStagePointerUp}
-        onPointerCancel={handleStagePointerCancel}
-        style={{
-          margin: "0.45rem 0.95rem",
-          minHeight: 0,
-          borderRadius: "0.8rem",
-          border: "1px solid rgba(140, 209, 255, 0.19)",
-          overflow: "hidden",
-        }}
-      />
+      {renderPipeline === "reze-design" ? (
+        <div style={{ margin: "0.45rem 0.95rem", minHeight: 0, borderRadius: "0.8rem", border: "1px solid rgba(140, 209, 255, 0.19)", overflow: "hidden" }}>
+          <RezeWebGpuStage ref={webGpuStageRef} modelUrl={toAbsolute(modelUrl)} localModelImport={rezeLocalModelImport} interaction={interaction} backgroundEffect={rezeBackgroundEffect} grade={rezeGrade} gradeIntensity={rezeGradeIntensity} cameraSnapshot={cameraSnapshot} />
+        </div>
+      ) : (
+        <div
+          ref={containerRef}
+          onPointerDown={handleStagePointerDown}
+          onPointerUp={handleStagePointerUp}
+          onPointerCancel={handleStagePointerCancel}
+          style={{
+            margin: "0.45rem 0.95rem",
+            minHeight: 0,
+            borderRadius: "0.8rem",
+            border: "1px solid rgba(140, 209, 255, 0.19)",
+            overflow: "hidden",
+          }}
+        />
+      )}
       <p ref={statusRef} className="muted" style={{ margin: 0, padding: "0.6rem 1rem 0.9rem" }}>
         Initializing stage...
       </p>
