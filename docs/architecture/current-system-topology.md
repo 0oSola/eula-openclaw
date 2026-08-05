@@ -1456,6 +1456,7 @@ Desktop 本地路线打开绑定工作区的新任务编辑界面；远程路线
 ### 16.8 Pet 本地全局 Agent 会话发现（首期）
 
 `desktop-pet` 的会话刷新不再把当前选中的本地工作区作为 Codex 扫描过滤条件。主进程通过统一的本地会话发现模块同时扫描 Windows `CODEX_HOME/sessions`、配置的 WSL `CODEX_HOME/sessions` 和 Claude `CLAUDE_CONFIG_DIR/projects`，从会话自身的 `cwd` 反向生成工作区归属，因此多个工作区的 Codex Desktop、Codex CLI、WSL CLI 和 Claude Code 会话可以同时进入 Pet 的最近会话列表。Codex JSONL 记录会保留 `originator`、`source`、运行方式、会话文件和 bounded facts；同一 session id 被重复观察时按最近活动证据去重。当前工作区/编程助手仍用于启动、恢复、watcher 上下文和旧状态隔离，不再限制全局最近会话发现。Pet 自有 app-server、进程增强和 macCodex 远程会话 Provider 尚未在本首期切片中接入。
+全局发现列表本身只读；在独立活动 registry 接入前，既有 `desktop_pet_sessions` review upsert 只对当前选中的 Codex 工作区保留兼容同步，不会因为观察到其它工作区就写入 review registry。扫描资源按 Provider 的 `maxFiles` 约束，过期活动证据显示为 `idle`，WSL `/mnt/<drive>/...` cwd 映射为对应 Windows 工作区路径。
 
 ## 17. 文档维护规则
 

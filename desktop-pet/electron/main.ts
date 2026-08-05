@@ -38,6 +38,7 @@ import {
 } from "./codexSessionFiles.js";
 import {
   discoverLocalCodexSessions,
+  discoverLocalClaudeSessions,
   type AgentSessionRecord,
 } from "./agentSessionDiscovery.js";
 import { createCodexCompletionTracker } from "./codexCompletionTracker.js";
@@ -486,7 +487,9 @@ function publishCodexStatus(
   window.webContents.invalidate();
 }
 
-const KNOWN_SESSION_STATUSES = new Set<CodexSessionStatus>([
+type DisplaySessionStatus = CodexSessionStatus | "idle";
+const KNOWN_SESSION_STATUSES = new Set<DisplaySessionStatus>([
+  "idle",
   "starting",
   "running",
   "command_running",
@@ -496,7 +499,7 @@ const KNOWN_SESSION_STATUSES = new Set<CodexSessionStatus>([
   "failed",
   "disconnected",
 ]);
-const ACTIVE_CODEX_SESSION_STATUSES = new Set<CodexSessionStatus>([
+const ACTIVE_CODEX_SESSION_STATUSES = new Set<DisplaySessionStatus>([
   "starting",
   "running",
   "command_running",
@@ -504,8 +507,8 @@ const ACTIVE_CODEX_SESSION_STATUSES = new Set<CodexSessionStatus>([
   "waiting_approval",
 ]);
 
-function normalizeCodexSessionStatus(value: unknown): CodexSessionStatus {
-  return KNOWN_SESSION_STATUSES.has(value as CodexSessionStatus) ? (value as CodexSessionStatus) : "running";
+function normalizeCodexSessionStatus(value: unknown): DisplaySessionStatus {
+  return KNOWN_SESSION_STATUSES.has(value as DisplaySessionStatus) ? (value as DisplaySessionStatus) : "running";
 }
 
 function sessionMenuKey(session: PetMenuSession): string {
@@ -815,40 +818,43 @@ function latestDisplayableSession(
 
 function toMenuSessionFromAgentRecord(
   session: AgentSessionRecord,
-  codexHome: string,
+  agentHome: string,
 ): {
   payload: DesktopPetSessionPayload;
   menuSession: PetMenuSession;
   sessionStartedAt: string;
   fileModifiedAt: string;
 } {
+  const primaryEvidence = session.evidence[0];
   const payload: DesktopPetSessionPayload = {
-    pet_session_id: `codex:${session.sessionId}`,
+    pet_session_id: `${session.agent}:${session.sessionId}`,
     codex_session_id: session.sessionId,
     workspace_id: null,
     workspace_path: session.workspacePath,
-    codex_home: codexHome,
+    codex_home: agentHome,
     display_title: session.displayTitle,
     first_prompt_preview: session.firstPromptPreview,
     last_summary: session.lastSummary,
     last_status: session.state,
-    launch_mode: "workspace-write",
+    launch_mode: session.agent === "claude" ? "interactive" : "workspace-write",
     remote_url: null,
     app_server_pid: null,
     app_server_port: null,
     metadata: {
-      source: session.evidence.source,
+      source: primaryEvidence?.source ?? "unknown",
       provider: session.provider,
       runtime: session.runtime,
       host_id: session.hostId,
-      session_file: session.sessionFile,
-      session_file_mtime: session.evidence.sessionFileModifiedAt,
+      session_file: primaryEvidence?.sessionFile ?? session.sessionFile,
+      session_file_mtime: primaryEvidence?.sessionFileModifiedAt ?? session.lastActivityAt,
       session_started_at: session.sessionStartedAt,
       originator: session.originator,
       codex_source: session.source,
       cli_version: session.cliVersion,
+      git_branch: session.gitBranch,
       last_event_at: session.lastEventAt,
       last_output: session.lastOutput,
+      evidence: session.evidence,
       facts: session.reviewFacts,
     },
   };
@@ -862,7 +868,7 @@ function toMenuSessionFromAgentRecord(
       updated_at: session.lastActivityAt,
     },
     sessionStartedAt: session.sessionStartedAt,
-    fileModifiedAt: session.evidence.sessionFileModifiedAt,
+    fileModifiedAt: primaryEvidence?.sessionFileModifiedAt ?? session.lastActivityAt,
   };
 }
 
@@ -883,33 +889,20 @@ async function readAllLocalCodexSessions(limit = 50): Promise<Array<{
   return snapshot.sessions.map((session) => toMenuSessionFromAgentRecord(session, codexHome));
 }
 
-function readAllLocalClaudeSessions(limit = 50): Array<{
+async function readAllLocalClaudeSessions(limit = 50): Promise<Array<{
   payload: DesktopPetSessionPayload;
   menuSession: PetMenuSession;
   sessionStartedAt: string;
   fileModifiedAt: string;
-}> {
+}>> {
   const claudeHome = resolveClaudeHome(process.env);
-  return scanRecentClaudeSessionFiles({
+  const snapshot = await discoverLocalClaudeSessions({
     claudeHome,
-    workspacePath: undefined,
     limit,
     maxFiles: Math.max(400, limit * 8),
-  }).map((summary) => {
-    const payload = buildClaudeDesktopPetSessionPayload(summary, claudeHome);
-    return {
-      payload,
-      menuSession: {
-        ...payload,
-        agent: "claude",
-        runtime: "cli",
-        last_seen_at: summary.fileModifiedAt,
-        updated_at: summary.fileModifiedAt,
-      },
-      sessionStartedAt: summary.sessionStartedAt,
-      fileModifiedAt: summary.fileModifiedAt,
-    };
+    scan: scanRecentClaudeSessionFiles,
   });
+  return snapshot.sessions.map((session) => toMenuSessionFromAgentRecord(session, claudeHome));
 }
 
 async function readAllLocalAgentSessions(limit = 50): Promise<Array<{
@@ -1027,7 +1020,22 @@ async function syncLocalAgentSessions(
 ): Promise<PetMenuSession[]> {
   const local = await readAllLocalAgentSessions(limit);
   if (!isActiveCodexSessionContext(context)) return [];
-  for (const item of [...local].reverse().filter((candidate) => candidate.payload.pet_session_id.startsWith("codex:"))) {
+  // Global discovery is read-only for the menu. Keep the legacy review registry
+  // sync scoped to the selected Codex workspace until the independent activity
+  // registry exists, so merely observing another workspace does not rewrite
+  // desktop_pet_sessions review data.
+  const reviewSyncCandidates =
+    context.agent === "codex"
+      ? [...local]
+          .filter(
+            (candidate) =>
+              candidate.payload.pet_session_id.startsWith("codex:") &&
+              normalizeWorkspacePathIdentity(candidate.menuSession.workspace_path) ===
+                normalizeWorkspacePathIdentity(context.workspacePath),
+          )
+          .reverse()
+      : [];
+  for (const item of reviewSyncCandidates) {
     try {
       await upsertDesktopPetSession(item.payload);
       if (!isActiveCodexSessionContext(context)) return [];
@@ -2067,7 +2075,12 @@ async function scanAndUpsertRecentCodexSessions(
   const agent = options.agent ?? context.agent;
   if (!shouldUpsertSessionsToApi(agent)) return;
   try {
-    const local = readLocalCodexSessions(workspacePath, 20, agent);
+    const local = (await readAllLocalAgentSessions(20)).filter(
+      (item) =>
+        item.menuSession.agent === "codex" &&
+        normalizeWorkspacePathIdentity(item.menuSession.workspace_path) ===
+          normalizeWorkspacePathIdentity(workspacePath),
+    );
     for (const item of [...local].reverse()) {
       try {
         await upsertDesktopPetSession(item.payload);

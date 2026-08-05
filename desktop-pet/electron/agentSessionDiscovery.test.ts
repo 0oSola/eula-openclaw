@@ -10,8 +10,10 @@ import {
 } from "./codexSessionFiles.js";
 import {
   discoverLocalCodexSessions,
+  discoverLocalClaudeSessions,
   type CodexSessionScanner,
 } from "./agentSessionDiscovery.js";
+import type { ClaudeSessionFileSummary } from "./claudeSessionFiles.js";
 
 function emptyFacts() {
   return {
@@ -143,6 +145,7 @@ describe("agent session discovery", () => {
       "cli",
       "wsl",
     ]);
+    expect(snapshot.sessions[0]?.workspacePath).toBe("D:\\workspace\\MMD project");
   });
 
   it("deduplicates the same session observed by multiple local sources", async () => {
@@ -160,5 +163,54 @@ describe("agent session discovery", () => {
 
     expect(snapshot.sessions).toHaveLength(1);
     expect(snapshot.sessions[0]?.lastOutput).toBe("newer evidence");
+    expect(snapshot.sessions[0]?.evidence).toHaveLength(2);
+  });
+
+  it("normalizes stale active evidence to idle and discovers Claude through the same registry", async () => {
+    const stale: CodexSessionFileSummary = summary({
+      codexSessionId: "stale",
+      lastEventAt: "2026-08-05T09:00:00.000Z",
+      fileModifiedAt: "2026-08-05T09:00:00.000Z",
+    });
+    const claude: ClaudeSessionFileSummary = {
+      claudeSessionId: "claude-1",
+      workspacePath: "/mnt/d/workspace/Aether UI",
+      filePath: "C:\\Users\\KSG\\.claude\\projects\\aether\\claude-1.jsonl",
+      firstPromptPreview: "Review the UI",
+      displayTitle: "Review the UI",
+      lastSummary: "Inspecting components",
+      lastOutput: "working",
+      lastStatus: "running",
+      gitBranch: "main",
+      cliVersion: "1.0.0",
+      sessionStartedAt: "2026-08-05T09:00:00.000Z",
+      lastEventAt: "2026-08-05T09:59:00.000Z",
+      fileModifiedAt: "2026-08-05T09:59:00.000Z",
+      reviewFacts: emptyFacts(),
+    };
+
+    const codexSnapshot = await discoverLocalCodexSessions({
+      codexHome: "C:\\Users\\KSG\\.codex",
+      scan: () => [stale],
+      now: () => new Date("2026-08-05T10:00:00.000Z"),
+    });
+    const claudeSnapshot = await discoverLocalClaudeSessions({
+      claudeHome: "C:\\Users\\KSG\\.claude",
+      scan: (options) => {
+        expect(options.workspacePath).toBeUndefined();
+        return [claude];
+      },
+      now: () => new Date("2026-08-05T10:00:00.000Z"),
+    });
+
+    expect(codexSnapshot.sessions[0]?.state).toBe("idle");
+    expect(claudeSnapshot.sessions[0]).toMatchObject({
+      agent: "claude",
+      provider: "claude",
+      runtime: "cli",
+      workspacePath: "D:\\workspace\\Aether UI",
+      state: "running",
+      gitBranch: "main",
+    });
   });
 });

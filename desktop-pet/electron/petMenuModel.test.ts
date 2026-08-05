@@ -35,6 +35,20 @@ describe("desktop pet menu model", () => {
     expect(label).not.toContain("11111111-2222");
   });
 
+  it("translates idle status in both menu languages", () => {
+    const session = {
+      display_title: "background review",
+      workspace_path: "D:/workspace/MMD project",
+      last_status: "idle",
+      last_seen_at: "2026-06-02T15:18:00Z",
+    };
+
+    expect(formatSessionMenuLabel(session, new Date("2026-06-03T00:00:00+08:00"))).toContain("idle");
+    expect(
+      formatSessionMenuLabel(session, new Date("2026-06-03T00:00:00+08:00"), "zh-CN"),
+    ).toContain("空闲");
+  });
+
   it("redacts sensitive fallback prompt text in recent session labels", () => {
     const label = formatSessionMenuLabel(
       {

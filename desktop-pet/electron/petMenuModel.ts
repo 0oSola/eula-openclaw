@@ -99,6 +99,7 @@ export type PetMenuActiveWorkspace = {
 const STATUS_LABELS: Record<MenuLanguage, Record<string, string>> = {
   en: {
     no_session: "no session",
+    idle: "idle",
     starting: "starting",
     running: "running",
     command_running: "running command",
@@ -110,6 +111,7 @@ const STATUS_LABELS: Record<MenuLanguage, Record<string, string>> = {
   },
   "zh-CN": {
     no_session: "无会话",
+    idle: "空闲",
     starting: "启动中",
     running: "运行中",
     command_running: "命令运行中",

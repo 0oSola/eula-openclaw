@@ -91,7 +91,7 @@ export type DesktopPetSessionPayload = {
   display_title: string;
   first_prompt_preview: string | null;
   last_summary: string | null;
-  last_status: CodexSessionStatus;
+  last_status: CodexSessionStatus | "idle";
   launch_mode: string;
   remote_url: string | null;
   app_server_pid: number | null;
@@ -927,24 +927,39 @@ export function parseCodexSessionFile(filePath: string, options: ParseOptions = 
   };
 }
 
-function findRolloutFiles(root: string): Array<{ filePath: string; mtimeMs: number }> {
+function findRolloutFiles(
+  root: string,
+  maxFiles: number,
+): Array<{ filePath: string; mtimeMs: number }> {
   if (!fs.existsSync(root)) return [];
   const found: Array<{ filePath: string; mtimeMs: number }> = [];
   const stack = [root];
+  let visitedRolloutFiles = 0;
 
-  while (stack.length) {
+  while (stack.length && visitedRolloutFiles < maxFiles) {
     const current = stack.pop();
     if (!current) continue;
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+    const childDirectories: string[] = [];
+    const entries = fs
+      .readdirSync(current, { withFileTypes: true })
+      .sort((left, right) => right.name.localeCompare(left.name));
+    for (const entry of entries) {
       const entryPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        stack.push(entryPath);
+        childDirectories.push(entryPath);
         continue;
       }
       if (!entry.isFile() || !/^rollout-.*\.jsonl$/i.test(entry.name)) continue;
-      const stat = fs.statSync(entryPath);
-      found.push({ filePath: entryPath, mtimeMs: stat.mtimeMs });
+      if (visitedRolloutFiles >= maxFiles) break;
+      visitedRolloutFiles += 1;
+      try {
+        const stat = fs.statSync(entryPath);
+        found.push({ filePath: entryPath, mtimeMs: stat.mtimeMs });
+      } catch {
+        continue;
+      }
     }
+    for (const directory of childDirectories.reverse()) stack.push(directory);
   }
 
   return found.sort((left, right) => right.mtimeMs - left.mtimeMs);
@@ -966,8 +981,9 @@ export function scanRecentCodexSessionFiles(options: {
   if (options.wslCodexHome?.trim()) {
     scanRoots.push(path.join(options.wslCodexHome.trim(), "sessions"));
   }
+  const perRootMaxFiles = Math.max(1, Math.ceil(maxFiles / scanRoots.length));
   const candidates = scanRoots
-    .flatMap((sessionsRoot) => findRolloutFiles(sessionsRoot))
+    .flatMap((sessionsRoot) => findRolloutFiles(sessionsRoot, perRootMaxFiles))
     .sort((left, right) => right.mtimeMs - left.mtimeMs);
   const seenFilePaths = new Set<string>();
 

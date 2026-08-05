@@ -453,12 +453,16 @@ export function parseClaudeSessionFile(filePath: string, options: ParseOptions =
   };
 }
 
-function findClaudeSessionFiles(root: string): Array<{ filePath: string; mtimeMs: number }> {
+function findClaudeSessionFiles(
+  root: string,
+  maxFiles: number,
+): Array<{ filePath: string; mtimeMs: number }> {
   if (!fs.existsSync(root)) return [];
   const found: Array<{ filePath: string; mtimeMs: number }> = [];
   const stack = [root];
+  let visitedSessionFiles = 0;
 
-  while (stack.length) {
+  while (stack.length && visitedSessionFiles < maxFiles) {
     const current = stack.pop();
     if (!current) continue;
     let entries: fs.Dirent[];
@@ -467,13 +471,16 @@ function findClaudeSessionFiles(root: string): Array<{ filePath: string; mtimeMs
     } catch {
       continue;
     }
-    for (const entry of entries) {
+    const childDirectories: string[] = [];
+    for (const entry of entries.sort((left, right) => right.name.localeCompare(left.name))) {
       const entryPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        stack.push(entryPath);
+        childDirectories.push(entryPath);
         continue;
       }
       if (!entry.isFile() || !/\.jsonl$/i.test(entry.name)) continue;
+      if (visitedSessionFiles >= maxFiles) break;
+      visitedSessionFiles += 1;
       try {
         const stat = fs.statSync(entryPath);
         found.push({ filePath: entryPath, mtimeMs: stat.mtimeMs });
@@ -481,6 +488,7 @@ function findClaudeSessionFiles(root: string): Array<{ filePath: string; mtimeMs
         continue;
       }
     }
+    for (const directory of childDirectories.reverse()) stack.push(directory);
   }
 
   return found.sort((left, right) => right.mtimeMs - left.mtimeMs);
@@ -498,7 +506,7 @@ export function scanRecentClaudeSessionFiles(options: {
   const maxFiles = Math.max(limit, options.maxFiles ?? DEFAULT_SCAN_FILE_LIMIT);
   const summaries: ClaudeSessionFileSummary[] = [];
 
-  for (const candidate of findClaudeSessionFiles(projectsRoot).slice(0, maxFiles)) {
+  for (const candidate of findClaudeSessionFiles(projectsRoot, maxFiles)) {
     try {
       const summary = parseClaudeSessionFile(candidate.filePath);
       if (workspaceFilter && normalizeWorkspacePathIdentity(summary.workspacePath) !== workspaceFilter) continue;

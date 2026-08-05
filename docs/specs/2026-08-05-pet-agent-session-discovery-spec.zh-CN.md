@@ -44,6 +44,7 @@ Desktop Pet 当前以用户选中的工作区和编程助手为扫描入口，�
 
 ## Implementation Decisions
 
+- 本轮垂直切片先交付本地 Codex/Claude 文件 Provider 和统一菜单快照；Pet app-server、进程增强、远程 Provider、独立活动 registry 仍是后续切片，不能按已接入能力验收。
 - 会话发现对外形成一个深模块：调用方只知道刷新、读取快照和订阅变化；Provider 细节留在模块内部。
 - 工作区由 session metadata、远程 cwd 或受信 runtime evidence 反向生成，不再作为发现前的全局过滤条件。
 - Codex Desktop 与 Codex CLI 共用 `.codex/sessions` 时，优先使用 `originator`、`source`、进程和运行时证据区分；证据不足则使用 unknown，不猜测。
@@ -52,7 +53,7 @@ Desktop Pet 当前以用户选中的工作区和编程助手为扫描入口，�
 - 活跃状态由事件、文件修改时间、进程、运行时心跳和终态共同计算，时间窗口集中在状态模块并可注入时钟。
 - 进程观察只负责补充 runtime/pid/startedAt 等事实，不单独创建已绑定 session。
 - 远程 Provider 只访问配置允许的主机、根目录和会话目录；远程 POSIX path 不进入 Windows 本地文件系统 API。
-- 现有 `desktop_pet_sessions` 继续作为 Codex review metadata registry；所有 Agent 的活动会话使用独立 read model/registry，避免改变既有 review 语义。
+- 现有 `desktop_pet_sessions` 继续作为 Codex review metadata registry；本地全局发现快照在独立 registry 接入前只读展示，旧 review upsert 仅保留当前选中 Codex 工作区的兼容路径，避免观察其它工作区就改变既有 review 语义。
 - 发送给 FastAPI/OpenClaw 的快照只保留 title、workspace、status、last activity、bounded output、changed files 和 evidence metadata。
 - UI 按“活动优先、工作区分组、来源标记”展示；历史会话作为次级列表，不再以当前 workspace 作为唯一入口。
 
