@@ -1455,8 +1455,8 @@ Desktop 本地路线打开绑定工作区的新任务编辑界面；远程路线
 
 ### 16.8 Pet 本地全局 Agent 会话发现（首期）
 
-`desktop-pet` 的会话刷新不再把当前选中的本地工作区作为 Codex 扫描过滤条件。主进程通过统一的本地会话发现模块同时扫描 Windows `CODEX_HOME/sessions`、配置的 WSL `CODEX_HOME/sessions`、Claude `CLAUDE_CONFIG_DIR/projects` 和 Pet 自有 app-server 会话列表，从会话自身的 `cwd` 或 app-server workspace path 反向生成工作区归属，因此多个工作区的 Codex Desktop、Codex CLI、WSL CLI、Claude Code 和 Pet app-server 会话可以同时进入 Pet 的最近会话列表。Codex JSONL 记录会保留 `originator`、`source`、运行方式、会话文件和 bounded facts；app-server 记录保留运行状态、进程号、transport、sandbox 和 bounded 输出预览。同一 Provider 的稳定 session id 被重复观察时按最近活动证据去重，并保留 evidence 列表。当前工作区/编程助手仍用于启动、恢复、watcher 上下文和旧状态隔离，不再限制全局最近会话发现。进程增强和 macCodex 远程会话 Provider 尚未在本阶段接入。
-全局发现列表本身只读；在独立活动 registry 接入前，既有 `desktop_pet_sessions` review upsert 只对当前选中的 Codex 工作区保留兼容同步，不会因为观察到其它工作区或 app-server 会话就写入 review registry。Pet 启动后首次刷新，并以 15 秒有界定时器在原生菜单临界路径之外持续刷新；扫描资源按 Provider 的 `maxFiles` 约束，过期活动证据显示为 `idle`，WSL `/mnt/<drive>/...` cwd 映射为对应 Windows 工作区路径。
+`desktop-pet` 的会话刷新不再把当前选中的本地工作区作为 Codex 扫描过滤条件。主进程通过统一的本地会话发现模块同时扫描 Windows `CODEX_HOME/sessions`、配置的 WSL `CODEX_HOME/sessions`、Claude `CLAUDE_CONFIG_DIR/projects` 和 Pet 自有 app-server 会话列表，从会话自身的 `cwd` 或 app-server workspace path 反向生成工作区归属，因此多个工作区的 Codex Desktop、Codex CLI、WSL CLI、Claude Code 和 Pet app-server 会话可以同时进入 Pet 的最近会话列表。Codex JSONL 记录会保留 `originator`、`source`、运行方式、会话文件和 bounded facts；app-server 记录保留运行状态、进程号、transport、sandbox 和 bounded 输出预览。同一 Provider 的稳定 session id 被重复观察时按最近活动证据去重，并保留 evidence 列表。当前工作区/编程助手仍用于启动、恢复、watcher 上下文和旧状态隔离，不再限制全局最近会话发现。
+全局发现列表本身只读；在独立活动 registry 接入前，既有 `desktop_pet_sessions` review upsert 只对当前选中的 Codex 工作区保留兼容同步，不会因为观察到其它工作区或 app-server 会话就写入 review registry。Pet 启动后首次刷新，并以 15 秒有界定时器在原生菜单临界路径之外持续刷新；扫描资源按 Provider 的 `maxFiles` 约束，过期活动证据显示为 `idle`，WSL `/mnt/<drive>/...` cwd 映射为对应 Windows 工作区路径。进程增强器只读取 Windows 进程名、PID 和启动时间，并只给已有 session id 或已有 app-server PID 的记录追加 `process` 证据；孤立的 `ChatGPT`、`codex` 或 `claude` 进程不会伪造会话。app-server PID 绑定还会校验已知的进程启动时间，并以会话创建时间作为保守边界，避免 PID 重用把无关进程绑定到旧会话。只有 Windows 上完成且适用的进程扫描才允许把已登记 app-server PID 的消失解释为 `disconnected`；非 Windows 或进程扫描失败均保留原有状态。
 
 ## 17. 文档维护规则
 

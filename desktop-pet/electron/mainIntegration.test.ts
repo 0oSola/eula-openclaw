@@ -99,6 +99,18 @@ describe("Electron main runtime integration", () => {
     expect(contextMenuBlock).not.toContain("scheduleAgentSessionRefresh");
   });
 
+  it("does not treat an unsupported process platform as a completed empty scan", () => {
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+    const processRefreshBlock = mainSource.slice(
+      mainSource.indexOf("let processScanCompleted = false"),
+      mainSource.indexOf("const records = candidates.map"),
+    );
+
+    expect(processRefreshBlock).toContain('if (process.platform === "win32")');
+    expect(processRefreshBlock).toContain("processScanCompleted = true");
+    expect(processRefreshBlock).not.toContain("else");
+  });
+
   it("keeps Pet app-server sessions out of the VSCode terminal restore path", () => {
     const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
     const restoreBlock = mainSource.slice(

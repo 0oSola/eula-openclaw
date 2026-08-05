@@ -15,9 +15,22 @@ export type AgentSessionState = CodexSessionStatus | "idle";
 export type AgentSessionAgent = "codex" | "claude";
 
 export type AgentSessionEvidence = {
-  source: "codex-jsonl" | "claude-jsonl" | "pet-app-server";
+  source: "codex-jsonl" | "claude-jsonl" | "pet-app-server" | "process";
   sessionFileModifiedAt: string | null;
   sessionFile: string | null;
+  processId?: number | null;
+  processName?: string | null;
+};
+
+export type AgentProcessObservation = {
+  pid: number;
+  processName: string;
+  provider: AgentSessionProvider | null;
+  runtime: AgentSessionRuntime;
+  hostId: "local";
+  startedAt: string | null;
+  observedAt: string;
+  sessionId?: string | null;
 };
 
 export type AgentSessionRecord = {
@@ -38,6 +51,10 @@ export type AgentSessionRecord = {
   lastActivityAt: string;
   sessionFile: string | null;
   processId: number | null;
+  processAlive: boolean | null;
+  processStartedAt: string | null;
+  processName: string | null;
+  processRuntime: AgentSessionRuntime | null;
   originator: string | null;
   source: string | null | undefined;
   cliVersion: string | null;
@@ -173,6 +190,7 @@ const ACTIVE_STATES = new Set<CodexSessionStatus>([
   "waiting_approval",
 ]);
 const DEFAULT_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+const PROCESS_IDENTITY_CLOCK_SKEW_MS = 60 * 1000;
 
 function deriveState(
   status: CodexSessionStatus,
@@ -207,6 +225,10 @@ function toRecord(summary: CodexSessionFileSummary, now: Date): AgentSessionReco
     lastActivityAt,
     sessionFile: summary.filePath,
     processId: null,
+    processAlive: null,
+    processStartedAt: null,
+    processName: null,
+    processRuntime: null,
     originator: summary.originator,
     source: summary.source,
     cliVersion: summary.cliVersion,
@@ -241,6 +263,10 @@ function toClaudeRecord(summary: ClaudeSessionFileSummary, now: Date): AgentSess
     lastActivityAt,
     sessionFile: summary.filePath,
     processId: null,
+    processAlive: null,
+    processStartedAt: null,
+    processName: null,
+    processRuntime: null,
     originator: "claude-code",
     source: "claude-jsonl",
     cliVersion: summary.cliVersion,
@@ -298,6 +324,10 @@ function toPetAppServerRecord(summary: PetAppServerSessionSummary): AgentSession
     lastActivityAt,
     sessionFile: null,
     processId: summary.processId,
+    processAlive: null,
+    processStartedAt: null,
+    processName: null,
+    processRuntime: null,
     originator: "desktop-pet",
     source: "pet-app-server",
     cliVersion: summary.codexVersion,
@@ -315,7 +345,7 @@ function preferNewer(left: AgentSessionRecord, right: AgentSessionRecord): Agent
   const preferred = parseTime(right.lastActivityAt) >= parseTime(left.lastActivityAt) ? right : left;
   const evidence = new Map(
     [...left.evidence, ...right.evidence].map((item) => [
-      `${item.source}:${item.sessionFile}`,
+      `${item.source}:${item.sessionFile}:${item.processId ?? ""}:${item.processName ?? ""}`,
       item,
     ]),
   );
@@ -342,6 +372,102 @@ function dedupeAndSort(
     (left, right) => parseTime(right.lastActivityAt) - parseTime(left.lastActivityAt),
   );
   return { refreshedAt, sessions };
+}
+
+function processMatchesRecord(
+  record: AgentSessionRecord,
+  observation: AgentProcessObservation,
+): boolean {
+  const sameStableIdentity =
+    record.processId !== null && record.processId === observation.pid;
+  const sameSessionIdentity =
+    Boolean(observation.sessionId) &&
+    observation.sessionId === record.sessionId &&
+    (observation.provider === null || observation.provider === record.provider);
+  if (!sameStableIdentity && !sameSessionIdentity) return false;
+
+  if (
+    record.processStartedAt &&
+    observation.startedAt &&
+    parseTime(record.processStartedAt) !== parseTime(observation.startedAt)
+  ) {
+    return false;
+  }
+  const sessionStartedAtMs = parseTime(record.sessionStartedAt);
+  const processStartedAtMs = parseTime(observation.startedAt);
+  if (
+    sessionStartedAtMs &&
+    processStartedAtMs &&
+    processStartedAtMs > sessionStartedAtMs + PROCESS_IDENTITY_CLOCK_SKEW_MS
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isActiveState(state: AgentSessionState): boolean {
+  return ACTIVE_STATES.has(state as CodexSessionStatus);
+}
+
+export function enrichAgentSessionRecords(
+  records: AgentSessionRecord[],
+  observations: AgentProcessObservation[],
+  options: { scanCompleted: boolean },
+): AgentSessionRecord[] {
+  const observationByRecord = new Map<string, AgentProcessObservation>();
+  for (const observation of observations) {
+    for (const record of records) {
+      if (processMatchesRecord(record, observation)) {
+        observationByRecord.set(record.sessionKey, observation);
+        break;
+      }
+    }
+  }
+
+  return records.map((record) => {
+    const observation = observationByRecord.get(record.sessionKey);
+    if (observation) {
+      const processEvidence: AgentSessionEvidence = {
+        source: "process",
+        sessionFileModifiedAt: observation.observedAt,
+        sessionFile: null,
+        processId: observation.pid,
+        processName: observation.processName,
+      };
+      const evidence = new Map(
+        [...record.evidence, processEvidence].map((item) => [
+          `${item.source}:${item.sessionFile}:${item.processId ?? ""}:${item.processName ?? ""}`,
+          item,
+        ]),
+      );
+      return {
+        ...record,
+        processId: record.processId ?? observation.pid,
+        processAlive: true,
+        processStartedAt: observation.startedAt,
+        processName: observation.processName,
+        processRuntime: observation.runtime,
+        evidence: Array.from(evidence.values()).sort(
+          (left, right) =>
+            parseTime(right.sessionFileModifiedAt) - parseTime(left.sessionFileModifiedAt),
+        ),
+      };
+    }
+
+    if (
+      options.scanCompleted &&
+      record.provider === "pet-app-server" &&
+      record.processId !== null
+    ) {
+      return {
+        ...record,
+        processAlive: false,
+        state: isActiveState(record.state) ? "disconnected" : record.state,
+      };
+    }
+
+    return { ...record };
+  });
 }
 
 export async function discoverLocalCodexSessions(

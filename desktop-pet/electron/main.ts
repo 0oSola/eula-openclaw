@@ -40,8 +40,13 @@ import {
   discoverLocalCodexSessions,
   discoverLocalClaudeSessions,
   discoverPetAppServerSessions,
+  type AgentProcessObservation,
   type AgentSessionRecord,
+  enrichAgentSessionRecords,
 } from "./agentSessionDiscovery.js";
+import {
+  createWindowsAgentProcessScanner,
+} from "./agentProcessScanner.js";
 import { createPetAppServerSessionScanner } from "./petAppServerSessionApi.js";
 import { createCodexCompletionTracker } from "./codexCompletionTracker.js";
 import {
@@ -829,7 +834,8 @@ function toMenuSessionFromAgentRecord(
   sessionStartedAt: string;
   fileModifiedAt: string;
 } {
-  const primaryEvidence = session.evidence[0];
+  const primaryEvidence =
+    session.evidence.find((evidence) => evidence.source !== "process") ?? session.evidence[0];
   const payload: DesktopPetSessionPayload = {
     pet_session_id: `${session.provider}:${session.sessionId}`,
     codex_session_id: session.sessionId,
@@ -858,6 +864,10 @@ function toMenuSessionFromAgentRecord(
       git_branch: session.gitBranch,
       last_event_at: session.lastEventAt,
       last_output: session.lastOutput,
+      process_alive: session.processAlive,
+      process_started_at: session.processStartedAt,
+      process_name: session.processName,
+      process_runtime: session.processRuntime,
       evidence: session.evidence,
       facts: session.reviewFacts,
     },
@@ -876,12 +886,32 @@ function toMenuSessionFromAgentRecord(
   };
 }
 
-async function readAllLocalCodexSessions(limit = 50): Promise<Array<{
-  payload: DesktopPetSessionPayload;
-  menuSession: PetMenuSession;
-  sessionStartedAt: string;
-  fileModifiedAt: string;
-}>> {
+type LocalAgentSessionCandidate = {
+  session: AgentSessionRecord;
+  agentHome: string | null;
+};
+
+type LocalAgentMenuSession = ReturnType<typeof toMenuSessionFromAgentRecord>;
+
+function restoreCachedProcessObservation(session: AgentSessionRecord): AgentSessionRecord {
+  if (session.provider !== "pet-app-server") return session;
+  const cached = lastMenuSessionsByPetId.get(`pet-app-server:${session.sessionId}`);
+  const metadata = cached?.metadata ?? {};
+  const cachedProcessAlive =
+    typeof metadata.process_alive === "boolean" ? metadata.process_alive : null;
+  const cachedProcessStartedAt =
+    typeof metadata.process_started_at === "string" ? metadata.process_started_at : null;
+  const cachedProcessName =
+    typeof metadata.process_name === "string" ? metadata.process_name : null;
+  return {
+    ...session,
+    processAlive: session.processAlive ?? cachedProcessAlive,
+    processStartedAt: session.processStartedAt ?? cachedProcessStartedAt,
+    processName: session.processName ?? cachedProcessName,
+  };
+}
+
+async function readAllLocalCodexSessions(limit = 50): Promise<LocalAgentSessionCandidate[]> {
   const codexHome = resolveCodexHome(process.env);
   const wslCodexHome = process.env.CODEX_WSL_HOME?.trim() || "\\\\wsl.localhost\\Ubuntu\\home\\ksg\\.codex";
   const snapshot = await discoverLocalCodexSessions({
@@ -890,15 +920,10 @@ async function readAllLocalCodexSessions(limit = 50): Promise<Array<{
     limit,
     scan: scanRecentCodexSessionFiles,
   });
-  return snapshot.sessions.map((session) => toMenuSessionFromAgentRecord(session, codexHome));
+  return snapshot.sessions.map((session) => ({ session, agentHome: codexHome }));
 }
 
-async function readAllLocalClaudeSessions(limit = 50): Promise<Array<{
-  payload: DesktopPetSessionPayload;
-  menuSession: PetMenuSession;
-  sessionStartedAt: string;
-  fileModifiedAt: string;
-}>> {
+async function readAllLocalClaudeSessions(limit = 50): Promise<LocalAgentSessionCandidate[]> {
   const claudeHome = resolveClaudeHome(process.env);
   const snapshot = await discoverLocalClaudeSessions({
     claudeHome,
@@ -906,15 +931,10 @@ async function readAllLocalClaudeSessions(limit = 50): Promise<Array<{
     maxFiles: Math.max(400, limit * 8),
     scan: scanRecentClaudeSessionFiles,
   });
-  return snapshot.sessions.map((session) => toMenuSessionFromAgentRecord(session, claudeHome));
+  return snapshot.sessions.map((session) => ({ session, agentHome: claudeHome }));
 }
 
-async function readAllPetAppServerSessions(limit = 50): Promise<Array<{
-  payload: DesktopPetSessionPayload;
-  menuSession: PetMenuSession;
-  sessionStartedAt: string;
-  fileModifiedAt: string;
-}>> {
+async function readAllPetAppServerSessions(limit = 50): Promise<LocalAgentSessionCandidate[]> {
   const snapshot = await discoverPetAppServerSessions({
     limit,
     scan: createPetAppServerSessionScanner({
@@ -922,29 +942,19 @@ async function readAllPetAppServerSessions(limit = 50): Promise<Array<{
       userId: menuUserId,
     }),
   });
-  return snapshot.sessions.map((session) => toMenuSessionFromAgentRecord(session, null));
+  return snapshot.sessions.map((session) => ({ session, agentHome: null }));
 }
 
-async function readAllLocalAgentSessions(limit = 50): Promise<Array<{
-  payload: DesktopPetSessionPayload;
-  menuSession: PetMenuSession;
-  sessionStartedAt: string;
-  fileModifiedAt: string;
-}>> {
+async function readAllLocalAgentSessions(limit = 50): Promise<LocalAgentMenuSession[]> {
   const results = await Promise.allSettled([
     readAllLocalCodexSessions(limit),
     readAllLocalClaudeSessions(limit),
     readAllPetAppServerSessions(limit),
   ]);
-  const sessions: Array<{
-    payload: DesktopPetSessionPayload;
-    menuSession: PetMenuSession;
-    sessionStartedAt: string;
-    fileModifiedAt: string;
-  }> = [];
+  const candidates: LocalAgentSessionCandidate[] = [];
   for (const [index, result] of results.entries()) {
     if (result.status === "fulfilled") {
-      sessions.push(...result.value);
+      candidates.push(...result.value);
     } else {
       const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
       logPetDebugEvent("agent-session:provider-error", {
@@ -953,12 +963,36 @@ async function readAllLocalAgentSessions(limit = 50): Promise<Array<{
       });
     }
   }
-  return sessions.sort(
+  let processScanCompleted = false;
+  let processObservations: AgentProcessObservation[] = [];
+  if (process.platform === "win32") {
+    try {
+      processObservations = await createWindowsAgentProcessScanner()();
+      processScanCompleted = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logPetDebugEvent("agent-session:process-scan-error", { error: message });
+    }
+  }
+  const records = candidates.map(({ session }) => restoreCachedProcessObservation(session));
+  const enrichedRecords = enrichAgentSessionRecords(
+    records,
+    processObservations,
+    { scanCompleted: processScanCompleted },
+  );
+  const agentHomesBySessionKey = new Map(
+    candidates.map(({ session, agentHome }) => [session.sessionKey, agentHome] as const),
+  );
+  return enrichedRecords
+    .map((session) =>
+      toMenuSessionFromAgentRecord(session, agentHomesBySessionKey.get(session.sessionKey) ?? null),
+    )
+    .sort(
     (left, right) => {
       const timeDelta = Date.parse(right.fileModifiedAt) - Date.parse(left.fileModifiedAt);
       return timeDelta || sessionMenuKey(left.menuSession).localeCompare(sessionMenuKey(right.menuSession));
     },
-  );
+    );
 }
 
 async function upsertDesktopPetSession(payload: DesktopPetSessionPayload): Promise<PetMenuSession> {

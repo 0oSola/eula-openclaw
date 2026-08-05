@@ -12,6 +12,8 @@ import {
   discoverLocalCodexSessions,
   discoverLocalClaudeSessions,
   discoverPetAppServerSessions,
+  enrichAgentSessionRecords,
+  type AgentProcessObservation,
   type PetAppServerSessionScanner,
   type CodexSessionScanner,
 } from "./agentSessionDiscovery.js";
@@ -258,5 +260,99 @@ describe("agent session discovery", () => {
       source: "pet-app-server",
       sessionFile: null,
     });
+  });
+
+  it("only enriches existing sessions with process evidence and marks missing app-server processes disconnected", () => {
+    const processEvidence: AgentProcessObservation = {
+      pid: 4321,
+      processName: "codex",
+      provider: "codex",
+      runtime: "cli",
+      hostId: "local",
+      startedAt: "2026-08-05T09:45:00.000Z",
+      observedAt: "2026-08-05T10:00:00.000Z",
+    };
+
+    const enriched = enrichAgentSessionRecords(
+      [
+        {
+          sessionKey: "local:pet-app-server:runtime-session",
+          provider: "pet-app-server",
+          agent: "codex",
+          runtime: "app-server",
+          hostId: "local",
+          sessionId: "runtime-session",
+          workspacePath: "D:\\workspace\\MMD project",
+          displayTitle: "Pet app-server",
+          firstPromptPreview: null,
+          lastSummary: null,
+          lastOutput: null,
+          state: "running",
+          sessionStartedAt: "2026-08-05T09:50:00.000Z",
+          lastEventAt: "2026-08-05T09:59:00.000Z",
+          lastActivityAt: "2026-08-05T09:59:00.000Z",
+          sessionFile: null,
+          processId: 4321,
+          processAlive: null,
+          processStartedAt: null,
+          processName: null,
+          processRuntime: null,
+          originator: "desktop-pet",
+          source: "pet-app-server",
+          cliVersion: null,
+          gitBranch: null,
+          reviewFacts: emptyFacts(),
+          evidence: [],
+        },
+      ],
+      [processEvidence],
+      { scanCompleted: true },
+    );
+
+    expect(enriched[0]).toMatchObject({
+      processId: 4321,
+      processAlive: true,
+      processStartedAt: "2026-08-05T09:45:00.000Z",
+      processName: "codex",
+      processRuntime: "cli",
+      state: "running",
+    });
+    expect(enriched[0]?.evidence).toContainEqual({
+      source: "process",
+      sessionFileModifiedAt: "2026-08-05T10:00:00.000Z",
+      sessionFile: null,
+      processId: 4321,
+      processName: "codex",
+    });
+
+    const disconnected = enrichAgentSessionRecords(
+      enriched,
+      [],
+      { scanCompleted: true },
+    );
+    expect(disconnected[0]?.state).toBe("disconnected");
+    expect(disconnected[0]?.processAlive).toBe(false);
+    expect(
+      enrichAgentSessionRecords(
+        [{ ...disconnected[0]!, state: "running", processAlive: null }],
+        [],
+        { scanCompleted: false },
+      )[0],
+    ).toMatchObject({
+      state: "running",
+      processAlive: null,
+    });
+    const reusedPid = enrichAgentSessionRecords(
+      [enriched[0]!],
+      [{ ...processEvidence, startedAt: "2026-08-05T10:30:00.000Z" }],
+      { scanCompleted: true },
+    );
+    expect(reusedPid[0]).toMatchObject({
+      processAlive: false,
+      state: "disconnected",
+    });
+    expect(
+      enrichAgentSessionRecords([], [processEvidence], { scanCompleted: true }),
+    ).toEqual([]);
   });
 });
