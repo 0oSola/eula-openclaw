@@ -98,6 +98,53 @@ describe("agent session discovery", () => {
     expect(snapshot.sessions.map((session) => session.sessionId).sort()).toEqual(["real-1", "real-2"]);
   });
 
+  it("extracts the Codex Desktop sessionID from session_meta as the stable session identity", async () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "agent-discovery-codex-desktop-"));
+    const sessionsDir = path.join(codexHome, "sessions", "2026", "08", "05");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const rollout = path.join(sessionsDir, "rollout-desktop.jsonl");
+    fs.writeFileSync(
+      rollout,
+      [
+        JSON.stringify({
+          timestamp: "2026-08-05T09:57:06.494Z",
+          type: "session_meta",
+          payload: {
+            id: "019fd15a-ae34-76d1-a99c-af48bf7b2ddf",
+            cwd: "D:\\workspace\\MMD project",
+            originator: "Codex Desktop",
+            source: "vscode",
+            cli_version: "codex-test/1.0",
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-08-05T10:00:00.000Z",
+          type: "event_msg",
+          payload: { type: "user_message", message: "Continue" },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const snapshot = await discoverLocalCodexSessions({
+      codexHome,
+      limit: 10,
+      scan: scanRecentCodexSessionFiles,
+      now: () => new Date("2026-08-05T10:00:01.000Z"),
+    });
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      sessionId: "019fd15a-ae34-76d1-a99c-af48bf7b2ddf",
+      runtime: "desktop",
+      originator: "Codex Desktop",
+      source: "vscode",
+      workspacePath: "D:\\workspace\\MMD project",
+    });
+    expect(snapshot.sessions[0]?.sessionKey).toBe(
+      "local:codex:019fd15a-ae34-76d1-a99c-af48bf7b2ddf",
+    );
+  });
+
   it("discovers all local Codex workspaces without using a workspace filter", async () => {
     const scanner: CodexSessionScanner = (options) => {
       expect(options.workspacePath).toBeUndefined();
