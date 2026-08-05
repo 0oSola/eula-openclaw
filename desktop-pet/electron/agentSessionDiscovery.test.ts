@@ -118,9 +118,30 @@ describe("agent session discovery", () => {
           },
         }),
         JSON.stringify({
+          timestamp: "2026-08-05T09:58:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Inspect the active Desktop session" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-08-05T09:59:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "The session is active." }],
+          },
+        }),
+        JSON.stringify({
           timestamp: "2026-08-05T10:00:00.000Z",
-          type: "event_msg",
-          payload: { type: "user_message", message: "Continue" },
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            output: "session content verified",
+          },
         }),
       ].join("\n") + "\n",
       "utf8",
@@ -139,6 +160,9 @@ describe("agent session discovery", () => {
       originator: "Codex Desktop",
       source: "vscode",
       workspacePath: "D:\\workspace\\MMD project",
+      firstPromptPreview: "Inspect the active Desktop session",
+      lastSummary: "The session is active.",
+      lastOutput: "session content verified",
     });
     expect(snapshot.sessions[0]?.sessionKey).toBe(
       "local:codex:019fd15a-ae34-76d1-a99c-af48bf7b2ddf",
