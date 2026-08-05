@@ -116,6 +116,11 @@ import { launchRemoteCodexSession } from "./remoteCodexCliLauncher.js";
 import { isSshWorkspaceUri } from "./remoteWorkspace.js";
 import { toElectronMenuTemplate } from "./electronMenuTemplate.js";
 import {
+  createKnowledgeHandoffTransport,
+  safeKnowledgeHandoffError,
+  type KnowledgeHandoffTransport,
+} from "./knowledgeHandoffTransport.js";
+import {
   readPetSettings,
   resolveSelectedWorkspacePath,
   resolvePetAgent,
@@ -132,6 +137,7 @@ const apiBaseUrl = process.env.MMD_PET_API_BASE_URL ?? "http://127.0.0.1:8000";
 const menuUserId = process.env.MMD_PET_USER_ID ?? "admin-1";
 const debugEventsEnabled = process.env.MMD_PET_DEBUG_EVENTS === "1";
 const contextMenuBlankDiagnosticEnabled = process.env.MMD_PET_CONTEXT_MENU_DIAGNOSTIC_BLANK === "1";
+const knowledgeHandoffTransportEnabled = process.env.MMD_PET_KNOWLEDGE_HANDOFF_TRANSPORT_ENABLED === "1";
 const debugEventsLogPath = process.env.MMD_PET_DEBUG_EVENTS_LOG ?? path.join(process.cwd(), "desktop-pet-debug-events.ndjson");
 const crashDiagnosticsPaths = resolveCrashDiagnosticsPaths({ cwd: process.cwd(), env: process.env });
 const CODEX_SESSION_WATCH_INTERVAL_MS = 2500;
@@ -173,6 +179,7 @@ type CodexPetStatus = {
 let currentCodexStatus: CodexPetStatus = { state: "idle" };
 const codexCompletionTracker = createCodexCompletionTracker();
 const codexSessionContext = createCodexSessionContext();
+let knowledgeHandoffTransport: KnowledgeHandoffTransport | null = null;
 let currentApiRuntimeStatus: ApiRuntimeStatus | null = null;
 let lastApiAvailable = true;
 let lastMenuPopup: ContextMenuPopupRecord | undefined;
@@ -234,6 +241,35 @@ function logPetCrashEvent(type: string, payload: CrashEventPayload = {}) {
     eventsLogPath: crashDiagnosticsPaths.eventsLogPath,
     crashDumpsDir: crashDiagnosticsPaths.crashDumpsDir,
   });
+}
+
+function startKnowledgeHandoffTransport() {
+  if (!knowledgeHandoffTransportEnabled) {
+    logPetDebugEvent("knowledge-handoff:disabled", {
+      flag: "MMD_PET_KNOWLEDGE_HANDOFF_TRANSPORT_ENABLED",
+    });
+    return;
+  }
+  if (knowledgeHandoffTransport) return;
+  const codexHome = resolveCodexHome(process.env);
+  knowledgeHandoffTransport = createKnowledgeHandoffTransport({
+    handoffRoot: path.join(codexHome, "knowledge-handoffs"),
+    queueFile: path.join(app.getPath("userData"), "knowledge-handoff-transport", "queue.json"),
+    apiBaseUrl,
+    autoDrain: true,
+    onLog: (event, payload) => logPetDebugEvent(event, payload),
+  });
+  void knowledgeHandoffTransport.start().catch((error) => {
+    knowledgeHandoffTransport = null;
+    logPetDebugEvent("knowledge-handoff:start-error", {
+      error: safeKnowledgeHandoffError(error),
+    });
+  });
+}
+
+function stopKnowledgeHandoffTransport() {
+  knowledgeHandoffTransport?.stop();
+  knowledgeHandoffTransport = null;
 }
 
 function installPetCrashDiagnostics() {
@@ -1964,6 +2000,7 @@ async function scanAndUpsertRecentCodexSessions(
 
 async function createPetWindow() {
   logPetDebugEvent("app:start", { isDev, devRendererUrl, debugEventsLogPath });
+  startKnowledgeHandoffTransport();
   const cleaned = cleanupStaleVscodeUserDataDirs();
   if (cleaned.removed.length) {
     logPetDebugEvent("vscode-user-data:cleanup", { removed: cleaned.removed.length, scanned: cleaned.scanned });
@@ -2248,6 +2285,7 @@ app.on("before-quit", () => {
   });
 });
 app.on("will-quit", () => {
+  stopKnowledgeHandoffTransport();
   logPetDebugEvent("app:will-quit", {
     windows: BrowserWindow.getAllWindows().length,
   });

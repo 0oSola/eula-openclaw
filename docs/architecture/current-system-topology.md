@@ -413,8 +413,22 @@ Codex final response
 Hook 只负责分割、校验、来源 metadata、哈希和原子落盘，不负责仓库证据、Gate、Vault
 主题解析或 Obsidian 发布。
 
-Pet 扫描、FastAPI 接收和 OpenClaw 双审核尚未由 KH-01 接通；在后续票据完成前，旧的
-Review/Knowledge 运行链仍按本节前文所述保持关闭或兼容运行。
+KH-02 已在 `desktop-pet/electron/knowledgeHandoffTransport.ts` 增加 Pet 侧扫描与运输
+边界：启动补扫、`.complete` 文件监听、包清单/hash 校验、持久化离线队列、幂等上传、
+accepted/duplicate ACK、重试、重启恢复和 FastAPI Git 事件提示。Pet 只向
+`/codex/knowledge/handoffs` 与 `/codex/knowledge/git-events` 发送请求，不直接访问
+OpenClaw，也不执行仓库证据、Gate、Vault 主题解析或发布。
+
+该运输器由 `MMD_PET_KNOWLEDGE_HANDOFF_TRANSPORT_ENABLED=1` 显式启用；默认关闭，
+因此 KH-02 不会提前启用新知识链。FastAPI 接收端、Repository Evidence Resolver、
+Gate 和 OpenClaw 双审核仍待后续票据接通；旧的 Review/Knowledge 运行链继续按本节
+前文所述保持关闭或兼容运行。
+
+Pet 会解析普通仓库和 Git worktree 的 `.git`/`commondir`，监听 checkout、commit
+和远端 refs 变化作为加速提示；真实 `push` 可由 Git Hook 调用
+`desktop-pet/scripts/knowledge-handoff-git-hint.mjs --workspace-key <key> --event push`。
+当前只提供这个显式桥接入口，不自动安装或修改用户仓库的 Git Hook；提示失败不会阻塞
+Git 操作，目录监听、启动补扫和周期性 FastAPI reconciliation 仍是可靠兜底。
 
 ## 5. 主调用链：前端发消息
 

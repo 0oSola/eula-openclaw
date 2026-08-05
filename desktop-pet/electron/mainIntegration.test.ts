@@ -187,6 +187,16 @@ describe("Electron main runtime integration", () => {
     expect(mainSource).toContain('"api-runtime:status"');
   });
 
+  it("keeps the author handoff transport disabled by default and stops it with the app", () => {
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+
+    expect(mainSource).toContain("MMD_PET_KNOWLEDGE_HANDOFF_TRANSPORT_ENABLED");
+    expect(mainSource).toContain('process.env.MMD_PET_KNOWLEDGE_HANDOFF_TRANSPORT_ENABLED === "1"');
+    expect(mainSource).toContain("startKnowledgeHandoffTransport()");
+    expect(mainSource).toContain("stopKnowledgeHandoffTransport()");
+    expect(mainSource).toContain('app.on("will-quit"');
+  });
+
   it("exposes API runtime retry and status through IPC", () => {
     const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
 
