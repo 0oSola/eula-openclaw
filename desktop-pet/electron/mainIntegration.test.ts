@@ -84,6 +84,40 @@ describe("Electron main runtime integration", () => {
     expect(nativeMenuBlock).not.toContain("onClosed();");
   });
 
+  it("keeps the global agent snapshot refreshing outside the menu popup path", () => {
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+
+    expect(mainSource).toContain("scheduleAgentSessionRefresh");
+    expect(mainSource).toContain("AGENT_SESSION_REFRESH_INTERVAL_MS");
+    expect(mainSource).toContain("clearInterval(agentSessionRefreshTimer)");
+    expect(mainSource).toContain("void refreshRecentSessionsInBackground(window)");
+    const contextMenuBlock = mainSource.slice(
+      mainSource.indexOf("async function openPetContextMenu"),
+      mainSource.indexOf("function startPetWindowDrag"),
+    );
+    expect(contextMenuBlock).not.toContain("refreshRecentSessionsInBackground");
+    expect(contextMenuBlock).not.toContain("scheduleAgentSessionRefresh");
+  });
+
+  it("keeps Pet app-server sessions out of the VSCode terminal restore path", () => {
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+    const restoreBlock = mainSource.slice(
+      mainSource.indexOf('if (action.type === "restore-session")'),
+      mainSource.indexOf('if (action.type === "focus-active-session")'),
+    );
+    const focusBlock = mainSource.slice(
+      mainSource.indexOf('if (action.type === "focus-active-session")'),
+      mainSource.indexOf('if (action.type === "more-sessions")'),
+    );
+
+    expect(restoreBlock).toContain('session?.runtime === "app-server"');
+    expect(restoreBlock).toContain("app-server session is already managed by Pet");
+    expect(focusBlock).toContain('session?.runtime === "app-server"');
+    expect(focusBlock).toContain("has no VSCode window to focus");
+    expect(mainSource).toContain('item.menuSession.runtime !== "app-server"');
+    expect(mainSource).toContain('item.payload.pet_session_id.startsWith("codex:")');
+  });
+
   it("keeps the native menu owner alive but hidden after dismissal so closing it cannot terminate the app", () => {
     const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
     const ownerBlock = mainSource.slice(

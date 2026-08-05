@@ -44,7 +44,7 @@ Desktop Pet 当前以用户选中的工作区和编程助手为扫描入口，�
 
 ## Implementation Decisions
 
-- 本轮垂直切片先交付本地 Codex/Claude 文件 Provider 和统一菜单快照；Pet app-server、进程增强、远程 Provider、独立活动 registry 仍是后续切片，不能按已接入能力验收。
+- 本轮垂直切片交付本地 Codex/Claude 文件 Provider、Pet app-server Provider 和统一菜单快照；进程增强、远程 Provider、独立活动 registry 仍是后续切片，不能按已接入能力验收。
 - 会话发现对外形成一个深模块：调用方只知道刷新、读取快照和订阅变化；Provider 细节留在模块内部。
 - 工作区由 session metadata、远程 cwd 或受信 runtime evidence 反向生成，不再作为发现前的全局过滤条件。
 - Codex Desktop 与 Codex CLI 共用 `.codex/sessions` 时，优先使用 `originator`、`source`、进程和运行时证据区分；证据不足则使用 unknown，不猜测。

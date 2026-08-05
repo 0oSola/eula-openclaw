@@ -39,8 +39,10 @@ import {
 import {
   discoverLocalCodexSessions,
   discoverLocalClaudeSessions,
+  discoverPetAppServerSessions,
   type AgentSessionRecord,
 } from "./agentSessionDiscovery.js";
+import { createPetAppServerSessionScanner } from "./petAppServerSessionApi.js";
 import { createCodexCompletionTracker } from "./codexCompletionTracker.js";
 import {
   createCodexSessionContext,
@@ -141,6 +143,7 @@ const debugEventsLogPath = process.env.MMD_PET_DEBUG_EVENTS_LOG ?? path.join(pro
 const crashDiagnosticsPaths = resolveCrashDiagnosticsPaths({ cwd: process.cwd(), env: process.env });
 const CODEX_SESSION_WATCH_INTERVAL_MS = 2500;
 const CODEX_SESSION_WATCH_MAX_DURATION_MS = 60 * 60 * 1000;
+const AGENT_SESSION_REFRESH_INTERVAL_MS = 15 * 1000;
 let currentInteractionMode: PetInteractionMode = DEFAULT_INTERACTION_MODE;
 let currentNotificationProfile: NotificationProfile = "medium";
 let currentMenuLanguage: MenuLanguage = "en";
@@ -173,7 +176,7 @@ type CodexPetStatus = {
   completionNoticeKey?: string;
   /** Command the user should run in the freshly opened VSCode terminal (copy-to-clipboard). */
   commandLine?: string;
-  source?: "codex-jsonl" | "claude-jsonl" | "terminal";
+  source?: "codex-jsonl" | "claude-jsonl" | "app-server" | "terminal";
 };
 let currentCodexStatus: CodexPetStatus = { state: "idle" };
 const codexCompletionTracker = createCodexCompletionTracker();
@@ -213,6 +216,7 @@ type CodexSessionOutputWatch = {
   hasMatchedSession: boolean;
 };
 const codexSessionOutputWatches = new WeakMap<BrowserWindow, CodexSessionOutputWatch>();
+let agentSessionRefreshTimer: ReturnType<typeof setInterval> | null = null;
 type ActiveCodexSessionContext = {
   snapshot: CodexSessionContextSnapshot;
   workspacePath: string;
@@ -818,7 +822,7 @@ function latestDisplayableSession(
 
 function toMenuSessionFromAgentRecord(
   session: AgentSessionRecord,
-  agentHome: string,
+  agentHome: string | null,
 ): {
   payload: DesktopPetSessionPayload;
   menuSession: PetMenuSession;
@@ -827,7 +831,7 @@ function toMenuSessionFromAgentRecord(
 } {
   const primaryEvidence = session.evidence[0];
   const payload: DesktopPetSessionPayload = {
-    pet_session_id: `${session.agent}:${session.sessionId}`,
+    pet_session_id: `${session.provider}:${session.sessionId}`,
     codex_session_id: session.sessionId,
     workspace_id: null,
     workspace_path: session.workspacePath,
@@ -836,9 +840,9 @@ function toMenuSessionFromAgentRecord(
     first_prompt_preview: session.firstPromptPreview,
     last_summary: session.lastSummary,
     last_status: session.state,
-    launch_mode: session.agent === "claude" ? "interactive" : "workspace-write",
+    launch_mode: session.agent === "claude" || session.runtime === "app-server" ? "interactive" : "workspace-write",
     remote_url: null,
-    app_server_pid: null,
+    app_server_pid: session.processId,
     app_server_port: null,
     metadata: {
       source: primaryEvidence?.source ?? "unknown",
@@ -905,18 +909,55 @@ async function readAllLocalClaudeSessions(limit = 50): Promise<Array<{
   return snapshot.sessions.map((session) => toMenuSessionFromAgentRecord(session, claudeHome));
 }
 
+async function readAllPetAppServerSessions(limit = 50): Promise<Array<{
+  payload: DesktopPetSessionPayload;
+  menuSession: PetMenuSession;
+  sessionStartedAt: string;
+  fileModifiedAt: string;
+}>> {
+  const snapshot = await discoverPetAppServerSessions({
+    limit,
+    scan: createPetAppServerSessionScanner({
+      apiBaseUrl,
+      userId: menuUserId,
+    }),
+  });
+  return snapshot.sessions.map((session) => toMenuSessionFromAgentRecord(session, null));
+}
+
 async function readAllLocalAgentSessions(limit = 50): Promise<Array<{
   payload: DesktopPetSessionPayload;
   menuSession: PetMenuSession;
   sessionStartedAt: string;
   fileModifiedAt: string;
 }>> {
-  const [codexSessions, claudeSessions] = await Promise.all([
+  const results = await Promise.allSettled([
     readAllLocalCodexSessions(limit),
     readAllLocalClaudeSessions(limit),
+    readAllPetAppServerSessions(limit),
   ]);
-  return [...codexSessions, ...claudeSessions].sort(
-    (left, right) => Date.parse(right.fileModifiedAt) - Date.parse(left.fileModifiedAt),
+  const sessions: Array<{
+    payload: DesktopPetSessionPayload;
+    menuSession: PetMenuSession;
+    sessionStartedAt: string;
+    fileModifiedAt: string;
+  }> = [];
+  for (const [index, result] of results.entries()) {
+    if (result.status === "fulfilled") {
+      sessions.push(...result.value);
+    } else {
+      const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      logPetDebugEvent("agent-session:provider-error", {
+        provider: ["codex", "claude", "pet-app-server"][index] ?? "unknown",
+        error: message,
+      });
+    }
+  }
+  return sessions.sort(
+    (left, right) => {
+      const timeDelta = Date.parse(right.fileModifiedAt) - Date.parse(left.fileModifiedAt);
+      return timeDelta || sessionMenuKey(left.menuSession).localeCompare(sessionMenuKey(right.menuSession));
+    },
   );
 }
 
@@ -967,7 +1008,9 @@ function mergeSessions(apiSessions: PetMenuSession[], localSessions: PetMenuSess
     .sort((left, right) => {
       const leftTime = Date.parse(left.last_seen_at || left.updated_at || "");
       const rightTime = Date.parse(right.last_seen_at || right.updated_at || "");
-      return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+      const timeDelta =
+        (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+      return timeDelta || sessionMenuKey(left).localeCompare(sessionMenuKey(right));
     })
     .slice(0, limit);
 }
@@ -998,7 +1041,12 @@ function publishCodexStatusForSession(
       sessionTitle: sessionTitle(session),
       codexSessionId: session.codex_session_id || undefined,
       lastOutput: sessionLastOutput(session),
-      source: agent === "claude" ? "claude-jsonl" : "codex-jsonl",
+      source:
+        session.runtime === "app-server"
+          ? "app-server"
+          : agent === "claude"
+            ? "claude-jsonl"
+            : "codex-jsonl",
     },
     {
       allowFirstCompletion: options.allowFirstCompletion,
@@ -1066,6 +1114,38 @@ async function refreshRecentSessionsInBackground(window: BrowserWindow) {
     const message = error instanceof Error ? error.message : String(error);
     logPetDebugEvent("codex-session:background-refresh-error", { error: message });
   }
+}
+
+function scheduleAgentSessionRefresh(window: BrowserWindow) {
+  if (agentSessionRefreshTimer) {
+    clearInterval(agentSessionRefreshTimer);
+    agentSessionRefreshTimer = null;
+  }
+  let inFlight = false;
+  agentSessionRefreshTimer = setInterval(() => {
+    if (window.isDestroyed()) {
+      if (agentSessionRefreshTimer) {
+        clearInterval(agentSessionRefreshTimer);
+        agentSessionRefreshTimer = null;
+      }
+      return;
+    }
+    if (inFlight) return;
+    inFlight = true;
+    void refreshRecentSessionsInBackground(window).finally(() => {
+      inFlight = false;
+    });
+  }, AGENT_SESSION_REFRESH_INTERVAL_MS);
+  logPetDebugEvent("agent-session:refresh-scheduled", {
+    intervalMs: AGENT_SESSION_REFRESH_INTERVAL_MS,
+  });
+}
+
+function stopAgentSessionRefresh(reason: string) {
+  if (!agentSessionRefreshTimer) return;
+  clearInterval(agentSessionRefreshTimer);
+  agentSessionRefreshTimer = null;
+  logPetDebugEvent("agent-session:refresh-stopped", { reason });
 }
 
 async function refreshLocalCodexSession(
@@ -1518,6 +1598,23 @@ async function dispatchMenuAction(window: BrowserWindow, action: PetMenuAction) 
     const workspacePath = session?.workspace_path || resolveCurrentWorkspacePath();
     const codexSessionId = session?.codex_session_id?.trim();
     const title = session ? sessionTitle(session) : "Codex session";
+    if (session?.runtime === "app-server") {
+      const message = "Pet app-server session is already managed by Pet";
+      logPetDebugEvent("codex-launch:restore-session-app-server", {
+        petSessionId: action.petSessionId,
+        codexSessionId,
+      });
+      publishCodexStatus(window, {
+        state: normalizeCodexSessionStatus(session.last_status),
+        workspacePath,
+        sessionTitle: title,
+        codexSessionId,
+        lastOutput: sessionLastOutput(session),
+        source: "app-server",
+      });
+      window.webContents.send("pet:menu:action", { ...action, message });
+      return;
+    }
     if (!codexSessionId) {
       const message = "Codex session metadata is missing";
       logPetDebugEvent("codex-launch:restore-session-error", { petSessionId: action.petSessionId, error: message });
@@ -1594,6 +1691,23 @@ async function dispatchMenuAction(window: BrowserWindow, action: PetMenuAction) 
     return;
   }
   if (action.type === "focus-active-session") {
+    const session = findMenuSessionByPetId(action.petSessionId);
+    if (session?.runtime === "app-server") {
+      const message = "Pet app-server session is managed by Pet and has no VSCode window to focus";
+      logPetDebugEvent("codex-launch:focus-active-session-app-server", {
+        petSessionId: action.petSessionId,
+      });
+      publishCodexStatus(window, {
+        state: normalizeCodexSessionStatus(session.last_status),
+        workspacePath: session.workspace_path || undefined,
+        sessionTitle: sessionTitle(session),
+        codexSessionId: session.codex_session_id || undefined,
+        lastOutput: sessionLastOutput(session),
+        source: "app-server",
+      });
+      window.webContents.send("pet:menu:action", { ...action, message });
+      return;
+    }
     try {
       const { workspacePath, userDataDir, workspaceFilePath } = focusActiveSessionWindow(window, action.petSessionId);
       const result = focusVscodeWorkspace({ workspacePath, userDataDir, workspaceFilePath });
@@ -2078,6 +2192,8 @@ async function scanAndUpsertRecentCodexSessions(
     const local = (await readAllLocalAgentSessions(20)).filter(
       (item) =>
         item.menuSession.agent === "codex" &&
+        item.menuSession.runtime !== "app-server" &&
+        item.payload.pet_session_id.startsWith("codex:") &&
         normalizeWorkspacePathIdentity(item.menuSession.workspace_path) ===
           normalizeWorkspacePathIdentity(workspacePath),
     );
@@ -2155,6 +2271,7 @@ async function createPetWindow() {
       nativeMenuOwnerAlive: Boolean(nativeMenuOwnerWindow && !nativeMenuOwnerWindow.isDestroyed()),
     });
     stopCodexSessionOutputWatch(window, "window-close");
+    stopAgentSessionRefresh("window-close");
     persistPetWindowBounds(window);
     if (contextMenuWindow && !contextMenuWindow.isDestroyed()) {
       contextMenuWindow.close();
@@ -2194,6 +2311,7 @@ async function createPetWindow() {
   // or that were missed by the watch-based trigger. Session completion during
   // the day is handled by the Codex session output watch.
   scheduleNextDailyScan(window);
+  scheduleAgentSessionRefresh(window);
 
   if (isDev) {
     await window.loadURL(devRendererUrl);
@@ -2411,5 +2529,6 @@ app.on("window-all-closed", () => {
     clearTimeout(sessionScanTimer);
     sessionScanTimer = null;
   }
+  stopAgentSessionRefresh("window-all-closed");
   app.quit();
 });

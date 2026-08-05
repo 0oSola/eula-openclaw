@@ -5,24 +5,25 @@ import type {
 } from "./codexSessionFiles.js";
 import type { ClaudeSessionFileSummary } from "./claudeSessionFiles.js";
 
-export const AGENT_SESSION_PROVIDERS = ["codex", "claude"] as const;
+export const AGENT_SESSION_PROVIDERS = ["codex", "claude", "pet-app-server"] as const;
 export type AgentSessionProvider = (typeof AGENT_SESSION_PROVIDERS)[number];
 
-export const AGENT_SESSION_RUNTIMES = ["desktop", "cli", "wsl", "unknown"] as const;
+export const AGENT_SESSION_RUNTIMES = ["desktop", "cli", "wsl", "app-server", "unknown"] as const;
 export type AgentSessionRuntime = (typeof AGENT_SESSION_RUNTIMES)[number];
 
 export type AgentSessionState = CodexSessionStatus | "idle";
+export type AgentSessionAgent = "codex" | "claude";
 
 export type AgentSessionEvidence = {
-  source: "codex-jsonl" | "claude-jsonl";
-  sessionFileModifiedAt: string;
-  sessionFile: string;
+  source: "codex-jsonl" | "claude-jsonl" | "pet-app-server";
+  sessionFileModifiedAt: string | null;
+  sessionFile: string | null;
 };
 
 export type AgentSessionRecord = {
   sessionKey: string;
   provider: AgentSessionProvider;
-  agent: AgentSessionProvider;
+  agent: AgentSessionAgent;
   runtime: AgentSessionRuntime;
   hostId: "local";
   sessionId: string;
@@ -35,7 +36,8 @@ export type AgentSessionRecord = {
   sessionStartedAt: string;
   lastEventAt: string | null;
   lastActivityAt: string;
-  sessionFile: string;
+  sessionFile: string | null;
+  processId: number | null;
   originator: string | null;
   source: string | null | undefined;
   cliVersion: string | null;
@@ -81,6 +83,31 @@ export type LocalClaudeSessionDiscoveryOptions = {
   now?: () => Date;
 };
 
+export type PetAppServerSessionSummary = {
+  id: string;
+  workspaceId: string;
+  workspacePath: string;
+  status: string;
+  createdAt: string;
+  lastActiveAt: string;
+  processId: number | null;
+  codexVersion: string | null;
+  transport: string;
+  sandbox: string;
+  mode: string | null;
+  lastOutputPreview: string | null;
+  error: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type PetAppServerSessionScanner = (limit: number) => Promise<PetAppServerSessionSummary[]>;
+
+export type PetAppServerDiscoveryOptions = {
+  limit?: number;
+  scan: PetAppServerSessionScanner;
+  now?: () => Date;
+};
+
 function compact(value: string | null | undefined): string {
   return String(value ?? "").trim();
 }
@@ -121,6 +148,21 @@ function sessionKey(summary: CodexSessionFileSummary): string {
 
 function sessionKeyFor(provider: AgentSessionProvider, sessionId: string): string {
   return `local:${provider}:${sessionId}`;
+}
+
+function emptyReviewFacts(): CodexReviewFacts {
+  return {
+    failed_commands: [],
+    changed_files: [],
+    approvals: [],
+    errors: [],
+    event_counts: {},
+    user_messages: [],
+    assistant_messages: [],
+    function_call_summaries: [],
+    work_items: [],
+    methods: [],
+  };
 }
 
 const ACTIVE_STATES = new Set<CodexSessionStatus>([
@@ -164,6 +206,7 @@ function toRecord(summary: CodexSessionFileSummary, now: Date): AgentSessionReco
     lastEventAt: summary.lastEventAt,
     lastActivityAt,
     sessionFile: summary.filePath,
+    processId: null,
     originator: summary.originator,
     source: summary.source,
     cliVersion: summary.cliVersion,
@@ -197,6 +240,7 @@ function toClaudeRecord(summary: ClaudeSessionFileSummary, now: Date): AgentSess
     lastEventAt: summary.lastEventAt,
     lastActivityAt,
     sessionFile: summary.filePath,
+    processId: null,
     originator: "claude-code",
     source: "claude-jsonl",
     cliVersion: summary.cliVersion,
@@ -206,6 +250,63 @@ function toClaudeRecord(summary: ClaudeSessionFileSummary, now: Date): AgentSess
       source: "claude-jsonl",
       sessionFileModifiedAt: summary.fileModifiedAt,
       sessionFile: summary.filePath,
+    }],
+  };
+}
+
+function appServerState(status: string): AgentSessionState {
+  switch (compact(status).toLowerCase()) {
+    case "starting":
+    case "preparing":
+      return "starting";
+    case "running":
+      return "running";
+    case "waiting_approval":
+    case "approval_required":
+      return "waiting_approval";
+    case "failed":
+      return "failed";
+    case "closed":
+    case "disconnected":
+      return "disconnected";
+    case "completed":
+      return "completed";
+    case "ready":
+    case "idle":
+    default:
+      return "idle";
+  }
+}
+
+function toPetAppServerRecord(summary: PetAppServerSessionSummary): AgentSessionRecord {
+  const lastActivityAt = summary.lastActiveAt || summary.createdAt;
+  return {
+    sessionKey: sessionKeyFor("pet-app-server", summary.id),
+    provider: "pet-app-server",
+    agent: "codex",
+    runtime: "app-server",
+    hostId: "local",
+    sessionId: summary.id,
+    workspacePath: displayWorkspacePath(summary.workspacePath),
+    displayTitle: compact(summary.mode) ? `Pet app-server · ${summary.mode}` : "Pet app-server",
+    firstPromptPreview: null,
+    lastSummary: summary.error || summary.lastOutputPreview,
+    lastOutput: summary.lastOutputPreview,
+    state: appServerState(summary.status),
+    sessionStartedAt: summary.createdAt,
+    lastEventAt: lastActivityAt,
+    lastActivityAt,
+    sessionFile: null,
+    processId: summary.processId,
+    originator: "desktop-pet",
+    source: "pet-app-server",
+    cliVersion: summary.codexVersion,
+    gitBranch: null,
+    reviewFacts: emptyReviewFacts(),
+    evidence: [{
+      source: "pet-app-server",
+      sessionFileModifiedAt: lastActivityAt,
+      sessionFile: null,
     }],
   };
 }
@@ -272,6 +373,18 @@ export async function discoverLocalClaudeSessions(
   });
   return dedupeAndSort(
     summaries.map((summary) => toClaudeRecord(summary, now)),
+    now.toISOString(),
+  );
+}
+
+export async function discoverPetAppServerSessions(
+  options: PetAppServerDiscoveryOptions,
+): Promise<AgentSessionDiscoverySnapshot> {
+  const now = (options.now ?? (() => new Date()))();
+  const limit = Math.max(1, Math.min(options.limit ?? 50, 50));
+  const summaries = await options.scan(limit);
+  return dedupeAndSort(
+    summaries.map(toPetAppServerRecord),
     now.toISOString(),
   );
 }

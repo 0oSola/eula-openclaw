@@ -11,6 +11,8 @@ import {
 import {
   discoverLocalCodexSessions,
   discoverLocalClaudeSessions,
+  discoverPetAppServerSessions,
+  type PetAppServerSessionScanner,
   type CodexSessionScanner,
 } from "./agentSessionDiscovery.js";
 import type { ClaudeSessionFileSummary } from "./claudeSessionFiles.js";
@@ -211,6 +213,50 @@ describe("agent session discovery", () => {
       workspacePath: "D:\\workspace\\Aether UI",
       state: "running",
       gitBranch: "main",
+    });
+  });
+
+  it("maps Pet app-server lifecycle sessions into the same bounded discovery record", async () => {
+    const scan: PetAppServerSessionScanner = async (limit) => {
+      expect(limit).toBe(10);
+      return [
+        {
+          id: "codex_sess_runtime",
+          workspaceId: "mmd-companion",
+          workspacePath: "D:\\workspace\\MMD project",
+          status: "waiting_approval",
+          createdAt: "2026-08-05T09:50:00.000Z",
+          lastActiveAt: "2026-08-05T09:59:00.000Z",
+          processId: 4321,
+          codexVersion: "codex-test/1.0",
+          transport: "stdio",
+          sandbox: "read-only",
+          mode: "read_only",
+          lastOutputPreview: "Need approval",
+          error: null,
+          metadata: { mode: "read_only" },
+        },
+      ];
+    };
+
+    const snapshot = await discoverPetAppServerSessions({
+      limit: 10,
+      scan,
+      now: () => new Date("2026-08-05T10:00:00.000Z"),
+    });
+
+    expect(snapshot.sessions[0]).toMatchObject({
+      sessionKey: "local:pet-app-server:codex_sess_runtime",
+      provider: "pet-app-server",
+      agent: "codex",
+      runtime: "app-server",
+      workspacePath: "D:\\workspace\\MMD project",
+      state: "waiting_approval",
+      lastOutput: "Need approval",
+    });
+    expect(snapshot.sessions[0]?.evidence[0]).toMatchObject({
+      source: "pet-app-server",
+      sessionFile: null,
     });
   });
 });

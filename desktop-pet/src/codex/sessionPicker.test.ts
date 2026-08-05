@@ -53,6 +53,22 @@ describe("desktop pet session picker", () => {
     expect(items[0]?.searchText).toContain("codex desktop");
   });
 
+  it("labels idle sessions instead of exposing the raw status key", () => {
+    const items = buildSessionPickerItems([
+      {
+        pet_session_id: "codex:idle",
+        codex_session_id: "idle",
+        display_title: "background review",
+        workspace_path: "D:\\workspace\\MMD project",
+        last_status: "idle",
+        last_seen_at: "2026-08-05T10:00:00.000Z",
+      },
+    ]);
+
+    expect(items[0]?.status).toBe("idle");
+    expect(items[0]?.subtitle).toContain("idle");
+  });
+
   it("filters by title, workspace, and status terms", () => {
     const items = buildSessionPickerItems(sessions, new Date("2026-06-03T11:00:00+08:00"));
 

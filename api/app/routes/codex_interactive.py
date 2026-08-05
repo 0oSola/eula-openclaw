@@ -24,6 +24,8 @@ _SECRET_KEY_RE = re.compile(r"(authorization|credential|password|secret|token|ap
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION|CREDENTIAL)[A-Z0-9_]*)=([^\s,;]+)"
 )
+_SECRET_TOKEN_RE = re.compile(r"\b(?:sk|ghp|github_pat|xox[abprs])[-_][A-Za-z0-9._-]{8,}\b", re.IGNORECASE)
+_SESSION_OUTPUT_PREVIEW_MAX_CHARS = 240
 
 
 class CodexSessionCreateRequest(BaseModel):
@@ -57,6 +59,38 @@ class CodexApplyRequest(BaseModel):
 
 class CodexDiscardRequest(BaseModel):
     remove_worktree: bool = True
+
+
+def _bounded_session_output(value: object) -> str | None:
+    text = " ".join(str(value or "").split())
+    text = _SECRET_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=[redacted]", text)
+    text = _SECRET_TOKEN_RE.sub("[redacted]", text)
+    if not text:
+        return None
+    if len(text) <= _SESSION_OUTPUT_PREVIEW_MAX_CHARS:
+        return text
+    return f"{text[:_SESSION_OUTPUT_PREVIEW_MAX_CHARS]}..."
+
+
+def _last_session_output_preview(request: Request, session_id: str) -> str | None:
+    events = request.app.state.trace_store.list_recent_codex_events(session_id, limit=20)
+    for event in reversed(events):
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        for key in ("text", "final_text", "error", "output", "stdout", "stderr"):
+            preview = _bounded_session_output(payload.get(key))
+            if preview:
+                return preview
+    return None
+
+
+def _bounded_session_metadata(value: object) -> dict[str, str]:
+    metadata = value if isinstance(value, dict) else {}
+    output: dict[str, str] = {}
+    for key in ("mode", "transport", "sandbox"):
+        candidate = _bounded_session_output(metadata.get(key))
+        if candidate:
+            output[key] = candidate
+    return output
 
 
 def _not_found_if_disabled(request: Request | WebSocket) -> None:
@@ -543,6 +577,46 @@ async def create_codex_interactive_session(
         "status": session["status"],
         "sandbox": session["sandbox_mode"],
         "ws_url": f"/api/backend/ws/codex/interactive/{session['id']}?user_id={user_id}",
+    }
+
+
+@router.get("/codex/interactive/sessions")
+def list_codex_interactive_sessions(
+    request: Request,
+    limit: int = 50,
+    x_user_id: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _not_found_if_disabled(request)
+    user_id = _require_codex_user(request, x_user_id or "")
+    bounded_limit = max(1, min(int(limit), 50))
+    sessions = request.app.state.trace_store.list_codex_interactive_sessions(
+        user_id=user_id,
+        limit=bounded_limit,
+    )
+    return {
+        "sessions": [
+            {
+                "id": session["id"],
+                "workspace_id": session["workspace_id"],
+                "workspace_path": session["workspace_path"],
+                "worktree_path": session.get("worktree_path"),
+                "branch_name": session.get("branch_name"),
+                "codex_thread_id": session.get("codex_thread_id"),
+                "codex_version": session.get("codex_version"),
+                "transport": session["transport"],
+                "sandbox": session["sandbox_mode"],
+                "status": session["status"],
+                "process_id": session.get("process_id"),
+                "created_at": session["created_at"],
+                "last_active_at": session["last_active_at"],
+                "closed_at": session.get("closed_at"),
+                "error": _bounded_session_output(session.get("error")),
+                "last_output_preview": _last_session_output_preview(request, session["id"]),
+                "metadata": _bounded_session_metadata(session.get("metadata")),
+            }
+            for session in sessions
+        ],
+        "limit": bounded_limit,
     }
 
 

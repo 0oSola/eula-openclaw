@@ -117,6 +117,50 @@ def test_create_codex_session_rejects_when_disabled():
     assert response.status_code == 404
 
 
+def test_list_codex_interactive_sessions_returns_bounded_session_snapshot():
+    client, app = _client()
+
+    created = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "read_only", "sandbox": "read-only"},
+        headers={"x-user-id": "admin-1"},
+    )
+    assert created.status_code == 200
+    app.state.trace_store.append_codex_event(
+        created.json()["id"],
+        None,
+        "text_delta",
+        {"text": "bounded runtime output password=hunter2 api_key=sk-live-secret-value"},
+    )
+
+    response = client.get(
+        "/codex/interactive/sessions?limit=999",
+        headers={"x-user-id": "admin-1"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["limit"] == 50
+    assert payload["sessions"][0]["id"] == created.json()["id"]
+    assert payload["sessions"][0]["workspace_path"].endswith("\\repo")
+    assert payload["sessions"][0]["status"] == "ready"
+    assert payload["sessions"][0]["last_output_preview"] == (
+        "bounded runtime output password=[redacted] api_key=[redacted]"
+    )
+    assert "metadata" in payload["sessions"][0]
+
+
+def test_list_codex_interactive_sessions_requires_codex_user():
+    client, _ = _client()
+
+    response = client.get(
+        "/codex/interactive/sessions",
+        headers={"x-user-id": "not-allowed"},
+    )
+
+    assert response.status_code == 403
+
+
 def test_create_codex_session_requires_allowlisted_admin():
     client, _ = _client(enabled=True, allowed_users=["sola"])
 

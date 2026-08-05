@@ -28,6 +28,7 @@ export type SessionPickerItem = {
 
 const STATUS_LABELS: Record<string, string> = {
   no_session: "no session",
+  idle: "idle",
   starting: "starting",
   running: "running",
   command_running: "running command",

@@ -1154,6 +1154,30 @@ class TraceStore:
         item["metadata"] = self._json_loads(item.get("metadata_json"), {})
         return item
 
+    def list_codex_interactive_sessions(
+        self,
+        *,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(int(limit), 50))
+        rows = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_interactive_sessions
+            WHERE user_id = ?
+            ORDER BY last_active_at DESC, id DESC
+            LIMIT ?
+            """,
+            (user_id, bounded_limit),
+        ).fetchall()
+        sessions: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["metadata"] = self._json_loads(item.get("metadata_json"), {})
+            sessions.append(item)
+        return sessions
+
     def update_codex_interactive_session(
         self,
         session_id: str,
@@ -1349,6 +1373,28 @@ class TraceStore:
             (codex_session_id,),
         ).fetchall()
         events = [dict(row) for row in rows]
+        for event in events:
+            event["payload"] = self._json_loads(event.get("payload_json"), {})
+        return events
+
+    def list_recent_codex_events(
+        self,
+        codex_session_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(int(limit), 50))
+        rows = self._conn.execute(
+            """
+            SELECT *
+            FROM codex_events
+            WHERE codex_session_id = ?
+            ORDER BY sequence DESC
+            LIMIT ?
+            """,
+            (codex_session_id, bounded_limit),
+        ).fetchall()
+        events = [dict(row) for row in reversed(rows)]
         for event in events:
             event["payload"] = self._json_loads(event.get("payload_json"), {})
         return events

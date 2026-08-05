@@ -122,7 +122,7 @@ type DesktopPetCodexStatus = {
   error?: string;
   updatedAt?: string;
   commandLine?: string;
-  source?: "codex-jsonl" | "claude-jsonl" | "terminal";
+  source?: "codex-jsonl" | "claude-jsonl" | "app-server" | "terminal";
 };
 
 type DesktopPetApiRuntimeStatus = {

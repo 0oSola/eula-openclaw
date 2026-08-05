@@ -21,7 +21,7 @@ export type CodexStatus = {
   lastOutput?: string;
   error?: string;
   updatedAt?: string;
-  source?: "codex-jsonl" | "claude-jsonl" | "terminal";
+  source?: "codex-jsonl" | "claude-jsonl" | "app-server" | "terminal";
   /** Command the user should paste into the freshly opened VSCode terminal. */
   commandLine?: string;
 };
