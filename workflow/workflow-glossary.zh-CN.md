@@ -48,3 +48,12 @@
 - 场景文档影响：按 `userId + renderPipeline + modelPath` 保存 Reze 场景 JSON，包含场景参数、调色、背景效果和可执行材质图预设；Reze Design 与 Reze NPR 的相机/灯光默认值不得跨管线复用。材质键采用 `mesh:<遍历序号>:material:<槽位>`，不得使用运行时 UUID。
 - 资产与导出影响：编辑器资产页复用主站模型目录与 VMD 导入；渲染页当前导出 WebGPU canvas PNG，不包含 CSS 层的 MIO 星海背景。
 - 完整定义：见 `workflow/concepts/reze-design-stage.zh-CN.md`。
+
+# Codex 作者知识交接
+
+- 英文机器名：`CodexAuthorKnowledgeHandoff`
+- 含义：Codex 在完成实质任务并形成稳定领域语义变化后生成的不可变 `3+N` 作者提案包，由人读 `handoff.md`、紧凑 `marker.yaml`、Hook 来源 `metadata.json`、一个或多个纯 Markdown candidate 和 `.complete` 组成。
+- 允许用法：把 Codex 的问题、根因、解决方式、边界、知识主张和证据提示交给 Pet、FastAPI 和 OpenClaw 继续治理。
+- 禁止用法：不得由普通 Review `accept` 触发；不得在 marker 中决定 Obsidian 路径、主题身份或发布动作；不得把 candidate 声明为 canonical knowledge；不得在无知识变化时生成空包。
+- 路由影响：数据主链固定为 `Codex -> Pet -> FastAPI -> OpenClaw -> Obsidian`；FastAPI 负责 Repository Evidence 和 Gate，OpenClaw 负责双审核、Vault Topic Resolution、Accepted Wiki Change Set 和发布。
+- 完整定义：见 `workflow/concepts/codex-author-knowledge-handoff.zh-CN.md`。

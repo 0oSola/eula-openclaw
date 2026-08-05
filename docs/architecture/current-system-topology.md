@@ -387,6 +387,35 @@ Phase 1 与 Phase 2 已实现；OpenClaw 侧 Wiki Change Proposal/双重审核�
 | OpenClaw 抽取 contract | `openclaw/skills/codex-session-knowledge-extraction/SKILL.md` |
 | 定向回归测试 | `api/tests/test_codex_knowledge_extraction.py`, `api/tests/test_domain_knowledge_*.py` |
 
+### 4.7 Codex 作者知识交接 Hook（KH-01）
+
+KH-01 在 Codex 边界内增加了独立的作者交接捕获器，但当前不会自动注册到用户级
+`C:\Users\KSG\.codex\hooks.json`。其运行入口位于：
+
+```text
+scripts/codex-knowledge-handoff/stop-hook.mjs
+```
+
+有效最终回复的局部链路为：
+
+```text
+Codex final response
+  -> Stop Hook YAML safe-subset validator
+  -> %CODEX_HOME%/knowledge-handoffs/<workspace-key>/<handoff-id>/
+       handoff.md
+       marker.yaml
+       metadata.json
+       candidates/*.md
+       .complete
+```
+
+没有固定作者载荷的普通回复直接放行；已声明但非法的载荷会阻止 Stop，且不创建半成品。
+Hook 只负责分割、校验、来源 metadata、哈希和原子落盘，不负责仓库证据、Gate、Vault
+主题解析或 Obsidian 发布。
+
+Pet 扫描、FastAPI 接收和 OpenClaw 双审核尚未由 KH-01 接通；在后续票据完成前，旧的
+Review/Knowledge 运行链仍按本节前文所述保持关闭或兼容运行。
+
 ## 5. 主调用链：前端发消息
 
 ```text
