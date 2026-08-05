@@ -127,6 +127,11 @@ class Settings:
     codex_openclaw_control_plane_workspace_id: str
     codex_openclaw_control_plane_sync_interval_seconds: float
     codex_openclaw_control_plane_snapshot_limit: int
+    codex_author_knowledge_handoff_enabled: bool
+    codex_author_knowledge_handoff_token: str
+    codex_author_knowledge_openclaw_token: str
+    codex_author_knowledge_reconciliation_interval_seconds: float
+    codex_author_knowledge_durable_refs: dict[str, str]
     domain_knowledge_control_plane_enabled: bool
     codex_review_memory_enabled: bool
     codex_review_memory_export_root: Path
@@ -460,6 +465,62 @@ class Settings:
                 ),
                 default=False,
             ),
+            codex_author_knowledge_handoff_enabled=_parse_bool(
+                resolve_value(
+                    "codex_author_knowledge_handoff_enabled",
+                    "CODEX_AUTHOR_KNOWLEDGE_HANDOFF_ENABLED",
+                    False,
+                ),
+                default=False,
+            ),
+            codex_author_knowledge_handoff_token=str(
+                resolve_value(
+                    "codex_author_knowledge_handoff_token",
+                    "CODEX_AUTHOR_KNOWLEDGE_HANDOFF_TOKEN",
+                    "",
+                )
+            ).strip(),
+            codex_author_knowledge_openclaw_token=str(
+                resolve_value(
+                    "codex_author_knowledge_openclaw_token",
+                    "CODEX_AUTHOR_KNOWLEDGE_OPENCLAW_TOKEN",
+                    "",
+                )
+            ).strip(),
+            codex_author_knowledge_reconciliation_interval_seconds=float(
+                resolve_value(
+                    "codex_author_knowledge_reconciliation_interval_seconds",
+                    "CODEX_AUTHOR_KNOWLEDGE_RECONCILIATION_INTERVAL_SECONDS",
+                    60,
+                )
+            ),
+            codex_author_knowledge_durable_refs={
+                workspace_id: str(
+                    (
+                        (overrides.get("codex_author_knowledge_durable_refs") or {}).get(workspace_id)
+                        if isinstance(overrides.get("codex_author_knowledge_durable_refs") or {}, dict)
+                        else None
+                    )
+                    or resolve_value(
+                        f"codex_author_knowledge_durable_ref_{workspace_id}",
+                        f"CODEX_AUTHOR_KNOWLEDGE_DURABLE_REF_{_workspace_env_suffix(workspace_id)}",
+                        "",
+                    )
+                ).strip()
+                for workspace_id in codex_allowed_workspaces
+                if str(
+                    (
+                        (overrides.get("codex_author_knowledge_durable_refs") or {}).get(workspace_id)
+                        if isinstance(overrides.get("codex_author_knowledge_durable_refs") or {}, dict)
+                        else None
+                    )
+                    or resolve_value(
+                        f"codex_author_knowledge_durable_ref_{workspace_id}",
+                        f"CODEX_AUTHOR_KNOWLEDGE_DURABLE_REF_{_workspace_env_suffix(workspace_id)}",
+                        "",
+                    )
+                ).strip()
+            },
             codex_review_memory_enabled=_parse_bool(
                 resolve_value("codex_review_memory_enabled", "CODEX_REVIEW_MEMORY_ENABLED", False),
                 default=False,

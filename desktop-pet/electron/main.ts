@@ -256,6 +256,7 @@ function startKnowledgeHandoffTransport() {
     handoffRoot: path.join(codexHome, "knowledge-handoffs"),
     queueFile: path.join(app.getPath("userData"), "knowledge-handoff-transport", "queue.json"),
     apiBaseUrl,
+    transportToken: process.env.MMD_PET_KNOWLEDGE_HANDOFF_TOKEN,
     autoDrain: true,
     onLog: (event, payload) => logPetDebugEvent(event, payload),
   });

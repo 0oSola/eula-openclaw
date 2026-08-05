@@ -1,0 +1,616 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+import hashlib
+import json
+from pathlib import Path
+import sqlite3
+from threading import RLock
+from typing import Any
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _hash(value: Any) -> str:
+    return f"sha256:{hashlib.sha256(_canonical_json(value).encode('utf-8')).hexdigest()}"
+
+
+class CodexAuthorKnowledgeHandoffStore:
+    """独立于旧 trace.db 的作者知识交接账本。"""
+
+    def __init__(self, db_path: Path):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = RLock()
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._init_db()
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+    def _init_db(self) -> None:
+        with self._lock:
+            self._conn.executescript(
+                """
+                PRAGMA journal_mode=WAL;
+
+                CREATE TABLE IF NOT EXISTS knowledge_handoff_package (
+                    package_id TEXT PRIMARY KEY,
+                    package_key TEXT NOT NULL UNIQUE,
+                    handoff_id TEXT NOT NULL,
+                    workspace_key TEXT NOT NULL,
+                    package_sha256 TEXT NOT NULL,
+                    package_content_sha256 TEXT NOT NULL,
+                    ack_id TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    candidate_count INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS knowledge_candidate_revision (
+                    candidate_id TEXT NOT NULL,
+                    candidate_revision INTEGER NOT NULL,
+                    workspace_key TEXT NOT NULL,
+                    local_id TEXT NOT NULL,
+                    package_id TEXT NOT NULL,
+                    content_sha256 TEXT NOT NULL,
+                    claim_sha256 TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (candidate_id, candidate_revision),
+                    UNIQUE (package_id, local_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_knowledge_candidate_revision_identity
+                ON knowledge_candidate_revision(workspace_key, local_id, candidate_revision);
+
+                CREATE TABLE IF NOT EXISTS knowledge_handoff_candidate (
+                    package_id TEXT NOT NULL,
+                    local_id TEXT NOT NULL,
+                    candidate_id TEXT NOT NULL,
+                    candidate_revision INTEGER NOT NULL,
+                    PRIMARY KEY (package_id, local_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS knowledge_evidence_revision (
+                    evidence_revision_id TEXT PRIMARY KEY,
+                    candidate_id TEXT NOT NULL,
+                    candidate_revision INTEGER NOT NULL,
+                    evidence_revision INTEGER NOT NULL,
+                    workspace_key TEXT NOT NULL,
+                    repository_id TEXT NOT NULL,
+                    revision TEXT,
+                    status TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(candidate_id, candidate_revision, evidence_revision)
+                );
+
+                CREATE TABLE IF NOT EXISTS knowledge_gate_result (
+                    gate_id TEXT PRIMARY KEY,
+                    candidate_id TEXT NOT NULL,
+                    candidate_revision INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    reason_codes_json TEXT NOT NULL,
+                    blocking_object_json TEXT NOT NULL,
+                    current_revision TEXT,
+                    next_action TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(candidate_id, candidate_revision)
+                );
+
+                CREATE TABLE IF NOT EXISTS knowledge_openclaw_delivery (
+                    delivery_id TEXT PRIMARY KEY,
+                    candidate_id TEXT NOT NULL,
+                    candidate_revision INTEGER NOT NULL,
+                    evidence_revision INTEGER NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    ack_id TEXT,
+                    delivered_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(candidate_id, candidate_revision, evidence_revision)
+                );
+
+                """
+            )
+            self._conn.commit()
+
+    @staticmethod
+    def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        return dict(row) if row is not None else None
+
+    def find_package(self, package_key: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_handoff_package WHERE package_key = ?",
+                (package_key,),
+            ).fetchone()
+            return self._row(row)
+
+    def create_package(
+        self,
+        *,
+        package_id: str,
+        package_key: str,
+        handoff_id: str,
+        workspace_key: str,
+        package_sha256: str,
+        package_content_sha256: str,
+        ack_id: str,
+        payload: dict[str, Any],
+        metadata: dict[str, Any],
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        now = _now_iso()
+        with self._lock:
+            existing = self.find_package(package_key)
+            if existing is not None:
+                return {**existing, "outcome": "duplicate"}
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO knowledge_handoff_package (
+                        package_id, package_key, handoff_id, workspace_key,
+                        package_sha256, package_content_sha256, ack_id, status,
+                        payload_json, metadata_json, candidate_count, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        package_id,
+                        package_key,
+                        handoff_id,
+                        workspace_key,
+                        package_sha256,
+                        package_content_sha256,
+                        ack_id,
+                        "received",
+                        json.dumps(payload, ensure_ascii=False),
+                        json.dumps(metadata, ensure_ascii=False),
+                        len(candidates),
+                        now,
+                        now,
+                    ),
+                )
+                for candidate in candidates:
+                    local_id = str(candidate["local_id"])
+                    candidate_id = self._candidate_id(workspace_key, local_id)
+                    latest = self._conn.execute(
+                        """
+                        SELECT candidate_revision, claim_sha256
+                        FROM knowledge_candidate_revision
+                        WHERE candidate_id = ?
+                        ORDER BY candidate_revision DESC
+                        LIMIT 1
+                        """,
+                        (candidate_id,),
+                    ).fetchone()
+                    if latest is not None and latest["claim_sha256"] == str(candidate["claim_sha256"]):
+                        revision = int(latest["candidate_revision"])
+                    else:
+                        revision = int(latest["candidate_revision"] if latest is not None else 0) + 1
+                        self._conn.execute(
+                            """
+                            INSERT INTO knowledge_candidate_revision (
+                                candidate_id, candidate_revision, workspace_key, local_id,
+                                package_id, content_sha256, claim_sha256, payload_json,
+                                status, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                candidate_id,
+                                revision,
+                                workspace_key,
+                                local_id,
+                                package_id,
+                                str(candidate["content_sha256"]),
+                                str(candidate["claim_sha256"]),
+                                json.dumps(
+                                    {
+                                        **candidate,
+                                        "candidate_id": candidate_id,
+                                        "candidate_revision": revision,
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                                "received",
+                                now,
+                                now,
+                            ),
+                        )
+                    self._conn.execute(
+                        """
+                        INSERT INTO knowledge_handoff_candidate (
+                            package_id, local_id, candidate_id, candidate_revision
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (package_id, local_id, candidate_id, revision),
+                    )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                existing = self.find_package(package_key)
+                if existing is not None:
+                    return {**existing, "outcome": "duplicate"}
+                raise
+            return {
+                "package_id": package_id,
+                "package_key": package_key,
+                "handoff_id": handoff_id,
+                "workspace_key": workspace_key,
+                "package_sha256": package_sha256,
+                "package_content_sha256": package_content_sha256,
+                "ack_id": ack_id,
+                "candidate_count": len(candidates),
+                "outcome": "accepted",
+            }
+
+    def list_package_candidates(self, package_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT c.*
+                FROM knowledge_handoff_candidate link
+                JOIN knowledge_candidate_revision c
+                  ON c.candidate_id = link.candidate_id
+                 AND c.candidate_revision = link.candidate_revision
+                WHERE link.package_id = ?
+                ORDER BY link.local_id
+                """,
+                (package_id,),
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                item = self._row(row) or {}
+                item["payload"] = json.loads(item.pop("payload_json"))
+                result.append(item)
+            return result
+
+    @staticmethod
+    def _candidate_id(workspace_key: str, local_id: str) -> str:
+        digest = hashlib.sha256(f"{workspace_key}:{local_id}".encode("utf-8")).hexdigest()[:24]
+        return f"candidate_{digest}"
+
+    def list_handoffs(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM knowledge_handoff_package ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [self._row(row) or {} for row in rows]
+
+    def get_package(self, package_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_handoff_package WHERE package_id = ?",
+                (package_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            result = self._row(row) or {}
+            result["payload"] = json.loads(result.pop("payload_json"))
+            result["metadata"] = json.loads(result.pop("metadata_json"))
+            return result
+
+    def list_candidate_revisions(
+        self,
+        *,
+        workspace_key: str | None = None,
+        status: str | None = None,
+        limit: int | None = 100,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if workspace_key:
+            clauses.append("workspace_key = ?")
+            params.append(workspace_key)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        limit_sql = ""
+        if limit is not None:
+            limit_sql = "LIMIT ?"
+            params.append(limit)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT * FROM knowledge_candidate_revision
+                {where}
+                ORDER BY created_at ASC
+                {limit_sql}
+                """,
+                params,
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                item = self._row(row) or {}
+                item["payload"] = json.loads(item.pop("payload_json"))
+                result.append(item)
+            return result
+
+    def save_evidence_revision(
+        self,
+        *,
+        candidate_id: str,
+        candidate_revision: int,
+        workspace_key: str,
+        repository_id: str,
+        revision: str | None,
+        status: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                latest = self._conn.execute(
+                    """
+                    SELECT * FROM knowledge_evidence_revision
+                    WHERE candidate_id = ? AND candidate_revision = ?
+                    ORDER BY evidence_revision DESC
+                    LIMIT 1
+                    """,
+                    (candidate_id, candidate_revision),
+                ).fetchone()
+                if latest is not None:
+                    latest_payload = json.loads(latest["payload_json"])
+                    if _hash(latest_payload) == _hash(payload) and latest["status"] == status:
+                        self._conn.commit()
+                        result = self._row(latest) or {}
+                        result["payload"] = latest_payload
+                        result.pop("payload_json", None)
+                        return result
+                previous = self._conn.execute(
+                    """
+                    SELECT MAX(evidence_revision) AS revision
+                    FROM knowledge_evidence_revision
+                    WHERE candidate_id = ? AND candidate_revision = ?
+                    """,
+                    (candidate_id, candidate_revision),
+                ).fetchone()
+                evidence_revision = int(previous["revision"] or 0) + 1
+                evidence_revision_id = "evidence_" + hashlib.sha256(
+                    f"{candidate_id}:{candidate_revision}:{evidence_revision}:{repository_id}:{revision}:{_hash(payload)}".encode("utf-8")
+                ).hexdigest()[:24]
+                self._conn.execute(
+                    """
+                    INSERT INTO knowledge_evidence_revision (
+                        evidence_revision_id, candidate_id, candidate_revision, evidence_revision,
+                        workspace_key, repository_id, revision, status, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        evidence_revision_id,
+                        candidate_id,
+                        candidate_revision,
+                        evidence_revision,
+                        workspace_key,
+                        repository_id,
+                        revision,
+                        status,
+                        json.dumps(payload, ensure_ascii=False),
+                        _now_iso(),
+                    ),
+                )
+                self._conn.commit()
+                row = self._conn.execute(
+                    """
+                    SELECT * FROM knowledge_evidence_revision
+                    WHERE evidence_revision_id = ?
+                    """,
+                    (evidence_revision_id,),
+                ).fetchone()
+                result = self._row(row) or {}
+                result["payload"] = json.loads(result.pop("payload_json"))
+                return result
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def save_gate_result(
+        self,
+        *,
+        candidate_id: str,
+        candidate_revision: int,
+        status: str,
+        reason_codes: list[str],
+        blocking_object: dict[str, Any],
+        current_revision: str | None,
+        next_action: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        gate_id = "gate_" + hashlib.sha256(
+            f"{candidate_id}:{candidate_revision}:{_hash(payload)}".encode("utf-8")
+        ).hexdigest()[:24]
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO knowledge_gate_result (
+                    gate_id, candidate_id, candidate_revision, status,
+                    reason_codes_json, blocking_object_json, current_revision,
+                    next_action, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(candidate_id, candidate_revision) DO UPDATE SET
+                    gate_id = excluded.gate_id,
+                    status = excluded.status,
+                    reason_codes_json = excluded.reason_codes_json,
+                    blocking_object_json = excluded.blocking_object_json,
+                    current_revision = excluded.current_revision,
+                    next_action = excluded.next_action,
+                    payload_json = excluded.payload_json,
+                    created_at = excluded.created_at
+                """,
+                (
+                    gate_id,
+                    candidate_id,
+                    candidate_revision,
+                    status,
+                    json.dumps(reason_codes, ensure_ascii=False),
+                    json.dumps(blocking_object, ensure_ascii=False),
+                    current_revision,
+                    next_action,
+                    json.dumps(payload, ensure_ascii=False),
+                    _now_iso(),
+                ),
+            )
+            self._conn.execute(
+                """
+                UPDATE knowledge_candidate_revision
+                SET status = ?, updated_at = ?
+                WHERE candidate_id = ? AND candidate_revision = ?
+                """,
+                (status, _now_iso(), candidate_id, candidate_revision),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                """
+                SELECT * FROM knowledge_gate_result
+                WHERE candidate_id = ? AND candidate_revision = ?
+                """,
+                (candidate_id, candidate_revision),
+            ).fetchone()
+            result = self._row(row) or {}
+            result["reason_codes"] = json.loads(result.pop("reason_codes_json"))
+            result["blocking_object"] = json.loads(result.pop("blocking_object_json"))
+            result["payload"] = json.loads(result.pop("payload_json"))
+            return result
+
+    def create_delivery(
+        self,
+        *,
+        candidate_id: str,
+        candidate_revision: int,
+        evidence_revision: int,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload_hash = _hash(payload)
+        delivery_id = "delivery_" + hashlib.sha256(
+            f"{candidate_id}:{candidate_revision}:{evidence_revision}:{payload_hash}".encode("utf-8")
+        ).hexdigest()[:24]
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO knowledge_openclaw_delivery (
+                    delivery_id, candidate_id, candidate_revision, evidence_revision, payload_hash,
+                    payload_json, status, ack_id, delivered_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    delivery_id,
+                    candidate_id,
+                    candidate_revision,
+                    evidence_revision,
+                    payload_hash,
+                    json.dumps(payload, ensure_ascii=False),
+                    "pending",
+                    None,
+                    None,
+                    _now_iso(),
+                    _now_iso(),
+                ),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                """
+                SELECT * FROM knowledge_openclaw_delivery
+                WHERE candidate_id = ? AND candidate_revision = ? AND evidence_revision = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (candidate_id, candidate_revision, evidence_revision),
+            ).fetchone()
+            result = self._row(row) or {}
+            result["payload"] = json.loads(result.pop("payload_json"))
+            return result
+
+    def acknowledge_delivery(
+        self,
+        *,
+        delivery_id: str,
+        outcome: str,
+        ack_id: str | None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_openclaw_delivery WHERE delivery_id = ?",
+                (delivery_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("OpenClaw delivery not found")
+            existing = self._row(row) or {}
+            if existing["status"] == "delivered":
+                existing["outcome"] = "duplicate"
+                return existing
+            newer = self._conn.execute(
+                """
+                SELECT delivery_id FROM knowledge_openclaw_delivery
+                WHERE candidate_id = ? AND candidate_revision = ?
+                  AND evidence_revision > ? AND status = 'pending'
+                LIMIT 1
+                """,
+                (existing["candidate_id"], existing["candidate_revision"], existing["evidence_revision"]),
+            ).fetchone()
+            if newer is not None:
+                raise ValueError("OpenClaw delivery is stale; acknowledge the newest evidence revision")
+            if outcome not in {"accepted", "duplicate"}:
+                raise ValueError("OpenClaw delivery outcome must be accepted or duplicate")
+            delivered_at = _now_iso()
+            self._conn.execute(
+                """
+                UPDATE knowledge_openclaw_delivery
+                SET status = 'delivered', ack_id = ?, delivered_at = ?, updated_at = ?
+                WHERE delivery_id = ?
+                """,
+                (ack_id, delivered_at, delivered_at, delivery_id),
+            )
+            self._conn.execute(
+                """
+                UPDATE knowledge_gate_result
+                SET status = 'delivered_to_openclaw', next_action = 'await_openclaw_review',
+                    created_at = ?
+                WHERE candidate_id = ? AND candidate_revision = ?
+                """,
+                (delivered_at, existing["candidate_id"], existing["candidate_revision"]),
+            )
+            self._conn.execute(
+                """
+                UPDATE knowledge_candidate_revision
+                SET status = 'delivered_to_openclaw', updated_at = ?
+                WHERE candidate_id = ? AND candidate_revision = ?
+                """,
+                (delivered_at, existing["candidate_id"], existing["candidate_revision"]),
+            )
+            self._conn.commit()
+            result = dict(existing)
+            result.update({"status": "delivered", "ack_id": ack_id, "delivered_at": delivered_at, "outcome": outcome})
+            return result
+
+    def list_deliveries(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM knowledge_openclaw_delivery ORDER BY created_at ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                item = self._row(row) or {}
+                item["payload"] = json.loads(item.pop("payload_json"))
+                result.append(item)
+            return result

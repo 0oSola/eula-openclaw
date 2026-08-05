@@ -83,6 +83,7 @@ export type KnowledgeHandoffTransportOptions = {
   handoffRoot: string;
   queueFile: string;
   apiBaseUrl: string;
+  transportToken?: string;
   fetch?: KnowledgeHandoffFetch;
   now?: () => Date;
   retryDelaysMs?: number[];
@@ -563,6 +564,7 @@ export function createKnowledgeHandoffTransport(
   const watchFactory = options.watchFactory ?? defaultWatchFactory;
   const gitWatchFactory = options.gitWatchFactory ?? defaultWatchFactory;
   const apiBaseUrl = normalizeApiBaseUrl(options.apiBaseUrl);
+  const transportToken = String(options.transportToken ?? "").trim();
   const onLog = options.onLog ?? (() => undefined);
   const queueLockPath = `${options.queueFile}.lock`;
   let started = false;
@@ -855,7 +857,11 @@ export function createKnowledgeHandoffTransport(
       }
       const response = await requestWithTimeout(`${apiBaseUrl}${HANDOFF_ENDPOINT}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "Idempotency-Key": `${packageInfo.handoffId}:${packageInfo.packageSha256}`,
+          ...(transportToken ? { "x-codex-knowledge-transport-token": transportToken } : {}),
+        },
         body: JSON.stringify({
           kind: "codex_knowledge_handoff_package",
           schema_version: HANDOFF_SCHEMA_VERSION,
@@ -961,7 +967,10 @@ export function createKnowledgeHandoffTransport(
     try {
       const response = await requestWithTimeout(`${apiBaseUrl}${GIT_EVENT_ENDPOINT}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(transportToken ? { "x-codex-knowledge-transport-token": transportToken } : {}),
+        },
         body: JSON.stringify({
           workspace_key: input.workspaceKey,
           event_type: input.eventType,

@@ -14,6 +14,7 @@ from app.routes.assets import router as assets_router
 from app.routes.chat import router as chat_router
 from app.routes.codex_interactive import router as codex_interactive_router
 from app.routes.codex_knowledge import router as codex_knowledge_router
+from app.routes.codex_author_knowledge_handoff import router as codex_author_knowledge_handoff_router
 from app.routes.codex_review import router as codex_review_router
 from app.routes.config import router as config_router
 from app.routes.desktop_pet import router as desktop_pet_router
@@ -30,6 +31,8 @@ from app.services.message_tts_worker import run_message_tts_worker
 from app.services.codex_app_server_client import CodexAppServerClient
 from app.services.codex_interactive_provider import CodexInteractiveProvider, DeterministicCodexInteractiveProvider
 from app.services.codex_knowledge_extraction import run_codex_knowledge_extraction_worker
+from app.services.codex_author_knowledge_handoff import run_codex_author_knowledge_reconciliation_worker
+from app.services.codex_author_knowledge_handoff_store import CodexAuthorKnowledgeHandoffStore
 from app.services.codex_openclaw_review_sync import run_codex_review_sync_worker
 from app.services.codex_worktree_manager import CodexWorktreeManager
 from app.services.message_bridge import MessageBridgeService, OpenClawGatewayProvider
@@ -49,6 +52,11 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     db_path = settings.data_dir / "sqlite" / "trace.db"
     ndjson_dir = settings.data_dir / "logs"
     trace_store = TraceStore(db_path=db_path, ndjson_dir=ndjson_dir)
+    knowledge_handoff_store = (
+        CodexAuthorKnowledgeHandoffStore(settings.data_dir / "sqlite" / "knowledge_handoff.db")
+        if settings.codex_author_knowledge_handoff_enabled
+        else None
+    )
     openclaw_client = OpenClawClient(
         base_url=settings.openclaw_base_url,
         token=settings.openclaw_token,
@@ -115,6 +123,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         bridge_task = None
         codex_review_task = None
         codex_knowledge_task = None
+        codex_author_knowledge_reconciliation_task = None
         codex_review_control_plane_task = None
         if settings.tts_service_enabled:
             worker_task = asyncio.create_task(run_message_tts_worker(app))
@@ -141,6 +150,10 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         )
         if should_start_codex_knowledge_worker:
             codex_knowledge_task = asyncio.create_task(run_codex_knowledge_extraction_worker(app))
+        if knowledge_handoff_store is not None:
+            codex_author_knowledge_reconciliation_task = asyncio.create_task(
+                run_codex_author_knowledge_reconciliation_worker(app)
+            )
         should_start_codex_review_control_plane_worker = (
             settings.codex_openclaw_control_plane_enabled
             and app.state.openclaw_control_plane_client is not None
@@ -168,6 +181,10 @@ def create_app(overrides: dict | None = None) -> FastAPI:
                 codex_knowledge_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await codex_knowledge_task
+            if codex_author_knowledge_reconciliation_task is not None:
+                codex_author_knowledge_reconciliation_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await codex_author_knowledge_reconciliation_task
             if codex_review_control_plane_task is not None:
                 codex_review_control_plane_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -184,6 +201,8 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         if openkb_close is not None:
             await openkb_close()
         await app.state.message_bridge_service.provider.close()
+        if app.state.knowledge_handoff_store is not None:
+            app.state.knowledge_handoff_store.close()
         app.state.trace_store.close()
 
     app = FastAPI(title="MMD Companion API", version="0.1.0", lifespan=lifespan)
@@ -239,6 +258,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.trace_store = trace_store
+    app.state.knowledge_handoff_store = knowledge_handoff_store
     app.state.openclaw_client = openclaw_client
     app.state.openclaw_control_plane_client = openclaw_control_plane_client
     app.state.openkb_client = openkb_client
@@ -260,6 +280,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.include_router(chat_router)
     app.include_router(codex_interactive_router)
     app.include_router(codex_knowledge_router)
+    app.include_router(codex_author_knowledge_handoff_router)
     app.include_router(codex_review_router)
     app.include_router(openclaw_tools_router)
     app.include_router(message_bridge_router)

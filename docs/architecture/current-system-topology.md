@@ -430,6 +430,32 @@ Pet 会解析普通仓库和 Git worktree 的 `.git`/`commondir`，监听 checko
 当前只提供这个显式桥接入口，不自动安装或修改用户仓库的 Git Hook；提示失败不会阻塞
 Git 操作，目录监听、启动补扫和周期性 FastAPI reconciliation 仍是可靠兜底。
 
+KH-03 在 FastAPI 内增加独立的作者知识交接账本，数据库文件为
+`api/data/sqlite/knowledge_handoff.db`，不复用旧 Review v1 派生表，也不在 feature flag
+关闭时创建。接收端点为：
+
+```text
+POST /codex/knowledge/handoffs
+POST /codex/knowledge/git-events
+POST /codex/knowledge/reconcile
+GET  /codex/knowledge/openclaw-deliveries
+POST /codex/knowledge/openclaw-deliveries/{delivery_id}/ack
+```
+
+FastAPI 会校验 3+N 文件清单、`.complete`、metadata、candidate 引用和两级 SHA-256，
+用 `workspace_key + handoff_id + package_sha256` 幂等接收并返回持久化 ACK。随后为每个
+candidate 创建不可变 `candidate_revision`，在固定 Git revision 上解析 `evidence_revision`
+并运行确定性 Gate。只有 `ready_for_review` 才会生成脱敏的候选级 bounded delivery；
+FastAPI 不决定 Vault topic、目标路径、create/update/merge/supersede 或 Accepted Wiki
+Change Set，也不直接调用 OpenClaw。
+
+KH-03 的 reconciliation worker 由 `CODEX_AUTHOR_KNOWLEDGE_HANDOFF_ENABLED=1` 控制，
+Git event 只负责加速，周期扫描负责兜底。启用时所有 Pet、Git 提示和 OpenClaw
+delivery ACK 都必须分别携带 `CODEX_AUTHOR_KNOWLEDGE_HANDOFF_TOKEN`（Pet/运输）
+或 `CODEX_AUTHOR_KNOWLEDGE_OPENCLAW_TOKEN`（OpenClaw/交付 ACK）；
+作者交接中的命令证据只允许固定的无副作用 Git 状态查询，其他命令不会被 FastAPI
+自动执行。真实 `trace.db`、真实 OpenClaw 审核和 Obsidian 发布仍未在本阶段接通。
+
 ## 5. 主调用链：前端发消息
 
 ```text

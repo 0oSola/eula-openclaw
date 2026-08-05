@@ -33,12 +33,16 @@ export function buildGitHintRequest(options) {
 
 export async function sendGitHint(options, fetchImpl = globalThis.fetch) {
   const request = buildGitHintRequest(options);
+  const transportToken = String(options.transportToken ?? "").trim();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
     const response = await fetchImpl(request.url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(transportToken ? { "x-codex-knowledge-transport-token": transportToken } : {}),
+      },
       body: JSON.stringify(request.body),
       signal: controller.signal,
     });
@@ -55,6 +59,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       workspaceKey: values.get("workspace-key"),
       eventType: values.get("event"),
       apiBaseUrl: values.get("api-base-url") || env.MMD_PET_API_BASE_URL || "http://127.0.0.1:8000",
+      transportToken: env.MMD_PET_KNOWLEDGE_HANDOFF_TOKEN,
     });
     if (!result.ok) process.stderr.write(`Git event hint rejected: HTTP ${result.status}\n`);
   } catch (error) {

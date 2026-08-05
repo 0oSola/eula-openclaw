@@ -29,6 +29,7 @@ test("sends a Git hint without involving OpenClaw", async () => {
       workspaceKey: "mmd-project",
       eventType: "commit",
       apiBaseUrl: "http://127.0.0.1:8100",
+      transportToken: "test-token",
     },
     async (url, init) => {
       request = { url, init };
@@ -38,6 +39,7 @@ test("sends a Git hint without involving OpenClaw", async () => {
 
   assert.deepEqual(result, { ok: true, status: 200 });
   assert.equal(request.url, "http://127.0.0.1:8100/codex/knowledge/git-events");
+  assert.equal(request.init.headers["x-codex-knowledge-transport-token"], "test-token");
   assert.deepEqual(JSON.parse(request.init.body), {
     workspace_key: "mmd-project",
     event_type: "commit",
