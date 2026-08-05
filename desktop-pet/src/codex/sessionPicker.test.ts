@@ -37,6 +37,22 @@ describe("desktop pet session picker", () => {
     expect(items[0].title).not.toContain("019e88e4");
   });
 
+  it("shows the discovered agent runtime when it is available", () => {
+    const items = buildSessionPickerItems(
+      [
+        {
+          ...sessions[0],
+          agent: "codex",
+          runtime: "desktop",
+        },
+      ],
+      new Date("2026-06-03T11:00:00+08:00"),
+    );
+
+    expect(items[0]?.subtitle).toBe("Codex Desktop · MMD project · waiting approval · 10:18");
+    expect(items[0]?.searchText).toContain("codex desktop");
+  });
+
   it("filters by title, workspace, and status terms", () => {
     const items = buildSessionPickerItems(sessions, new Date("2026-06-03T11:00:00+08:00"));
 

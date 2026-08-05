@@ -60,3 +60,11 @@ _Avoid_: Daily summary
 **Baseline Scan**:
 A fixed-revision repository scan used to establish or audit the initial Domain Wiki coverage.
 _Avoid_: Full transcript scan, automatic Wiki import
+
+**运行中 Agent 会话**：
+机器或远程主机上已经启动、仍可通过事件、会话存储、进程或运行时接口观察到的编程助手会话。它不等同于当前选中的工作区，也不要求由 Desktop Pet 启动。
+_Avoid_: 当前工作区会话、最近历史会话
+
+**会话发现**：
+从多个 Agent Provider 收集会话事实，按稳定会话身份去重，补充运行方式、工作区、主机、状态和最近活动，并向 Pet 提供统一活动视图的过程。
+_Avoid_: 单一 JSONL 文件扫描、项目目录发现

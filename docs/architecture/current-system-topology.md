@@ -1453,6 +1453,10 @@ Desktop 本地路线打开绑定工作区的新任务编辑界面；远程路线
 
 完整定义见 `workflow/concepts/codex-launch-target.zh-CN.md`。回归测试必须覆盖设置归一化和 merge、菜单 radio 状态、路径中特殊字符的 URI 编码、Desktop/CLI/Claude 主进程分支。程序门禁为 `desktop-pet` 目录下 `npm run check`；在没有用户真实点击验证前，只能表述为“路由与 URI 构造已验证”，不能声称 Codex Desktop 端到端拉起已验证。
 
+### 16.8 Pet 本地全局 Agent 会话发现（首期）
+
+`desktop-pet` 的会话刷新不再把当前选中的本地工作区作为 Codex 扫描过滤条件。主进程通过统一的本地会话发现模块同时扫描 Windows `CODEX_HOME/sessions`、配置的 WSL `CODEX_HOME/sessions` 和 Claude `CLAUDE_CONFIG_DIR/projects`，从会话自身的 `cwd` 反向生成工作区归属，因此多个工作区的 Codex Desktop、Codex CLI、WSL CLI 和 Claude Code 会话可以同时进入 Pet 的最近会话列表。Codex JSONL 记录会保留 `originator`、`source`、运行方式、会话文件和 bounded facts；同一 session id 被重复观察时按最近活动证据去重。当前工作区/编程助手仍用于启动、恢复、watcher 上下文和旧状态隔离，不再限制全局最近会话发现。Pet 自有 app-server、进程增强和 macCodex 远程会话 Provider 尚未在本首期切片中接入。
+
 ## 17. 文档维护规则
 
 后续只要更新功能、服务拓扑、外部服务集成、环境变量、数据落点、API 契约或运行时行为，都需要同步更新本文。

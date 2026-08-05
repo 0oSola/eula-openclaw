@@ -1,6 +1,8 @@
 export type DesktopPetSession = {
   pet_session_id?: string;
   codex_session_id?: string;
+  agent?: string | null;
+  runtime?: string | null;
   display_title?: string | null;
   first_prompt_preview?: string | null;
   last_summary?: string | null;
@@ -81,6 +83,17 @@ function isActiveSessionStatus(status: string | null | undefined): boolean {
   return ACTIVE_SESSION_STATUSES.has(compactText(status));
 }
 
+function runtimeLabel(session: DesktopPetSession): string {
+  if (compactText(session.agent) === "claude") return "Claude Code";
+  const runtime = compactText(session.runtime);
+  if (runtime === "desktop") return "Codex Desktop";
+  if (runtime === "cli") return "Codex CLI";
+  if (runtime === "wsl") return "WSL Codex CLI";
+  if (runtime === "app-server") return "Pet app-server";
+  if (runtime === "remote") return "Remote Agent";
+  return "";
+}
+
 function sessionTitle(session: DesktopPetSession): string {
   return truncatePreview(
     safeDetailText(session.display_title) ||
@@ -114,10 +127,11 @@ export function buildSessionPickerItems(sessions: DesktopPetSession[], now = new
       const summaryText = safeDetailText(session.last_summary);
       const promptPreview = previewText(promptText, "No prompt preview");
       const summaryPreview = previewText(summaryText, "No summary yet");
-      const subtitle = `${workspace} · ${status} · ${time}`;
+      const subtitle = [runtimeLabel(session), workspace, status, time].filter(Boolean).join(" · ");
       const isActive = isActiveSessionStatus(session.last_status);
       const searchText = [
         title,
+        runtimeLabel(session),
         workspace,
         status,
         time,

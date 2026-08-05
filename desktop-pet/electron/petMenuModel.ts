@@ -27,6 +27,8 @@ export const CODEX_ENV_MODE_LABELS: Record<CodexEnvMode, string> = {
 export type PetMenuSession = {
   pet_session_id?: string;
   codex_session_id?: string;
+  agent?: string | null;
+  runtime?: string | null;
   workspace_id?: string | null;
   display_title?: string | null;
   first_prompt_preview?: string | null;

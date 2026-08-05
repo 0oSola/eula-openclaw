@@ -36,6 +36,10 @@ import {
   type CodexSessionStatus,
   type DesktopPetSessionPayload,
 } from "./codexSessionFiles.js";
+import {
+  discoverLocalCodexSessions,
+  type AgentSessionRecord,
+} from "./agentSessionDiscovery.js";
 import { createCodexCompletionTracker } from "./codexCompletionTracker.js";
 import {
   createCodexSessionContext,
@@ -492,6 +496,13 @@ const KNOWN_SESSION_STATUSES = new Set<CodexSessionStatus>([
   "failed",
   "disconnected",
 ]);
+const ACTIVE_CODEX_SESSION_STATUSES = new Set<CodexSessionStatus>([
+  "starting",
+  "running",
+  "command_running",
+  "file_changed",
+  "waiting_approval",
+]);
 
 function normalizeCodexSessionStatus(value: unknown): CodexSessionStatus {
   return KNOWN_SESSION_STATUSES.has(value as CodexSessionStatus) ? (value as CodexSessionStatus) : "running";
@@ -788,6 +799,134 @@ function readLocalCodexSessions(workspacePath: string, limit = 10, agent: PetAge
   });
 }
 
+function latestDisplayableSession(
+  sessions: readonly PetMenuSession[],
+  workspacePath: string,
+  agent: PetAgent,
+): PetMenuSession | undefined {
+  return (
+    latestSessionForWorkspace(sessions, workspacePath, agent) ||
+    sessions.find((session) =>
+      ACTIVE_CODEX_SESSION_STATUSES.has(normalizeCodexSessionStatus(session.last_status)),
+    ) ||
+    sessions[0]
+  );
+}
+
+function toMenuSessionFromAgentRecord(
+  session: AgentSessionRecord,
+  codexHome: string,
+): {
+  payload: DesktopPetSessionPayload;
+  menuSession: PetMenuSession;
+  sessionStartedAt: string;
+  fileModifiedAt: string;
+} {
+  const payload: DesktopPetSessionPayload = {
+    pet_session_id: `codex:${session.sessionId}`,
+    codex_session_id: session.sessionId,
+    workspace_id: null,
+    workspace_path: session.workspacePath,
+    codex_home: codexHome,
+    display_title: session.displayTitle,
+    first_prompt_preview: session.firstPromptPreview,
+    last_summary: session.lastSummary,
+    last_status: session.state,
+    launch_mode: "workspace-write",
+    remote_url: null,
+    app_server_pid: null,
+    app_server_port: null,
+    metadata: {
+      source: session.evidence.source,
+      provider: session.provider,
+      runtime: session.runtime,
+      host_id: session.hostId,
+      session_file: session.sessionFile,
+      session_file_mtime: session.evidence.sessionFileModifiedAt,
+      session_started_at: session.sessionStartedAt,
+      originator: session.originator,
+      codex_source: session.source,
+      cli_version: session.cliVersion,
+      last_event_at: session.lastEventAt,
+      last_output: session.lastOutput,
+      facts: session.reviewFacts,
+    },
+  };
+  return {
+    payload,
+    menuSession: {
+      ...payload,
+      agent: session.agent,
+      runtime: session.runtime,
+      last_seen_at: session.lastActivityAt,
+      updated_at: session.lastActivityAt,
+    },
+    sessionStartedAt: session.sessionStartedAt,
+    fileModifiedAt: session.evidence.sessionFileModifiedAt,
+  };
+}
+
+async function readAllLocalCodexSessions(limit = 50): Promise<Array<{
+  payload: DesktopPetSessionPayload;
+  menuSession: PetMenuSession;
+  sessionStartedAt: string;
+  fileModifiedAt: string;
+}>> {
+  const codexHome = resolveCodexHome(process.env);
+  const wslCodexHome = process.env.CODEX_WSL_HOME?.trim() || "\\\\wsl.localhost\\Ubuntu\\home\\ksg\\.codex";
+  const snapshot = await discoverLocalCodexSessions({
+    codexHome,
+    wslCodexHome,
+    limit,
+    scan: scanRecentCodexSessionFiles,
+  });
+  return snapshot.sessions.map((session) => toMenuSessionFromAgentRecord(session, codexHome));
+}
+
+function readAllLocalClaudeSessions(limit = 50): Array<{
+  payload: DesktopPetSessionPayload;
+  menuSession: PetMenuSession;
+  sessionStartedAt: string;
+  fileModifiedAt: string;
+}> {
+  const claudeHome = resolveClaudeHome(process.env);
+  return scanRecentClaudeSessionFiles({
+    claudeHome,
+    workspacePath: undefined,
+    limit,
+    maxFiles: Math.max(400, limit * 8),
+  }).map((summary) => {
+    const payload = buildClaudeDesktopPetSessionPayload(summary, claudeHome);
+    return {
+      payload,
+      menuSession: {
+        ...payload,
+        agent: "claude",
+        runtime: "cli",
+        last_seen_at: summary.fileModifiedAt,
+        updated_at: summary.fileModifiedAt,
+      },
+      sessionStartedAt: summary.sessionStartedAt,
+      fileModifiedAt: summary.fileModifiedAt,
+    };
+  });
+}
+
+async function readAllLocalAgentSessions(limit = 50): Promise<Array<{
+  payload: DesktopPetSessionPayload;
+  menuSession: PetMenuSession;
+  sessionStartedAt: string;
+  fileModifiedAt: string;
+}>> {
+  const [codexSessions, claudeSessions] = await Promise.all([
+    readAllLocalCodexSessions(limit),
+    readAllLocalClaudeSessions(limit),
+  ]);
+  return [...codexSessions, ...claudeSessions].sort(
+    (left, right) => Date.parse(right.fileModifiedAt) - Date.parse(left.fileModifiedAt),
+  );
+}
+
 async function upsertDesktopPetSession(payload: DesktopPetSessionPayload): Promise<PetMenuSession> {
   const response = await fetch(`${apiBaseUrl}/desktop-pet/sessions`, {
     method: "POST",
@@ -857,7 +996,7 @@ function publishCodexStatusForSession(
   session: PetMenuSession,
   options: { allowFirstCompletion?: boolean; agent?: PetAgent } = {},
 ) {
-  const agent = options.agent ?? currentAgent;
+  const agent = session.agent === "claude" ? "claude" : (options.agent ?? currentAgent);
   publishCodexStatus(
     window,
     {
@@ -882,14 +1021,13 @@ function shouldUpsertSessionsToApi(agent: PetAgent = currentAgent): boolean {
   return agent === "codex";
 }
 
-async function syncLocalCodexSessions(
+async function syncLocalAgentSessions(
   context: ActiveCodexSessionContext,
   limit = 10,
 ): Promise<PetMenuSession[]> {
-  const local = readLocalCodexSessions(context.workspacePath, limit, context.agent);
+  const local = await readAllLocalAgentSessions(limit);
   if (!isActiveCodexSessionContext(context)) return [];
-  if (!shouldUpsertSessionsToApi(context.agent)) return local.map((item) => item.menuSession);
-  for (const item of [...local].reverse()) {
+  for (const item of [...local].reverse().filter((candidate) => candidate.payload.pet_session_id.startsWith("codex:"))) {
     try {
       await upsertDesktopPetSession(item.payload);
       if (!isActiveCodexSessionContext(context)) return [];
@@ -912,7 +1050,7 @@ async function refreshRecentSessionsInBackground(window: BrowserWindow) {
   try {
     const sessions = await listRecentSessions(10, context);
     if (window.isDestroyed() || !isActiveCodexSessionContext(context)) return;
-    const session = latestSessionForWorkspace(sessions, context.workspacePath, context.agent);
+    const session = latestDisplayableSession(sessions, context.workspacePath, context.agent);
     if (session && !codexSessionOutputWatches.has(window)) {
       publishCodexStatusForSession(window, session, { agent: context.agent });
     }
@@ -1552,7 +1690,7 @@ async function listRecentSessions(
   const { workspacePath, agent } = context;
   let localSessions: PetMenuSession[] = [];
   try {
-    localSessions = await syncLocalCodexSessions(context, limit);
+    localSessions = await syncLocalAgentSessions(context, limit);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logPetDebugEvent("codex-session:sync-error", { workspacePath, error: message });
@@ -1560,7 +1698,7 @@ async function listRecentSessions(
 
   if (!isActiveCodexSessionContext(context)) return [];
 
-  if (!shouldUpsertSessionsToApi(agent)) {
+  if (agent === "claude") {
     cacheMenuSessions(localSessions);
     return localSessions;
   }

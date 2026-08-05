@@ -48,3 +48,21 @@
 - 场景文档影响：按 `userId + renderPipeline + modelPath` 保存 Reze 场景 JSON，包含场景参数、调色、背景效果和可执行材质图预设；Reze Design 与 Reze NPR 的相机/灯光默认值不得跨管线复用。材质键采用 `mesh:<遍历序号>:material:<槽位>`，不得使用运行时 UUID。
 - 资产与导出影响：编辑器资产页复用主站模型目录与 VMD 导入；渲染页当前导出 WebGPU canvas PNG，不包含 CSS 层的 MIO 星海背景。
 - 完整定义：见 `workflow/concepts/reze-design-stage.zh-CN.md`。
+
+# 运行中 Agent 会话
+
+- 英文机器名：`ActiveAgentSession`
+- 含义：机器或远程主机上已经启动、仍可通过事件、会话存储、进程或运行时接口观察到的编程助手会话。
+- 允许用法：描述 Pet 自动发现、归属工作区、显示状态和同步摘要的对象。
+- 禁止用法：不得把它等同于当前选中的工作区、单个 JSONL 文件或仅由 Pet 启动的会话。
+- 路由影响：工作区由会话元数据反向生成；本地 Desktop、CLI、WSL、Claude 和远程会话可以同时存在并分别显示。
+- 完整定义：见 `workflow/concepts/agent-session-discovery.zh-CN.md`。
+
+# 会话发现
+
+- 英文机器名：`AgentSessionDiscovery`
+- 含义：从多个 Agent Provider 收集会话事实，按稳定会话身份去重，补充运行方式、工作区、主机、状态和最近活动，并向 Pet 提供统一活动视图的过程。
+- 允许用法：描述全局扫描、进程增强、运行时状态合并和活动会话刷新。
+- 禁止用法：不得表示只扫描当前工作区；不得把进程存在单独当成会话已绑定；不得把远程 POSIX 路径当作本地路径。
+- 路由影响：调用方只消费统一快照；Codex/Claude 文件扫描、进程枚举、app-server 和 SSH 细节隐藏在 Provider 内部。
+- 完整定义：见 `workflow/concepts/agent-session-discovery.zh-CN.md`。

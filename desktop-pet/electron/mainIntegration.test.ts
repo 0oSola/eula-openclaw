@@ -366,7 +366,7 @@ describe("Electron main runtime integration", () => {
     expect(mainSource).toContain("const codexSessionContext = createCodexSessionContext()");
     expect(refreshBlock).toContain("captureActiveCodexSessionContext()");
     expect(refreshBlock).toContain("!isActiveCodexSessionContext(context)");
-    expect(refreshBlock).toContain("latestSessionForWorkspace");
+    expect(refreshBlock).toContain("latestDisplayableSession");
     expect(refreshBlock).toContain("!codexSessionOutputWatches.has(window)");
     expect(listBlock).toContain("if (!isActiveCodexSessionContext(context)) return []");
     expect(mainSource.match(/codexSessionContext\.invalidate\(\)/g)?.length).toBeGreaterThanOrEqual(3);

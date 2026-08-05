@@ -74,6 +74,7 @@ export type CodexSessionFileSummary = {
   lastOutput: string | null;
   lastStatus: CodexSessionStatus;
   originator: string | null;
+  source?: string | null;
   cliVersion: string | null;
   sessionStartedAt: string;
   lastEventAt: string | null;
@@ -801,6 +802,7 @@ type CodexSessionMeta = {
   codexSessionId: string;
   workspacePath: string;
   originator: string | null;
+  source: string | null;
   cliVersion: string | null;
 };
 
@@ -814,6 +816,7 @@ function extractSessionMeta(event: CodexSessionJsonEvent): CodexSessionMeta | nu
     codexSessionId,
     workspacePath,
     originator: truncateText(compactText(payload.originator), 120),
+    source: truncateText(compactText(payload.source), 80),
     cliVersion: truncateText(compactText(payload.cli_version), 80),
   };
 }
@@ -1011,6 +1014,7 @@ export function buildDesktopPetSessionPayload(
       session_file_mtime: summary.fileModifiedAt,
       session_started_at: summary.sessionStartedAt,
       originator: summary.originator,
+      codex_source: summary.source,
       cli_version: summary.cliVersion,
       last_event_at: summary.lastEventAt,
       last_output: summary.lastOutput,

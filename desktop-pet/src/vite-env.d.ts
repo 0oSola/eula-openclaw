@@ -152,6 +152,8 @@ type DesktopPetApiRuntimeStatus = {
 type DesktopPetSession = {
   pet_session_id?: string;
   codex_session_id?: string;
+  agent?: string | null;
+  runtime?: string | null;
   display_title?: string | null;
   first_prompt_preview?: string | null;
   last_summary?: string | null;
