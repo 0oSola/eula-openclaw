@@ -345,4 +345,187 @@ GET  /v1/apps/mmd/codex-author-knowledge/workspaces/{workspace_key}/publish-stat
 4. Skill 注册方式（O7）→ 确定需要补齐的文件；
 5. 回执网络方向（O8）→ 确定 FastAPI 侧新增轮询 worker 还是允许反连；
 6. 验收方式（O9/O10）→ 确定 KH-05 阶段 D 的端到端验收步骤。
+
+## 10. OpenClaw 侧回答归档（2026-08-06 已收到）
+
+> OpenClaw 侧已逐题回答 O1-O10。以下是归档摘要；完整原文以 OpenClaw 侧会话为准。
+
+### 10.1 已确认事实
+
+**O1/O2：扩展方式**
+
+- OpenClaw 支持 Skill、MCP、Plugin、外部服务/sidecar、对话 API；
+- 插件可用 `api.registerHttpRoute(...)` 挂 Gateway HTTP 路由，不必改 OpenClaw 核心源码；
+- 当前 codex-review control-plane 是独立 Python sidecar：
+  - 启动脚本：`scripts/codex_daily_review.py serve`
+  - 服务：launchd `ai.openclaw.codex-review-control-plane`
+  - 监听：`10.11.252.164:8765`
+- 新插件通常需要 Gateway restart；sidecar 只需重启该服务。
+
+**O3：当前已注册路由**
+
+v1 codex-review（实测可用）：
+
+```text
+POST /v1/apps/mmd/codex-review/runs/{session_key}/snapshot
+GET  /v1/apps/mmd/codex-review/runs/{session_key}/commands
+POST /v1/apps/mmd/codex-review/commands/{command_id}/result
+POST /v1/apps/mmd/codex-review/runs/{session_key}/memory-payloads
+GET  /v1/apps/mmd/codex-review/runs/{session_key}/publish-status
+```
+
+v2 project-knowledge（实测可用）：
+
+```text
+POST /v1/apps/mmd/project-knowledge/runs/{run_id}/candidates
+GET  /v1/apps/mmd/project-knowledge/runs/{run_id}/commands
+POST /v1/apps/mmd/project-knowledge/commands/{command_id}/result
+POST /v1/apps/mmd/project-knowledge/runs/{run_id}/publish-payloads
+GET  /v1/apps/mmd/project-knowledge/runs/{run_id}/publish-status
+```
+
+我方 404 实测的解释：
+
+- `/healthz`、`/`：确实未实现；
+- `project-knowledge/runs`、`codex-review/runs`：缺 `{run_id}`/`{session_key}` 段，路径不完整；
+- `codex-author-knowledge/...`：当前确实未实现/未挂载。
+
+**O4：author-knowledge 端点**
+
+- 未实现；OpenClaw 推荐由本项目提供 sidecar/可部署包，不需要等 OpenClaw 团队；
+- 允许独立 Python 进程；
+- 强烈建议不要新开 `codex-author-knowledge` 命名，优先收敛到已存在的
+  `project-knowledge` v2 端点，避免“文档写 A、服务挂 B”的路径债。
+
+**O5：memory-wiki**
+
+- 插件：`memory-wiki`，enabled，`stock:memory-wiki/index.js`；
+- `openclaw wiki status --json`：
+  - vaultMode=isolated，renderMode=obsidian；
+  - vaultPath=`/Users/sola/.openclaw/wiki/main`，vaultExists=true；
+  - pageCounts：report=10，entity/concept/source/synthesis=0；
+  - warnings 为空；
+- CLI 可用：`openclaw wiki search/get/apply/lint/compile`；
+- 注意：对话工具面没有一等 `wiki_apply` tool，需要专门插件/sidecar 调 CLI。
+
+**O6：Obsidian Vault 现状**
+
+存在三个易混淆位置：
+
+1. OpenClaw wiki 当前 vault：可 compile、lint issueCount=0，但**不是 Git 仓库**；
+2. Obsidian 默认 vault：是 Git 仓库（branch=main），但**没有 remote**；
+3. domain-knowledge v2 生产配置：当前不存在配置文件，代码默认
+   `enable_production=false`，没有 `projects/{workspace_id}/domains/` 目录。
+
+结论：真实 production vault 尚未收口。
+
+**O7：Skill 注册**
+
+- 最小交付形态：`skill-dir/SKILL.md`，放 `~/.openclaw/workspace/skills/` 或
+  `extraDirs`，新 session 或 Gateway restart 后加载；
+- `agents/openai.yaml` 不是硬要求，但建议补齐 UI 元数据；
+- 审核交互默认在对话中完成；HTTP 应用只负责候选/命令/回执流转，不直接驱动审核。
+
+**O8：回执回传（已确认）**
+
+- 选 A：FastAPI 主动轮询 OpenClaw 的 `publish-status` 端点；
+- 不推荐 B（OpenClaw 反连本机），会推翻 2026-06-11 已定边界；
+- 可用轮询端点：
+  `GET /v1/apps/mmd/project-knowledge/runs/{run_id}/publish-status?cursor=...`
+
+**O9：验收能力**
+
+- 没有独立 shadow-mode 端点，但 v2 默认 `enable_production=false` 可作保护；
+- 有 disposable Git vault 测试 harness（临时 vault + 本地 bare remote）可演练
+  lint/commit/push；
+- OpenClaw 侧 `domain_knowledge_publish.py` 支持完整 publish transaction；
+- “双审核通过”口径：内容审核由用户/sola 在 OpenClaw 对话确认；发布审核由
+  publication review command/payload 明确 approve。
+
+**O10：排期与依赖**
+
+- 不必等 KH-01~KH-04 全部合并即可做接口对齐；
+- 不硬依赖 SQLite 恢复；v2 有自己的 `data/domain-knowledge-v2.db`；
+- 不依赖 v1 codex-review 修复，建议 v1 保持兼容、不再扩展 author-knowledge 语义；
+- 依赖：生产 vault 配置、endpoint 命名收敛、验收开关（disposable → production）。
+
+### 10.2 OpenClaw 推荐路径
+
+```text
+A 回执模式（FastAPI 轮询）
++ 复用 project-knowledge v2 端点
++ disposable vault 验收
++ 最后绑定真实 Git vault
+不新增第三套 codex-author-knowledge 路由名
+```
+
+### 10.3 需要拍板的架构冲突（重要）
+
+OpenClaw 推荐的“复用 project-knowledge v2”与 2026-08-05 方案冻结的
+“OpenClaw-owned Accepted Wiki Change Set”存在一个所有权差异：
+
+```text
+2026-08-05 方案（KH-04 设计）：
+  OpenClaw 审核 -> OpenClaw 冻结 Change Set -> OpenClaw 自己发布
+  FastAPI 只接收回执，不再次推送发布载荷
+
+现有 project-knowledge sidecar（07-14 spec 实现）：
+  OpenClaw 审核 -> 命令给 FastAPI -> FastAPI 持久化 Change Set
+  -> FastAPI 把 publish payload 回推 OpenClaw -> OpenClaw 发布
+  （这是 2026-08-05 方案明确要废弃的回跳模式）
+```
+
+因此“收敛到 project-knowledge”有两种解释，必须选一个：
+
+- 解释 A：只复用端点命名/HTTP 形状，但 sidecar 内部升级为 KH-04 新状态机
+  （OpenClaw 冻结 Change Set，FastAPI 不再回推 publish payload）；
+- 解释 B：完整复用现有 sidecar 流程（FastAPI 冻结/授权 Change Set 后回推），
+  即接受 07-14 所有权模型，等于放弃 2026-08-05 的“无回跳”冻结决策。
+
+### 10.4 本仓库代码影响
+
+按“解释 A + OpenClaw 推荐”推进时，KH-04/KH-05 需要调整：
+
+1. FastAPI delivery worker 从
+   `post_codex_author_knowledge_deliveries()` 改为
+   `post_project_knowledge_candidates()`，或保留客户端但换 URL；
+2. 候选 payload 需要从 `codex_author_knowledge_delivery` 映射到
+   `project_domain_knowledge_candidate_batch` 契约（run_id、candidate_id、
+   source_hash、content_hash、trigger 等）；
+3. FastAPI 新增/改造回执轮询 worker，从
+   `GET project-knowledge/runs/{run_id}/publish-status` 拉回执并写入
+   knowledge_handoff 审计镜像表（现有 domain_knowledge 轮询写的是旧
+   trace.db 表，不能混用）；
+4. `openclaw/project_knowledge/review_publisher.py` 的去向待定：
+   - 若 sidecar 升级新状态机：它可作为 sidecar 核心库；
+   - 若完整复用现有 sidecar：它退化为参考实现/测试夹具；
+5. 删除或废弃 `post_codex_author_knowledge_deliveries` 客户端与
+   `codex-author-knowledge` 路由契约，避免路径债；
+6. 新增 `agents/openai.yaml` 到新 Skill（UI 元数据，非硬要求）；
+7. FastAPI 侧新增 `CODEX_AUTHOR_KNOWLEDGE_PROJECT_RUN_ID` 之类的 run_id
+   策略（或复用现有 domain knowledge run_id 格式）。
+
+### 10.5 仍需 OpenClaw 补充的信息
+
+1. sidecar 的 project-knowledge 实现是否就是 07-14 spec 的完整实现？
+   能否提供 `scripts/codex_daily_review.py`、`domain_knowledge_publish.py`
+   的路径/版本，或开放源码只读访问？
+2. sidecar 是否愿意升级为“OpenClaw 冻结 Change Set”的新状态机，还是坚持
+   现有“FastAPI 回推 publish payload”流程？
+3. 生产 vault 最终选哪个：
+   - `/Users/sola/.openclaw/wiki/main`（可编译，非 Git）；
+   - Obsidian 默认 vault（Git 无 remote）；
+   - 新建专用 Git vault + remote + `projects/{workspace_id}/domains/`；
+4. `enable_production=true` 由谁在何时打开？
+5. 现有 `GET project-knowledge/runs/{run_id}/commands` 的 command schema
+   是否与 07-14 spec 一致（供 FastAPI 轮询实现对齐）？
+
+### 10.6 建议的下一步
+
+```text
+1. 用户拍板 10.3 的所有权模型（解释 A 或 B）；
+2. OpenClaw 补充 10.5 的信息；
+3. 之后在 KH-05 实施：端点收敛 + 回执轮询 + vault 初始化 + disposable 验收；
+4. SQLite P0 可并行推进（先停写库进程，再做备份和副本恢复）。
+```
 ```
