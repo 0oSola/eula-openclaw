@@ -14,10 +14,10 @@ Codex → Pet → FastAPI → OpenClaw → memory-wiki → Obsidian
 OpenClaw 只接收 FastAPI 推送的候选级有界交付，不读取本地 Codex transcript、
 仓库或绝对路径。
 
-候选接收契约：
+候选接收契约（收敛到 project-knowledge v2，不新增 `codex-author-knowledge` 路由）：
 
 ```http
-POST /v1/apps/mmd/codex-author-knowledge/workspaces/{workspace_key}/deliveries
+POST /v1/apps/mmd/project-knowledge/runs/{run_id}/candidates
 Authorization: Bearer <FastAPI service token>
 ```
 
@@ -25,24 +25,30 @@ Authorization: Bearer <FastAPI service token>
 
 ```json
 {
-  "kind": "codex_author_knowledge_delivery_batch",
+  "kind": "project_domain_knowledge_candidate_batch",
   "schema_version": 1,
+  "run_id": "project-knowledge:mmd-project:candidate:candidate_...:1",
   "workspace_key": "mmd-project",
   "items": [
     {
-      "kind": "codex_author_knowledge_delivery",
-      "schema_version": 1,
-      "delivery_id": "delivery_...",
-      "candidate_payload": {},
+      "candidate_id": "candidate_...",
+      "candidate_revision": 1,
+      "source_kind": "codex_author_handoff",
+      "source_hash": "sha256:...",
+      "content_hash": "sha256:...",
+      "knowledge": {},
+      "review_readiness": "ready_for_review",
+      "evidence_index": [],
       "payload_sha256": "sha256:...",
-      "idempotency_key": "codex-author-knowledge:delivery_..."
     }
-  ]
+  ],
+  "idempotency_key": "knowledge-candidates:sha256:..."
 }
 ```
 
-同一 `delivery_id` 和相同 payload 只能返回 `duplicate`；相同 ID 搭配不同
-payload 必须返回 `idempotency_conflict`，不能覆盖既有审核任务。
+同一 `candidate_id + candidate_revision` 和相同 payload 只能返回 `duplicate`；
+相同身份搭配不同 payload 必须返回 `idempotency_conflict`，不能覆盖既有审核任务。
+OpenClaw 内部可把 candidate batch 适配为作者候选审核任务后复用同一状态机。
 
 ## 审核顺序
 

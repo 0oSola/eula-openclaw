@@ -455,17 +455,19 @@ delivery ACK 都必须分别携带 `CODEX_AUTHOR_KNOWLEDGE_HANDOFF_TOKEN`（Pet/
 或 `CODEX_AUTHOR_KNOWLEDGE_OPENCLAW_TOKEN`（OpenClaw/交付 ACK）；
 作者交接中的命令证据只允许固定的无副作用 Git 状态查询，其他命令不会被 FastAPI
 自动执行。KH-04 增加独立的 `CODEX_AUTHOR_KNOWLEDGE_OPENCLAW_DELIVERY_ENABLED`
-开关；开启后 FastAPI 才会把 pending bounded delivery 通过
-`POST /v1/apps/mmd/codex-author-knowledge/workspaces/{workspace_key}/deliveries`
-推送给 OpenClaw。OpenClaw 侧由
+开关；开启后 FastAPI 才会把 pending bounded delivery 映射为
+`project_domain_knowledge_candidate_batch`，并通过
+`POST /v1/apps/mmd/project-knowledge/runs/{run_id}/candidates`
+推送给 OpenClaw（不新增 `codex-author-knowledge` 路由命名）。OpenClaw 侧由
 `openclaw/project_knowledge/review_publisher.py` 保存审核任务、执行 Vault Topic
 Resolution、内容审核、独立发布审核、Accepted Wiki Change Set 冻结和 exact
 Publisher；发布通过前不会写入 Obsidian。当前测试使用注入式 memory-wiki fake，
 不触碰真实 Obsidian Vault；真实 OpenClaw 运行时接线仍需部署该 Skill/适配器。
-发布后的 `Publication Receipt` 可由 OpenClaw 通过
-`POST /codex/knowledge/publication-receipts` 镜像回 FastAPI，仅用于不可变审计
-和状态同步，不会重新创建 delivery，也不会改变前向数据流。如果 Git 已创建提交
-但 push 失败，Publisher 保留失败回执和提交信息，不自动 reset 旧 revision。
+发布后的 `Publication Receipt` 由 FastAPI 主动轮询
+`GET /v1/apps/mmd/project-knowledge/runs/{run_id}/publish-status` 拉取并写入
+独立审计镜像表；`POST /codex/knowledge/publication-receipts` 仅保留为本地测试/
+兼容入口，生产回执不回跳、不重新创建 delivery。如果 Git 已创建提交但 push 失败，
+Publisher 保留失败回执和提交信息，不自动 reset 旧 revision。
 
 ## 5. 主调用链：前端发消息
 

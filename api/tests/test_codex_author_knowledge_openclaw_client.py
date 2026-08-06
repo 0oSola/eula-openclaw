@@ -8,7 +8,7 @@ import httpx
 from app.services.openclaw_control_plane import OpenClawReviewControlPlaneClient
 
 
-def test_author_knowledge_delivery_client_uses_strict_openclaw_forward_route():
+def test_author_knowledge_delivery_client_uses_project_knowledge_route():
     calls: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -20,7 +20,7 @@ def test_author_knowledge_delivery_client_uses_strict_openclaw_forward_route():
                 "body": json.loads(request.content.decode("utf-8")),
             }
         )
-        return httpx.Response(status_code=200, json={"status": "delivery_batch_received", "items": []})
+        return httpx.Response(status_code=200, json={"status": "candidate_batch_received", "items": []})
 
     async def run_case():
         transport = httpx.MockTransport(handler)
@@ -30,10 +30,10 @@ def test_author_knowledge_delivery_client_uses_strict_openclaw_forward_route():
                 token="service-token",
                 http_client=http_client,
             )
-            return await client.post_codex_author_knowledge_deliveries(
-                workspace_key="mmd-project",
+            return await client.post_project_knowledge_candidates(
+                run_id="project-knowledge:mmd-project:candidate:candidate-1:1",
                 batch={
-                    "kind": "codex_author_knowledge_delivery_batch",
+                    "kind": "project_domain_knowledge_candidate_batch",
                     "schema_version": 1,
                     "items": [],
                 },
@@ -41,14 +41,14 @@ def test_author_knowledge_delivery_client_uses_strict_openclaw_forward_route():
 
     result = asyncio.run(run_case())
 
-    assert result["status"] == "delivery_batch_received"
+    assert result["status"] == "candidate_batch_received"
     assert calls == [
         {
             "method": "POST",
-            "url": "http://openclaw.local:8765/v1/apps/mmd/codex-author-knowledge/workspaces/mmd-project/deliveries",
+            "url": "http://openclaw.local:8765/v1/apps/mmd/project-knowledge/runs/project-knowledge:mmd-project:candidate:candidate-1:1/candidates",
             "authorization": "Bearer service-token",
             "body": {
-                "kind": "codex_author_knowledge_delivery_batch",
+                "kind": "project_domain_knowledge_candidate_batch",
                 "schema_version": 1,
                 "items": [],
             },

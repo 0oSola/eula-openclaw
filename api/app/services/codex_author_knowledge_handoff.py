@@ -691,6 +691,10 @@ def reconcile_candidate(
             evidence_pack=evidence_pack,
         )
         delivery = store.create_delivery(
+            run_id=(
+                f"project-knowledge:{candidate_row['workspace_key']}:candidate:"
+                f"{candidate_id}:{candidate_revision}"
+            ),
             candidate_id=candidate_id,
             candidate_revision=candidate_revision,
             evidence_revision=evidence_revision,

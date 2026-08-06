@@ -116,6 +116,7 @@ class CodexAuthorKnowledgeHandoffStore:
 
                 CREATE TABLE IF NOT EXISTS knowledge_openclaw_delivery (
                     delivery_id TEXT PRIMARY KEY,
+                    run_id TEXT,
                     candidate_id TEXT NOT NULL,
                     candidate_revision INTEGER NOT NULL,
                     evidence_revision INTEGER NOT NULL,
@@ -140,11 +141,18 @@ class CodexAuthorKnowledgeHandoffStore:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS knowledge_author_openclaw_cursor (
+                    run_id TEXT PRIMARY KEY,
+                    publish_cursor TEXT,
+                    updated_at TEXT NOT NULL
+                );
+
                 """
             )
             self._ensure_column("knowledge_openclaw_delivery", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column("knowledge_openclaw_delivery", "last_error", "TEXT")
             self._ensure_column("knowledge_openclaw_delivery", "lease_expires_at", "TEXT")
+            self._ensure_column("knowledge_openclaw_delivery", "run_id", "TEXT")
             self._conn.commit()
 
     def _ensure_column(self, table: str, column: str, definition: str) -> None:
@@ -517,6 +525,7 @@ class CodexAuthorKnowledgeHandoffStore:
     def create_delivery(
         self,
         *,
+        run_id: str,
         candidate_id: str,
         candidate_revision: int,
         evidence_revision: int,
@@ -530,13 +539,14 @@ class CodexAuthorKnowledgeHandoffStore:
             self._conn.execute(
                 """
                 INSERT OR IGNORE INTO knowledge_openclaw_delivery (
-                    delivery_id, candidate_id, candidate_revision, evidence_revision, payload_hash,
+                    delivery_id, run_id, candidate_id, candidate_revision, evidence_revision, payload_hash,
                     payload_json, status, ack_id, delivered_at, attempt_count,
                     last_error, lease_expires_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     delivery_id,
+                    run_id,
                     candidate_id,
                     candidate_revision,
                     evidence_revision,
@@ -699,6 +709,47 @@ class CodexAuthorKnowledgeHandoffStore:
                 item["payload"] = json.loads(item.pop("payload_json"))
                 result.append(item)
             return result
+
+    def list_delivery_run_ids(self, *, limit: int = 50) -> list[str]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT DISTINCT run_id FROM knowledge_openclaw_delivery
+                WHERE run_id IS NOT NULL AND run_id != ''
+                ORDER BY run_id
+                LIMIT ?
+                """,
+                (max(1, min(int(limit), 200)),),
+            ).fetchall()
+            return [str(row["run_id"]) for row in rows]
+
+    def get_author_openclaw_cursor(self, run_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_author_openclaw_cursor WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            return self._row(row)
+
+    def update_author_openclaw_cursor(self, *, run_id: str, publish_cursor: str | None) -> dict[str, Any]:
+        now = _now_iso()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO knowledge_author_openclaw_cursor (run_id, publish_cursor, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    publish_cursor = excluded.publish_cursor,
+                    updated_at = excluded.updated_at
+                """,
+                (run_id, publish_cursor, now),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_author_openclaw_cursor WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            return self._row(row) or {}
 
     def mirror_publication_receipt(self, *, receipt: dict[str, Any]) -> dict[str, Any]:
         change_set_id = str(receipt.get("change_set_id") or "").strip()
