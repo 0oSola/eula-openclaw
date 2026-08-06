@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import RLock
 from typing import Any
+from uuid import uuid4
 
 
 def _now_iso() -> str:
@@ -146,6 +147,25 @@ class CodexAuthorKnowledgeHandoffStore:
                     publish_cursor TEXT,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS knowledge_review_claim (
+                    claim_id TEXT PRIMARY KEY,
+                    candidate_id TEXT NOT NULL,
+                    candidate_revision INTEGER NOT NULL,
+                    workspace_key TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    claimed_by TEXT NOT NULL,
+                    lease_expires_at TEXT,
+                    last_heartbeat_at TEXT,
+                    content_decision_json TEXT,
+                    publication_decision_json TEXT,
+                    receipt_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_knowledge_review_claim_active
+                ON knowledge_review_claim(status, created_at);
 
                 """
             )
@@ -750,6 +770,334 @@ class CodexAuthorKnowledgeHandoffStore:
                 (run_id,),
             ).fetchone()
             return self._row(row) or {}
+
+    @staticmethod
+    def _decode_claim(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        item = dict(row) if row is not None else None
+        if item is None:
+            return None
+        for field in ("content_decision", "publication_decision", "receipt"):
+            item[field] = json.loads(item.pop(f"{field}_json", None) or "null")
+        return item
+
+    def get_review_claim(self, claim_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_review_claim WHERE claim_id = ?",
+                (claim_id,),
+            ).fetchone()
+            return self._decode_claim(row)
+
+    def _candidate_payload(self, candidate_id: str, candidate_revision: int) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT payload_json FROM knowledge_candidate_revision
+            WHERE candidate_id = ? AND candidate_revision = ?
+            """,
+            (candidate_id, candidate_revision),
+        ).fetchone()
+        if row is None or not row["payload_json"]:
+            return None
+        return json.loads(row["payload_json"])
+
+    def claim_next_review(
+        self,
+        *,
+        workspace_key: str,
+        claimed_by: str,
+        lease_seconds: int = 3600,
+    ) -> dict[str, Any] | None:
+        current_time = datetime.now(UTC)
+        now_iso = current_time.isoformat()
+        lease_expires_at = (current_time + timedelta(seconds=max(60, lease_seconds))).isoformat()
+        claim_id = "claim_" + uuid4().hex[:24]
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    """
+                    SELECT cr.candidate_id, cr.candidate_revision, cr.workspace_key
+                    FROM knowledge_candidate_revision cr
+                    LEFT JOIN knowledge_review_claim rc
+                      ON rc.candidate_id = cr.candidate_id
+                     AND rc.candidate_revision = cr.candidate_revision
+                     AND rc.status NOT IN ('claim_expired', 'rejected', 'deferred')
+                    WHERE cr.status = 'ready_for_review'
+                      AND cr.workspace_key = ?
+                      AND rc.claim_id IS NULL
+                    ORDER BY cr.created_at ASC
+                    LIMIT 1
+                    """,
+                    (workspace_key,),
+                ).fetchone()
+                if row is None:
+                    self._conn.commit()
+                    return None
+                candidate_id = str(row["candidate_id"])
+                candidate_revision = int(row["candidate_revision"])
+                self._conn.execute(
+                    """
+                    UPDATE knowledge_candidate_revision
+                    SET status = 'claimed', updated_at = ?
+                    WHERE candidate_id = ? AND candidate_revision = ?
+                    """,
+                    (now_iso, candidate_id, candidate_revision),
+                )
+                self._conn.execute(
+                    """
+                    INSERT INTO knowledge_review_claim (
+                        claim_id, candidate_id, candidate_revision, workspace_key,
+                        status, claimed_by, lease_expires_at, last_heartbeat_at,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'claimed', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        claim_id,
+                        candidate_id,
+                        candidate_revision,
+                        workspace_key,
+                        claimed_by,
+                        lease_expires_at,
+                        now_iso,
+                        now_iso,
+                        now_iso,
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        claim = self.get_review_claim(claim_id) or {}
+        claim["candidate_payload"] = self._candidate_payload(candidate_id, candidate_revision)
+        return claim
+
+    def expire_stale_review_claims(self, *, now: datetime | None = None) -> int:
+        current_time = now or datetime.now(UTC)
+        now_iso = current_time.isoformat()
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT claim_id, candidate_id, candidate_revision
+                FROM knowledge_review_claim
+                WHERE status IN ('claimed', 'awaiting_content_confirmation')
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at <= ?
+                """,
+                (now_iso,),
+            ).fetchall()
+            for row in rows:
+                self._conn.execute(
+                    """
+                    UPDATE knowledge_review_claim
+                    SET status = 'claim_expired', updated_at = ?
+                    WHERE claim_id = ?
+                    """,
+                    (now_iso, row["claim_id"]),
+                )
+                self._conn.execute(
+                    """
+                    UPDATE knowledge_candidate_revision
+                    SET status = 'ready_for_review', updated_at = ?
+                    WHERE candidate_id = ? AND candidate_revision = ?
+                    """,
+                    (now_iso, row["candidate_id"], row["candidate_revision"]),
+                )
+            self._conn.commit()
+            return len(rows)
+
+    def heartbeat_review_claim(self, *, claim_id: str, claimed_by: str, lease_seconds: int = 3600) -> dict[str, Any]:
+        current_time = datetime.now(UTC)
+        now_iso = current_time.isoformat()
+        lease_expires_at = (current_time + timedelta(seconds=max(60, lease_seconds))).isoformat()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_review_claim WHERE claim_id = ?",
+                (claim_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("review claim not found")
+            existing = dict(row)
+            if existing["claimed_by"] != claimed_by:
+                raise ValueError("review claim is owned by another reviewer")
+            if existing["status"] not in {"claimed", "awaiting_content_confirmation"}:
+                raise ValueError("review claim is not active")
+            self._conn.execute(
+                """
+                UPDATE knowledge_review_claim
+                SET lease_expires_at = ?, last_heartbeat_at = ?, updated_at = ?
+                WHERE claim_id = ?
+                """,
+                (lease_expires_at, now_iso, now_iso, claim_id),
+            )
+            self._conn.commit()
+            return self.get_review_claim(claim_id) or {}
+
+    def defer_review_claim(self, *, claim_id: str, claimed_by: str) -> dict[str, Any]:
+        now_iso = _now_iso()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_review_claim WHERE claim_id = ?",
+                (claim_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("review claim not found")
+            existing = dict(row)
+            if existing["claimed_by"] != claimed_by:
+                raise ValueError("review claim is owned by another reviewer")
+            if existing["status"] not in {"claimed", "awaiting_content_confirmation"}:
+                raise ValueError("review claim is not deferrable")
+            self._conn.execute(
+                """
+                UPDATE knowledge_review_claim
+                SET status = 'deferred', updated_at = ?
+                WHERE claim_id = ?
+                """,
+                (now_iso, claim_id),
+            )
+            self._conn.execute(
+                """
+                UPDATE knowledge_candidate_revision
+                SET status = 'ready_for_review', updated_at = ?
+                WHERE candidate_id = ? AND candidate_revision = ?
+                """,
+                (now_iso, existing["candidate_id"], existing["candidate_revision"]),
+            )
+            self._conn.commit()
+            return self.get_review_claim(claim_id) or {}
+
+    def record_content_decision(
+        self,
+        *,
+        claim_id: str,
+        decision: str,
+        approved_knowledge: dict[str, Any] | None,
+        notes: str | None,
+    ) -> dict[str, Any]:
+        now_iso = _now_iso()
+        if decision not in {"accept", "edit_accept", "reject", "needs_evidence"}:
+            raise ValueError("invalid content decision")
+        if decision in {"accept", "edit_accept"} and not isinstance(approved_knowledge, dict):
+            raise ValueError("accepted content decision requires approved knowledge")
+        payload = {
+            "decision": decision,
+            "approved_knowledge": approved_knowledge,
+            "approved_knowledge_sha256": _hash(approved_knowledge) if approved_knowledge else None,
+            "notes": notes,
+        }
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_review_claim WHERE claim_id = ?",
+                (claim_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("review claim not found")
+            existing = dict(row)
+            if existing["status"] not in {"claimed", "awaiting_content_confirmation"}:
+                raise ValueError("content decision is not pending")
+            next_status = (
+                "content_approved"
+                if decision in {"accept", "edit_accept"}
+                else ("rejected" if decision == "reject" else "needs_evidence")
+            )
+            self._conn.execute(
+                """
+                UPDATE knowledge_review_claim
+                SET status = ?, content_decision_json = ?, updated_at = ?
+                WHERE claim_id = ?
+                """,
+                (next_status, json.dumps(payload, ensure_ascii=False), now_iso, claim_id),
+            )
+            self._conn.execute(
+                """
+                UPDATE knowledge_candidate_revision
+                SET status = ?, updated_at = ?
+                WHERE candidate_id = ? AND candidate_revision = ?
+                """,
+                (next_status, now_iso, existing["candidate_id"], existing["candidate_revision"]),
+            )
+            self._conn.commit()
+            return self.get_review_claim(claim_id) or {}
+
+    def record_publication_decision(
+        self,
+        *,
+        claim_id: str,
+        proposal: dict[str, Any],
+    ) -> dict[str, Any]:
+        now_iso = _now_iso()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_review_claim WHERE claim_id = ?",
+                (claim_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("review claim not found")
+            existing = dict(row)
+            if existing["status"] != "content_approved":
+                raise ValueError("content decision must be approved before publication decision")
+            self._conn.execute(
+                """
+                UPDATE knowledge_review_claim
+                SET status = 'publication_approved',
+                    publication_decision_json = ?, updated_at = ?
+                WHERE claim_id = ?
+                """,
+                (json.dumps(proposal, ensure_ascii=False), now_iso, claim_id),
+            )
+            self._conn.execute(
+                """
+                UPDATE knowledge_candidate_revision
+                SET status = 'publication_approved', updated_at = ?
+                WHERE candidate_id = ? AND candidate_revision = ?
+                """,
+                (now_iso, existing["candidate_id"], existing["candidate_revision"]),
+            )
+            self._conn.commit()
+            return self.get_review_claim(claim_id) or {}
+
+    def record_publication_receipt(
+        self,
+        *,
+        claim_id: str,
+        receipt: dict[str, Any],
+    ) -> dict[str, Any]:
+        now_iso = _now_iso()
+        status = str(receipt.get("status") or "")
+        if status not in {"published", "failed", "conflict"}:
+            raise ValueError("publication receipt status must be published, failed, or conflict")
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_review_claim WHERE claim_id = ?",
+                (claim_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("review claim not found")
+            existing = dict(row)
+            if existing.get("receipt_json"):
+                existing["outcome"] = "duplicate"
+                return existing
+            if existing["status"] not in {"publication_approved", "publishing", "published", "failed", "conflict"}:
+                raise ValueError("publication receipt is not pending")
+            self._conn.execute(
+                """
+                UPDATE knowledge_review_claim
+                SET status = ?, receipt_json = ?, updated_at = ?
+                WHERE claim_id = ?
+                """,
+                (status, json.dumps(receipt, ensure_ascii=False), now_iso, claim_id),
+            )
+            self._conn.execute(
+                """
+                UPDATE knowledge_candidate_revision
+                SET status = ?, updated_at = ?
+                WHERE candidate_id = ? AND candidate_revision = ?
+                """,
+                (status, now_iso, existing["candidate_id"], existing["candidate_revision"]),
+            )
+            self._conn.commit()
+            result = self.get_review_claim(claim_id) or {}
+            result["outcome"] = "recorded"
+            return result
 
     def mirror_publication_receipt(self, *, receipt: dict[str, Any]) -> dict[str, Any]:
         change_set_id = str(receipt.get("change_set_id") or "").strip()

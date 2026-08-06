@@ -15,6 +15,7 @@ from app.routes.chat import router as chat_router
 from app.routes.codex_interactive import router as codex_interactive_router
 from app.routes.codex_knowledge import router as codex_knowledge_router
 from app.routes.codex_author_knowledge_handoff import router as codex_author_knowledge_handoff_router
+from app.routes.codex_author_knowledge_review import router as codex_author_knowledge_review_router
 from app.routes.codex_review import router as codex_review_router
 from app.routes.config import router as config_router
 from app.routes.desktop_pet import router as desktop_pet_router
@@ -299,6 +300,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.include_router(codex_interactive_router)
     app.include_router(codex_knowledge_router)
     app.include_router(codex_author_knowledge_handoff_router)
+    app.include_router(codex_author_knowledge_review_router)
     app.include_router(codex_review_router)
     app.include_router(openclaw_tools_router)
     app.include_router(message_bridge_router)
