@@ -59,34 +59,35 @@ Codex（作者，3+N 包）
 | 事实与 Gate | 接收、Evidence、确定性 Gate、候选 revision | FastAPI |
 | 审核队列 | 待审核候选、审核状态、决定记录 | FastAPI |
 | 人工决策 | 展示候选、内容确认、发布方案确认 | 用户（经任意 agent/UI） |
-| 精确发布 | 生成 exact Markdown、lint、commit、push | FastAPI（经适配器） |
+| 精确发布 | 生成 exact Markdown、结构门禁、commit、push | agent 机器本地执行（Obsidian MCP + Gate Skill + Git CLI）；FastAPI 裁决与审计 |
 | 知识落盘 | Obsidian Vault + Git 历史 | Obsidian / Vault Git |
 | 审计 | 回执、hash、不可变记录 | FastAPI |
 
 ## 4. 审核流程（简化后）
 
 ```text
-1. FastAPI Gate 通过后，候选进入“待审核”队列；
-2. 任意 agent（OpenClaw/Hermes）或 Web/Pet 拉取待审核候选：
-   GET /codex/knowledge/reviews?status=pending
-3. agent 向用户展示：
-   - 作者主张（问题、方案、边界）
-   - 证据摘要（文件、符号、测试）
-   - 建议的发布方案（由 FastAPI 或 agent 生成，用户确认）
-4. 用户决策后回传 FastAPI：
-   POST /codex/knowledge/reviews/{candidate_id}/decision
-   {
-     "decision": "accept | edit_accept | reject | needs_evidence",
-     "approved_knowledge": {...},      // accept 时必填
-     "publication_proposal": {...},     // 发布方案，用户确认
-     "reviewer": {"agent": "openclaw|hermes|web", "user_id": "..."}
-   }
-5. FastAPI 校验决定，生成 Accepted Wiki Change Set（FastAPI 冻结）；
-6. FastAPI 发布执行器调用发布适配器：
-   exact write → lint → compile → commit → push；
-7. receipt 写入 FastAPI 审计表；
-8. 状态机推进：pending → review_requested → content_approved →
-   publication_approved → publishing → published | failed | conflict。
+1. FastAPI Gate 通过后，候选进入“待审核”队列；FastAPI DB 保存完整不可变事实：
+   handoff package、candidate 原文、marker 声明、revision、hash、evidence、Gate；
+2. OpenClaw（或其他 agent）主动认领一条：
+   POST /knowledge-review/claims
+   → FastAPI 单事务：选择最早 queued 候选 → 状态改 claimed →
+     创建 lease（claim_id、claimed_by、lease_expires_at、heartbeat）
+   → 返回完整审核上下文；无候选时返回空，不制造空审核会话；
+3. OpenClaw 对话中向用户展示作者主张、证据摘要，进行第一次内容确认；
+4. OpenClaw 查询 Obsidian（Obsidian MCP）生成发布方案；
+5. OpenClaw 在本机执行 preflight 结构门禁（Vault Publication Gate Skill +
+   确定性 validator CLI）；
+6. 通过后向用户展示目标文件与完整 diff，进行第二次发布确认；
+7. OpenClaw 调用 Obsidian MCP 写入 → 本机 post-apply 门禁 →
+   Git CLI commit/push；
+8. OpenClaw 把审核决定、检查报告、发布回执写回 FastAPI：
+   POST /knowledge-review/{claim_id}/content-decision
+   POST /knowledge-review/{claim_id}/publication-decision
+   POST /knowledge-review/{claim_id}/publication-receipt
+   POST /knowledge-review/{claim_id}/heartbeat
+   POST /knowledge-review/{claim_id}/defer
+9. FastAPI 校验报告（规则版本、批准范围、实际 diff hash、Git 结果），
+   生成/确认 Accepted Wiki Change Set，推进状态并保存 receipt。
 ```
 
 两次人工确认仍然保留（这是原方案的价值）：
@@ -95,6 +96,29 @@ Codex（作者，3+N 包）
 - 第二次：确认“具体写哪个页面、最终 Markdown 和 diff 正确”。
 
 两次确认可以合并为一次交互中的两个步骤，但 FastAPI 账本必须分别记录。
+
+### 4.1 认领与租约（Lease）
+
+- 认领必须是原子的：FastAPI 单事务完成“选择 + claimed + lease 创建”；
+- OpenClaw 等待人工确认时通过 heartbeat 续租；
+- 租约到期且进程中断后，FastAPI 把候选恢复为 `queued`，重新可认领；
+- 恢复可认领不等于自动给用户发消息，不自动重复打扰。
+
+队列状态：
+
+```text
+received → needs_evidence / ready_for_review → queued → claimed
+→ awaiting_content_confirmation → content_approved
+→ awaiting_publication_confirmation → publication_approved
+→ publishing → published
+旁路：rejected / deferred / superseded / claim_expired
+```
+
+### 4.2 网络方向（重要变更）
+
+本模型下 OpenClaw 是 FastAPI 的客户端：主动拉取任务、处理、主动回传结果。
+这推翻了之前“OpenClaw 不反连本机 FastAPI”的约束，需要 FastAPI 暴露
+OpenClaw 可达的地址（内网/公网 + 独立 token 认证）。此变化记录为 D10。
 
 ## 5. 发布适配器（可替换）
 
@@ -123,26 +147,28 @@ vault_commit_push(paths, message, trailers)
 推荐组合：
 
 ```text
-Obsidian MCP（内容读写/搜索）
-+ Git CLI（status → add allowlist → commit → push）
-+ FastAPI（幂等/审计/回执）
-+ 可选轻量 lint（frontmatter/wikilink）
+OpenClaw 机器本地执行：
+  Obsidian MCP（内容读写/搜索）
+  Vault Publication Gate Skill（编排 preflight/post-apply）
+  确定性 validator CLI（路径/frontmatter/diff/hash/Git 工作树）
+  Git CLI（status → add allowlist → commit → push）
+FastAPI 统一：
+  校验规则与规则版本（validation policy）
+  检查结果与回执审计
+  幂等与状态机
 ```
 
 memory-wiki 不再进入主路径。
 
-### 5.1 Git CLI 与远程 Vault 的三种访问方式
+### 5.1 远程 Vault 执行方式（已收敛）
 
-如果 Vault 不在 FastAPI 所在机器（当前 OpenClaw/Obsidian 在远程），选一种：
+已确认：生产 Vault、Obsidian MCP、Git CLI 都在 OpenClaw 机器。
 
-| 方式 | 说明 | 条件 |
-|---|---|---|
-| 共享/网络挂载 | FastAPI 直接访问远程 Vault 目录 | 远程目录可挂载、Git 工作区可访问 |
-| git clone 工作流 | FastAPI 本地 clone Vault，Obsidian MCP 写远程工作区后由 FastAPI push | MCP 与 clone 指向同一目录；或 MCP 写后同步 |
-| 远程薄执行器 | 远程运行一个只执行 Git 命令的小服务/脚本 | 需要部署一个最小执行器（不绑定 OpenClaw） |
+因此：
 
-注意：Obsidian MCP 写的文件必须与 Git CLI 操作的是同一个工作区，否则会发布
-“另一个目录”的内容。这是 D4/D3 决策的一部分。
+- Obsidian MCP、validator CLI、Git CLI 在 OpenClaw 机器本地执行；
+- FastAPI 不直接访问 Vault 文件，只下发规则、接收检查报告并裁决；
+- 唯一前提：Obsidian MCP 写入的工作区与 Git CLI 操作的工作区是同一目录。
 
 ### 5.2 memory-wiki 退役边界
 
@@ -152,7 +178,7 @@ memory-wiki 的 `wiki_status/search/get/apply/lint/compile` 职责按以下方�
 |---|---|
 | search/get（内容查询） | Obsidian MCP |
 | apply（写入页面） | Obsidian MCP |
-| lint | 轻量自校验脚本（可选） |
+| lint | Vault Publication Gate Skill 内的确定性 validator CLI（FastAPI 下发规则） |
 | compile | Obsidian 自动索引（打开时）；不阻塞发布 |
 | status（Vault 脏状态） | Git CLI `git status --porcelain` |
 | Git commit/push | Git CLI |
@@ -161,9 +187,12 @@ memory-wiki 的 `wiki_status/search/get/apply/lint/compile` 职责按以下方�
 
 OpenClaw 只做两件事：
 
-1. 审核对话：读取待审核候选（或接收 FastAPI 推送的 bounded review request），
-   向用户展示并回传决定；
-2. 不再承担发布后端：memory-wiki 退出主路径，发布事务由 Git CLI 接管。
+1. 审核对话：主动认领候选，向用户展示并回传两次决定；
+2. 发布执行（本机适配器）：Obsidian MCP 写入 + Gate Skill 门禁 +
+   validator CLI 检查 + Git CLI commit/push，再把回执写回 FastAPI。
+
+OpenClaw 是第一个“审核 + 发布执行 agent”，但适配器是通用工具，
+Hermes 或其他 agent 可通过同一套 API 和工具复用相同流程。
 
 不再需要：
 
@@ -177,19 +206,22 @@ OpenClaw 只做两件事：
 接入一个新的 agent（如 Hermes）只需要实现一个薄适配器：
 
 ```text
-1. 拉取待审核候选：GET /codex/knowledge/reviews?status=pending
+1. 认领：POST /knowledge-review/claims
 2. 展示给用户（内容 + 证据 + 发布方案）
-3. 回传决定：POST /codex/knowledge/reviews/{candidate_id}/decision
+3. 回传两次决定：content-decision / publication-decision
+4. 在可访问 Vault 的机器上复用发布适配器：
+   Obsidian MCP + Gate Skill + validator CLI + Git CLI
+5. 回传检查报告与发布回执
 ```
 
 agent 不需要：
 
-- 理解 Obsidian Vault 结构；
-- 生成/校验 diff；
-- 执行发布；
-- 维护审核状态。
+- 理解知识语义或维护审核状态（FastAPI 持有）；
+- 自己定义校验规则（FastAPI 下发 validation policy）；
+- 自己实现 Git 发布事务（复用通用适配器与 Gate Skill）。
 
-这就是“agent 无关”的实现方式：审核界面可替换，权威和发布留在 FastAPI。
+这就是“agent 无关”的实现方式：审核界面和发布执行者都可替换，
+权威、规则和审计留在 FastAPI。
 
 ## 8. 对已实现代码的影响
 
@@ -204,19 +236,20 @@ agent 不需要：
 
 | 现有实现 | 新方案中的处理 |
 |---|---|
-| `codex_author_knowledge_openclaw_delivery.py`（T1/T2 project-knowledge 收敛） | 改造为“审核队列 + 审核 API”而非推送给 OpenClaw；回执轮询不再需要，改为 FastAPI 发布器直接写 receipt |
+| `codex_author_knowledge_openclaw_delivery.py`（T1/T2 project-knowledge 收敛） | 改造为“审核队列 + claim/decision 回传 API”；回执轮询不再需要，改为 OpenClaw 主动回传 receipt |
 | `openclaw/project_knowledge/review_publisher.py` | 降级为参考实现，不进入生产主链 |
 | `openclaw/skills/codex-author-knowledge-review-publisher/SKILL.md` | 简化为“审核对话 + 回传决定”契约，删除发布状态机与 memory-wiki 依赖说明 |
-| FastAPI `POST /publication-receipts` | 保留为审计/兼容入口 |
+| FastAPI `POST /publication-receipts` | 并入 claim receipt 回传契约，保留为审计/兼容入口 |
 
 ### 新增
 
-- 审核队列与审核 API（FastAPI）；
-- 发布执行器与 `Accepted Wiki Change Set` 冻结（FastAPI）；
-- Obsidian MCP 适配器（内容读写/搜索）；
-- Git CLI 发布适配器（status/add/commit/push，allowlist + 审计 trailer）；
-- 可选轻量 lint 脚本；
-- 审核界面薄适配器（第一版可先用 OpenClaw 对话）。
+- 审核队列 + claim/lease/heartbeat/defer API（FastAPI）；
+- 两次决定与发布回执回传 API（FastAPI）；
+- validation policy 下发与检查报告校验（FastAPI）；
+- `Accepted Wiki Change Set` 冻结与 receipt 审计（FastAPI）；
+- Vault Publication Gate Skill + 确定性 validator CLI（OpenClaw 机器）；
+- Obsidian MCP + Git CLI 发布执行（OpenClaw 机器本地）；
+- OpenClaw 审核/发布 Skill（第一版）。
 
 ## 9. 需要人工决策的点
 
@@ -264,27 +297,38 @@ agent 不需要：
 
 **D8：轻量 lint 是否纳入第一版？**
 
-- A. 纳入（推荐：frontmatter 必填 + wikilink 存在性 + Markdown 结构）；
-- B. 第一版不做，只靠 Git CLI + 人工确认。
+- 已收敛：FastAPI 统一管理规则与检查结果；OpenClaw 机器上由
+  `Vault Publication Gate Skill` 编排、确定性 `validator CLI` 执行；
+- 保留两个门禁点：preflight（第二次确认前）与 post-apply（commit 前）；
+- 规则以版本化 `validation_policy` 下发：allowed_roots、required_frontmatter、
+  forbid_path_traversal、require_approved_file_allowlist、
+  require_clean_unrelated_diff。
 
 **D9：远程 Vault 的 Git 访问方式？**
 
-- A. Obsidian MCP 与 Git CLI 指向同一远程工作区（需确认部署方式）；
-- B. git clone 工作流；
-- C. 远程薄执行器；
-- D. Vault 实际在本机可访问（需确认）。
+- 已收敛：Obsidian MCP、validator CLI、Git CLI 都在 OpenClaw 机器本地执行，
+  指向同一 Vault 工作区；FastAPI 不直接访问 Vault 文件。
 
-## 10. 简化后的实施任务（D1-D7 拍板后细化）
+**D10：网络方向（新增）**
+
+OpenClaw 需要能主动访问 FastAPI（拉取任务 + 回传结果）。请确认：
+
+- FastAPI 对外地址（内网 IP/域名 + 端口）；
+- 是否使用独立 `CODEX_AUTHOR_KNOWLEDGE_OPENCLAW_TOKEN` 认证（配置项已预留）；
+- 是否接受推翻“OpenClaw 不反连 FastAPI”的旧约束。
+
+## 10. 简化后的实施任务（D1-D10 拍板后细化）
 
 ```text
-S1 FastAPI 审核队列与审核 API（候选入队、状态机、决定回传）
-S2 FastAPI Accepted Wiki Change Set 冻结与发布执行器
-S3 发布适配器（按 D2/D3/D9：Obsidian MCP + Git CLI）
-S4 审核界面薄适配器（按 D1：OpenClaw 对话第一版）
-S5 OpenClaw Skill 简化与部署（展示 + 回传，不碰发布、不依赖 memory-wiki）
-S6 清理 project-knowledge 依赖（按 D5）
-S7 SQLite 生产切换（备份/副本已就绪，切换需确认）
-S8 v1 切断、flags 分阶段启用、真实端到端验收
+S1 FastAPI 审核队列 + claim/lease/heartbeat/defer API
+S2 FastAPI 两次决定回传 API 与 Accepted Wiki Change Set 冻结
+S3 FastAPI validation policy 下发与检查报告校验/审计
+S4 Vault Publication Gate Skill + validator CLI（preflight/post-apply）
+S5 Obsidian MCP + Git CLI 发布执行（OpenClaw 机器本地）
+S6 OpenClaw 审核/发布 Skill（第一版）与回执回传
+S7 清理 project-knowledge 依赖（按 D5）
+S8 SQLite 生产切换（备份/副本已就绪，切换需确认）
+S9 v1 切断、flags 分阶段启用、真实端到端验收
 ```
 
 ## 11. 与旧方案的关系
@@ -293,4 +337,5 @@ S8 v1 切断、flags 分阶段启用、真实端到端验收
   receipt 审计、SQLite P0；
 - 废弃：OpenClaw sidecar 双审核状态机、project-knowledge 控制面依赖、
   OpenClaw-owned Change Set（改为 FastAPI 冻结）、memory-wiki 主路径；
-- 新增：agent 无关的审核界面端口、可替换发布适配器。
+- 新增：agent 无关的审核认领/回传端口、可替换发布适配器
+  （Obsidian MCP + Gate Skill + Git CLI）、FastAPI 规则权威。
