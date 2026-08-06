@@ -648,11 +648,46 @@ OpenClaw 推荐的“复用 project-knowledge v2”与 2026-08-05 方案冻结�
 
 **T10：SQLite P0（并行，不阻塞 T1/T2）**
 
-- 状态：需要授权停写库进程
+- 状态：备份与副本恢复实验已完成（2026-08-06），生产切换未执行
 - 目标：按方案第 9 节执行：
   停 FastAPI/Pet → 备份 DB/WAL/SHM → 副本恢复实验 →
   `PRAGMA quick_check` + `integrity_check=ok` → 核心 API 烟测 → 回滚路径；
 - 验收 Gate：恢复报告落盘；`enable` 前保持 knowledge flags 关闭。
+
+### 10.9 T10 执行记录（2026-08-06）
+
+已执行：
+
+1. 确认写库进程：`python -m uvicorn app.main:app --port 8100`（PID 49560），
+   已停止；
+2. 备份三件套到 `api/data/sqlite/backups/trace-db-corrupt-20260806/`：
+   `trace.db`（961,691,648 字节）、`trace.db-wal`、`trace.db-shm`；
+3. 新增恢复工具 `scripts/sqlite_recovery.py`（逐表重建 + 只读挂载源库 +
+   DETACH 后完整性检查）；
+4. 在副本上恢复：跳过损坏表 `codex_knowledge_extraction_outbox`（rootpage 19，
+   方案明确废弃），49 张表全部复制：
+
+```text
+trace_events            2,053,027 行
+codex_review_items      1,895 行
+desktop_pet_sessions      182 行
+messages                5,034 行
+...
+quick_check:            ok
+integrity_check:        ok
+foreign_key_check_count: 0
+```
+
+5. 恢复报告：`api/data/sqlite/backups/trace-db-corrupt-20260806/trace-recovered.report.json`；
+6. 副本只读烟测通过（messages/desktop_pet_sessions/codex_review_items 可查）；
+7. FastAPI 已按原命令重启（PID 117504，`127.0.0.1:8100`），应用启动完成。
+
+尚未执行（属于 KH-05 后续生产切换，需用户决策）：
+
+- 把恢复后的库正式切换为 `trace.db`；
+- 明确废弃 `codex_knowledge_extraction_outbox` 及相关 v1 派生表清单；
+- 切换后再次执行 `PRAGMA integrity_check` 和核心 API 烟测；
+- knowledge feature flags 保持关闭。
 
 ### 10.8 建议实施顺序
 
