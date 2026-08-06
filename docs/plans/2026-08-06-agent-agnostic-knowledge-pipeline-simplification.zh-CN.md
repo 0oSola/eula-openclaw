@@ -111,16 +111,51 @@ vault_compile()
 vault_commit_push(paths, message, trailers)
 ```
 
-三个实现候选：
+实现候选（已收敛，2026-08-06 澄清）：
 
 | 适配器 | 优点 | 条件 |
 |---|---|---|
-| Obsidian MCP | 语义化读写、agent 可复用、符合“利用现有 MCP”目标 | 需要确认 MCP server 部署与工具面（read/write/search/compile） |
-| 本地 Git Vault 适配器 | 最简单、不依赖任何 agent | FastAPI 能访问 Vault 路径（本机或网络挂载），git 命令可用 |
-| memory-wiki | 已启用、CLI 可用（apply/lint/compile） | 绑定 OpenClaw 运行时；作为可选后端而非主路径 |
+| Obsidian MCP | 语义化读写/搜索/链接，agent 可复用 | 需要确认 MCP server 部署与工具面（read/write/search） |
+| Git CLI 适配器 | 发布事务：status / allowlist add / commit / push / 失败不自动回滚 | FastAPI 能访问 Vault 的 Git 工作区（本机、网络挂载或 git clone 工作流） |
+| 轻量 lint 脚本（可选） | frontmatter 必填、wikilink 可解析、Markdown 结构 | 自写校验脚本，不依赖 memory-wiki |
+| ~~memory-wiki~~ | ~~已启用、CLI 可用~~ | **退役：内容操作交给 Obsidian MCP，发布事务交给 Git CLI** |
 
-推荐：第一版实现“本地 Git Vault 适配器 + Obsidian MCP 适配器”，memory-wiki
-保留为可切换实现。
+推荐组合：
+
+```text
+Obsidian MCP（内容读写/搜索）
++ Git CLI（status → add allowlist → commit → push）
++ FastAPI（幂等/审计/回执）
++ 可选轻量 lint（frontmatter/wikilink）
+```
+
+memory-wiki 不再进入主路径。
+
+### 5.1 Git CLI 与远程 Vault 的三种访问方式
+
+如果 Vault 不在 FastAPI 所在机器（当前 OpenClaw/Obsidian 在远程），选一种：
+
+| 方式 | 说明 | 条件 |
+|---|---|---|
+| 共享/网络挂载 | FastAPI 直接访问远程 Vault 目录 | 远程目录可挂载、Git 工作区可访问 |
+| git clone 工作流 | FastAPI 本地 clone Vault，Obsidian MCP 写远程工作区后由 FastAPI push | MCP 与 clone 指向同一目录；或 MCP 写后同步 |
+| 远程薄执行器 | 远程运行一个只执行 Git 命令的小服务/脚本 | 需要部署一个最小执行器（不绑定 OpenClaw） |
+
+注意：Obsidian MCP 写的文件必须与 Git CLI 操作的是同一个工作区，否则会发布
+“另一个目录”的内容。这是 D4/D3 决策的一部分。
+
+### 5.2 memory-wiki 退役边界
+
+memory-wiki 的 `wiki_status/search/get/apply/lint/compile` 职责按以下方式接管：
+
+| memory-wiki 能力 | 接管者 |
+|---|---|
+| search/get（内容查询） | Obsidian MCP |
+| apply（写入页面） | Obsidian MCP |
+| lint | 轻量自校验脚本（可选） |
+| compile | Obsidian 自动索引（打开时）；不阻塞发布 |
+| status（Vault 脏状态） | Git CLI `git status --porcelain` |
+| Git commit/push | Git CLI |
 
 ## 6. OpenClaw 的角色（大幅简化）
 
@@ -128,8 +163,7 @@ OpenClaw 只做两件事：
 
 1. 审核对话：读取待审核候选（或接收 FastAPI 推送的 bounded review request），
    向用户展示并回传决定；
-2. 可选发布后端：如果 FastAPI 选择 memory-wiki 适配器，OpenClaw 暴露
-   `wiki_apply/lint/compile` 能力。
+2. 不再承担发布后端：memory-wiki 退出主路径，发布事务由 Git CLI 接管。
 
 不再需要：
 
@@ -171,15 +205,17 @@ agent 不需要：
 | 现有实现 | 新方案中的处理 |
 |---|---|
 | `codex_author_knowledge_openclaw_delivery.py`（T1/T2 project-knowledge 收敛） | 改造为“审核队列 + 审核 API”而非推送给 OpenClaw；回执轮询不再需要，改为 FastAPI 发布器直接写 receipt |
-| `openclaw/project_knowledge/review_publisher.py` | 降级为参考实现/可选 memory-wiki 适配器库，不进入生产主链 |
-| `openclaw/skills/codex-author-knowledge-review-publisher/SKILL.md` | 简化为“审核对话 + 回传决定”契约，删除发布状态机说明 |
+| `openclaw/project_knowledge/review_publisher.py` | 降级为参考实现，不进入生产主链 |
+| `openclaw/skills/codex-author-knowledge-review-publisher/SKILL.md` | 简化为“审核对话 + 回传决定”契约，删除发布状态机与 memory-wiki 依赖说明 |
 | FastAPI `POST /publication-receipts` | 保留为审计/兼容入口 |
 
 ### 新增
 
 - 审核队列与审核 API（FastAPI）；
 - 发布执行器与 `Accepted Wiki Change Set` 冻结（FastAPI）；
-- Obsidian MCP 适配器 / 本地 Git Vault 适配器；
+- Obsidian MCP 适配器（内容读写/搜索）；
+- Git CLI 发布适配器（status/add/commit/push，allowlist + 审计 trailer）；
+- 可选轻量 lint 脚本；
 - 审核界面薄适配器（第一版可先用 OpenClaw 对话）。
 
 ## 9. 需要人工决策的点
@@ -194,10 +230,9 @@ agent 不需要：
 
 **D2：发布适配器第一版用哪个？**
 
-- A. 本地 Git Vault 适配器（推荐，最通用、最快）；
-- B. Obsidian MCP（符合“利用现有 MCP”目标，但需确认 MCP server 配置和工具面）；
-- C. memory-wiki（已有 CLI，但绑定 OpenClaw）；
-- D. 本地 Git + Obsidian MCP 双实现。
+- A. Obsidian MCP（内容读写/搜索）+ Git CLI（发布事务）（推荐，已澄清）；
+- B. 仅 Git CLI + 文件路径（不用 MCP，最简）；
+- C. 保留 memory-wiki 仅做 Git 事务（不推荐，绑定 OpenClaw）。
 
 **D3：Obsidian MCP 是否已部署？**
 
@@ -227,14 +262,26 @@ agent 不需要：
 - A. 只做审核展示/回传（推荐）；
 - B. 允许 Hermes 也执行发布（不推荐，权威分散）。
 
+**D8：轻量 lint 是否纳入第一版？**
+
+- A. 纳入（推荐：frontmatter 必填 + wikilink 存在性 + Markdown 结构）；
+- B. 第一版不做，只靠 Git CLI + 人工确认。
+
+**D9：远程 Vault 的 Git 访问方式？**
+
+- A. Obsidian MCP 与 Git CLI 指向同一远程工作区（需确认部署方式）；
+- B. git clone 工作流；
+- C. 远程薄执行器；
+- D. Vault 实际在本机可访问（需确认）。
+
 ## 10. 简化后的实施任务（D1-D7 拍板后细化）
 
 ```text
 S1 FastAPI 审核队列与审核 API（候选入队、状态机、决定回传）
 S2 FastAPI Accepted Wiki Change Set 冻结与发布执行器
-S3 发布适配器（按 D2：本地 Git Vault / Obsidian MCP）
+S3 发布适配器（按 D2/D3/D9：Obsidian MCP + Git CLI）
 S4 审核界面薄适配器（按 D1：OpenClaw 对话第一版）
-S5 OpenClaw Skill 简化与部署（展示 + 回传，不碰发布）
+S5 OpenClaw Skill 简化与部署（展示 + 回传，不碰发布、不依赖 memory-wiki）
 S6 清理 project-knowledge 依赖（按 D5）
 S7 SQLite 生产切换（备份/副本已就绪，切换需确认）
 S8 v1 切断、flags 分阶段启用、真实端到端验收
@@ -245,5 +292,5 @@ S8 v1 切断、flags 分阶段启用、真实端到端验收
 - 保留：作者契约、Pet 运输、FastAPI Gate、两次人工确认、exact 发布、
   receipt 审计、SQLite P0；
 - 废弃：OpenClaw sidecar 双审核状态机、project-knowledge 控制面依赖、
-  OpenClaw-owned Change Set（改为 FastAPI 冻结）；
+  OpenClaw-owned Change Set（改为 FastAPI 冻结）、memory-wiki 主路径；
 - 新增：agent 无关的审核界面端口、可替换发布适配器。
