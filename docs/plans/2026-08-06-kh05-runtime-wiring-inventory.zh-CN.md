@@ -482,7 +482,25 @@ OpenClaw 推荐的“复用 project-knowledge v2”与 2026-08-05 方案冻结�
 - 解释 B：完整复用现有 sidecar 流程（FastAPI 冻结/授权 Change Set 后回推），
   即接受 07-14 所有权模型，等于放弃 2026-08-05 的“无回跳”冻结决策。
 
-### 10.4 本仓库代码影响
+### 10.3.1 决策登记（2026-08-06 已确认）
+
+用户通过“架构冲突决策建议”确认选择：
+
+```text
+解释 A
+复用 OpenClaw 现有 project-knowledge v2 的接口能力和 sidecar 基础设施，
+但内部状态机升级为 08-05 方案冻结的 OpenClaw-owned Change Set 模型。
+```
+
+理由（保留既有治理边界）：
+
+- FastAPI 只回答“这个候选有没有资格进入审核”，不决定 Wiki 主题、目标页、diff 或发布动作；
+- OpenClaw 回答“它在 Wiki 里应该成为什么”，并生成/冻结 Accepted Wiki Change Set；
+- 用户批准最终知识变化；Publisher 只执行冻结变更；
+- 现有 project-knowledge 端点复用，但 Change Set ownership、approval state、
+  publish payload direction、receipt model 需要按新模型调整。
+
+### 10.4 本仓库代码影响（按已确认的解释 A）
 
 按“解释 A + OpenClaw 推荐”推进时，KH-04/KH-05 需要调整：
 
@@ -497,8 +515,8 @@ OpenClaw 推荐的“复用 project-knowledge v2”与 2026-08-05 方案冻结�
    knowledge_handoff 审计镜像表（现有 domain_knowledge 轮询写的是旧
    trace.db 表，不能混用）；
 4. `openclaw/project_knowledge/review_publisher.py` 的去向待定：
-   - 若 sidecar 升级新状态机：它可作为 sidecar 核心库；
-   - 若完整复用现有 sidecar：它退化为参考实现/测试夹具；
+   - 按解释 A：它作为 OpenClaw sidecar 的核心库；需要补充
+     project-knowledge candidate 入口适配，并把 Change Set 冻结留在 OpenClaw 侧；
 5. 删除或废弃 `post_codex_author_knowledge_deliveries` 客户端与
    `codex-author-knowledge` 路由契约，避免路径债；
 6. 新增 `agents/openai.yaml` 到新 Skill（UI 元数据，非硬要求）；
@@ -520,12 +538,133 @@ OpenClaw 推荐的“复用 project-knowledge v2”与 2026-08-05 方案冻结�
 5. 现有 `GET project-knowledge/runs/{run_id}/commands` 的 command schema
    是否与 07-14 spec 一致（供 FastAPI 轮询实现对齐）？
 
-### 10.6 建议的下一步
+### 10.6 下一步（决策后更新）
 
 ```text
-1. 用户拍板 10.3 的所有权模型（解释 A 或 B）；
-2. OpenClaw 补充 10.5 的信息；
-3. 之后在 KH-05 实施：端点收敛 + 回执轮询 + vault 初始化 + disposable 验收；
+1. 所有权模型：已确认解释 A；
+2. OpenClaw 补充 10.5 的信息（sidecar 源码/升级意愿/vault/command schema）；
+3. KH-05 实施按 10.7 任务清单推进；
 4. SQLite P0 可并行推进（先停写库进程，再做备份和副本恢复）。
+```
+
+### 10.7 KH-05 具体改造任务清单（解释 A 已确认）
+
+> 状态标记：`可本地开始` = 不依赖 OpenClaw 补充；`依赖 OpenClaw` = 需先拿到
+> 10.5 的回答或 sidecar 配合。
+
+**T1：FastAPI delivery 端点收敛到 project-knowledge candidates**
+
+- 状态：可本地开始
+- 目标：`codex_author_knowledge_openclaw_delivery.py` 不再调用
+  `post_codex_author_knowledge_deliveries`，改为
+  `post_project_knowledge_candidates(run_id=..., batch=...)`；
+- 涉及：
+  - `api/app/services/codex_author_knowledge_openclaw_delivery.py`
+  - `api/app/services/openclaw_control_plane.py`（客户端方法）
+  - `api/app/services/codex_author_knowledge_handoff_store.py`（run_id 关联）
+  - 对应测试
+- 待定细节：run_id 策略（候选：
+  `project-knowledge:{workspace_key}:author:{handoff_id}`，需与 OpenClaw command
+  schema 对齐后再冻结）；候选 payload 从 `codex_author_knowledge_delivery`
+  映射到 `project_domain_knowledge_candidate_batch`；
+- 验收 Gate：单测断言请求体符合 07-14 candidate 契约；仓库不再出现
+  `codex-author-knowledge/.../deliveries` URL（历史文档除外）。
+
+**T2：FastAPI 回执轮询 worker**
+
+- 状态：可本地开始
+- 目标：FastAPI 主动轮询
+  `GET project-knowledge/runs/{run_id}/publish-status?cursor=...`，
+  把 receipt 写入 `knowledge_handoff.db` 独立审计镜像表；
+- 涉及：
+  - 新增或扩展 `api/app/services/codex_author_knowledge_openclaw_delivery.py`
+    或独立 receipt polling worker；
+  - `api/app/services/codex_author_knowledge_handoff_store.py`（cursor + 镜像幂等）；
+  - `api/app/main.py`（worker 生命周期）；
+  - 测试（fake OpenClaw publish-status）
+- 验收 Gate：receipt 幂等写入；cursor 持久化；receipt hash 冲突拒绝；
+  不写入旧 `trace.db` 表。
+
+**T3：review_publisher 增加 project-knowledge 入口适配**
+
+- 状态：依赖 OpenClaw（10.5#2：sidecar 是否升级）
+- 目标：`openclaw/project_knowledge/review_publisher.py` 在保留现有状态机的同时，
+  支持 `project_domain_knowledge_candidate_batch` 入口（或新增适配函数），
+  使 sidecar 升级时可直接调用；Change Set 冻结保持 OpenClaw-owned；
+- 验收 Gate：现有 11 项测试继续通过；新增 candidate batch 映射测试。
+
+**T4：OpenClaw sidecar 升级（Change Set ownership 调整）**
+
+- 状态：依赖 OpenClaw
+- 目标：sidecar 内部按解释 A 调整：内容审核 → 主题解析 → 发布审核 →
+  OpenClaw 冻结 Change Set → 自己发布；不再依赖 FastAPI 回推 publish payload；
+  receipt 通过 `publish-status` 暴露给 FastAPI 轮询；
+- 交付物：由本项目提供可部署包/sidecar 代码，或 OpenClaw 侧实现；
+- 验收 Gate：disposable vault 上完成一次真实
+  apply/lint/commit/push/receipt 全流程，且网络日志无 FastAPI→OpenClaw→FastAPI
+  二次前向投递。
+
+**T5：Skill 补齐并部署**
+
+- 状态：可本地开始（补齐文件），远程部署依赖 OpenClaw
+- 目标：新增
+  `openclaw/skills/codex-author-knowledge-review-publisher/agents/openai.yaml`
+  （display_name、short_description、default_prompt）；部署到
+  `~/.openclaw/workspace/skills/`；
+- 验收 Gate：远程 skill 列表可见；审核对话按 SKILL.md 执行。
+
+**T6：生产 Vault 收口**
+
+- 状态：依赖 OpenClaw/用户决策（10.5#3）
+- 目标：选定生产 vault；初始化 `projects/{workspace_id}/domains/`；
+  配置 Git remote；`enable_production=false` 保持到验收完成；
+- 验收 Gate：`openclaw wiki status` 显示目标 vault；目录存在；remote 可访问。
+
+**T7：disposable vault 验收**
+
+- 状态：部分依赖 OpenClaw（测试 vault + sidecar 事务）
+- 目标：用远程 disposable Git vault 演练
+  preflight → apply → lint → compile → commit → push → receipt；
+  覆盖 stale/hash/lint/push 失败场景；
+- 验收 Gate：publish transaction 全绿；失败场景不回滚已提交内容；
+  receipt hash 与 approved hash 一致。
+
+**T8：废弃 author-knowledge 路由契约**
+
+- 状态：可本地开始（随 T1/T2 一并处理）
+- 目标：删除或标记废弃
+  - `post_codex_author_knowledge_deliveries` 客户端；
+  - SKILL.md 中 `codex-author-knowledge` 端点文档；
+  - FastAPI `POST /publication-receipts` 保留为本地测试/兼容入口，
+    但文档明确生产回执走 FastAPI 轮询；
+- 验收 Gate：`rg codex-author-knowledge` 仅命中历史文档/注释，不命中活动代码。
+
+**T9：v1 控制面处理**
+
+- 状态：待用户决策
+- 目标：v1 `codex-review` 保持兼容、不扩展新语义；是否关闭
+  `CODEX_OPENCLAW_CONTROL_PLANE_ENABLED` 由用户决定；
+- 验收 Gate：v1 worker 不再持续报端点错误（关闭）或明确保持兼容（不扩展）。
+
+**T10：SQLite P0（并行，不阻塞 T1/T2）**
+
+- 状态：需要授权停写库进程
+- 目标：按方案第 9 节执行：
+  停 FastAPI/Pet → 备份 DB/WAL/SHM → 副本恢复实验 →
+  `PRAGMA quick_check` + `integrity_check=ok` → 核心 API 烟测 → 回滚路径；
+- 验收 Gate：恢复报告落盘；`enable` 前保持 knowledge flags 关闭。
+
+### 10.8 建议实施顺序
+
+```text
+第一批（本地可开始，不依赖 OpenClaw）：
+  T1 -> T2 -> T8 -> T5（补齐文件）
+
+第二批（依赖 OpenClaw 回答/配合）：
+  T3 -> T4 -> T6 -> T7
+
+并行：
+  T10（SQLite P0，需授权停服务）
+  T9（v1 flag 决策）
 ```
 ```
