@@ -7,6 +7,7 @@ import secrets
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.models.domain_knowledge import PublicationReceipt
 from app.services.codex_author_knowledge_handoff import (
     HandoffValidationError,
     receive_handoff,
@@ -25,6 +26,10 @@ class GitEventPayload(BaseModel):
 class OpenClawDeliveryAckPayload(BaseModel):
     outcome: str = Field(min_length=1, max_length=40)
     ack_id: str | None = Field(default=None, max_length=200)
+
+
+class PublicationReceiptPayload(PublicationReceipt):
+    """OpenClaw publication receipt mirrored for audit; it never re-enters delivery."""
 
 
 def _store_or_404(request: Request, token: str | None, *, audience: str):
@@ -163,5 +168,18 @@ def acknowledge_openclaw_delivery(
             outcome=payload.outcome,
             ack_id=payload.ack_id,
         )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/publication-receipts")
+def mirror_publication_receipt(
+    payload: PublicationReceiptPayload,
+    request: Request,
+    x_codex_knowledge_openclaw_token: str | None = Header(default=None),
+):
+    store = _store_or_404(request, x_codex_knowledge_openclaw_token, audience="openclaw")
+    try:
+        return store.mirror_publication_receipt(receipt=payload.model_dump(mode="json"))
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error

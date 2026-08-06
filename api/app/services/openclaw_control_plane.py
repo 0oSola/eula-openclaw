@@ -168,6 +168,19 @@ class OpenClawReviewControlPlaneClient:
             fallback={"status": "candidate_batch_received", "items": []},
         )
 
+    async def post_codex_author_knowledge_deliveries(
+        self,
+        *,
+        workspace_key: str,
+        batch: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self._project_knowledge_request(
+            "POST",
+            f"/v1/apps/mmd/codex-author-knowledge/workspaces/{workspace_key}/deliveries",
+            json_payload=batch,
+            fallback={"status": "delivery_batch_received", "items": []},
+        )
+
     async def get_project_knowledge_commands(
         self,
         *,

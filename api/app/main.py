@@ -33,6 +33,9 @@ from app.services.codex_interactive_provider import CodexInteractiveProvider, De
 from app.services.codex_knowledge_extraction import run_codex_knowledge_extraction_worker
 from app.services.codex_author_knowledge_handoff import run_codex_author_knowledge_reconciliation_worker
 from app.services.codex_author_knowledge_handoff_store import CodexAuthorKnowledgeHandoffStore
+from app.services.codex_author_knowledge_openclaw_delivery import (
+    run_codex_author_knowledge_openclaw_delivery_worker,
+)
 from app.services.codex_openclaw_review_sync import run_codex_review_sync_worker
 from app.services.codex_worktree_manager import CodexWorktreeManager
 from app.services.message_bridge import MessageBridgeService, OpenClawGatewayProvider
@@ -124,6 +127,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         codex_review_task = None
         codex_knowledge_task = None
         codex_author_knowledge_reconciliation_task = None
+        codex_author_knowledge_openclaw_delivery_task = None
         codex_review_control_plane_task = None
         if settings.tts_service_enabled:
             worker_task = asyncio.create_task(run_message_tts_worker(app))
@@ -153,6 +157,16 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         if knowledge_handoff_store is not None:
             codex_author_knowledge_reconciliation_task = asyncio.create_task(
                 run_codex_author_knowledge_reconciliation_worker(app)
+            )
+        should_start_codex_author_knowledge_openclaw_delivery = (
+            settings.codex_author_knowledge_openclaw_delivery_enabled
+            and knowledge_handoff_store is not None
+            and app.state.openclaw_control_plane_client is not None
+            and bool(settings.codex_openclaw_control_plane_token)
+        )
+        if should_start_codex_author_knowledge_openclaw_delivery:
+            codex_author_knowledge_openclaw_delivery_task = asyncio.create_task(
+                run_codex_author_knowledge_openclaw_delivery_worker(app)
             )
         should_start_codex_review_control_plane_worker = (
             settings.codex_openclaw_control_plane_enabled
@@ -185,6 +199,10 @@ def create_app(overrides: dict | None = None) -> FastAPI:
                 codex_author_knowledge_reconciliation_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await codex_author_knowledge_reconciliation_task
+            if codex_author_knowledge_openclaw_delivery_task is not None:
+                codex_author_knowledge_openclaw_delivery_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await codex_author_knowledge_openclaw_delivery_task
             if codex_review_control_plane_task is not None:
                 codex_review_control_plane_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

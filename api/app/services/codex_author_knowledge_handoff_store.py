@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from threading import RLock
 from typing import Any
 
@@ -124,14 +124,36 @@ class CodexAuthorKnowledgeHandoffStore:
                     status TEXT NOT NULL,
                     ack_id TEXT,
                     delivered_at TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    lease_expires_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE(candidate_id, candidate_revision, evidence_revision)
                 );
 
+                CREATE TABLE IF NOT EXISTS knowledge_publication_receipt_mirror (
+                    change_set_id TEXT PRIMARY KEY,
+                    receipt_hash TEXT NOT NULL,
+                    receipt_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 """
             )
+            self._ensure_column("knowledge_openclaw_delivery", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column("knowledge_openclaw_delivery", "last_error", "TEXT")
+            self._ensure_column("knowledge_openclaw_delivery", "lease_expires_at", "TEXT")
             self._conn.commit()
+
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        columns = {
+            str(row["name"])
+            for row in self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in columns:
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     @staticmethod
     def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -509,8 +531,9 @@ class CodexAuthorKnowledgeHandoffStore:
                 """
                 INSERT OR IGNORE INTO knowledge_openclaw_delivery (
                     delivery_id, candidate_id, candidate_revision, evidence_revision, payload_hash,
-                    payload_json, status, ack_id, delivered_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    payload_json, status, ack_id, delivered_at, attempt_count,
+                    last_error, lease_expires_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     delivery_id,
@@ -520,6 +543,9 @@ class CodexAuthorKnowledgeHandoffStore:
                     payload_hash,
                     json.dumps(payload, ensure_ascii=False),
                     "pending",
+                    None,
+                    None,
+                    0,
                     None,
                     None,
                     _now_iso(),
@@ -536,6 +562,64 @@ class CodexAuthorKnowledgeHandoffStore:
                 """,
                 (candidate_id, candidate_revision, evidence_revision),
             ).fetchone()
+            result = self._row(row) or {}
+            result["payload"] = json.loads(result.pop("payload_json"))
+            return result
+
+    def claim_next_delivery(self, *, now: datetime | None = None, lease_seconds: int = 300) -> dict[str, Any] | None:
+        current_time = now or datetime.now(UTC)
+        now_iso = current_time.isoformat()
+        lease_expires_at = (current_time + timedelta(seconds=max(1, lease_seconds))).isoformat()
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT * FROM knowledge_openclaw_delivery
+                WHERE status = 'pending'
+                   OR (status = 'sending' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
+                ORDER BY created_at ASC, delivery_id ASC
+                LIMIT 1
+                """,
+                (now_iso,),
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute(
+                """
+                UPDATE knowledge_openclaw_delivery
+                SET status = 'sending', attempt_count = attempt_count + 1,
+                    lease_expires_at = ?, updated_at = ?, last_error = NULL
+                WHERE delivery_id = ?
+                """,
+                (lease_expires_at, now_iso, row["delivery_id"]),
+            )
+            self._conn.commit()
+            result = self._row(
+                self._conn.execute(
+                    "SELECT * FROM knowledge_openclaw_delivery WHERE delivery_id = ?",
+                    (row["delivery_id"],),
+                ).fetchone()
+            ) or {}
+            result["payload"] = json.loads(result.pop("payload_json"))
+            return result
+
+    def release_delivery(self, *, delivery_id: str, error: str) -> dict[str, Any] | None:
+        now = _now_iso()
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE knowledge_openclaw_delivery
+                SET status = 'pending', last_error = ?, lease_expires_at = NULL, updated_at = ?
+                WHERE delivery_id = ? AND status = 'sending'
+                """,
+                (str(error)[:2000], now, delivery_id),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_openclaw_delivery WHERE delivery_id = ?",
+                (delivery_id,),
+            ).fetchone()
+            if row is None:
+                return None
             result = self._row(row) or {}
             result["payload"] = json.loads(result.pop("payload_json"))
             return result
@@ -575,7 +659,8 @@ class CodexAuthorKnowledgeHandoffStore:
             self._conn.execute(
                 """
                 UPDATE knowledge_openclaw_delivery
-                SET status = 'delivered', ack_id = ?, delivered_at = ?, updated_at = ?
+                SET status = 'delivered', ack_id = ?, delivered_at = ?,
+                    lease_expires_at = NULL, last_error = NULL, updated_at = ?
                 WHERE delivery_id = ?
                 """,
                 (ack_id, delivered_at, delivered_at, delivery_id),
@@ -614,3 +699,42 @@ class CodexAuthorKnowledgeHandoffStore:
                 item["payload"] = json.loads(item.pop("payload_json"))
                 result.append(item)
             return result
+
+    def mirror_publication_receipt(self, *, receipt: dict[str, Any]) -> dict[str, Any]:
+        change_set_id = str(receipt.get("change_set_id") or "").strip()
+        if not change_set_id:
+            raise ValueError("publication receipt change_set_id is required")
+        receipt_hash = _hash(receipt)
+        now = _now_iso()
+        with self._lock:
+            existing = self._conn.execute(
+                """
+                SELECT * FROM knowledge_publication_receipt_mirror
+                WHERE change_set_id = ?
+                """,
+                (change_set_id,),
+            ).fetchone()
+            if existing is not None:
+                if existing["receipt_hash"] != receipt_hash:
+                    raise ValueError("publication receipt is immutable")
+                return {
+                    "outcome": "duplicate",
+                    "change_set_id": change_set_id,
+                    "receipt_hash": existing["receipt_hash"],
+                    "receipt": json.loads(existing["receipt_json"]),
+                }
+            self._conn.execute(
+                """
+                INSERT INTO knowledge_publication_receipt_mirror (
+                    change_set_id, receipt_hash, receipt_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (change_set_id, receipt_hash, json.dumps(receipt, ensure_ascii=False), now, now),
+            )
+            self._conn.commit()
+            return {
+                "outcome": "mirrored",
+                "change_set_id": change_set_id,
+                "receipt_hash": receipt_hash,
+                "receipt": receipt,
+            }

@@ -128,6 +128,7 @@ class Settings:
     codex_openclaw_control_plane_sync_interval_seconds: float
     codex_openclaw_control_plane_snapshot_limit: int
     codex_author_knowledge_handoff_enabled: bool
+    codex_author_knowledge_openclaw_delivery_enabled: bool
     codex_author_knowledge_handoff_token: str
     codex_author_knowledge_openclaw_token: str
     codex_author_knowledge_reconciliation_interval_seconds: float
@@ -469,6 +470,14 @@ class Settings:
                 resolve_value(
                     "codex_author_knowledge_handoff_enabled",
                     "CODEX_AUTHOR_KNOWLEDGE_HANDOFF_ENABLED",
+                    False,
+                ),
+                default=False,
+            ),
+            codex_author_knowledge_openclaw_delivery_enabled=_parse_bool(
+                resolve_value(
+                    "codex_author_knowledge_openclaw_delivery_enabled",
+                    "CODEX_AUTHOR_KNOWLEDGE_OPENCLAW_DELIVERY_ENABLED",
                     False,
                 ),
                 default=False,
