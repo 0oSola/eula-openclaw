@@ -227,3 +227,122 @@ CODEX_AUTHOR_KNOWLEDGE_OPENCLAW_TOKEN
 4. 是否授权在 KH-05 阶段停止本机 FastAPI 与 Pet 进程做 SQLite 恢复？
 5. v1 `CODEX_OPENCLAW_CONTROL_PLANE_ENABLED=true` 是否可以现在关闭？
 6. 四条 KH 分支的合并策略由谁确认（逐条合并 vs 集成分支）？
+
+## 9. OpenClaw 侧实现确认单（新增 2026-08-06）
+
+> 用途：把“OpenClaw 需要做什么”转成远程机器负责人可以直接回答的问题。
+> 回答后，KH-05 才能确定交付物是“可部署应用包 + Skill + 插件配置”，
+> 还是需要 OpenClaw 团队改服务端。
+
+### 9.1 实现方式
+
+**问题 O1：OpenClaw 平台支持哪些扩展方式？**
+
+- 能否挂载自定义 HTTP 应用/路由（例如 `POST /v1/apps/mmd/...`）？
+- 是否支持 MCP、插件或外部服务注册？
+- 还是只能通过 Skill + 对话（`/v1/responses`）执行？
+
+**问题 O2：如果支持挂载自定义应用，挂载在哪里？**
+
+- OpenClaw 部署环境是否有应用/插件目录？
+- 新增一个 HTTP 服务需要改 OpenClaw 核心源码，还是只新增外部应用包？
+- 新增应用后是否需要重新构建/重启整个 OpenClaw？
+
+### 9.2 现有端点状态
+
+**问题 O3：请提供当前 Control Plane 已注册的路由清单。**
+
+本项目实测（2026-08-06，只读 GET）：
+
+```text
+GET /healthz                                                    404
+GET /                                                           404
+GET /v1/apps/mmd/codex-author-knowledge/workspaces/mmd-project/deliveries  404
+GET /v1/apps/mmd/project-knowledge/runs                         404
+GET /v1/apps/mmd/codex-review/runs                              404
+```
+
+- 这些是“尚未实现”，还是“路径/前缀不同”？
+- 现有 `codex-review` 端点实际挂在哪里？v1 worker 一直调用失败的根因是什么？
+
+**问题 O4：author-knowledge 端点由谁实现？**
+
+需要实现的端点至少包括：
+
+```text
+POST /v1/apps/mmd/codex-author-knowledge/workspaces/{workspace_key}/deliveries
+GET  /v1/apps/mmd/codex-author-knowledge/workspaces/{workspace_key}/publish-status
+```
+
+- 由 OpenClaw 团队实现，还是由本项目提供一个可部署包？
+- 实现语言/运行环境是否必须是 OpenClaw 内置技术栈，还是允许独立 Python 进程？
+
+### 9.3 memory-wiki 与 Obsidian
+
+**问题 O5：远程机器的 memory-wiki 插件是否已启用？**
+
+- 能否提供 `wiki_status` 的实际输出？
+- `wiki_search`、`wiki_get`、`wiki_apply`、`wiki_lint` 是否可用？
+
+**问题 O6：真实 Obsidian Vault 在哪里？**
+
+- Vault 路径、Git 仓库地址、远程 remote 是什么？
+- 是否已初始化 `projects/{workspace_id}/domains/` 目录？
+- Obsidian 侧是否能看到 Vault 并正常编译？
+
+### 9.4 Skill 注册
+
+**问题 O7：新 Skill 如何注册到 OpenClaw？**
+
+- 需要交付物是 `SKILL.md` 目录（含 agents 元数据），还是由 OpenClaw 侧从
+  `openclaw/skills/` 同步？
+- 当前 `codex-author-knowledge-review-publisher/SKILL.md` 缺少 `agents/openai.yaml`，
+  是否需要补齐？
+- OpenClaw 加载 Skill 后，审核交互是在对话中完成，还是由 HTTP 应用驱动？
+
+### 9.5 回执与网络方向
+
+**问题 O8：发布回执如何回到 FastAPI？**
+
+当前 KH-04 实现是 OpenClaw 主动 `POST /codex/knowledge/publication-receipts`
+到本机 FastAPI，但：
+
+- OpenClaw 在远程，本机 FastAPI 是 `127.0.0.1:8100`；
+- 既有规格要求“所有网络连接由 FastAPI 发起，OpenClaw 不反连本机”。
+
+请确认采用哪种方式：
+
+- 方式 A：FastAPI 主动轮询 OpenClaw 的 `publish-status`/receipt 端点（推荐，符合
+  既有网络方向约束）；
+- 方式 B：允许 OpenClaw 通过内网可路由地址访问 FastAPI（会推翻“不反连本机”约束）；
+- 方式 C：其他现有机制。
+
+### 9.6 交付与验收
+
+**问题 O9：OpenClaw 侧实现完成后，如何验收？**
+
+- OpenClaw 能否提供一个“shadow 模式”测试端点，让 FastAPI 推送候选但不写真实
+  Vault？
+- 是否能提供测试 Vault（disposable Git Vault）做 lint/commit/push 演练？
+- 验收时 OpenClaw 侧由谁确认“双审核通过”？
+
+### 9.7 优先级
+
+**问题 O10：OpenClaw 侧实现的排期和依赖？**
+
+- 是否依赖本仓库先合并 KH-01~KH-04 分支？
+- 是否依赖 SQLite 恢复完成？
+- 是否依赖 v1 `codex-review` 端点先修复或停用？
+
+### 9.8 回答后应更新的交付物
+
+回答以上问题后，本清单应更新为：
+
+```text
+1. OpenClaw 侧实现方式（O1/O2）→ 确定交付物形态；
+2. 端点实现方与端点清单（O3/O4）→ 确定 OpenClaw 应用包范围；
+3. memory-wiki/Vault 状态（O5/O6）→ 确定远程部署清单；
+4. Skill 注册方式（O7）→ 确定需要补齐的文件；
+5. 回执网络方向（O8）→ 确定 FastAPI 侧新增轮询 worker 还是允许反连；
+6. 验收方式（O9/O10）→ 确定 KH-05 阶段 D 的端到端验收步骤。
+```
