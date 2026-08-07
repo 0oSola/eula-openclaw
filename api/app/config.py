@@ -131,6 +131,7 @@ class Settings:
     codex_author_knowledge_openclaw_delivery_enabled: bool
     codex_author_knowledge_handoff_token: str
     codex_author_knowledge_openclaw_token: str
+    codex_author_knowledge_whitelist_file: str
     codex_author_knowledge_reconciliation_interval_seconds: float
     codex_author_knowledge_durable_refs: dict[str, str]
     domain_knowledge_control_plane_enabled: bool
@@ -494,6 +495,13 @@ class Settings:
                     "codex_author_knowledge_openclaw_token",
                     "CODEX_AUTHOR_KNOWLEDGE_OPENCLAW_TOKEN",
                     "",
+                )
+            ).strip(),
+            codex_author_knowledge_whitelist_file=str(
+                resolve_value(
+                    "codex_author_knowledge_whitelist_file",
+                    "CODEX_AUTHOR_KNOWLEDGE_WHITELIST_FILE",
+                    "knowledge_handoff/openclaw_whitelist.json",
                 )
             ).strip(),
             codex_author_knowledge_reconciliation_interval_seconds=float(

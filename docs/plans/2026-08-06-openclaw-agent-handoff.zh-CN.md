@@ -64,6 +64,19 @@ FASTAPI_KNOWLEDGE_TOKEN=<由用户配置的 CODEX_AUTHOR_KNOWLEDGE_OPENCLAW_TOKE
 X-Codex-Knowledge-OpenClaw-Token: <token>
 ```
 
+### 3.1.1 来源 IP 白名单（后台管理）
+
+FastAPI 侧对 OpenClaw 审核接口启用来源 IP 白名单，作为 token 之外的第二层防线：
+
+- 后台页面：`GET /admin/codex-knowledge/whitelist/`
+- 管理 API：`GET/POST /admin/codex-knowledge/whitelist/api`，`DELETE /admin/codex-knowledge/whitelist/api/{cidr}`
+- 鉴权：`X-User-Id` 必须是 `ADMIN_USER_IDS` 中配置的管理员
+- 支持单 IP 与 CIDR（例如 `10.11.252.164` 或 `10.11.252.0/24`），新增后即时生效
+- 落盘：`api/data/knowledge_handoff/openclaw_whitelist.json`
+
+白名单为空时默认放行（兼容本地链路）；一旦添加任何条目，白名单之外来源的请求返回 `403`。
+OpenClaw 机器实际出口 IP 需在首次联通前加入白名单，否则认领请求会被拒绝。
+
 ### 3.2 Obsidian MCP
 
 - 确认你使用的 Obsidian MCP 实现与工具清单（至少需要：读笔记、搜索、写/更新笔记）；

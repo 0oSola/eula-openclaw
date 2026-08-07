@@ -16,6 +16,7 @@ from app.routes.codex_interactive import router as codex_interactive_router
 from app.routes.codex_knowledge import router as codex_knowledge_router
 from app.routes.codex_author_knowledge_handoff import router as codex_author_knowledge_handoff_router
 from app.routes.codex_author_knowledge_review import router as codex_author_knowledge_review_router
+from app.routes.codex_knowledge_whitelist_admin import router as codex_knowledge_whitelist_admin_router
 from app.routes.codex_review import router as codex_review_router
 from app.routes.config import router as config_router
 from app.routes.desktop_pet import router as desktop_pet_router
@@ -34,6 +35,7 @@ from app.services.codex_interactive_provider import CodexInteractiveProvider, De
 from app.services.codex_knowledge_extraction import run_codex_knowledge_extraction_worker
 from app.services.codex_author_knowledge_handoff import run_codex_author_knowledge_reconciliation_worker
 from app.services.codex_author_knowledge_handoff_store import CodexAuthorKnowledgeHandoffStore
+from app.services.codex_knowledge_whitelist import CodexKnowledgeWhitelistStore
 from app.services.codex_author_knowledge_openclaw_delivery import (
     run_codex_author_knowledge_openclaw_delivery_worker,
 )
@@ -58,6 +60,13 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     trace_store = TraceStore(db_path=db_path, ndjson_dir=ndjson_dir)
     knowledge_handoff_store = (
         CodexAuthorKnowledgeHandoffStore(settings.data_dir / "sqlite" / "knowledge_handoff.db")
+        if settings.codex_author_knowledge_handoff_enabled
+        else None
+    )
+    knowledge_whitelist_store = (
+        CodexKnowledgeWhitelistStore(
+            settings.data_dir / settings.codex_author_knowledge_whitelist_file
+        )
         if settings.codex_author_knowledge_handoff_enabled
         else None
     )
@@ -222,6 +231,8 @@ def create_app(overrides: dict | None = None) -> FastAPI:
         await app.state.message_bridge_service.provider.close()
         if app.state.knowledge_handoff_store is not None:
             app.state.knowledge_handoff_store.close()
+        if app.state.codex_knowledge_whitelist_store is not None:
+            app.state.codex_knowledge_whitelist_store.close()
         app.state.trace_store.close()
 
     app = FastAPI(title="MMD Companion API", version="0.1.0", lifespan=lifespan)
@@ -278,6 +289,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.trace_store = trace_store
     app.state.knowledge_handoff_store = knowledge_handoff_store
+    app.state.codex_knowledge_whitelist_store = knowledge_whitelist_store
     app.state.openclaw_client = openclaw_client
     app.state.openclaw_control_plane_client = openclaw_control_plane_client
     app.state.openkb_client = openkb_client
@@ -301,6 +313,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.include_router(codex_knowledge_router)
     app.include_router(codex_author_knowledge_handoff_router)
     app.include_router(codex_author_knowledge_review_router)
+    app.include_router(codex_knowledge_whitelist_admin_router)
     app.include_router(codex_review_router)
     app.include_router(openclaw_tools_router)
     app.include_router(message_bridge_router)

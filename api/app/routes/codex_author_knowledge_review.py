@@ -10,6 +10,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.models.domain_knowledge import PublicationReceipt
+from app.services.codex_knowledge_whitelist import require_whitelisted_ip
 
 
 router = APIRouter(prefix="/codex/knowledge", tags=["codex-author-knowledge-review"])
@@ -48,6 +49,8 @@ def _store_or_404(request: Request):
     store = getattr(request.app.state, "knowledge_handoff_store", None)
     if store is None:
         raise HTTPException(status_code=404, detail="Codex author knowledge handoff is disabled.")
+    whitelist_store = getattr(request.app.state, "codex_knowledge_whitelist_store", None)
+    require_whitelisted_ip(whitelist_store, request.client.host if request.client else "")
     transport_expected = request.app.state.settings.codex_author_knowledge_handoff_token
     openclaw_expected = request.app.state.settings.codex_author_knowledge_openclaw_token
     if (
