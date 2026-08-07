@@ -94,3 +94,15 @@ def test_whitelist_admin_page_renders(tmp_path: Path):
         response = client.get("/admin/codex-knowledge/whitelist/")
         assert response.status_code == 200
         assert "OpenClaw 来源白名单" in response.text
+
+
+def test_review_summary_requires_admin_and_reports_counts(tmp_path: Path):
+    with _client(tmp_path) as client:
+        store = client.app.state.knowledge_handoff_store
+        assert store is not None
+        assert client.get("/codex/knowledge/review-summary").status_code == 401
+        response = client.get("/codex/knowledge/review-summary", headers={"X-User-Id": "admin-1"})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 0
+        assert body["pending"] == 0
