@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 
 type ReviewSummary = {
   workspace_key: string | null;
@@ -59,14 +58,13 @@ export function KnowledgeReviewBadge({ userId }: { userId: string }) {
   const claimed = summary.by_status.claimed ?? 0;
 
   return (
-    <Link
+    <div
       className={`mio-knowledge-badge${pending > 0 ? " has-pending" : ""}`}
-      href="/traces"
       title={`知识审核队列：待审核 ${pending}，已认领 ${claimed}，需补充证据 ${needsEvidence}`}
       aria-label={`知识审核队列：待审核 ${pending} 条`}
     >
       <span className="mio-knowledge-badge-label">KNOWLEDGE</span>
       <strong className="mio-knowledge-badge-count">{pending}</strong>
-    </Link>
+    </div>
   );
 }
