@@ -389,6 +389,88 @@ Phase 1 与 Phase 2 已实现；OpenClaw 侧 Wiki Change Proposal/双重审核�
 | OpenClaw 抽取 contract | `openclaw/skills/codex-session-knowledge-extraction/SKILL.md` |
 | 定向回归测试 | `api/tests/test_codex_knowledge_extraction.py`, `api/tests/test_domain_knowledge_*.py` |
 
+### 4.7 Codex 作者知识交接 Hook（KH-01）
+
+KH-01 在 Codex 边界内增加了独立的作者交接捕获器，但当前不会自动注册到用户级
+`C:\Users\KSG\.codex\hooks.json`。其运行入口位于：
+
+```text
+scripts/codex-knowledge-handoff/stop-hook.mjs
+```
+
+有效最终回复的局部链路为：
+
+```text
+Codex final response
+  -> Stop Hook YAML safe-subset validator
+  -> %CODEX_HOME%/knowledge-handoffs/<workspace-key>/<handoff-id>/
+       handoff.md
+       marker.yaml
+       metadata.json
+       candidates/*.md
+       .complete
+```
+
+没有固定作者载荷的普通回复直接放行；已声明但非法的载荷会阻止 Stop，且不创建半成品。
+Hook 只负责分割、校验、来源 metadata、哈希和原子落盘，不负责仓库证据、Gate、Vault
+主题解析或 Obsidian 发布。
+
+KH-02 已在 `desktop-pet/electron/knowledgeHandoffTransport.ts` 增加 Pet 侧扫描与运输
+边界：启动补扫、`.complete` 文件监听、包清单/hash 校验、持久化离线队列、幂等上传、
+accepted/duplicate ACK、重试、重启恢复和 FastAPI Git 事件提示。Pet 只向
+`/codex/knowledge/handoffs` 与 `/codex/knowledge/git-events` 发送请求，不直接访问
+OpenClaw，也不执行仓库证据、Gate、Vault 主题解析或发布。
+
+该运输器由 `MMD_PET_KNOWLEDGE_HANDOFF_TRANSPORT_ENABLED=1` 显式启用；默认关闭，
+因此 KH-02 不会提前启用新知识链。FastAPI 接收端、Repository Evidence Resolver、
+Gate 和 OpenClaw 双审核仍待后续票据接通；旧的 Review/Knowledge 运行链继续按本节
+前文所述保持关闭或兼容运行。
+
+Pet 会解析普通仓库和 Git worktree 的 `.git`/`commondir`，监听 checkout、commit
+和远端 refs 变化作为加速提示；真实 `push` 可由 Git Hook 调用
+`desktop-pet/scripts/knowledge-handoff-git-hint.mjs --workspace-key <key> --event push`。
+当前只提供这个显式桥接入口，不自动安装或修改用户仓库的 Git Hook；提示失败不会阻塞
+Git 操作，目录监听、启动补扫和周期性 FastAPI reconciliation 仍是可靠兜底。
+
+KH-03 在 FastAPI 内增加独立的作者知识交接账本，数据库文件为
+`api/data/sqlite/knowledge_handoff.db`，不复用旧 Review v1 派生表，也不在 feature flag
+关闭时创建。接收端点为：
+
+```text
+POST /codex/knowledge/handoffs
+POST /codex/knowledge/git-events
+POST /codex/knowledge/reconcile
+GET  /codex/knowledge/openclaw-deliveries
+POST /codex/knowledge/openclaw-deliveries/{delivery_id}/ack
+```
+
+FastAPI 会校验 3+N 文件清单、`.complete`、metadata、candidate 引用和两级 SHA-256，
+用 `workspace_key + handoff_id + package_sha256` 幂等接收并返回持久化 ACK。随后为每个
+candidate 创建不可变 `candidate_revision`，在固定 Git revision 上解析 `evidence_revision`
+并运行确定性 Gate。只有 `ready_for_review` 才会生成脱敏的候选级 bounded delivery；
+FastAPI 不决定 Vault topic、目标路径、create/update/merge/supersede 或 Accepted Wiki
+Change Set，也不直接调用 OpenClaw。
+
+KH-03 的 reconciliation worker 由 `CODEX_AUTHOR_KNOWLEDGE_HANDOFF_ENABLED=1` 控制，
+Git event 只负责加速，周期扫描负责兜底。启用时所有 Pet、Git 提示和 OpenClaw
+delivery ACK 都必须分别携带 `CODEX_AUTHOR_KNOWLEDGE_HANDOFF_TOKEN`（Pet/运输）
+或 `CODEX_AUTHOR_KNOWLEDGE_OPENCLAW_TOKEN`（OpenClaw/交付 ACK）；
+作者交接中的命令证据只允许固定的无副作用 Git 状态查询，其他命令不会被 FastAPI
+自动执行。KH-04 增加独立的 `CODEX_AUTHOR_KNOWLEDGE_OPENCLAW_DELIVERY_ENABLED`
+开关；开启后 FastAPI 才会把 pending bounded delivery 映射为
+`project_domain_knowledge_candidate_batch`，并通过
+`POST /v1/apps/mmd/project-knowledge/runs/{run_id}/candidates`
+推送给 OpenClaw（不新增 `codex-author-knowledge` 路由命名）。OpenClaw 侧由
+`openclaw/project_knowledge/review_publisher.py` 保存审核任务、执行 Vault Topic
+Resolution、内容审核、独立发布审核、Accepted Wiki Change Set 冻结和 exact
+Publisher；发布通过前不会写入 Obsidian。当前测试使用注入式 memory-wiki fake，
+不触碰真实 Obsidian Vault；真实 OpenClaw 运行时接线仍需部署该 Skill/适配器。
+发布后的 `Publication Receipt` 由 FastAPI 主动轮询
+`GET /v1/apps/mmd/project-knowledge/runs/{run_id}/publish-status` 拉取并写入
+独立审计镜像表；`POST /codex/knowledge/publication-receipts` 仅保留为本地测试/
+兼容入口，生产回执不回跳、不重新创建 delivery。如果 Git 已创建提交但 push 失败，
+Publisher 保留失败回执和提交信息，不自动 reset 旧 revision。
+
 ## 5. 主调用链：前端发消息
 
 ```text
