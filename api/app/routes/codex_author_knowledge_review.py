@@ -10,10 +10,44 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.models.domain_knowledge import PublicationReceipt
+from app.security import resolve_requester
 from app.services.codex_knowledge_whitelist import require_whitelisted_ip
 
 
 router = APIRouter(prefix="/codex/knowledge", tags=["codex-author-knowledge-review"])
+
+
+def _require_admin(request: Request, x_user_id: str | None):
+    settings = request.app.state.settings
+    requester = resolve_requester(x_user_id, settings.admin_user_ids)
+    if not requester.is_admin:
+        raise HTTPException(status_code=403, detail="Admin permission required")
+    return requester
+
+
+@router.get("/review-summary")
+def get_review_summary(
+    request: Request,
+    workspace_key: str | None = None,
+    x_user_id: str | None = Header(default=None),
+):
+    """供 MMD 工作台查看知识审核队列汇总（待审核/已认领/需补充证据等数量）。"""
+    _require_admin(request, x_user_id)
+    store = getattr(request.app.state, "knowledge_handoff_store", None)
+    if store is None:
+        raise HTTPException(status_code=404, detail="Codex author knowledge handoff is disabled.")
+    rows = store.list_candidate_revisions(workspace_key=workspace_key, limit=None)
+    counts: dict[str, int] = {}
+    for row in rows:
+        status = str(row.get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    pending = counts.get("ready_for_review", 0)
+    return {
+        "workspace_key": workspace_key,
+        "total": len(rows),
+        "pending": pending,
+        "by_status": counts,
+    }
 
 
 def _canonical_json(value: Any) -> str:

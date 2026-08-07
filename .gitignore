@@ -37,6 +37,7 @@ web/tsconfig.tsbuildinfo
 *.deb
 api/data/logs/
 api/data/sqlite/backups/
+api/data/storage/
 api/data/sqlite/trace.db-shm
 api/data/sqlite/trace.db-wal
 api/data/sqlite/knowledge_handoff.db
