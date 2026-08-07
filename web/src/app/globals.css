@@ -2791,6 +2791,45 @@ a {
   mix-blend-mode: screen;
 }
 
+.mio-knowledge-badge {
+  min-width: 88px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: 1px solid rgba(137, 212, 255, 0.34);
+  border-radius: 8px;
+  background: rgba(5, 20, 42, 0.56);
+  color: #eef8ff;
+  text-decoration: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  font-family: inherit;
+}
+
+.mio-knowledge-badge.has-pending {
+  border-color: rgba(255, 196, 92, 0.72);
+  background: rgba(64, 42, 8, 0.62);
+  box-shadow: inset 0 0 0 1px rgba(255, 196, 92, 0.24), 0 0 14px rgba(255, 166, 60, 0.18);
+}
+
+.mio-knowledge-badge-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: rgba(239, 248, 255, 0.82);
+}
+
+.mio-knowledge-badge-count {
+  font-size: 15px;
+  font-weight: 700;
+  color: #ffd08a;
+}
+
+.mio-knowledge-badge:not(.has-pending) .mio-knowledge-badge-count {
+  color: #eef8ff;
+}
+
 .mio-nav-button img {
   width: 34px;
   height: 34px;

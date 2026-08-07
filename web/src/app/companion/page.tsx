@@ -36,6 +36,7 @@ import {
   type RezeSceneDebugSettings,
 } from "@/features/stage/rezeDesignDefaults";
 import { CompanionCommandBar } from "./CompanionCommandBar";
+import { KnowledgeReviewBadge } from "./KnowledgeReviewBadge";
 import { MioModeBackground } from "./MioModeBackground";
 import { CompanionRightRail, type RightPanelView } from "./CompanionRightRail";
 import {
@@ -2847,6 +2848,7 @@ export default function CompanionPage() {
             <Link href="/traces" className="mio-trace-button">
               TRACE
             </Link>
+            <KnowledgeReviewBadge userId={session?.userId || ""} />
             <button
               className="mio-icon-button"
               type="button"
