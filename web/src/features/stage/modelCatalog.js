@@ -13,3 +13,11 @@ export function pickInitialModelSelection(models, preferredRelativePath = "") {
   if (!Array.isArray(models) || models.length === 0) return null;
   return models.find((item) => item?.relative_path === preferredRelativePath) || models[0] || null;
 }
+
+export function pickRememberedModelSelection(models, rememberedRelativePath = "", fallbackRelativePath = "") {
+  if (!Array.isArray(models) || models.length === 0) return null;
+  return (
+    models.find((item) => item?.relative_path === rememberedRelativePath) ||
+    pickInitialModelSelection(models, fallbackRelativePath)
+  );
+}

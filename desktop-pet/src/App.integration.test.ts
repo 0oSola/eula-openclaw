@@ -129,8 +129,27 @@ describe("Desktop Pet App integration wiring", () => {
 
     expect(source).toContain("shouldTriggerStageCharacterClick");
     expect(source).toContain("createStageClickRipple");
+    expect(source).not.toContain("handlePetInputSurfaceClick");
+    expect(source).not.toContain("onClick={handlePetInputSurfaceClick}");
     expect(petStageState).toContain('from "@/features/stage/stageCharacterClick.js"');
     expect(petStageState).toContain("resolveStageCharacterClickInteraction({");
+  });
+
+  it("defines a stationary click as an action and leaves movement to window/camera interaction", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+
+    expect(source).toContain("nativeClick?.on");
+    expect(source).toContain("shouldTriggerStageCharacterClick");
+    expect(source).toContain("hasPetPointerMoved");
+    expect(source).toContain("shouldActivatePetWindowDrag");
+    expect(source).toContain("interactionMode !== \"camera-adjust\"");
+    expect(source).toContain("enableCharacterClickCapture={false}");
+
+    const pointerDownBlock = source.slice(
+      source.indexOf("function handlePointerDown"),
+      source.indexOf("function handlePointerMove"),
+    );
+    expect(pointerDownBlock).not.toContain("windowDrag?.start");
   });
 
   it("keeps the right-click menu out of the MMD renderer", () => {
@@ -139,5 +158,36 @@ describe("Desktop Pet App integration wiring", () => {
     expect(source).not.toContain("window.desktopPet?.menu?.onShow");
     expect(source).not.toContain("pet-context-menu");
     expect(source).toContain('closest(".pet-panel, .pet-status-action, .pet-completion-bubble")');
+  });
+
+  it("provides a camera-mode save and exit button without routing its click into stage actions", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+    const styles = readFileSync(path.resolve(__dirname, "styles.css"), "utf8");
+
+    expect(source).toContain('interactionMode === "camera-adjust"');
+    expect(source).toContain('data-testid="pet-camera-save-exit"');
+    expect(source).toContain("handleSaveAndExitCamera");
+    expect(source).toContain('setInteractionMode("window-drag")');
+    expect(source).toContain('interactionMode?.set("window-drag")');
+    expect(source).toContain(".pet-camera-save-exit");
+    expect(styles).toContain("z-index: 13;");
+    expect(styles).toContain("-webkit-app-region: no-drag;");
+  });
+
+  it("persists the current camera snapshot before the renderer unloads", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+
+    expect(source).toContain("persistCurrentPetCameraSnapshot");
+    expect(source).toContain('window.addEventListener("beforeunload"');
+    expect(source).toContain("savePetCameraSnapshot");
+    expect(source).toContain("captureCamera");
+  });
+
+  it("suppresses the renderer context menu while camera adjustment is active", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+
+    expect(source).toContain('document.addEventListener("contextmenu"');
+    expect(source).toContain("event.preventDefault()");
+    expect(source).toContain('interactionMode !== "camera-adjust"');
   });
 });

@@ -68,6 +68,15 @@ describe("desktop pet Codex session files", () => {
         },
       },
       {
+        timestamp: "2026-06-03T11:15:48.264Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "<recommended_plugins>\nHere is a list of plugins..." }],
+        },
+      },
+      {
         timestamp: "2026-06-03T11:15:48.267Z",
         type: "event_msg",
         payload: {

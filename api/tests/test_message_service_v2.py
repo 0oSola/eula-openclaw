@@ -982,6 +982,50 @@ def test_motion_context_export_returns_current_model_favorites_snapshot():
     assert motion["match_names"] == [asset_id, "打招呼1", "打招呼1.vmd", "wave.vmd"]
 
 
+def test_eula_favorites_are_exported_and_resolved_for_other_selected_pmx_models():
+    client, app = _client()
+    eula_model_path = "Eula/Eula.pmx"
+    other_model_path = "Ayaka/Ayaka.pmx"
+    _write_model_stub(app, eula_model_path)
+    _write_model_stub(app, other_model_path)
+    upload = client.post(
+        "/assets/vmd",
+        headers={"x-user-id": "u1"},
+        files={"file": ("think.vmd", b"Vocaloid Motion Data 0002".ljust(64, b"\x00"), "application/octet-stream")},
+        data={"user_id": "u1", "slot": "thinking", "source_relative_path": "usage/vmd/Eula[动作]/03_thinking_waiting/think.vmd"},
+    )
+    asset_id = upload.json()["asset_id"]
+    client.patch(
+        f"/assets/vmd/{asset_id}",
+        headers={"x-user-id": "u1"},
+        json={"favorite": True, "model_relative_path": eula_model_path, "display_name": "think.vmd"},
+    )
+
+    exported = client.post(
+        "/motion-context/exports",
+        headers={"x-user-id": "u1"},
+        json={"selected_model_path": other_model_path},
+    )
+    assert exported.status_code == 200
+    assert exported.json()["motion_count"] == 1
+    assert exported.json()["export_json"]["motions"][0]["asset_id"] == asset_id
+
+    app.state.openclaw_client = FakeOpenClawClient(
+        raw_text='{"text":"Let me think.","emotion":"thinking","action":"' + asset_id + '","memory_ops":[]}'
+    )
+    session_id = client.post("/sessions", json={}, headers={"x-user-id": "u1"}).json()["session"]["id"]
+    sent = client.post(
+        f"/sessions/{session_id}/messages",
+        json={"content": "think", "tts_enabled": False, "selected_model_path": other_model_path},
+        headers={"x-user-id": "u1"},
+    )
+
+    assert sent.status_code == 200
+    resolution = sent.json()["assistant_message"]["motion_resolution"]
+    assert resolution["status"] == "matched"
+    assert resolution["resolved_asset_id"] == asset_id
+
+
 def test_message_send_resolves_motion_key_to_favorite_vmd_asset():
     client, app = _client()
     model_path = "Eula/Eula.pmx"

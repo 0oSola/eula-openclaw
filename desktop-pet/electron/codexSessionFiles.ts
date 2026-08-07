@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
+import { isInjectedCodexContext } from "./codexPresentation.js";
 import { normalizeWorkspacePathIdentity } from "./workspacePathIdentity.js";
 
 export type CodexSessionStatus =
@@ -282,23 +283,15 @@ function contentText(content: unknown): string {
   );
 }
 
-function isInjectedUserContext(text: string): boolean {
-  return (
-    text.startsWith("# AGENTS.md instructions") ||
-    text.startsWith("<environment_context>") ||
-    text.startsWith("The following is the Codex agent history")
-  );
-}
-
 function userPromptFromEvent(event: CodexSessionJsonEvent): string | null {
   const payload = asRecord(event.payload);
   if (event.type === "response_item" && payload.type === "message" && payload.role === "user") {
     const text = contentText(payload.content);
-    return text && !isInjectedUserContext(text) ? text : null;
+    return text && !isInjectedCodexContext(text) ? text : null;
   }
   if (event.type === "event_msg" && payload.type === "user_message") {
     const text = compactText(payload.message);
-    return text && !isInjectedUserContext(text) ? text : null;
+    return text && !isInjectedCodexContext(text) ? text : null;
   }
   return null;
 }
@@ -660,7 +653,7 @@ function processReviewFactEvent(accumulator: ReviewFactsAccumulator, event: Code
     facts.user_messages.length < REVIEW_FACT_MAX_USER_MESSAGES
   ) {
     const userText = contentText(payload.content);
-    if (userText && !isInjectedUserContext(userText) && !facts.user_messages.includes(userText)) {
+    if (userText && !isInjectedCodexContext(userText) && !facts.user_messages.includes(userText)) {
       facts.user_messages.push(truncateText(userText, REVIEW_FACT_MAX_USER_MESSAGE_CHARS) || userText);
       addWorkItem(facts, event, "goal", "user", userText);
     }
@@ -683,7 +676,7 @@ function processReviewFactEvent(accumulator: ReviewFactsAccumulator, event: Code
 
   if (event.type === "event_msg" && payload.type === "user_message" && facts.user_messages.length < REVIEW_FACT_MAX_USER_MESSAGES) {
     const userText = compactText(payload.message);
-    if (userText && !isInjectedUserContext(userText) && !facts.user_messages.includes(userText)) {
+    if (userText && !isInjectedCodexContext(userText) && !facts.user_messages.includes(userText)) {
       facts.user_messages.push(truncateText(userText, REVIEW_FACT_MAX_USER_MESSAGE_CHARS) || userText);
       addWorkItem(facts, event, "goal", "user", userText);
     }

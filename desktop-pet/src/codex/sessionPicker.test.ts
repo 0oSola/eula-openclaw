@@ -177,4 +177,24 @@ describe("desktop pet session picker", () => {
     expect(items[0].searchText).not.toContain("hunter2");
     expect(items[0].searchText).not.toContain("sk-live-secret");
   });
+
+  it("does not show injected context as a session title or prompt preview", () => {
+    const items = buildSessionPickerItems([
+      {
+        pet_session_id: "pet-injected",
+        codex_session_id: "019e88e9-4f27-7f20-be48-fd1ef50e9492",
+        display_title: "<recommended_plugins> Here is a list of plugins...",
+        first_prompt_preview: "<app-context> Codex desktop runtime details...",
+        workspace_path: "D:\\workspace\\MMD project",
+        last_status: "running",
+      },
+    ]);
+
+    expect(items[0]).toMatchObject({
+      title: "MMD project",
+      promptPreview: "No prompt preview",
+    });
+    expect(items[0].title).not.toContain("<recommended_plugins>");
+    expect(items[0].promptPreview).not.toContain("<app-context>");
+  });
 });

@@ -1,3 +1,5 @@
+import { resolveCodexTaskTitle, workspaceLabelFromPath } from "../../electron/codexPresentation";
+
 export type CodexLaunchState =
   | "idle"
   | "starting"
@@ -44,26 +46,20 @@ export type CodexStatusPresentation = {
   shouldInterruptIdle: boolean;
 };
 
-function workspaceLabel(workspacePath: string | undefined): string {
-  if (!workspacePath?.trim()) return "workspace";
-  const parts = workspacePath.split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) || "workspace";
-}
-
 function sessionLabel(status: CodexStatus): string {
-  return status.sessionTitle?.trim() || workspaceLabel(status.workspacePath);
+  return resolveCodexTaskTitle([status.sessionTitle], status.workspacePath);
 }
 
 export function describeCodexStatus(status: CodexStatus | null | undefined): string | null {
   if (!status || status.state === "idle") return null;
   if (status.state === "failed") {
-    return `Codex launch failed · ${status.error?.trim() || workspaceLabel(status.workspacePath)}`;
+    return `Codex launch failed · ${status.error?.trim() || workspaceLabelFromPath(status.workspacePath)}`;
   }
   if (status.state === "starting") {
-    return `Codex starting · ${workspaceLabel(status.workspacePath)}`;
+    return `Codex starting · ${workspaceLabelFromPath(status.workspacePath)}`;
   }
   if (status.state === "vscode-opened") {
-    return `VSCode workspace open · ${workspaceLabel(status.workspacePath)}`;
+    return `VSCode workspace open · ${workspaceLabelFromPath(status.workspacePath)}`;
   }
   if (status.state === "resuming") {
     return `Codex resuming · ${sessionLabel(status)}`;
@@ -86,7 +82,7 @@ export function describeCodexStatus(status: CodexStatus | null | undefined): str
   if (status.state === "disconnected") {
     return `Codex disconnected · ${sessionLabel(status)}`;
   }
-  return `Codex terminal running · ${workspaceLabel(status.workspacePath)}`;
+  return `Codex terminal running · ${workspaceLabelFromPath(status.workspacePath)}`;
 }
 
 export function getCodexStatusPresentation(status: CodexStatus | null | undefined): CodexStatusPresentation {

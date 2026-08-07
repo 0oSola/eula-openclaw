@@ -11,7 +11,7 @@ from starlette.responses import Response
 
 from app.models.chat import OpenClawReply
 from app.services.message_tts_reference import create_or_enqueue_message_tts_reference
-from app.services.motion_resolution import resolve_motion_resolution
+from app.services.motion_resolution import list_available_favorite_motion_assets, resolve_motion_resolution
 from app.services.openclaw_client import OpenClawInvocationError
 from app.services.response_parser import normalize_assistant_reply
 from app.services.voice_workflow_tts_client import VoiceWorkflowTtsError
@@ -676,7 +676,7 @@ async def create_motion_context_export(
 ):
     ctx = _context(request, x_user_id)
     store = _store(request)
-    assets = store.list_favorite_assets_for_model(ctx["account"]["external_user_id"], payload.selected_model_path)
+    assets = list_available_favorite_motion_assets(store, ctx["account"]["external_user_id"], payload.selected_model_path)
     export_json = _build_motion_context_export_payload(payload.selected_model_path, assets)
     export_row = store.create_motion_context_export(
         ctx["workspace"]["id"],

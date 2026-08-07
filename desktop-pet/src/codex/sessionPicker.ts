@@ -1,3 +1,8 @@
+import {
+  isInjectedCodexContext,
+  resolveCodexTaskTitle,
+} from "../../electron/codexPresentation";
+
 export type DesktopPetSession = {
   pet_session_id?: string;
   codex_session_id?: string;
@@ -63,7 +68,8 @@ function truncatePreview(value: string, maxLength = 100): string {
 }
 
 function safeDetailText(value: unknown): string {
-  return redactSensitiveText(compactText(value));
+  const text = compactText(value);
+  return text && !isInjectedCodexContext(text) ? redactSensitiveText(text) : "";
 }
 
 function previewText(value: string, fallback: string): string {
@@ -96,11 +102,9 @@ function runtimeLabel(session: DesktopPetSession): string {
 }
 
 function sessionTitle(session: DesktopPetSession): string {
-  return truncatePreview(
-    safeDetailText(session.display_title) ||
-      safeDetailText(session.first_prompt_preview) ||
-      workspaceLabel(session.workspace_path) ||
-      "Codex session",
+  return resolveCodexTaskTitle(
+    [session.display_title, session.first_prompt_preview],
+    session.workspace_path,
     80,
   );
 }

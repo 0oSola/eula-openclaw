@@ -15,6 +15,11 @@ describe("Electron main runtime integration", () => {
     );
 
     expect(nativeMouseBlock).toContain("WM_RBUTTONUP");
+    expect(nativeMouseBlock).toContain("nativeClickCandidateState");
+    expect(nativeMouseBlock).toContain("readNativeClientPoint");
+    expect(nativeMouseBlock).toContain("shouldActivateNativeWindowDrag");
+    expect(nativeMouseBlock).toContain("shouldDispatchNativePetClick");
+    expect(nativeMouseBlock).toContain('source: "native-click-candidate"');
     expect(nativeMouseBlock).toContain('openPetContextMenu(window, { space: "screen", point }, "native")');
     expect(nativeMouseBlock).toContain('"native-mouse:right-button-up"');
     expect(windowEventBlock).not.toContain('window.on("system-context-menu"');
@@ -25,16 +30,23 @@ describe("Electron main runtime integration", () => {
     expect(mainSource).toContain("menu.popup({");
     expect(mainSource).toContain("toElectronMenuTemplate");
     expect(mainSource).toContain('ipcMain.handle("pet:menu:execute"');
+
+    const leftButtonDownBlock = nativeMouseBlock.slice(
+      nativeMouseBlock.indexOf("WM_LBUTTONDOWN"),
+      nativeMouseBlock.indexOf("WM_MOUSEMOVE"),
+    );
+    expect(leftButtonDownBlock).not.toContain('startPetWindowDrag(window, "native")');
   });
 
-  it("exposes renderer menu presentation and execution without a renderer contextmenu fallback", () => {
+  it("exposes renderer menu presentation and execution with camera-mode contextmenu suppression", () => {
     const appSource = readFileSync(path.resolve(__dirname, "../src/App.tsx"), "utf8");
     const menuWindowSource = readFileSync(path.resolve(__dirname, "../src/MenuWindow.tsx"), "utf8");
     const preloadSource = readFileSync(path.resolve(__dirname, "preload.cts"), "utf8");
     const rendererTypes = readFileSync(path.resolve(__dirname, "../src/vite-env.d.ts"), "utf8");
 
     expect(appSource).not.toContain("function handleContextMenu");
-    expect(appSource).not.toContain('document.addEventListener("contextmenu"');
+    expect(appSource).toContain('document.addEventListener("contextmenu"');
+    expect(appSource).toContain('interactionMode !== "camera-adjust"');
     expect(preloadSource).not.toContain("openContextMenu:");
     expect(rendererTypes).not.toContain("openContextMenu:");
     expect(preloadSource).toContain('ipcRenderer.on("pet:menu:show"');
@@ -170,6 +182,18 @@ describe("Electron main runtime integration", () => {
     expect(mainSource).toContain('logPetDebugEvent("app:window-all-closed"');
   });
 
+  it("re-applies persisted bounds after creating the transparent BrowserWindow", () => {
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+    const createWindowBlock = mainSource.slice(
+      mainSource.indexOf("const window = new BrowserWindow(windowOptions)"),
+      mainSource.indexOf("void refreshApiRuntimeStatus()", mainSource.indexOf("const window = new BrowserWindow(windowOptions)")),
+    );
+
+    expect(createWindowBlock).toContain("window.setBounds");
+    expect(createWindowBlock).toContain("windowOptions.width");
+    expect(createWindowBlock).toContain("windowOptions.height");
+  });
+
   it("supports a fresh blank-window diagnostic that bypasses renderer menu IPC, preload, and React", () => {
     const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
     const contextMenuBlock = mainSource.slice(
@@ -249,6 +273,33 @@ describe("Electron main runtime integration", () => {
     expect(mainSource).toContain('window.webContents.send("pet:menu:action", { type: "interaction-mode", mode: currentInteractionMode })');
   });
 
+  it("does not open the native context menu during camera adjustment", () => {
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+    const contextMenuBlock = mainSource.slice(
+      mainSource.indexOf("async function openPetContextMenu"),
+      mainSource.indexOf("function startPetWindowDrag"),
+    );
+
+    expect(mainSource).toContain("shouldOpenPetContextMenu");
+    expect(contextMenuBlock).toContain("context-menu:ignored-camera-adjust");
+    expect(contextMenuBlock.indexOf("shouldOpenPetContextMenu(currentInteractionMode)")).toBeLessThan(
+      contextMenuBlock.indexOf("const now = Date.now()"),
+    );
+  });
+
+  it("prevents Electron's default context menu before routing the custom menu", () => {
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+    const windowContextMenuBlock = mainSource.slice(
+      mainSource.indexOf('window.webContents.on("context-menu"'),
+      mainSource.indexOf('window.webContents.on("console-message"'),
+    );
+
+    expect(windowContextMenuBlock).toContain(
+      'window.webContents.on("context-menu", (event, params) =>',
+    );
+    expect(windowContextMenuBlock).toContain("event.preventDefault()");
+  });
+
   it("shows active workspaces in the context menu and switches the selected workspace from that submenu", () => {
     const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
 
@@ -304,8 +355,9 @@ describe("Electron main runtime integration", () => {
   it("redacts main-process session title fallbacks before publishing status or payloads", () => {
     const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
 
-    expect(mainSource).toContain("function redactSensitiveText");
-    expect(mainSource).toContain("return truncateText(redactSensitiveText(rawTitle), 80)");
+    expect(mainSource).toContain('from "./codexPresentation.js"');
+    expect(mainSource).toContain("resolveCodexTaskTitle(");
+    expect(mainSource).toContain("session.display_title, session.first_prompt_preview, session.last_summary");
   });
 
   it("focuses VSCode without overwriting the current Codex status", () => {

@@ -32,6 +32,24 @@ describe("Codex completion notice", () => {
     });
   });
 
+  it("does not expose injected context as the completed task label", () => {
+    const notice = buildCodexCompletionNotice(
+      {
+        state: "completed",
+        workspacePath: "D:\\workspace\\MMD project",
+        sessionTitle: "<recommended_plugins> Here is a list of plugins...",
+        completionNoticeKey: "completion-injected-context",
+      },
+      [],
+      "Codex",
+    );
+
+    expect(notice).toMatchObject({
+      workspaceLabel: "MMD project",
+      taskLabel: undefined,
+    });
+  });
+
   it("does not rebuild a notice after the user dismissed the same completion", () => {
     const notice = buildCodexCompletionNotice(
       {

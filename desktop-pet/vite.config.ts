@@ -30,5 +30,10 @@ export default defineConfig({
   },
   test: {
     exclude: ["**/node_modules/**", "**/dist/**", "**/dist-electron/**"],
+    server: {
+      deps: {
+        inline: ["reze-engine"],
+      },
+    },
   },
 });

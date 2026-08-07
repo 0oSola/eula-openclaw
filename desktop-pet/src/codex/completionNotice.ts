@@ -1,4 +1,8 @@
 import type { CodexStatus } from "./codexStatus";
+import {
+  resolveCodexTaskTitle,
+  workspaceLabelFromPath,
+} from "../../electron/codexPresentation";
 
 export type CodexCompletionNotice = {
   key: string;
@@ -13,25 +17,6 @@ export const MAX_DISMISSED_COMPLETION_NOTICE_KEYS = 100;
 
 function compact(value: string | null | undefined): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";
-}
-
-function workspaceLabel(workspacePath: string): string {
-  const parts = workspacePath.split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) || "workspace";
-}
-
-function redactSensitiveText(value: string): string {
-  return value
-    .replace(
-      /\b((?:[\w.-]*?(?:token|password|passwd|pwd|secret|api[_-]?key|access[_-]?key|private[_-]?key)[\w.-]*?)\s*[:=]\s*)(["']?)[^\s"',;]+/gi,
-      "$1[redacted]",
-    )
-    .replace(/\b(?:sk|ghp|github_pat|xox[abprs])[-_][A-Za-z0-9._-]{8,}\b/g, "[redacted]");
-}
-
-function truncate(value: string, maxLength: number): string {
-  if (value.length <= maxLength) return value;
-  return `${value.slice(0, maxLength - 3).trimEnd()}...`;
 }
 
 function normalizeDismissedCompletionNoticeKeys(values: readonly unknown[]): string[] {
@@ -87,8 +72,8 @@ export function buildCodexCompletionNotice(
   const key = compact(status.completionNoticeKey);
   if (!key || dismissedKeys?.includes(key)) return null;
 
-  const label = workspaceLabel(workspacePath);
-  const task = truncate(redactSensitiveText(compact(status.sessionTitle)), 72);
+  const label = workspaceLabelFromPath(workspacePath);
+  const task = resolveCodexTaskTitle([status.sessionTitle], workspacePath, 72);
   return {
     key,
     title: `${agentLabel} task completed`,

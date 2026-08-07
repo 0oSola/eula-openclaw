@@ -8,6 +8,8 @@ import {
   createVmdPreviewInteraction,
   createDefaultFavoriteLoopInteraction,
   excludeCompanionUnsafeAssets,
+  isEmptyVmdAsset,
+  mergeFavoriteMotionAssets,
   resolveAutoplayVmdAssetPool,
 } from "../src/features/mapping/vmdPreview.js";
 
@@ -68,6 +70,16 @@ test("favorite VMD autoplay accepts legacy assets without motion profile", () =>
   assert.equal(interaction.vmdUrl, legacy.url);
 });
 
+test("只有 VMD 文件头的空动作不会进入预览、点击或待机播放池", () => {
+  const empty = { ...makeAsset("empty.vmd", true), size_bytes: 64 };
+  const valid = { ...makeAsset("valid.vmd", true), size_bytes: 65 };
+
+  assert.equal(isEmptyVmdAsset(empty), true);
+  assert.equal(isEmptyVmdAsset(valid), false);
+  assert.deepEqual(excludeCompanionUnsafeAssets([empty, valid]), [valid]);
+  assert.equal(createDefaultFavoriteLoopInteraction([empty, valid]).vmdUrl, valid.url);
+});
+
 test("autoplay resume starts from a random favorite motion instead of the fixed first asset", () => {
   const first = makeAsset("idle-a.vmd", true);
   const middle = makeAsset("idle-b.vmd", true);
@@ -114,4 +126,29 @@ test("other models borrow a safe shared idle only when their own favorite idle p
 
   assert.deepEqual(resolveAutoplayVmdAssetPool([ayakaIdle], [eulaIdle]), [ayakaIdle]);
   assert.deepEqual(resolveAutoplayVmdAssetPool([], [eulaIdle]), [eulaIdle]);
+});
+
+test("all Eula favorites remain available when a different PMX is selected", () => {
+  const ayakaFavorite = makeAsset("ayaka-wave.vmd", true, "02_greeting_social");
+  const eulaIdle = makeAsset("eula-idle.vmd", true, "00_idle_loop");
+  const eulaThinking = makeAsset("eula-thinking.vmd", true, "03_thinking_waiting");
+
+  assert.deepEqual(
+    mergeFavoriteMotionAssets([ayakaFavorite], [eulaIdle, eulaThinking]).map((asset) => asset.filename),
+    ["ayaka-wave.vmd", "eula-idle.vmd", "eula-thinking.vmd"],
+  );
+});
+
+test("default standby loop prefers Eula idle over a non-idle favorite on the selected PMX", () => {
+  const ayakaGreeting = makeAsset("ayaka-wave.vmd", true, "02_greeting_social");
+  const eulaIdle = makeAsset("eula-idle.vmd", true, "00_idle_loop");
+
+  assert.deepEqual(resolveAutoplayVmdAssetPool([ayakaGreeting], [eulaIdle]), [eulaIdle]);
+});
+
+test("default standby loop falls back to safe Eula favorites when no idle category exists", () => {
+  const eulaGreeting = makeAsset("eula-wave.vmd", true, "02_greeting_social");
+  const eulaUnsafe = makeAsset("eula-leg-lift.vmd", false, "02_greeting_social");
+
+  assert.deepEqual(resolveAutoplayVmdAssetPool([], [eulaGreeting, eulaUnsafe]), [eulaGreeting]);
 });

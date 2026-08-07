@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 
 import * as THREE from "three";
@@ -474,13 +474,13 @@ test("expression targets vary by emotion and action without using blink morphs",
 
 test("renderFrame restores root transport anchors and bones outside the active VMD clip", () => {
   const allParent = new THREE.Bone();
-  allParent.name = "鍏ㄣ仸銇Κ";
+  allParent.name = "全ての親";
   allParent.position.set(0, 0, 0);
   const leftLegIk = new THREE.Bone();
-  leftLegIk.name = "宸﹁冻锛╋极";
+  leftLegIk.name = "左足ＩＫ";
   leftLegIk.position.set(0, 0, 0);
   const finger = new THREE.Bone();
-  finger.name = "鍙冲皬鎸囷紤";
+  finger.name = "右小指１";
   finger.position.set(0, 0, 0);
 
   const mesh = {
@@ -522,10 +522,10 @@ test("renderFrame restores root transport anchors and bones outside the active V
 
 test("captureBones does not treat leg IK targets as fixed VMD anchors", () => {
   const leftLegIkParent = new THREE.Bone();
-  leftLegIkParent.name = "宸﹁冻IK瑕?;
+  leftLegIkParent.name = "左足IK親";
   leftLegIkParent.position.set(0, 0, 0);
   const leftLegIk = new THREE.Bone();
-  leftLegIk.name = "宸﹁冻锛╋极";
+  leftLegIk.name = "左足ＩＫ";
   leftLegIk.position.set(0, 0, 0);
 
   const mesh = {
@@ -547,7 +547,7 @@ test("captureBones does not treat leg IK targets as fixed VMD anchors", () => {
 
 test("playVmd builds clips against the captured base skeleton instead of the live animated mesh", async () => {
   const rightLegIk = new THREE.Bone();
-  rightLegIk.name = "鍙宠冻锛╋极";
+  rightLegIk.name = "右足ＩＫ";
   rightLegIk.position.set(1, 2, 3);
   const mesh = {
     isSkinnedMesh: true,
@@ -581,7 +581,7 @@ test("playVmd builds clips against the captured base skeleton instead of the liv
     loader: {
       loadAnimation(_url, object, onLoad) {
         loaderTarget = object;
-        loaderBasePosition = object.skeleton.getBoneByName("鍙宠冻锛╋极").position.toArray();
+        loaderBasePosition = object.skeleton.getBoneByName("右足ＩＫ").position.toArray();
         onLoad({ duration: 1 });
       },
     },
@@ -775,7 +775,7 @@ test("stage presentation config exposes k3 as a high-fidelity preset with postfx
   assert.equal(k3.outline.enabled, true);
   assert.ok(k3.outline.scale < 1.02);
   assert.equal(k3.postfx.enabled, true);
-  // UnrealBloomPass 浼氭秱榛戦€忔槑鑳屾櫙锛孠3 鐨?bloom 蹇呴』淇濇寔鍏抽棴
+  // UnrealBloomPass 会涂黑透明背景，K3 的 bloom 必须保持关闭
   assert.equal(k3.postfx.bloomStrength, 0);
   assert.equal(k3.floor.kind, "shadowCatcher");
   assert.equal(k3.floor.contactShadow.enabled, true);
@@ -1156,7 +1156,7 @@ test("classic and genshin material tuners diverge while preserving cutout safety
 
 test("genshin material tuning preserves authored toon ramps while keeping hair presentation readable", () => {
   const existingGradientMap = { id: "authored-ramp" };
-  const hair = makeMaterial({ name: "鍓嶉", transparent: false, specular: 0.7, shininess: 40 });
+  const hair = makeMaterial({ name: "前髪", transparent: false, specular: 0.7, shininess: 40 });
   hair.gradientMap = existingGradientMap;
 
   runtimeModule.tuneGenshinMMDMaterial?.(hair, { id: "generated-ramp" });
@@ -2487,10 +2487,10 @@ test("companion loop lower-body lock restores leg bones even when the VMD animat
 });
 
 test("lower-body detection covers IK parents and waist chain bones", () => {
-  assert.equal(isLowerBodyBoneName("鍙宠冻IK瑕?), true);
-  assert.equal(isLowerBodyBoneName("鑵?), true);
+  assert.equal(isLowerBodyBoneName("右足IK親"), true);
+  assert.equal(isLowerBodyBoneName("腰"), true);
   assert.equal(isLowerBodyBoneName("pelvis"), true);
-  assert.equal(isLowerBodyBoneName("鍙宠厱"), false);
+  assert.equal(isLowerBodyBoneName("右腕"), false);
 });
 
 test("updateVmdLoop starts another built-in idle motion after the current clip duration elapses", () => {

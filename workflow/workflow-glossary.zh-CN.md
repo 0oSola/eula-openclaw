@@ -1,5 +1,14 @@
 # 工作流术语表
 
+# 项目级 Blender MCP 接入
+
+- 英文机器名：`ProjectLocalBlenderMcp`
+- 含义：仅由当前项目 `.codex/config.toml` 启用的 Blender 官方 Lab MCP 链路；Codex 通过项目专用 Python 运行时经 stdio 启动服务端，Blender 5.1.1 的官方 `mcp` 扩展通过本机 `127.0.0.1:9876` 提供桥接。
+- 允许用法：PMX/VMD 导入、动作姿势检查、Blender 网格碰撞诊断和离线动作修正。
+- 禁止用法：不得把它写入 Codex 用户级全局 MCP 配置；不得与旧的第三方 `blenderMCP-addon` 同时启用；不得把 MCP 工具调用当作 `motion_acceptance_gate.py` 或四视角截图/GIF 网格审核的替代。
+- 路由影响：只有从 `D:\workspace\MMD project` 启动的 Codex 任务加载 `blender_lab`；Blender 未运行、官方扩展未启用或 `9876` 已被其他桥接占用时，工具链必须视为不可用并先修正连接状态。
+- 完整定义：见 `workflow/concepts/project-local-blender-mcp.zh-CN.md`。
+
 ## Codex 启动目标
 
 - 英文机器名：`CodexLaunchTarget`
@@ -66,3 +75,131 @@
 - 禁止用法：不得表示只扫描当前工作区；不得把进程存在单独当成会话已绑定；不得把远程 POSIX 路径当作本地路径。
 - 路由影响：调用方只消费统一快照；Codex/Claude 文件扫描、进程枚举、app-server 和 SSH 细节隐藏在 Provider 内部。
 - 完整定义：见 `workflow/concepts/agent-session-discovery.zh-CN.md`。
+# 优菈通用收藏动作
+
+- 英文机器名：`EulaUniversalFavoriteMotions`
+- 含义：优菈 PMX 的收藏 VMD 可被所有 PMX 只读复用的动作库；资产归属和收藏操作仍保留在优菈。
+- 允许用法：收藏列表、手动预览、角色点击动作、聊天动作解析，以及默认待机回退。
+- 禁止用法：不得复制资产、改变 `favorite_model_relative_path`，不得把非 `00_idle_loop` 的优菈动作纳入默认待机。
+- 路由影响：当前 PMX 收藏优先，再合并优菈收藏；待机先依次选择当前 PMX、优菈、其它安全收藏的 `00_idle_loop`，缺失时才回退安全非进场收藏，最后才 procedural idle。
+- 完整定义：见 `workflow/concepts/eula-universal-favorite-motions.zh-CN.md`。
+
+# Reze K3 舞台配置
+
+- 英文机器名：`reze-k3`
+- 含义：当前项目 `renderPipeline` 的并列枚举值；与 `reze-design` 共用 `RezeWebGpuStage`（reze-engine WebGPU）运行时底座，材质、场景、本地 PMX 导入和编辑器 Dock 行为一致，仅语义定位为"复刻 reze-design 项目 MMD 渲染能力"的承接位。
+- 透明背景：`reze-k3` 的 WebGPU 画布透明（`background: null`），不绘制 `#4b004f` 紫红底，由页面 MIO 星海 CSS 背景透出；`reze-design` 保持不透明紫红底。
+- 允许用法：主站渲染模式选择、校准页面 query 参数和 `RenderPipeline` 类型值；编辑器 Dock 四页（材质 / 场景 / 资产 / 渲染）在主站开放。
+- 禁止用法：不得把 WebGPU 兼容性失败静默伪装为 Three.js 成功渲染；不得替代 `reze-design` 或 `reze-npr`；桌面 Pet 无 WebGPU 时不得静默伪装为 Reze K3 成功渲染。
+- 路由影响：选择后由 `RezeWebGpuStage` 创建 `Engine`，行为与 `reze-design` 相同；场景文档、相机快照按 `userId + modelPath + pipeline` 隔离存储，互不影响。
+- VMD 预览影响：每次预览均携带递增的 `vmdRequestId`；只有最新异步加载可提交到模型，重复点击同一收藏动作也必须重新从首帧播放。
+- 局部 VMD 影响：已有姿势上播放只含部分骨骼轨道的 VMD 时，必须保留未覆盖骨骼的当前姿势，禁止因全骨骼重置回退到 PMX 绑定 T 姿势。
+- 动作完成影响：reze-engine 的 `animationState.setOnEnd()` 必须回传页面动作状态机，并按剪辑时长设置兜底完成计时；单次预览、聊天或点击动作结束后复用同一收藏待机恢复规则，不能停在最终帧。
+- 空 VMD 限制：仅含文件头、无骨骼和形态帧的 64 字节 VMD 不是动作，禁止进入预览、角色点击和默认待机候选池；手动点击时必须显示不可预览原因，不能尝试播放后卡住。
+- 循环 URL 限制：传给 WebGPU 舞台的首段 VMD、循环 VMD 与备用 VMD 必须全部绝对化为 API 地址，不能让循环段访问前端 `/assets/...`。
+
+# 克莱妲默认外观
+
+- 英文机器名：`KoledaDefaultAppearance`
+- 含义：模型名称或路径包含“克莱妲”或 `Koleda` 时，加载后默认闭眼并隐藏口罩材质的角色级外观规则。
+- 允许用法：Three.js MMD 舞台与 Reze WebGPU 舞台加载模型、单次动作复原姿势后。
+- 禁止用法：不得修改 PMX/VMD 源文件；不得把该规则应用于未命中克莱妲关键字的模型；不得根据固定材质编号隐藏部件。
+- 路由影响：按 Morph 名称优先选择同时包含 eye/眼/目 与 close/闭 的闭眼通道，缺失时才使用 blink；Reze WebGPU 在每帧 VMD Morph 采样后重新写入该通道，从而保持闭眼并禁用眨眼；按材质名称匹配 `mask`、`face mask`、`mouth mask`、`口罩`、`面具` 后隐藏；Reze WebGPU 对 body/face/skin/肌/脸/顔 命中的材质强制归入 `cloth_smooth`（柔滑布料）分组。
+
+# 通用内置动作库
+
+- 英文机器名：`usage/vmd/_builtin`
+- 含义：优菈规范收藏目录的递归副本；所有 PMX 可读取为默认动作，但其中资产不是收藏。
+- 禁止用法：不得把 `_builtin` 或其它 PMX 动作目录的文件标记为收藏；不得把数据库残留 `is_favorite` 当作收藏来源。
+- 路由影响：收藏只从 `usage/vmd/优菈_by_原神_339146e6e418d79e85a515b26414c0b0[动作]/` 同步；内置副本由资源同步建立并进入全模型动作候选。
+- 完整定义：见 `workflow/concepts/reze-design-stage.zh-CN.md` 的 `reze-k3` 增补章节。
+
+# Reze 材质类别样式组
+
+- 英文机器名：`RezeMaterialStyleGroupId`
+- 含义：按材质语义组织 PMX 材质并提供推荐着色器图的固定类别。标准类别为 `default`、`body`、`eye`、`face`、`hair`、`metal`、`cloth_rough`、`cloth_smooth`、`stockings`，另有 `ungrouped`（未分组）。
+- 允许用法：材质树分组、样式组基线、人工跨组移动和自动分类。
+- 禁止用法：不得把样式组类别等同于当前使用的着色器图，也不得限制该组只能选择推荐图。
+- 路由影响：先解析人工分组覆盖，否则使用自动分类；最终图再按单材质覆盖、组基线、推荐图的顺序解析。
+- 完整定义：见 `workflow/concepts/reze-shader-workflow.zh-CN.md`。
+
+# 样式组基线
+
+- 英文机器名：`groupGraphBindings`
+- 含义：Reze 场景文档中，材质类别样式组指向稳定着色器图引用的组级绑定。
+- 允许用法：组标题快速选择器、恢复推荐图、覆盖数量计算。
+- 禁止用法：切换组基线时不得改写已有单材质图覆盖。
+- 路由影响：仅在当前材质没有单材质图覆盖时参与最终图解析。
+- 完整定义：见 `workflow/concepts/reze-shader-workflow.zh-CN.md`。
+
+# 单材质图覆盖
+
+- 英文机器名：`materialGraphOverrides`
+- 含义：Reze 场景文档中，单个稳定 PMX 材质键指向着色器图引用的显式覆盖。
+- 允许用法：单材质快速选择、图库应用目标、旧 `materialPresets` 迁移。
+- 禁止用法：缺少该字段表示“跟随样式组”，不能用 `默认`图代替继承语义。
+- 路由影响：优先级高于样式组基线；材质跨组移动时继续保留。
+- 完整定义：见 `workflow/concepts/reze-shader-workflow.zh-CN.md`。
+
+# 本地图资产
+
+- 英文机器名：`RezeShaderGraphAsset`
+- 含义：按当前 `userId` 隔离存入 IndexedDB 的可复用着色器图资产，包含稳定 ID、双语名称、`ShaderGraph`、`renderClass`（渲染集成类别）、`alphaMode`（透明度处理模式）、推荐类别、标签、说明和来源元数据。
+- 允许用法：跨模型复用、收藏、JSON 导入/导出、复制、重命名和节点编辑。
+- 禁止用法：场景文档不得复制资产图 JSON；内置图不得作为可写本地图覆盖。
+- 路由影响：场景只保存 `local:<uuid>` 图引用；删除前必须扫描并处理全部引用。
+- 完整定义：见 `workflow/concepts/reze-shader-workflow.zh-CN.md`。
+
+# 着色器编辑草稿
+
+- 英文机器名：`RezeShaderGraphDraft`
+- 含义：节点编辑器正在修改的本地图资产状态。打开内置图或已可应用本地图进行编辑时创建独立草稿，避免编辑过程改变既有场景绑定。
+- 允许用法：自动保存、撤销/重做、临时预览、应用和应用并关闭。
+- 禁止用法：不得把临时预览当作正式场景提交；关闭未应用时不得丢弃草稿。
+- 路由影响：校验与编译成功只更新临时预览；用户点击应用后才把草稿转为可应用资产并更新目标绑定。
+- 完整定义：见 `workflow/concepts/reze-shader-workflow.zh-CN.md`。
+
+# 着色器异步应用事务
+
+- 英文机器名：`RezeShaderApplyTransaction`
+- 含义：从用户选择稳定图引用开始，到图校验、WGSL 生成、WebGPU 管线创建、最新世代确认、舞台切换和场景文档提交结束的原子业务操作。
+- 允许用法：样式组快速选择、单材质选择、图库应用、节点编辑器应用。
+- 禁止用法：不得在异步编译完成前更新已应用勾选或写入场景文档；失败和过期请求不得提交。
+- 路由影响：编译期间旧图继续渲染；只有最新请求成功后才同时提交舞台、界面和持久化。
+- 完整定义：见 `workflow/concepts/reze-shader-workflow.zh-CN.md`。
+
+# Pet 左键输入路由
+
+- 英文机器名：`PetLeftClickRouting`
+- 含义：Desktop Pet 对左键短按、窗口拖动和相机调整进行统一分流的输入规则；按下只记录候选，超过 6px 才启动拖动，静止抬起才选择动作。
+- 允许用法：Pet 默认拖动模式、相机调整模式、透明窗口原生点击兜底。
+- 禁止用法：不得让 `pointerdown` 立即启动拖动；不得让透明层无条件 `click` 或 MMDStage 内部捕获绕过位移判定选择动作。
+- 路由影响：外层文档级指针候选和 Electron 原生候选共同进入同一动作选择入口；WebGPU 舞台矩形由 `MMDStage` 回退到 `RezeWebGpuStage` 画布。
+- 完整定义：见 `workflow/concepts/pet-left-click-routing.zh-CN.md`。
+
+# Pet 相机调整退出保护
+
+- 英文机器名：`PetCameraAdjustExitGuard`
+- 含义：Desktop Pet 在 `camera-adjust` 模式下由 renderer 和 Electron `webContents` 共同阻断默认上下文菜单，再由主进程拒绝自定义右键菜单入口，并通过独立的“保存并退出相机”悬浮按钮保存当前镜头、锁定相机和恢复 `window-drag`。
+- 允许用法：相机拖动、滚轮缩放/旋转、Windows 原生右键和 Electron `webContents` 右键的统一保护。
+- 禁止用法：不得在相机模式弹出右键菜单；不得让退出按钮参与角色点击、窗口拖动或另建相机存储格式。
+- 路由影响：右键请求在 Electron 主进程入口被拒绝；退出按钮复用 `PetInteractionMode` 切换与既有按模型/管线隔离的相机快照保存路线。
+- 完整定义：见 `workflow/concepts/pet-camera-adjust-exit-guard.zh-CN.md`。
+
+# 会话展示清洗
+
+- 英文机器名：`CodexSessionPresentationSanitization`
+- 含义：Desktop Pet 在会话汇合和 UI 展示边界，对注入上下文、旧缓存标题、机器输出包装行和敏感值进行统一过滤、回退、脱敏与限长。
+- 允许用法：会话标题、prompt/summary 预览、完成气泡、底部状态卡和状态通知的共同展示规则。
+- 禁止用法：不得把清洗后的展示文本当作完整 transcript；不得以展示回退值覆盖原始会话证据；不得把进度条、`Exit code` 或分隔线当作用户任务结果。
+- 路由影响：Electron 主进程在 `AgentSessionRecord` 汇合点清洗一次，renderer 的完成通知、状态卡和会话选择器再次按同一纯函数规则防御旧数据；无效标题回退到工作区或有效摘要。
+- 完整定义：见 `workflow/concepts/codex-session-presentation-sanitization.zh-CN.md`。
+
+# Codex 作者知识交接
+
+- 英文机器名：`CodexAuthorKnowledgeHandoff`
+- 含义：Codex 在完成实质任务并形成稳定领域语义变化后生成的不可变 `3+N` 作者提案包，由人读 `handoff.md`、紧凑 `marker.yaml`、Hook 来源 `metadata.json`、一个或多个纯 Markdown candidate 和 `.complete` 组成。
+- 允许用法：把 Codex 的问题、根因、解决方式、边界、知识主张和证据提示交给 Pet、FastAPI 和 OpenClaw 继续治理。
+- 禁止用法：不得由普通 Review `accept` 触发；不得在 marker 中决定 Obsidian 路径、主题身份或发布动作；不得把 candidate 声明为 canonical knowledge；不得在无知识变化时生成空包。
+- 路由影响：数据主链固定为 `Codex -> Pet -> FastAPI -> OpenClaw -> Obsidian`；FastAPI 负责 Repository Evidence 和 Gate，OpenClaw 负责双审核、Vault Topic Resolution、Accepted Wiki Change Set 和发布。
+- 完整定义：见 `workflow/concepts/codex-author-knowledge-handoff.zh-CN.md`。

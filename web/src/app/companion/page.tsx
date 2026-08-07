@@ -11,6 +11,10 @@ import {
   createIdleVmdFallbackInteraction,
   createVmdPreviewInteraction,
   excludeEntryStandbyAssets,
+  isEulaFavoriteMotionAsset,
+  isEmptyVmdAsset,
+  isUniversalBuiltInMotionAsset,
+  mergeFavoriteMotionAssets,
   resolveAutoplayVmdAssetPool,
   resolveVmdPlaybackRate,
 } from "@/features/mapping/vmdPreview.js";
@@ -28,6 +32,7 @@ import {
 } from "@/features/stage/rezeEditorScene";
 import {
   REZE_DESIGN_SCENE_DEFAULTS,
+  REZE_K3_SCENE_DEFAULTS,
   type RezeSceneDebugSettings,
 } from "@/features/stage/rezeDesignDefaults";
 import { CompanionCommandBar } from "./CompanionCommandBar";
@@ -52,13 +57,22 @@ import {
 import {
   DEFAULT_VMD_PLAYBACK_RATE,
 } from "@/features/stage/builtInMotionPreferences.js";
-import { getModelDisplayLabel, pickInitialModelSelection } from "@/features/stage/modelCatalog.js";
+import { getModelDisplayLabel, pickInitialModelSelection, pickRememberedModelSelection } from "@/features/stage/modelCatalog.js";
+import {
+  companionRenderPipelineStorageKey,
+  normalizeRememberedRenderPipeline,
+} from "@/features/stage/companionStagePreferences.js";
+import {
+  buildCompanionSharedConfigPayload,
+  saveCompanionSharedConfigWithTimeout,
+} from "@/features/stage/companionSharedConfigSave.js";
 import { collectImportableVmdFiles } from "@/features/stage/vmdImportHelpers.js";
 import {
   cleanupMessageServiceAdmin,
   createMotionContextExport,
   createChatSession,
   deleteChatSession,
+  getCompanionSharedConfig,
   getLatestMotionContextExport,
   getLatestDailyPodcast,
   refreshDailyPodcast as requestDailyPodcastRefresh,
@@ -135,6 +149,7 @@ type InteractionState = {
   lockLowerBody?: boolean;
   disableCrossfade?: boolean;
   playbackRate?: number;
+  vmdRequestId?: number;
   sequence: InteractionStep[];
 };
 
@@ -214,7 +229,9 @@ function resolveRezeMaterialStyleGroup(entry: StageMaterialDebugEntry): RezeMate
 }
 
 function getRezeSceneDebugDefaults(pipeline: RenderPipeline): RezeSceneDebugSettings {
-  return pipeline === "reze-npr" ? REZE_NPR_SCENE_DEBUG_DEFAULTS : REZE_SCENE_DEBUG_DEFAULTS;
+  if (pipeline === "reze-npr") return REZE_NPR_SCENE_DEBUG_DEFAULTS;
+  if (pipeline === "reze-k3") return REZE_K3_SCENE_DEFAULTS;
+  return REZE_SCENE_DEBUG_DEFAULTS;
 }
 type StageInteractionMode =
   | "default_idle"
@@ -300,11 +317,11 @@ const INPUT_LABEL =
   "\u8f93\u5165\u4f60\u7684\u6307\u4ee4 / \u4efb\u52a1 / \u95ee\u9898...\uff08Enter \u53d1\u9001\uff0cShift + Enter \u6362\u884c\uff09";
 
 function isRezeEditorPipeline(pipeline: RenderPipeline): boolean {
-  return pipeline === "reze-design" || pipeline === "reze-npr";
+  return pipeline === "reze-design" || pipeline === "reze-npr" || pipeline === "reze-k3";
 }
 
 function normalizeRenderPipeline(value?: string): RenderPipeline {
-  if (value === "classic" || value === "hero-shot" || value === "genshin" || value === "mio-reference" || value === "reze-npr" || value === "reze-design" || value === "k3") {
+  if (value === "classic" || value === "hero-shot" || value === "genshin" || value === "mio-reference" || value === "reze-npr" || value === "reze-design" || value === "k3" || value === "reze-k3") {
     return value;
   }
   return "mio-reference";
@@ -403,6 +420,7 @@ const renderPipelineOptions: { value: RenderPipeline; label: string; description
   { value: "genshin", label: "Genshin", description: "Project2 \u900f\u660e\u98ce\u683c" },
   { value: "reze-npr", label: "Reze NPR", description: "reze-engine \u5b9e\u9a8c\u98ce\u683c" },
   { value: "reze-design", label: "Reze Design", description: "Reze \u706f\u5149\u00b7MIO \u661f\u6d77\u821e\u53f0" },
+  { value: "reze-k3", label: "Reze K3", description: "Reze WebGPU \u590d\u523b\u00b7\u6750\u8d28\u4e0e\u573a\u666f" },
 ];
 
 const MIO_REFERENCE_CAMERA_DEFAULT: MmdCameraSnapshot = {
@@ -521,8 +539,11 @@ export default function CompanionPage() {
         defaultInteraction: createDefaultInteractionState(),
       }) as StageInteractionViewState,
   );
+  const stageInteractionStateRef = useRef<StageInteractionViewState>(stageInteractionState);
+  stageInteractionStateRef.current = stageInteractionState;
   const [stageClickRipples, setStageClickRipples] = useState<StageClickRipple[]>([]);
   const lastStageClickVmdAssetIdRef = useRef("");
+  const vmdPreviewRequestIdRef = useRef(0);
   const [mappings, setMappings] = useState<Record<string, MappingConfig>>({});
   const [assets, setAssets] = useState<VmdAsset[]>([]);
   const [models, setModels] = useState<MmdModelAsset[]>([]);
@@ -626,13 +647,16 @@ export default function CompanionPage() {
   useEffect(() => {
     if (!session?.userId || !selectedModelPath) return;
     const controller = new AbortController();
+    const payload = buildCompanionSharedConfigPayload({
+      selectedModelPath,
+      renderPipeline,
+      rezeStageDocument,
+      rezeSceneDebugSettings,
+    });
     const timeoutId = window.setTimeout(() => {
       putCompanionSharedConfig(
         session.userId,
-        {
-          selected_model_path: selectedModelPath,
-          render_pipeline: renderPipeline,
-        },
+        payload,
         { signal: controller.signal },
       ).catch(() => {
         // Shared config is best-effort. Local companion state must not break.
@@ -642,7 +666,18 @@ export default function CompanionPage() {
       controller.abort();
       window.clearTimeout(timeoutId);
     };
-  }, [session?.userId, selectedModelPath, renderPipeline]);
+  }, [
+    rezeSceneDebugSettings,
+    rezeStageDocument,
+    renderPipeline,
+    selectedModelPath,
+    session?.userId,
+  ]);
+
+  useEffect(() => {
+    if (!session?.userId) return;
+    window.localStorage.setItem(companionRenderPipelineStorageKey(session.userId), renderPipeline);
+  }, [renderPipeline, session?.userId]);
 
   useEffect(() => {
     return () => {
@@ -652,7 +687,9 @@ export default function CompanionPage() {
 
   useEffect(() => {
     const saved = loadSession();
-    const normalizedPipeline: RenderPipeline = "mio-reference";
+    const normalizedPipeline: RenderPipeline = normalizeRememberedRenderPipeline(
+      saved?.userId ? window.localStorage.getItem(companionRenderPipelineStorageKey(saved.userId)) : "",
+    ) as RenderPipeline;
     const normalizedSession = saved
       ? {
           ...saved,
@@ -681,11 +718,12 @@ export default function CompanionPage() {
 
     (async () => {
       try {
-        const [mappingRows, assetRows, modelRows, sessionRows] = await Promise.all([
+        const [mappingRows, assetRows, modelRows, sessionRows, sharedConfig] = await Promise.all([
           getResolvedMappings(session.userId),
           listVmdAssets(session.userId),
           listMmdModels(),
           listChatSessions(session.userId),
+          getCompanionSharedConfig(session.userId).catch(() => null),
         ]);
         if (cancelled) return;
 
@@ -697,11 +735,18 @@ export default function CompanionPage() {
           if (current && modelRows.some((item) => item.relative_path === current)) {
             return current;
           }
-          const preferred =
-            modelRows.find((item) => item.relative_path.includes(DEFAULT_MODEL_RELATIVE_PATH)) ||
-            pickInitialModelSelection(modelRows, DEFAULT_MODEL_RELATIVE_PATH);
+          const preferred = pickRememberedModelSelection(
+            modelRows,
+            sharedConfig?.selected_model_path || "",
+            DEFAULT_MODEL_RELATIVE_PATH,
+          );
           return preferred?.relative_path || "";
         });
+        setRenderPipeline((current) =>
+          current === "mio-reference"
+            ? (normalizeRememberedRenderPipeline(sharedConfig?.render_pipeline) as RenderPipeline)
+            : current,
+        );
 
         let activeSession =
           sessionRows.find((item) => item.id === session.activeChatSessionId) ||
@@ -1066,41 +1111,34 @@ export default function CompanionPage() {
     lastStageClickVmdAssetIdRef.current = "";
   }, [selectedModel?.relative_path]);
 
-  const currentModelFavoriteAssets = useMemo(() => {
-    if (!selectedModel?.relative_path) return [];
-    return visibleRecentVmdAssets.filter(
-      (asset) => asset.is_favorite && asset.favorite_model_relative_path === selectedModel.relative_path,
-    );
-  }, [selectedModel?.relative_path, visibleRecentVmdAssets]);
+  const eulaFavoriteAssets = useMemo(
+    () => visibleRecentVmdAssets.filter((asset) => isEulaFavoriteMotionAsset(asset)),
+    [visibleRecentVmdAssets],
+  );
+
+  const universalBuiltinAssets = useMemo(
+    () => visibleRecentVmdAssets.filter((asset) => isUniversalBuiltInMotionAsset(asset)),
+    [visibleRecentVmdAssets],
+  );
+
+  const availableFavoriteAssets = eulaFavoriteAssets;
 
   const currentModelLibraryAssets = useMemo(() => {
-    return visibleRecentVmdAssets.filter(
-      (asset) => !asset.is_favorite || asset.favorite_model_relative_path === selectedModel?.relative_path,
+    return mergeFavoriteMotionAssets(
+      visibleRecentVmdAssets.filter((asset) => !asset.is_favorite || isEulaFavoriteMotionAsset(asset)),
+      eulaFavoriteAssets,
     );
-  }, [selectedModel?.relative_path, visibleRecentVmdAssets]);
-
-  const currentModelAutoplayAssets = useMemo(() => {
-    if (!selectedModel?.relative_path) return [];
-    return recentVmdAssets.filter(
-      (asset) => asset.is_favorite && asset.favorite_model_relative_path === selectedModel.relative_path,
-    );
-  }, [selectedModel?.relative_path, recentVmdAssets]);
-
-  const sharedIdleAutoplayAssets = useMemo(() => {
-    return recentVmdAssets.filter(
-      (asset) => asset.is_favorite && asset.favorite_model_relative_path !== selectedModel?.relative_path,
-    );
-  }, [recentVmdAssets, selectedModel?.relative_path]);
+  }, [eulaFavoriteAssets, visibleRecentVmdAssets]);
 
   const autoplayVmdAssets = useMemo(
-    () => resolveAutoplayVmdAssetPool(currentModelAutoplayAssets, sharedIdleAutoplayAssets),
-    [currentModelAutoplayAssets, sharedIdleAutoplayAssets],
+    () => resolveAutoplayVmdAssetPool([], eulaFavoriteAssets, universalBuiltinAssets),
+    [eulaFavoriteAssets, universalBuiltinAssets],
   );
 
   const filteredFavoriteAssets = useMemo(() => {
-    if (advancedFavoriteSlotFilter === "all") return currentModelFavoriteAssets;
-    return currentModelFavoriteAssets.filter((asset) => asset.slot === advancedFavoriteSlotFilter);
-  }, [advancedFavoriteSlotFilter, currentModelFavoriteAssets]);
+    if (advancedFavoriteSlotFilter === "all") return availableFavoriteAssets;
+    return availableFavoriteAssets.filter((asset) => asset.slot === advancedFavoriteSlotFilter);
+  }, [advancedFavoriteSlotFilter, availableFavoriteAssets]);
 
   const autoFavoriteInteraction = useMemo<InteractionState | null>(() => {
     return buildAutoFavoriteInteraction(autoplayVmdAssets) as InteractionState | null;
@@ -1170,15 +1208,6 @@ export default function CompanionPage() {
   }, [renderPipeline, rezeSceneDebugSettings, rezeStageDocument, selectedModelPath, session?.userId]);
 
   useEffect(() => {
-    if (!isRezeEditorOpen || !isRezeEditorPipeline(renderPipeline)) return;
-    const timer = window.setTimeout(() => {
-      stageRef.current?.setSceneDebugSettings?.(rezeSceneDebugSettings);
-      refreshStageMaterialDebug();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [isRezeEditorOpen, renderPipeline, rezeSceneDebugSettings]);
-
-  useEffect(() => {
     return () => {
       stopServerAudio({ updateSpeaking: false });
       cancelRealtimeVoicePlayback({ closeSocket: true });
@@ -1187,27 +1216,43 @@ export default function CompanionPage() {
 
   function previewVmdAsset(asset: VmdAsset) {
     setAdvancedError("");
-    if (asset.is_favorite && asset.favorite_model_relative_path !== selectedModel?.relative_path) {
-      const favoriteModel = models.find((model) => model.relative_path === asset.favorite_model_relative_path);
-      const favoriteModelLabel = favoriteModel ? getModelDisplayLabel(favoriteModel) : "收藏角色";
-      setAdvancedMessage("");
-      setAdvancedError(`该 VMD 已收藏到${favoriteModelLabel}，切换到对应角色后才能预览。`);
+    if (isEmptyVmdAsset(asset)) {
+      setAdvancedError(`${asset.display_name || asset.filename} 不含任何动作帧，无法预览。`);
       return;
     }
     setAdvancedMessage(`Previewing ${asset.display_name || asset.filename}`);
+    const state = stageInteractionStateRef.current;
+    // 再次点同一个动作 = 停止预览，立即回到自动循环 / 默认待机。与舞台点击
+    // 切换动作的行为对齐：预览视为一种「点选切换」的临时 VMD，不是锁死的播单。
+    if (state.mode === "manual_preview" && state.activeVmdAssetId === asset.asset_id) {
+      resumeStageAfterInteractionComplete();
+      return;
+    }
+
     const preview = createVmdPreviewInteraction(asset, Number(advancedPlaybackRate) || 1);
+    const nextInteraction: InteractionState = {
+      emotion: preview.emotion,
+      action: preview.action,
+      mode: "vmd",
+      vmdUrl: preview.vmdUrl,
+      vmdLoopUrls: [],
+      vmdLoopEmotionByUrl: preview.vmdLoopEmotionByUrl,
+      playbackRate: preview.playbackRate || DEFAULT_VMD_PLAYBACK_RATE,
+      sequence: preview.sequence,
+    };
+
+    // 预览替换一段「单次 VMD」（手动预览 / 舞台点击 / 聊天一次性动作）时，需要
+    // 显式 bump vmdRequestId 让 useEffect 重新触发一次播放请求；否则 URL 改变
+    // 虽然也会引起 effect 重跑，但「同 URL 再次预览」在 WebGPU 路径会因 guard
+    // 跳过加载，从而看起来没有反应。
+    // WebGPU 的 useEffect 依赖 vmdUrl / playbackRate / vmdRequestId 触发加载。
+    // 只要每次预览都带一个新的 vmdRequestId，就能稳定触发「重新播放」，无论
+    // 前一个 interaction 是循环还是单次。
+    nextInteraction.vmdRequestId = ++vmdPreviewRequestIdRef.current;
+
     setStageInteractionState(
       startManualPreview({
-        interaction: {
-          emotion: preview.emotion,
-          action: preview.action,
-          mode: "vmd",
-          vmdUrl: preview.vmdUrl,
-          vmdLoopUrls: [],
-          vmdLoopEmotionByUrl: preview.vmdLoopEmotionByUrl,
-          playbackRate: preview.playbackRate || DEFAULT_VMD_PLAYBACK_RATE,
-          sequence: preview.sequence,
-        },
+        interaction: nextInteraction,
         activeVmdAssetId: asset.asset_id,
         canAutoResume: Boolean(autoplayResumeInteraction),
       }) as StageInteractionViewState,
@@ -1224,6 +1269,14 @@ export default function CompanionPage() {
     );
     setAdvancedError("");
     setAdvancedMessage("Model reset to default state.");
+  }
+
+  function isReadOnlySharedFavorite(asset: VmdAsset) {
+    return Boolean(
+      asset.is_favorite &&
+        asset.favorite_model_relative_path &&
+        asset.favorite_model_relative_path !== selectedModel?.relative_path,
+    );
   }
 
   async function handleFavoriteAsset(asset: VmdAsset) {
@@ -1701,10 +1754,18 @@ export default function CompanionPage() {
     }
     setSharedConfigSaving(true);
     try {
-      await putCompanionSharedConfig(session.userId, {
-        selected_model_path: selectedModelPath,
-        render_pipeline: renderPipeline,
-      });
+      await saveCompanionSharedConfigWithTimeout((signal: AbortSignal) =>
+        putCompanionSharedConfig(
+          session.userId,
+          buildCompanionSharedConfigPayload({
+            selectedModelPath,
+            renderPipeline,
+            rezeStageDocument,
+            rezeSceneDebugSettings,
+          }),
+          { signal },
+        ),
+      );
       setAdvancedMessage("已保存到桌面 Pet。请在 pet 右键菜单选择 Sync from Main Site / 从主站同步。");
       pushToast("已保存到桌面 Pet。");
     } catch (err) {
@@ -2152,7 +2213,7 @@ export default function CompanionPage() {
     }, STAGE_CLICK_RIPPLE_DURATION_MS);
 
     const clickAction = resolveStageCharacterClickInteraction({
-      assets: currentModelFavoriteAssets,
+      assets: availableFavoriteAssets,
       previousActiveVmdAssetId: lastStageClickVmdAssetIdRef.current,
     }) as { interaction: InteractionState; activeVmdAssetId: string };
     if (clickAction.activeVmdAssetId) {
@@ -2736,7 +2797,7 @@ export default function CompanionPage() {
       data-reze-grade={rezeStageDocument.grade}
     >
       <MioModeBackground
-        active={renderPipeline === "mio-reference" || renderPipeline === "reze-npr"}
+        active={renderPipeline === "mio-reference" || renderPipeline === "reze-npr" || renderPipeline === "reze-k3"}
         speaking={speaking}
         emotion={interaction.emotion}
         action={interaction.action}
@@ -3212,12 +3273,14 @@ export default function CompanionPage() {
             models={models}
             selectedModelPath={selectedModelPath}
             modelUrl={selectedModel?.url || ""}
-            rezeLocalModelImport={renderPipeline === "reze-design" ? rezeLocalModelImport : null}
+            rezeLocalModelImport={renderPipeline === "reze-design" || renderPipeline === "reze-k3" ? rezeLocalModelImport : null}
             modelLabel={selectedModel ? getModelDisplayLabel(selectedModel) : ""}
             renderPipeline={renderPipeline}
             rezeBackgroundEffect={rezeStageDocument.backgroundEffect}
             rezeGrade={rezeStageDocument.grade}
             rezeGradeIntensity={rezeStageDocument.gradeIntensity}
+            rezeSceneDebugSettings={rezeSceneDebugSettings}
+            rezeTransparentBackground={renderPipeline === "reze-k3"}
             cameraSnapshot={stageCameraSnapshot}
             onModelChange={handleCharacterSwitch}
           />
@@ -3365,7 +3428,7 @@ export default function CompanionPage() {
                     </nav>
                     <div className="mio-reze-editor-body">
                     <div className="mio-camera-controls-head mio-reze-editor-head">
-                      <div><strong>Reze Design</strong><span>My first scene</span></div>
+                      <div><strong>{renderPipeline === "reze-k3" ? "Reze K3" : "Reze Design"}</strong><span>{rezeStageDocument.name}</span></div>
                       <button
                         type="button"
                         className="mio-advanced-mini"
@@ -3376,7 +3439,7 @@ export default function CompanionPage() {
                       </button>
                     </div>
 
-                    <div className="mio-stage-debug-tabs" role="tablist" aria-label="Reze Design 调试类别">
+                    <div className="mio-stage-debug-tabs" role="tablist" aria-label={renderPipeline === "reze-k3" ? "Reze K3 调试类别" : "Reze Design 调试类别"}>
                       <button
                         type="button"
                         role="tab"
@@ -3856,7 +3919,7 @@ export default function CompanionPage() {
 
                   <div className="mio-advanced-list">
                     <div className="mio-advanced-list-head">
-                      <span>{advancedTab === "library" ? "Recent VMD Assets" : "Current Model Favorites"}</span>
+                      <span>{advancedTab === "library" ? "最近使用的 VMD 动作" : "所有 PMX 可用的收藏动作"}</span>
                       <strong>
                         {(advancedTab === "library" ? currentModelLibraryAssets.length : filteredFavoriteAssets.length)
                           .toString()
@@ -3913,9 +3976,10 @@ export default function CompanionPage() {
                                 type="button"
                                 className={`mio-advanced-mini ${asset.is_favorite ? "is-active" : ""}`}
                                 onClick={() => handleFavoriteAsset(asset)}
-                                disabled={advancedBusy || !selectedModel?.relative_path}
+                                disabled={advancedBusy || !selectedModel?.relative_path || isReadOnlySharedFavorite(asset)}
+                                title={isReadOnlySharedFavorite(asset) ? "优菈共享动作只能预览，不能从当前 PMX 修改收藏归属。" : undefined}
                               >
-                                {asset.is_favorite ? "Unfavorite" : "Favorite"}
+                                {isReadOnlySharedFavorite(asset) ? "优菈共享" : asset.is_favorite ? "Unfavorite" : "Favorite"}
                               </button>
                               <button
                                 type="button"

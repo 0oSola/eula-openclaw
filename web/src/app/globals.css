@@ -3339,6 +3339,9 @@ a {
   height: 100%;
   min-height: 0;
   display: grid;
+  /* 网格行必须钉在容器高度：WebGPU 画布为 height:100%，若行被内容撑高，
+     画布会溢出舞台，只显示顶部一条（模型被裁掉，看似“没有渲染”）。 */
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
   overflow: hidden;
 }
@@ -4866,6 +4869,10 @@ a {
   display: grid;
   gap: 12px;
   min-height: 0;
+  /* 材质树 + 检查器 + 素材库常超过编辑器 dock 高度；容器必须自身滚动，
+     否则 grid 行溢出，材质叶与选中材质检查器会相互叠在一起。 */
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px 14px 20px;
 }
 
@@ -4952,6 +4959,10 @@ a {
   display: grid;
   gap: 2px;
   min-height: 0;
+  /* 树被编辑器 dock 压缩时必须在内部滚动；否则溢出的材质叶会
+     溢出到下方选中材质检查器之上，造成文字/控件相互重叠。 */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .mio-reze-material-group {

@@ -37,6 +37,8 @@ def _cached_scan(cache_key: str, scan_fn) -> list[Path]:
 ALLOWED_SLOTS = {"neutral", "happy", "sad", "thinking", "excited", "caring"}
 MMD_MODEL_EXTENSIONS = {".pmx", ".pmd"}
 MMD_MOTION_EXTENSIONS = {".vmd"}
+UNIVERSAL_FAVORITE_DIRECTORY_NAME = "优菈_by_原神_339146e6e418d79e85a515b26414c0b0[动作]"
+UNIVERSAL_BUILTIN_RELATIVE_DIRECTORY = Path("usage") / "vmd" / "_builtin"
 VMD_HEADER_SIZE = 50
 VMD_BONE_FRAME_SIZE = 111
 VMD_LOWER_BODY_MOTION_THRESHOLD = 0.35
@@ -266,12 +268,30 @@ def _ensure_unique_path(directory: Path, filename: str) -> Path:
         index += 1
 
 
-def _favorite_directory_for_model(root: Path, model_relative_path: str) -> Path:
-    model_path = _resolve_mmd_request_path(root, model_relative_path)
-    if model_path.suffix.lower() not in MMD_MODEL_EXTENSIONS or not model_path.exists():
-        raise HTTPException(status_code=404, detail="MMD model not found.")
-    folder_name = _usage_vmd_folder_name_for_model(model_path, root)
-    return root / "usage" / "vmd" / folder_name
+def _universal_favorite_directory(root: Path) -> Path:
+    return root / "usage" / "vmd" / UNIVERSAL_FAVORITE_DIRECTORY_NAME
+
+
+def _universal_builtin_directory(root: Path) -> Path:
+    return root / UNIVERSAL_BUILTIN_RELATIVE_DIRECTORY
+
+
+def _relative_path_starts_with(relative_path: str | None, directory: Path) -> bool:
+    if not relative_path:
+        return False
+    normalized = Path(relative_path.replace("\\", "/"))
+    try:
+        normalized.relative_to(directory)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_universal_favorite_relative_path(relative_path: str | None) -> bool:
+    return _relative_path_starts_with(
+        relative_path,
+        Path("usage") / "vmd" / UNIVERSAL_FAVORITE_DIRECTORY_NAME,
+    )
 
 
 def _infer_model_relative_path_from_favorite_path(root: Path, favorite_relative_path: str | None) -> str | None:
@@ -304,7 +324,7 @@ def _sync_favorite_copy(settings, item: dict, display_name: str, model_relative_
     source_path = settings.data_dir / item["relative_path"]
     if not source_path.exists():
         raise HTTPException(status_code=404, detail="Asset file missing.")
-    favorite_dir = _favorite_directory_for_model(settings.mmd_root_dir.resolve(), model_relative_path)
+    favorite_dir = _universal_favorite_directory(settings.mmd_root_dir.resolve())
     favorite_dir.mkdir(parents=True, exist_ok=True)
     target_path = favorite_dir / display_name
     previous_relative_path = item.get("favorite_relative_path")
@@ -320,18 +340,69 @@ def _sync_favorite_copy(settings, item: dict, display_name: str, model_relative_
 def _sync_usage_vmd_assets_to_db(settings, store, user_id: str) -> None:
     with _USAGE_VMD_SYNC_LOCK:
         root = settings.mmd_root_dir.resolve()
-        for motion_path in _iter_usage_vmds(root):
-            favorite_relative_path = motion_path.relative_to(root).as_posix()
-            model_relative_path = _infer_model_relative_path_from_favorite_path(root, favorite_relative_path)
-            if not model_relative_path:
-                continue
+        favorite_dir = _universal_favorite_directory(root)
+        builtin_dir = _universal_builtin_directory(root)
+        all_items = store.list_assets(requester_user_id=user_id, is_admin=False, user_id_filter=user_id)
+        canonical_favorite_paths: set[str] = set()
+        for item in all_items:
+            favorite_relative_path = item.get("favorite_relative_path")
+            favorite_path = root / favorite_relative_path if favorite_relative_path else None
+            invalid_or_duplicate_favorite = (
+                not _is_universal_favorite_relative_path(favorite_relative_path)
+                or favorite_path is None
+                or not favorite_path.is_file()
+                or favorite_relative_path in canonical_favorite_paths
+            )
+            if item.get("is_favorite") and invalid_or_duplicate_favorite:
+                store.update_asset(
+                    item["asset_id"],
+                    display_name=item.get("display_name"),
+                    is_favorite=False,
+                    favorite_relative_path=None,
+                    favorite_model_relative_path=None,
+                )
+            elif item.get("is_favorite"):
+                canonical_favorite_paths.add(favorite_relative_path)
 
-            existing = store.get_asset_by_favorite_relative_path(user_id, favorite_relative_path)
+        if favorite_dir.exists():
+            for motion_path in favorite_dir.rglob("*"):
+                if not motion_path.is_file() or motion_path.suffix.lower() not in MMD_MOTION_EXTENSIONS:
+                    continue
+                builtin_path = builtin_dir / motion_path.relative_to(favorite_dir)
+                builtin_path.parent.mkdir(parents=True, exist_ok=True)
+                if not builtin_path.exists() or builtin_path.stat().st_size != motion_path.stat().st_size:
+                    shutil.copy2(motion_path, builtin_path)
+
+        canonical_model_paths = [
+            model_path.relative_to(root).as_posix()
+            for model_path in _iter_mmd_models(root)
+            if _usage_vmd_folder_name_for_model(model_path, root) == UNIVERSAL_FAVORITE_DIRECTORY_NAME
+        ]
+        canonical_model_path = canonical_model_paths[0] if len(canonical_model_paths) == 1 else None
+        motion_paths = [
+            item
+            for directory in (favorite_dir, builtin_dir)
+            if directory.exists()
+            for item in directory.rglob("*")
+            if item.is_file() and item.suffix.lower() in MMD_MOTION_EXTENSIONS
+        ]
+        for motion_path in motion_paths:
+            favorite_relative_path = motion_path.relative_to(root).as_posix()
+            is_universal_favorite = _is_universal_favorite_relative_path(favorite_relative_path)
+            existing = next(
+                (
+                    item
+                    for item in all_items
+                    if item.get("relative_path") == favorite_relative_path
+                    or item.get("favorite_relative_path") == favorite_relative_path
+                ),
+                None,
+            )
             display_name = _normalize_vmd_filename(motion_path.name)
             if existing:
-                if (
+                if is_universal_favorite and (
                     not existing.get("is_favorite")
-                    or existing.get("favorite_model_relative_path") != model_relative_path
+                    or existing.get("favorite_model_relative_path") != canonical_model_path
                     or not existing.get("display_name")
                 ):
                     store.update_asset(
@@ -339,7 +410,7 @@ def _sync_usage_vmd_assets_to_db(settings, store, user_id: str) -> None:
                         display_name=existing.get("display_name") or display_name,
                         is_favorite=True,
                         favorite_relative_path=favorite_relative_path,
-                        favorite_model_relative_path=model_relative_path,
+                        favorite_model_relative_path=canonical_model_path,
                     )
                 continue
 
@@ -351,13 +422,14 @@ def _sync_usage_vmd_assets_to_db(settings, store, user_id: str) -> None:
                 relative_path=favorite_relative_path,
                 size_bytes=motion_path.stat().st_size,
             )
-            store.update_asset(
-                created["asset_id"],
-                display_name=display_name,
-                is_favorite=True,
-                favorite_relative_path=favorite_relative_path,
-                favorite_model_relative_path=model_relative_path,
-            )
+            if is_universal_favorite:
+                store.update_asset(
+                    created["asset_id"],
+                    display_name=display_name,
+                    is_favorite=True,
+                    favorite_relative_path=favorite_relative_path,
+                    favorite_model_relative_path=canonical_model_path,
+                )
 
 
 def _resolve_vmd_asset_file_path(settings, item: dict) -> Path:
@@ -531,7 +603,10 @@ def update_vmd_asset(
         if not model_relative_path:
             raise HTTPException(status_code=400, detail="model_relative_path is required when favoriting an asset.")
         favorite_relative_path = _sync_favorite_copy(settings, item, display_name, model_relative_path)
-        favorite_model_relative_path = model_relative_path
+        favorite_model_relative_path = (
+            _infer_model_relative_path_from_favorite_path(settings.mmd_root_dir.resolve(), favorite_relative_path)
+            or model_relative_path
+        )
     else:
         _remove_favorite_copy(settings, item)
         favorite_relative_path = None

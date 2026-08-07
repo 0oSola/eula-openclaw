@@ -18,7 +18,7 @@ Reze Design 舞台配置。
 
 Reze Design 的默认舞台不再依据早期截图参数或页面 MIO 背景推断，而是以 `D:\workspace\reze-design\reze-design\lib\default-scene.ts` 的 bundled 默认场景为准。WebGPU 画布必须绘制原生 `#4b004f` 背景和独立实现的 `Shining Stars` WGSL 效果；世界光、太阳、Bloom、地面、网格和相机必须使用同一默认源。此规则仅适用于 `reze-design`，透明的 MIO 背景合成仍属于 `reze-npr`。
 
-为避免没有本模型收藏待机时回到 PMX 的 T 姿 bind pose，舞台待机可只读借用其它模型的 `companion_safe` 收藏 VMD；当前模型有可播放待机时必须优先并且只使用当前模型收藏。借用播放不改变收藏权属，不参与资源库展示、收藏操作、聊天动作解析或点击动作。
+优菈收藏动作遵循 `EulaUniversalFavoriteMotions`：所有 PMX 可只读复用优菈收藏用于资源库、手动预览、点击动作和聊天解析，但不复制资产或改变收藏归属。默认待机仅使用 `00_idle_loop`，顺序为当前 PMX → 优菈 → 其它安全收藏 → procedural idle；招呼、思考、回答、个性和进场动作不得混入待机循环。
 
 参考项目本体为 AGPL-3.0，但 `reze-engine` 为 MIT；当前实现只依赖后者、独立编写适配层，不复制参考编辑器源码。`RezeWebGpuStage` 真实调用 `Engine.init()`、`loadModel()`、`autoStyleGroups()`、`Model.loadVmd()` 和 `runRenderLoop()`，从而让合格的 PMX/VMD 使用 WebGPU 渲染。它与旧 Three.js `MMDCompanionRuntime` 并列存在，不能把 WebGPU 失败悄悄切成 Three.js 并仍标为 Reze Design。
 
@@ -99,4 +99,62 @@ Reze Design 的默认舞台不再依据早期截图参数或页面 MIO 背景推
 
 ## 与现有概念的关系
 
-`reze-design` 复用 `reze-npr` 的 PMX 材质分类，但二者是不同的渲染配置。它与 `k3`、`mio-reference` 等同属 `renderPipeline` 的并列值；不改变 MMD 动作验收 Gate 或骨骼坐标系统。
+`reze-design` 复用 `reze-npr` 的 PMX 材质分类，但二者是不同的渲染配置。它与 `k3`、`mio-reference`、`reze-k3` 等同属 `renderPipeline` 的并列值；不改变 MMD 动作验收 Gate 或骨骼坐标系统。
+
+## 2026-08-03 增补：`reze-k3` 并列舞台模式
+
+`reze-k3` 是本轮新增的并列 `RenderPipeline` 枚举值，运行时底座与 `reze-design` 相同——复用 `RezeWebGpuStage`（reze-engine WebGPU），材质走九个内置 WGSL 图，场景走引擎 world/sun/bloom/ground/camera。它与 `reze-design` 的差别仅在语义定位：`reze-design` 以参考工程默认场景（`#4b004f` 紫红底 + Shining Stars + `#ed6aff` 世界光）为构图基准，`reze-k3` 则是"复刻 reze-design 项目 MMD 渲染能力"的承接位，两者共享同一套编辑器 Dock、本地 PMX 导入和场景文档存储（按 `userId + modelPath + pipeline` 隔离，互不影响）。
+
+**透明背景差异**：`reze-k3` 的 WebGPU 画布透明（`setBackgroundColor(null)` + 引擎构造 `background: null`），不绘制 `#4b004f` 紫红底，由页面 `MioModeBackground` 星海 CSS 背景透出；`MioModeBackground` 的激活条件因此追加 `reze-k3`。`reze-design` 仍保持不透明紫红底。两模式的 Shining Stars 星空效果均保留（画在 WebGPU 透明层上，叠加于 MIO 背景之上）。`RezeWebGpuStage` 新增 `transparentBackground` prop，由 `MMDStage` 按管线（`reze-k3` → true）传入，同时作用于引擎构造参数和 `applySceneSettings()` 的 `setBackgroundColor`。
+
+与 `reze-design` 一样，`reze-k3` 在主站开放编辑器 Dock（材质 / 场景 / 资产 / 渲染四页），支持本地 PMX 目录导入和 PNG 导出；浏览器无 WebGPU 时舞台内显示错误，用户手动切回 `reze-npr` 恢复。桌面 Pet 的 `/desktop-pet/shared-config` 已接受 `reze-k3`，同步主站配置后会复用 `MMDStage` 的 WebGPU 分支加载。
+
+**VMD URL 绝对化修复（2026-08-03）**：`MMDStage` 传给 `RezeWebGpuStage` 的 `interaction.vmdUrl` 此前未像 Three.js 分支那样调用 `toAbsolute()`，导致 `loadVmd` 把相对路径 `/assets/vmd/file/...` 请求到 web 前端（3100）而非 API（8100），返回 404 并把整个 WebGPU 舞台标记为 error。现已在 `MMDStage` 构造 `webGpuInteraction`（对 vmdUrl 做 `toAbsolute`）统一传给两处 WebGPU 分支；该修复同时作用于 `reze-design` 和 `reze-k3`。
+
+核心不变量追加：
+
+15. `reze-k3` 与 `reze-design` 必须是独立的 `RenderPipeline` 枚举值，共享 WebGPU 运行时底座但场景文档、相机快照按管线隔离，不得互相覆盖。
+16. `reze-k3` 必须写入并可由 `/desktop-pet/shared-config` 读取；API 层 `Literal`、`COMPANION_RENDER_PIPELINES`、SQLite CHECK 必须同步接受该值。
+17. `reze-k3` 的 WebGPU 画布必须透明并叠加 `MioModeBackground`；不得像 `reze-design` 那样绘制不透明背景色。
+18. 传给 `RezeWebGpuStage` 的 VMD URL 必须先 `toAbsolute`；相对路径会被请求到 web 前端导致 404。
+
+## 2026-08-03 增补：`reze-k3` 独立默认场景（ak-12）
+
+此前 `reze-k3` 复用 `REZE_DESIGN_SCENE_DEFAULTS`（reze-design 的紫调舞台：相机距离 26.2、目标点 Y 11.4、`#4b004f` 底、`#ed6aff` 世界光）。本轮引入独立的 `REZE_K3_SCENE_DEFAULTS`（`web/src/features/stage/rezeDesignDefaults.ts`），数值取自 `MMD_stage/ak-12.json` 的 `scene` 字段：明亮中性光（白主光 1.07、白世界光 0.73、白地面），相机距离 21.2、目标点 `[-2.1, 12.3, 2.2]`，主光方位 10°、仰角 55°。`getRezeSceneDebugDefaults` 现在按管线分流：`reze-npr` → NPR 默认、`reze-k3` → ak-12 默认、其余（`reze-design`）→ Reze Design 默认。场景文档仍按 `userId + modelPath + pipeline` 隔离，三条管线互不影响；`reze-k3` 画布透明，白底/白地面仅作为光照与地面代理，最终由页面 MIO 星海 CSS 背景透出。
+
+核心不变量追加：
+
+19. `reze-k3` 必须使用独立的 ak-12 默认场景，不得回退到 `REZE_DESIGN_SCENE_DEFAULTS`；三条 Reze 管线的默认场景各自独立。
+
+## 2026-08-03 增补：材质面板重叠修复
+
+Reze 编辑器「材质」页的 `.mio-reze-material-browser`（样式组树 + 素材库 + 选中材质检查器）此前缺少 `overflow-y: auto`。当内容总高（常超过 1100px）大于编辑器 dock 可用高度（约 790px）时，grid 行溢出，材质叶与底部检查器（含透明度/发光强度/重置按钮）相互叠在一起且无法点击（检查器拦截指针事件）。本轮给该容器加 `overflow-y: auto`，使其在内容超高时自身滚动，材质树与检查器按文档流顺排、底部「重置此材质」可达，不再重叠裁切。
+
+核心不变量追加：
+
+20. `.mio-reze-material-browser` 必须保持 `overflow-y: auto`；内容超高时靠容器自身滚动，不得让 grid 行溢出压到选中材质检查器。
+
+## 2026-08-04 增补：WebGPU VMD 最新请求保护
+
+`reze-design` 与 `reze-k3` 的 VMD 预览是异步加载流程。每次待机、手动预览或重复点击同一动作时，`RezeWebGpuStage` 都必须分配递增请求号；`loadVmd()` 返回后，只有请求号仍是最新值时才可调用 `show()`、`play()`、更新当前 VMD URL 并重置物理。这样用户刚点击的预览不会被先前开始、后完成的待机或旧预览覆盖。
+
+核心不变量追加：
+
+21. WebGPU VMD 加载只能由最新请求提交到模型；过期请求必须在 `loadVmd()` 完成后静默退出，不能回写姿势、当前 URL、物理或错误状态。
+22. 手动重复点击同一 VMD 必须产生新的请求号并从第一帧重新播放；不能只因 URL 未改变而跳过。
+
+## 2026-08-04 增补：局部骨骼 VMD 姿势保留
+
+部分收藏 VMD 只含一小组骨骼轨道，例如 `cheer (37).vmd`。`reze-engine` 的公开 `Model.show()` 和 `Model.play()` 会先清空所有本地骨骼变换；若局部 VMD 没有覆盖上半身、手臂或裙摆等骨骼，模型会退回 PMX 绑定 T 姿势。已有动作姿势时，`RezeWebGpuStage` 必须通过引擎的动画状态切换到新 clip，让引擎仅写入 VMD 实际提供的轨道；首次加载仍走公开模型方法以建立初始姿势。
+
+核心不变量追加：
+
+23. WebGPU 舞台切换局部骨骼 VMD 时不得清空未被该 VMD 轨道覆盖的骨骼；正常站姿或当前待机姿势必须保留。
+
+## 2026-08-04 增补：单次 VMD 完成后的待机恢复
+
+reze-engine 的 `animationState.setOnEnd()` 是 WebGPU 单次 VMD 的权威结束信号。`RezeWebGpuStage` 必须把当前 VMD 的结束事件转发给 `CompanionPage` 的 `onInteractionComplete`；页面状态机随后按既有优先级恢复收藏待机循环，只有找不到可用待机 VMD 时才恢复程序化待机。WebGPU 分支不得让动作停在最终帧，也不得自行伪造另一套待机策略。
+
+核心不变量追加：
+
+24. reze-design 与 reze-k3 的单次 VMD 结束必须回传现有舞台状态机；恢复逻辑与 Three.js 分支使用同一套收藏待机选择规则。

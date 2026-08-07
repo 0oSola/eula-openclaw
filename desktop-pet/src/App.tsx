@@ -8,6 +8,8 @@ import {
   STAGE_CLICK_RIPPLE_DURATION_MS,
 } from "@/features/stage/stageCharacterClick.js";
 import type { CompanionSharedConfig, MmdCameraSnapshot, MmdModelAsset, RenderPipeline, VmdAsset } from "@/lib/types";
+import { normalizeRezeStageDocument } from "@/features/stage/rezeEditorScene";
+import { REZE_DESIGN_SCENE_DEFAULTS, REZE_K3_SCENE_DEFAULTS } from "@/features/stage/rezeDesignDefaults";
 
 import { getCodexStatusPresentation, type CodexStatus } from "./codex/codexStatus";
 import {
@@ -30,8 +32,11 @@ import { createApiClient } from "./lib/apiClient";
 import { describeMainSiteSyncResult, describeMenuActionResult } from "./menu/menuActionStatus";
 import {
   loadPetCameraSnapshot,
+  loadPetRezeCameraDistance,
   preparePetCameraSnapshotForStorage,
+  resolvePetRezeCameraDistance,
   savePetCameraSnapshot,
+  savePetRezeCameraDistance,
   shouldPersistPetCameraOnModeChange,
 } from "./mmd/petCameraState";
 import {
@@ -45,13 +50,21 @@ import {
   resolvePetStageInteractionWithFallback,
   shouldReplayCodexStatusMotionOnCompletion,
 } from "./mmd/petStageState";
-import { shouldStartPetWindowDrag, shouldStopPetWindowDragPropagation } from "./window/petWindowEvents";
+import {
+  hasPetPointerMoved,
+  shouldActivatePetWindowDrag,
+  shouldStopPetWindowDragPropagation,
+} from "./window/petWindowEvents";
 
 const DEFAULT_USER_ID = "admin-1";
+// 画布修正为真正覆盖整个 Pet 窗口后，垂直视图范围变大；
+// 使用 30 的安全距离，保留完整角色并仍允许交互模式继续缩放。
+const PET_REZE_K3_CAMERA_DISTANCE = 30;
 const DEFAULT_SHARED_CONFIG: CompanionSharedConfig = {
   user_id: DEFAULT_USER_ID,
   selected_model_path: null,
   render_pipeline: "classic",
+  reze_stage_document: null,
   updated_at: null,
 };
 type PetInteractionMode = "window-drag" | "camera-adjust";
@@ -157,6 +170,7 @@ export function App() {
   const [menuStatus, setMenuStatus] = useState<string | null>(null);
   const [stageReloadRevision, setStageReloadRevision] = useState(0);
   const [petCameraRevision, setPetCameraRevision] = useState(0);
+  const [petRezeCameraRevision, setPetRezeCameraRevision] = useState(0);
   const [codexStatusMotionReplayRevision, setCodexStatusMotionReplayRevision] = useState(0);
   const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
   const [sessionPanelQuery, setSessionPanelQuery] = useState("");
@@ -229,6 +243,48 @@ export function App() {
   const api = useMemo(() => createApiClient({ baseUrl: apiBaseUrl, userId: DEFAULT_USER_ID }), [apiBaseUrl]);
   const selectedModel = pickSelectedModel(models, sharedConfig.selected_model_path);
   const renderPipeline: RenderPipeline = sharedConfig.render_pipeline || "classic";
+  const rezeStageDocument = useMemo(
+    () =>
+      normalizeRezeStageDocument(
+        sharedConfig.reze_stage_document,
+        renderPipeline === "reze-k3" ? REZE_K3_SCENE_DEFAULTS : REZE_DESIGN_SCENE_DEFAULTS,
+      ),
+    [renderPipeline, sharedConfig.reze_stage_document],
+  );
+  const petRezeSceneSettings = useMemo(
+    () => {
+      if (
+        (renderPipeline !== "reze-k3" && renderPipeline !== "reze-design") ||
+        !selectedModel
+      ) {
+        return rezeStageDocument.scene;
+      }
+      let savedDistance: number | null = null;
+      try {
+        savedDistance = loadPetRezeCameraDistance({
+          storage: window.localStorage,
+          modelPath: selectedModel.relative_path,
+          renderPipeline,
+        });
+      } catch {
+        savedDistance = null;
+      }
+      return {
+        ...rezeStageDocument.scene,
+        // 相机距离按 Pet 窗口独立保存；主站 scene.cameraDistance 不参与同步。
+        cameraDistance: resolvePetRezeCameraDistance({
+          renderPipeline,
+          savedDistance,
+          mainSiteDistance: rezeStageDocument.scene.cameraDistance,
+          petDefaultDistance:
+            renderPipeline === "reze-k3"
+              ? PET_REZE_K3_CAMERA_DISTANCE
+              : REZE_DESIGN_SCENE_DEFAULTS.cameraDistance,
+        }),
+      };
+    },
+    [petRezeCameraRevision, renderPipeline, rezeStageDocument.scene, selectedModel],
+  );
   const petCameraSnapshot = useMemo<MmdCameraSnapshot | null>(() => {
     if (!selectedModel) return null;
     try {
@@ -241,6 +297,23 @@ export function App() {
       return null;
     }
   }, [petCameraRevision, renderPipeline, selectedModel]);
+  const persistCurrentPetCameraSnapshot = useCallback((): boolean | null => {
+    if (!selectedModel) return null;
+    const snapshot = stageRef.current?.captureCamera();
+    const persistedSnapshot = snapshot ? preparePetCameraSnapshotForStorage(snapshot) : null;
+    if (!persistedSnapshot) return null;
+    try {
+      savePetCameraSnapshot({
+        storage: window.localStorage,
+        modelPath: selectedModel.relative_path,
+        renderPipeline,
+        snapshot: persistedSnapshot,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [renderPipeline, selectedModel]);
   const petAutoplayIdleState = useMemo(
     () =>
       selectedModel
@@ -364,36 +437,107 @@ export function App() {
   }, [petAutoplayIdleState, renderPipeline, selectedModel?.relative_path, stageReloadRevision]);
 
   useEffect(() => {
+    if (renderPipeline !== "reze-k3" && renderPipeline !== "reze-design") return;
+    let cancelled = false;
+    let retries = 0;
+    let timer: number | null = null;
+    const applyMaterialPresets = () => {
+      if (cancelled) return;
+      const entries = stageRef.current?.getMaterialDebugEntries?.() ?? [];
+      if (!entries.length && retries++ < 30) {
+        timer = window.setTimeout(applyMaterialPresets, 100);
+        return;
+      }
+      for (const entry of entries) {
+        const preset = rezeStageDocument.materialPresets[entry.id];
+        if (preset) stageRef.current?.setMaterialPreset?.(entry.id, preset);
+      }
+    };
+    timer = window.setTimeout(applyMaterialPresets, 0);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [renderPipeline, rezeStageDocument, selectedModel?.relative_path, stageReloadRevision]);
+
+  useEffect(() => {
+    const persistBeforeUnload = () => {
+      persistCurrentPetCameraSnapshot();
+    };
+    window.addEventListener("beforeunload", persistBeforeUnload);
+    window.addEventListener("pagehide", persistBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", persistBeforeUnload);
+      window.removeEventListener("pagehide", persistBeforeUnload);
+    };
+  }, [persistCurrentPetCameraSnapshot]);
+
+  useEffect(() => {
     const previousInteractionMode = previousInteractionModeRef.current;
     if (
       shouldPersistPetCameraOnModeChange(previousInteractionMode, interactionMode) &&
       selectedModel
     ) {
-      const snapshot = stageRef.current?.captureCamera();
-      const persistedSnapshot = snapshot ? preparePetCameraSnapshotForStorage(snapshot) : null;
-      if (persistedSnapshot) {
+      const persistenceResult = persistCurrentPetCameraSnapshot();
+      if (persistenceResult === true) {
         try {
-          savePetCameraSnapshot({
-            storage: window.localStorage,
-            modelPath: selectedModel.relative_path,
-            renderPipeline,
-            snapshot: persistedSnapshot,
-          });
           stageRef.current?.lockCamera();
           setPetCameraRevision((revision) => revision + 1);
           setMenuStatus("Pet camera saved");
           window.setTimeout(() => setMenuStatus(null), 1800);
         } catch {
-          setMenuStatus("Pet camera save failed");
-          window.setTimeout(() => setMenuStatus(null), 2400);
+          // Camera persistence already succeeded; locking is only a runtime convenience.
         }
+      } else if (persistenceResult === false) {
+        setMenuStatus("Pet camera save failed");
+        window.setTimeout(() => setMenuStatus(null), 2400);
       }
     }
     if (interactionMode === "camera-adjust") {
       stageRef.current?.unlockCamera();
     }
     previousInteractionModeRef.current = interactionMode;
-  }, [interactionMode, renderPipeline, selectedModel, stageReloadRevision]);
+  }, [interactionMode, persistCurrentPetCameraSnapshot, selectedModel, stageReloadRevision]);
+
+  useEffect(() => {
+    if (interactionMode !== "camera-adjust" || (renderPipeline !== "reze-k3" && renderPipeline !== "reze-design")) return;
+    const handleWheel = (event: WheelEvent) => {
+      const rect = stageRef.current?.getStageRect();
+      if (!rect || event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return;
+      event.preventDefault();
+      // 滚轮上推拉近角色，滚轮下拉拉远角色。
+      const result = stageRef.current?.adjustCameraDistance?.(event.deltaY * 0.012);
+      if (
+        typeof result === "number" &&
+        selectedModel &&
+        (renderPipeline === "reze-k3" || renderPipeline === "reze-design")
+      ) {
+        try {
+          savePetRezeCameraDistance({
+            storage: window.localStorage,
+            modelPath: selectedModel.relative_path,
+            renderPipeline,
+            distance: result,
+          });
+          setPetRezeCameraRevision((revision) => revision + 1);
+        } catch {
+          // 相机仍已在运行时调整；存储不可用时不阻断交互。
+        }
+      }
+    };
+    document.addEventListener("wheel", handleWheel, { passive: false, capture: true });
+    return () => document.removeEventListener("wheel", handleWheel, true);
+  }, [interactionMode, renderPipeline, selectedModel]);
+
+  useEffect(() => {
+    if (interactionMode !== "camera-adjust") return;
+    const handleContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    document.addEventListener("contextmenu", handleContextMenu, true);
+    return () => document.removeEventListener("contextmenu", handleContextMenu, true);
+  }, [interactionMode]);
 
   useEffect(() => {
     return window.desktopPet?.menu?.onAction((action: DesktopPetMenuAction) => {
@@ -579,7 +723,7 @@ export function App() {
       const lastClick = lastStageClickEventRef.current;
       if (
         lastClick &&
-        nowMs - lastClick.atMs < 80 &&
+        nowMs - lastClick.atMs < 180 &&
         Math.abs(lastClick.clientX - clientX) <= 1 &&
         Math.abs(lastClick.clientY - clientY) <= 1
       ) {
@@ -607,6 +751,21 @@ export function App() {
     [api, selectedModel?.relative_path, vmdAssets],
   );
 
+  useEffect(() => {
+    return window.desktopPet?.nativeClick?.on((point) => {
+      if (!Number.isFinite(point.clientX) || !Number.isFinite(point.clientY)) return;
+      const stageRect = stageRef.current?.getStageRect();
+      const hit = Boolean(stageRef.current?.hitTestCharacterAtClientPoint(point.clientX, point.clientY));
+      if (!hit) return;
+      if (!stageRect) return;
+      handlePetStageCharacterClick({
+        clientX: point.clientX,
+        clientY: point.clientY,
+        stageRect,
+      });
+    });
+  }, [handlePetStageCharacterClick, renderPipeline, selectedModel?.relative_path]);
+
   const recoverPetStageInteraction = useCallback(() => {
     setStageInteractionState(petAutoplayIdleState);
   }, [petAutoplayIdleState]);
@@ -629,8 +788,9 @@ export function App() {
   useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
       if (event.target instanceof Element && event.target.closest(".pet-panel, .pet-status-action, .pet-completion-bubble")) return;
+      if (event.target instanceof Element && event.target.closest(".pet-camera-save-exit")) return;
       if (event.target instanceof Element && event.target.closest(".pet-status-main")) return;
-      if (interactionMode === "window-drag" && event.button === 0) {
+      if (event.button === 0) {
         stageClickCandidateRef.current = {
           pointerId: event.pointerId,
           clientX: event.clientX,
@@ -638,16 +798,30 @@ export function App() {
           timeStamp: event.timeStamp,
         };
       }
-      if (!shouldStartPetWindowDrag({ interactionMode, button: event.button })) return;
-      dragPointerIdRef.current = event.pointerId;
-      event.preventDefault();
-      if (shouldStopPetWindowDragPropagation({ eventType: "pointerdown", dragActive: true })) {
-        event.stopPropagation();
-      }
-      window.desktopPet?.windowDrag?.start();
     }
 
     function handlePointerMove(event: PointerEvent) {
+      const candidate = stageClickCandidateRef.current;
+      if (
+        candidate?.pointerId === event.pointerId &&
+        dragPointerIdRef.current === null &&
+        shouldActivatePetWindowDrag({
+          interactionMode,
+          button: 0,
+          moved: hasPetPointerMoved({
+            origin: { x: candidate.clientX, y: candidate.clientY },
+            current: { x: event.clientX, y: event.clientY },
+          }),
+        })
+      ) {
+        dragPointerIdRef.current = event.pointerId;
+        stageClickCandidateRef.current = null;
+        event.preventDefault();
+        if (shouldStopPetWindowDragPropagation({ eventType: "pointermove", dragActive: true })) {
+          event.stopPropagation();
+        }
+        window.desktopPet?.windowDrag?.start();
+      }
       if (dragPointerIdRef.current !== event.pointerId) return;
       event.preventDefault();
       if (shouldStopPetWindowDragPropagation({ eventType: "pointermove", dragActive: true })) {
@@ -719,6 +893,16 @@ export function App() {
     };
   }, [handlePetStageCharacterClick, interactionMode]);
 
+  const handleSaveAndExitCamera = useCallback(() => {
+    if (interactionMode !== "camera-adjust") return;
+    setInteractionMode("window-drag");
+    const modeRequest = window.desktopPet?.interactionMode?.set("window-drag");
+    modeRequest?.catch(() => {
+      setMenuStatus("Camera mode exit sync failed");
+      window.setTimeout(() => setMenuStatus(null), 2800);
+    });
+  }, [interactionMode]);
+
   const codexStatusText = codexStatusCard?.title ?? formatCodexStatusNotification(codexStatus, notificationProfile);
   const approvalFallback = buildApprovalFallback(codexStatus, notificationProfile);
   const showApiRetry = Boolean(loadError) && !approvalFallback;
@@ -743,7 +927,10 @@ export function App() {
       className="pet-shell"
       data-interaction-mode={interactionMode}
     >
-      <div className="pet-input-hit-surface" aria-hidden="true" />
+      <div
+        className="pet-input-hit-surface"
+        aria-hidden="true"
+      />
       <div className="pet-stage" data-render-pipeline={renderPipeline}>
         {selectedModel ? (
           <MMDStage
@@ -757,9 +944,18 @@ export function App() {
             modelUrl={api.toAbsoluteUrl(selectedModel.url)}
             modelLabel={getModelLabel(selectedModel)}
             renderPipeline={renderPipeline}
+            rezeBackgroundEffect={rezeStageDocument.backgroundEffect}
+            rezeGrade={rezeStageDocument.grade}
+            rezeGradeIntensity={rezeStageDocument.gradeIntensity}
+            rezeSceneDebugSettings={petRezeSceneSettings}
+            // Pet 舞台仍然覆盖整个窗口，但背景按用户要求保持透明，
+            // 让桌面或主站背景从 Reze 画布后方透出。
+            rezeTransparentBackground
             cameraSnapshot={petCameraSnapshot}
             cameraLocked={interactionMode !== "camera-adjust"}
-            enableCharacterClickCapture={interactionMode !== "camera-adjust"}
+            // Pet 的点击统一由外层输入路由处理；避免 MMDStage 内层指针捕获
+            // 在窗口拖动结束时把同一次拖动误判成动作点击。
+            enableCharacterClickCapture={false}
             onCharacterClick={handlePetStageCharacterClick}
             clickRipples={stageClickRipples}
             onInteractionComplete={handleStageInteractionComplete}
@@ -768,6 +964,18 @@ export function App() {
           />
         ) : null}
       </div>
+      {interactionMode === "camera-adjust" ? (
+        <button
+          type="button"
+          className="pet-camera-save-exit"
+          data-testid="pet-camera-save-exit"
+          aria-label="Save camera and exit camera mode"
+          title="Save camera and exit camera mode"
+          onClick={handleSaveAndExitCamera}
+        >
+          Save &amp; Exit Camera
+        </button>
+      ) : null}
       {completionNotice && !sessionPanelOpen && !promptPanelOpen ? (
         <section className="pet-completion-bubble" role="status" aria-live="polite">
           <button

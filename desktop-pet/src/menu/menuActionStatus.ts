@@ -63,7 +63,7 @@ export function describeMenuActionResult(action: MenuAction): string {
       return "Showing Codex sessions...";
     case "interaction-mode":
       return action.mode === "camera-adjust"
-        ? "Interaction mode: Adjust Camera"
+        ? "Interaction mode: Adjust Camera · Mouse wheel zooms"
         : "Interaction mode: Drag Whole App";
     case "focus-vscode":
       return "Opening VSCode workspace...";

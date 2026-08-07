@@ -24,9 +24,18 @@ import {
   type RezeGradePreset,
   type RezeSceneDebugSettings,
 } from "@/features/stage/rezeDesignDefaults";
+import { createRezeVmdRequestGuard } from "@/features/stage/rezeVmdRequestGuard.js";
+import { playRezeVmd, resetRezeModelToBindPose, setRezeVmdCompletionHandler } from "@/features/stage/rezeVmdPlayback.js";
+import {
+  isKoledaMaskMaterialName,
+  isKoledaModelIdentifier,
+  lockKoledaMorphWeights,
+  selectKoledaClosedEyeMorphNames,
+} from "@/features/stage/koledaDefaultAppearance.js";
 
 type RezeStageProps = {
   modelUrl: string;
+  modelIdentifier?: string;
   localModelImport?: {
     revision: number;
     files: File[];
@@ -35,13 +44,25 @@ type RezeStageProps = {
   interaction: {
     mode?: "procedural" | "vmd";
     vmdUrl?: string;
+    vmdLoopUrls?: string[];
+    vmdLoopEmotionByUrl?: Record<string, string>;
+    standbyVmdUrl?: string;
+    loopGapMs?: number;
+    loopMode?: "random" | "sequential";
+    lockLowerBody?: boolean;
+    disableCrossfade?: boolean;
     playbackRate?: number;
+    vmdRequestId?: number;
   };
   backgroundEffect?: RezeBackgroundEffect;
   grade?: RezeGradePreset;
   gradeIntensity?: number;
+  sceneSettings?: RezeSceneDebugSettings;
+  /** true 时 WebGPU 画布透明，由页面 MIO CSS 背景透出；false 用场景背景色。 */
+  transparentBackground?: boolean;
   cameraSnapshot?: MmdCameraSnapshot | null;
   onReadyChange?: (ready: boolean, detail?: string) => void;
+  onInteractionComplete?: () => void;
 };
 
 const DEFAULT_SETTINGS = REZE_DESIGN_SCENE_DEFAULTS;
@@ -87,8 +108,93 @@ function stableMaterialId(index: number): string {
   return `reze:material:${index}`;
 }
 
+type RezeCameraRuntime = {
+  alpha: number;
+  beta: number;
+  radius: number;
+  target: { x: number; y: number; z: number };
+  fov: number;
+  getPosition: () => { x: number; y: number; z: number };
+  setInputLocked: (locked: boolean) => void;
+};
+
+function readRezeCamera(engine: Engine | null): RezeCameraRuntime | null {
+  const camera = (engine as unknown as { camera?: RezeCameraRuntime } | null)?.camera;
+  if (
+    !camera ||
+    typeof camera.getPosition !== "function" ||
+    typeof camera.setInputLocked !== "function" ||
+    !Number.isFinite(camera.radius) ||
+    !Number.isFinite(camera.alpha) ||
+    !Number.isFinite(camera.beta)
+  ) {
+    return null;
+  }
+  return camera;
+}
+
+function captureRezeCameraSnapshot(engine: Engine | null): MmdCameraSnapshot | null {
+  const camera = readRezeCamera(engine);
+  if (!camera) return null;
+  const position = camera.getPosition();
+  const target = camera.target;
+  const fov = Number.isFinite(camera.fov) ? (camera.fov * 180) / Math.PI : 45;
+  if (
+    ![position.x, position.y, position.z, target.x, target.y, target.z, fov].every(Number.isFinite)
+  ) {
+    return null;
+  }
+  return {
+    fov,
+    position: [position.x, position.y, position.z],
+    target: [target.x, target.y, target.z],
+    locked: false,
+  };
+}
+
+function applyRezeCameraSnapshot(engine: Engine | null, snapshot: MmdCameraSnapshot | null): boolean {
+  if (!snapshot) return false;
+  const camera = readRezeCamera(engine);
+  if (!camera) return false;
+  const [positionX, positionY, positionZ] = snapshot.position;
+  const [targetX, targetY, targetZ] = snapshot.target;
+  const offsetX = positionX - targetX;
+  const offsetY = positionY - targetY;
+  const offsetZ = positionZ - targetZ;
+  const distance = Math.hypot(offsetX, offsetY, offsetZ);
+  if (!Number.isFinite(distance) || distance <= 0) return false;
+  const beta = Math.acos(Math.max(-1, Math.min(1, offsetY / distance)));
+  const alpha = Math.atan2(offsetX, offsetZ);
+  if (!Number.isFinite(alpha) || !Number.isFinite(beta)) return false;
+
+  engine?.setCameraTarget(new Vec3(targetX, targetY, targetZ));
+  engine?.setCameraDistance(distance);
+  engine?.setCameraAlpha(alpha);
+  engine?.setCameraBeta(beta);
+  if (Number.isFinite(snapshot.fov)) {
+    camera.fov = (snapshot.fov * Math.PI) / 180;
+  }
+  return true;
+}
+
+function isKoledaFaceOrBodyMaterialName(materialName: string): boolean {
+  const name = materialName.toLowerCase();
+  return (
+    name.includes("body") ||
+    name.includes("face") ||
+    name.includes("skin") ||
+    name.includes("肌") ||
+    name.includes("皮肤") ||
+    name.includes("顔") ||
+    name.includes("颜") ||
+    name.includes("顏") ||
+    name.includes("脸") ||
+    name.includes("臉")
+  );
+}
+
 export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(function RezeWebGpuStage(
-  { modelUrl, localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, onReadyChange },
+  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
   ref,
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -97,20 +203,30 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     detail: "正在初始化 reze-engine WebGPU…",
   });
   const engineRef = useRef<Engine | null>(null);
+  const engineReadyRef = useRef(false);
   const settingsRef = useRef<RezeSceneDebugSettings>(DEFAULT_SETTINGS);
+  const cameraSnapshotRef = useRef<MmdCameraSnapshot | null>(cameraSnapshot);
   const modelRef = useRef<Awaited<ReturnType<Engine["loadModel"]>> | null>(null);
   const materialStateRef = useRef(new Map<string, { visible: boolean; preset: string }>());
   const currentVmdUrlRef = useRef("");
+  const lastLoopVmdUrlRef = useRef("");
+  const vmdCompletionFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const vmdRequestGuardRef = useRef(createRezeVmdRequestGuard());
   const interactionRef = useRef(interaction);
   const backgroundEffectRef = useRef<RezeBackgroundEffect>(backgroundEffect);
   const gradeRef = useRef<RezeGradePreset>(grade);
   const gradeIntensityRef = useRef(gradeIntensity);
+  const transparentBackgroundRef = useRef(transparentBackground);
   const onReadyChangeRef = useRef(onReadyChange);
+  const onInteractionCompleteRef = useRef(onInteractionComplete);
   interactionRef.current = interaction;
   backgroundEffectRef.current = backgroundEffect;
   gradeRef.current = grade;
   gradeIntensityRef.current = gradeIntensity;
+  transparentBackgroundRef.current = transparentBackground;
+  cameraSnapshotRef.current = cameraSnapshot;
   onReadyChangeRef.current = onReadyChange;
+  onInteractionCompleteRef.current = onInteractionComplete;
 
   const reportStatus = (state: "loading" | "ready" | "error", detail: string) => {
     if (canvasRef.current) {
@@ -121,10 +237,97 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     onReadyChangeRef.current?.(state === "ready", detail);
   };
 
+  const applyKoledaDefaultAppearance = (model: Awaited<ReturnType<Engine["loadModel"]>>) => {
+    const enabled = isKoledaModelIdentifier(modelIdentifier, modelUrl, localModelImport?.pmxFile?.name);
+    if (!enabled) return;
+
+    for (const [index, material] of model.getMaterials().entries()) {
+      if (!isKoledaMaskMaterialName(material.name)) continue;
+      engineRef.current?.setMaterialVisible("companion", material.name, false);
+      materialStateRef.current.set(stableMaterialId(index), { visible: false, preset: "默认" });
+    }
+
+    const morphNames = model.getMorphing().morphs.map((morph) => morph.name);
+    const closedEyeMorphs = selectKoledaClosedEyeMorphNames(morphNames);
+    lockKoledaMorphWeights(model, Object.fromEntries(closedEyeMorphs.map((name) => [name, 1])));
+  };
+
+  const clearVmdCompletionFallback = () => {
+    if (vmdCompletionFallbackTimerRef.current === null) return;
+    globalThis.clearTimeout(vmdCompletionFallbackTimerRef.current);
+    vmdCompletionFallbackTimerRef.current = null;
+  };
+
+  const handleRezeVmdFinished = (
+    model: Awaited<ReturnType<Engine["loadModel"]>>,
+    finishedName: string,
+  ) => {
+    clearVmdCompletionFallback();
+    const currentName = currentVmdUrlRef.current.split("/").pop();
+    if (!currentName || currentName !== finishedName) return;
+
+    const activeInteraction = interactionRef.current;
+    const loopUrls = Array.from(new Set((activeInteraction?.vmdLoopUrls || []).filter(Boolean)));
+    if (loopUrls.length) {
+      const finishedUrl = loopUrls.find((url) => url.split("/").pop() === finishedName) || "";
+      const nextUrl =
+        activeInteraction?.loopMode === "sequential"
+          ? loopUrls[(Math.max(0, loopUrls.indexOf(finishedUrl)) + 1) % loopUrls.length]
+          : (() => {
+              const candidates = loopUrls.filter((url) => url !== finishedUrl);
+              const pool = candidates.length ? candidates : loopUrls;
+              return pool[Math.floor(Math.random() * pool.length)];
+            })();
+      if (!nextUrl) return;
+      const nextName = nextUrl.split("/").pop() || "motion.vmd";
+      void (async () => {
+        try {
+          await model.loadVmd(nextName, nextUrl);
+          if (model !== modelRef.current) return;
+          playRezeVmd(model, nextName, { preserveCurrentPose: true });
+          currentVmdUrlRef.current = nextUrl;
+          lastLoopVmdUrlRef.current = nextUrl;
+          armRezeVmdCompletionFallback(model, nextName, nextUrl);
+        } catch (error) {
+          reportStatus("error", `循环动作切换失败：${error instanceof Error ? error.message : String(error)}`);
+        }
+      })();
+      return;
+    }
+
+    // 单次动作的 VMD 可能只有第 0 帧；reze-engine 对零时长剪辑不会派发
+    // animationState.onEnd。无论来自引擎结束事件还是兜底计时器，都统一复原姿势
+    // 并通知页面恢复待机。
+    currentVmdUrlRef.current = "";
+    resetRezeModelToBindPose(model);
+    applyKoledaDefaultAppearance(model);
+    onInteractionCompleteRef.current?.();
+  };
+
+  const armRezeVmdCompletionFallback = (
+    model: Awaited<ReturnType<Engine["loadModel"]>>,
+    name: string,
+    url: string,
+  ) => {
+    clearVmdCompletionFallback();
+    const durationSeconds = Math.max(0, Number(model.getAnimationProgress?.().duration) || 0);
+    const delayMs = durationSeconds > 0 ? Math.ceil(durationSeconds * 1000) + 350 : 80;
+    if (canvasRef.current) {
+      canvasRef.current.dataset.vmdCompletionFallbackDelay = String(delayMs);
+      canvasRef.current.dataset.vmdCompletionFallbackFired = "false";
+    }
+    vmdCompletionFallbackTimerRef.current = globalThis.setTimeout(() => {
+      vmdCompletionFallbackTimerRef.current = null;
+      if (canvasRef.current) canvasRef.current.dataset.vmdCompletionFallbackFired = "true";
+      if (model !== modelRef.current || currentVmdUrlRef.current !== url) return;
+      handleRezeVmdFinished(model, name);
+    }, delayMs);
+  };
+
   const applySceneSettings = (next: RezeSceneDebugSettings) => {
-    const engine = engineRef.current;
-    if (!engine) return null;
     settingsRef.current = { ...DEFAULT_SETTINGS, ...next };
+    const engine = engineRef.current;
+    if (!engine || !engineReadyRef.current) return { ...settingsRef.current };
     const settings = settingsRef.current;
     engine.setWorld({ color: hexToLinearVec3(settings.worldColor), strength: settings.ambientIntensity });
     engine.setSun({
@@ -140,7 +343,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       intensity: settings.bloomStrength,
       color: hexToLinearVec3(settings.bloomColor),
     });
-    engine.setBackgroundColor(hexToSrgbVec3(settings.backgroundColor));
+    engine.setBackgroundColor(transparentBackgroundRef.current ? null : hexToSrgbVec3(settings.backgroundColor));
     engine.setCameraTarget(new Vec3(settings.cameraTargetX, settings.cameraTargetY, settings.cameraTargetZ));
     engine.setCameraDistance(settings.cameraDistance);
     engine.addGround({
@@ -159,7 +362,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
 
   const applyGrade = (preset: RezeGradePreset, intensity: number) => {
     const engine = engineRef.current;
-    if (!engine) return null;
+    if (!engine || !engineReadyRef.current) return null;
     const cdl = resolveRezeGrade(preset, intensity);
     engine.setColorGrading({
       shadows: hexToSrgbVec3(cdl.shadows),
@@ -175,12 +378,59 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     return { preset, intensity };
   };
 
+  const restorePersistedCamera = (snapshot: MmdCameraSnapshot | null = cameraSnapshotRef.current) => {
+    const engine = engineRef.current;
+    if (!engine || !engineReadyRef.current || !snapshot) return null;
+    if (!applyRezeCameraSnapshot(engine, snapshot)) return null;
+    settingsRef.current = {
+      ...settingsRef.current,
+      cameraDistance: Math.hypot(
+        snapshot.position[0] - snapshot.target[0],
+        snapshot.position[1] - snapshot.target[1],
+        snapshot.position[2] - snapshot.target[2],
+      ),
+      cameraTargetX: snapshot.target[0],
+      cameraTargetY: snapshot.target[1],
+      cameraTargetZ: snapshot.target[2],
+    };
+    return captureRezeCameraSnapshot(engine);
+  };
+
   useImperativeHandle(ref, () => ({
-    unlockCamera: () => null,
-    lockCamera: () => null,
-    captureCamera: () => null,
-    resetCamera: () => null,
-    hitTestCharacterAtClientPoint: () => false,
+    unlockCamera: () => {
+      readRezeCamera(engineRef.current)?.setInputLocked(false);
+      return captureRezeCameraSnapshot(engineRef.current);
+    },
+    lockCamera: () => {
+      readRezeCamera(engineRef.current)?.setInputLocked(true);
+      return captureRezeCameraSnapshot(engineRef.current);
+    },
+    captureCamera: () => captureRezeCameraSnapshot(engineRef.current),
+    resetCamera: () => {
+      applySceneSettings(DEFAULT_SETTINGS);
+      return captureRezeCameraSnapshot(engineRef.current);
+    },
+    adjustCameraDistance: (delta) => {
+      const engine = engineRef.current;
+      const currentDistance = readRezeCamera(engine)?.radius ?? settingsRef.current.cameraDistance;
+      const cameraDistance = Math.max(3.5, Math.min(40, currentDistance + delta));
+      if (engine && engineReadyRef.current) {
+        engine.setCameraDistance(cameraDistance);
+      }
+      settingsRef.current = { ...settingsRef.current, cameraDistance };
+      return cameraDistance;
+    },
+    hitTestCharacterAtClientPoint: (clientX, clientY) => {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      return Boolean(
+        rect &&
+          canvasRef.current?.dataset.webgpuStatus === "ready" &&
+          clientX >= rect.left &&
+          clientX <= rect.right &&
+          clientY >= rect.top &&
+          clientY <= rect.bottom,
+      );
+    },
     getStageRect: () => canvasRef.current?.getBoundingClientRect() ?? null,
     setSpeechLevel: () => undefined,
     setSpeechViseme: () => undefined,
@@ -257,30 +507,37 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     const canvas = canvasRef.current;
     if (!canvas || !modelUrl) return;
     let disposed = false;
+    const initialSettings = sceneSettings ?? DEFAULT_SETTINGS;
     const boot = async () => {
       reportStatus("loading", "正在初始化 reze-engine WebGPU…");
       if (!("gpu" in navigator)) throw new Error("当前浏览器不支持 WebGPU，请改用 Reze NPR（WebGL）模式。");
+      settingsRef.current = { ...DEFAULT_SETTINGS, ...initialSettings };
+      engineReadyRef.current = false;
       const engine = new Engine(canvas, {
-        background: hexToSrgbVec3(DEFAULT_SETTINGS.backgroundColor),
-        camera: { distance: DEFAULT_SETTINGS.cameraDistance, target: new Vec3(0, 11.4, 0) },
-        world: { color: hexToLinearVec3(DEFAULT_SETTINGS.worldColor), strength: DEFAULT_SETTINGS.ambientIntensity },
+        background: transparentBackgroundRef.current ? null : hexToSrgbVec3(initialSettings.backgroundColor),
+        camera: {
+          distance: initialSettings.cameraDistance,
+          target: new Vec3(initialSettings.cameraTargetX, initialSettings.cameraTargetY, initialSettings.cameraTargetZ),
+        },
+        world: { color: hexToLinearVec3(initialSettings.worldColor), strength: initialSettings.ambientIntensity },
         sun: {
-          color: hexToLinearVec3(DEFAULT_SETTINGS.sunColor),
-          strength: DEFAULT_SETTINGS.keyIntensity,
-          direction: azElToDirection(DEFAULT_SETTINGS.sunAzimuth, DEFAULT_SETTINGS.sunElevation),
+          color: hexToLinearVec3(initialSettings.sunColor),
+          strength: initialSettings.keyIntensity,
+          direction: azElToDirection(initialSettings.sunAzimuth, initialSettings.sunElevation),
         },
         bloom: {
-          enabled: true,
-          threshold: DEFAULT_SETTINGS.bloomThreshold,
-          knee: DEFAULT_SETTINGS.bloomKnee,
-          radius: DEFAULT_SETTINGS.bloomRadius,
-          intensity: DEFAULT_SETTINGS.bloomStrength,
-          color: hexToLinearVec3(DEFAULT_SETTINGS.bloomColor),
+          enabled: initialSettings.bloomStrength > 0,
+          threshold: initialSettings.bloomThreshold,
+          knee: initialSettings.bloomKnee,
+          radius: initialSettings.bloomRadius,
+          intensity: initialSettings.bloomStrength,
+          color: hexToLinearVec3(initialSettings.bloomColor),
         },
       });
        engineRef.current = engine;
        await engine.init();
        if (disposed) return;
+       engineReadyRef.current = true;
        const initialBackgroundEffect = await engine.setBackgroundEffect(
          backgroundEffectRef.current === "Shining Stars" ? REZE_SHINING_STARS_WGSL : null,
        );
@@ -290,18 +547,36 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         : await engine.loadModel("companion", modelUrl);
       if (disposed) return;
       modelRef.current = model;
-      await engine.autoStyleGroups("companion");
+      applyKoledaDefaultAppearance(model);
+      setRezeVmdCompletionHandler(model, (finishedName: string) => handleRezeVmdFinished(model, finishedName));
+      const isKoleda = isKoledaModelIdentifier(modelIdentifier, modelUrl, localModelImport?.pmxFile?.name);
+      const koledaFaceAndBodyMaterials = isKoleda
+        ? model.getMaterials().map((material) => material.name).filter(isKoledaFaceOrBodyMaterialName)
+        : [];
+      await engine.autoStyleGroups(
+        "companion",
+        koledaFaceAndBodyMaterials.length ? { cloth_smooth: koledaFaceAndBodyMaterials } : undefined,
+      );
+      if (isKoleda) {
+        for (const [index, material] of model.getMaterials().entries()) {
+          if (!isKoledaFaceOrBodyMaterialName(material.name)) continue;
+          const current = materialStateRef.current.get(stableMaterialId(index)) ?? { visible: true, preset: "默认" };
+          materialStateRef.current.set(stableMaterialId(index), { ...current, preset: "柔滑布料" });
+        }
+      }
        if (disposed) return;
        applySceneSettings(settingsRef.current);
-       applyGrade(gradeRef.current, gradeIntensityRef.current);
+       restorePersistedCamera();
+      applyGrade(gradeRef.current, gradeIntensityRef.current);
       const initialInteraction = interactionRef.current;
       if (initialInteraction.mode === "vmd" && initialInteraction.vmdUrl) {
+        const requestId = vmdRequestGuardRef.current.begin();
         const name = initialInteraction.vmdUrl.split("/").pop() || "motion.vmd";
         await model.loadVmd(name, initialInteraction.vmdUrl);
-        if (disposed) return;
-        model.show(name);
-        model.play(name, { loop: false });
+        if (disposed || !vmdRequestGuardRef.current.isCurrent(requestId)) return;
+        playRezeVmd(model, name);
         currentVmdUrlRef.current = initialInteraction.vmdUrl;
+        armRezeVmdCompletionFallback(model, name, initialInteraction.vmdUrl);
         engine.resetPhysics();
       }
       engine.runRenderLoop();
@@ -312,16 +587,27 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     });
     return () => {
       disposed = true;
+      engineReadyRef.current = false;
       modelRef.current = null;
+      clearVmdCompletionFallback();
       materialStateRef.current.clear();
       engineRef.current?.dispose();
       engineRef.current = null;
     };
-  }, [modelUrl, localModelImport]);
+  }, [modelUrl, localModelImport, modelIdentifier]);
+
+  useEffect(() => {
+    if (!sceneSettings) return;
+    applySceneSettings(sceneSettings);
+  }, [sceneSettings]);
+
+  useEffect(() => {
+    restorePersistedCamera(cameraSnapshot);
+  }, [cameraSnapshot]);
 
   useEffect(() => {
     const engine = engineRef.current;
-    if (!engine) return;
+    if (!engine || !engineReadyRef.current) return;
     void engine.setBackgroundEffect(backgroundEffect === "Shining Stars" ? REZE_SHINING_STARS_WGSL : null).then((result) => {
       if (!result.ok) reportStatus("error", `Shining Stars 背景编译失败：${result.diagnostics.join("; ")}`);
     });
@@ -332,22 +618,37 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   }, [grade, gradeIntensity]);
 
   useEffect(() => {
+    const requestId = vmdRequestGuardRef.current.begin();
     const model = modelRef.current;
-    if (!model || interaction.mode !== "vmd" || !interaction.vmdUrl || interaction.vmdUrl === currentVmdUrlRef.current) return;
+    if (!model || interaction.mode !== "vmd" || !interaction.vmdUrl) return;
     const load = async () => {
       try {
-        const name = interaction.vmdUrl!.split("/").pop() || "motion.vmd";
-        await model.loadVmd(name, interaction.vmdUrl!);
-        model.show(name);
-        model.play(name, { loop: false });
-        currentVmdUrlRef.current = interaction.vmdUrl!;
+        const url = interaction.vmdUrl!;
+        const name = url.split("/").pop() || "motion.vmd";
+        await model.loadVmd(name, url);
+        if (!vmdRequestGuardRef.current.isCurrent(requestId) || model !== modelRef.current) return;
+        // 只有在「上一个动作已经结束（currentVmdUrlRef 已被完成回调清空）」时
+        // 才代表真的没有动作在播，直接 show/play 从绑定姿势起跳；只要前一个
+        // 动作仍在进行中（currentVmdUrlRef 非空），新动作必须保留当前姿势，避免
+        // 模型被 resetAllBones() 拉回 T 形再跳到新动作，产生闪烁。
+        playRezeVmd(model, name, { preserveCurrentPose: Boolean(currentVmdUrlRef.current) });
+        currentVmdUrlRef.current = url;
+        if (interaction.vmdLoopUrls?.includes(url)) lastLoopVmdUrlRef.current = url;
+        armRezeVmdCompletionFallback(model, name, url);
         engineRef.current?.resetPhysics();
       } catch (error) {
+        if (!vmdRequestGuardRef.current.isCurrent(requestId)) return;
         reportStatus("error", `VMD 加载失败：${error instanceof Error ? error.message : String(error)}`);
       }
     };
     void load();
-  }, [interaction.mode, interaction.vmdUrl, interaction.playbackRate]);
+  }, [interaction.mode, interaction.vmdUrl, interaction.playbackRate, interaction.vmdRequestId]);
+
+  useEffect(() => {
+    if (interaction.mode === "vmd" && interaction.vmdUrl) return;
+    clearVmdCompletionFallback();
+    currentVmdUrlRef.current = "";
+  }, [interaction.mode, interaction.vmdUrl]);
 
   return (
     <div className="mio-stage-webgpu-shell" data-webgpu-status={runtimeStatus.state}>

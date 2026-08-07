@@ -86,6 +86,13 @@ contextBridge.exposeInMainWorld("desktopPet", {
     move: () => ipcRenderer.send("pet:window-drag:move"),
     end: () => ipcRenderer.send("pet:window-drag:end"),
   },
+  nativeClick: {
+    on: (callback: (point: { clientX: number; clientY: number }) => void) => {
+      const listener = (_event: unknown, point: { clientX: number; clientY: number }) => callback(point);
+      ipcRenderer.on("pet:native-left-click", listener);
+      return () => ipcRenderer.removeListener("pet:native-left-click", listener);
+    },
+  },
   notificationProfile: {
     get: () => ipcRenderer.invoke("pet:notification-profile:get"),
   },

@@ -8,6 +8,11 @@ import {
   ShaderPass,
   UnrealBloomPass,
 } from "three-stdlib";
+import {
+  isKoledaMaskMaterialName,
+  isKoledaModelIdentifier,
+  selectKoledaClosedEyeMorphNames,
+} from "./koledaDefaultAppearance.js";
 
 const FIXED_EMOTION_MORPH_HINTS = {
   happy: ["smile", "happy", "\u7b11", "\u5fae\u7b11", "\u7b11\u3044"],
@@ -1875,6 +1880,7 @@ export class MMDCompanionRuntime {
     this.speechLevelActive = false;
     this.destroyed = false;
     this.presentation = null;
+    this.isKoledaModel = false;
 
     this.bones = {};
     this.baseBoneRotation = {};
@@ -1884,6 +1890,7 @@ export class MMDCompanionRuntime {
     this.animationBuildTarget = null;
     this.morphSlots = {};
     this.expressionMorphSlots = {};
+    this.koledaClosedEyeMorphSlots = [];
 
     this.toonRampTexture = null;
     this.outlineObjects = [];
@@ -2689,11 +2696,13 @@ export class MMDCompanionRuntime {
     this.vmdAnchorBones = [];
     this.animationBuildTarget = null;
     this.morphSlots = {};
+    this.koledaClosedEyeMorphSlots = [];
   }
 
   async loadModel(modelUrl) {
     this.setStatus("Loading MMD model...");
     this.clearModel();
+    this.isKoledaModel = isKoledaModelIdentifier(modelUrl);
     const mesh = await new Promise((resolve, reject) => {
       this.loader.load(modelUrl, resolve, undefined, reject);
     });
@@ -2707,6 +2716,12 @@ export class MMDCompanionRuntime {
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       for (const material of materials) {
         tuneMaterialByPipeline(material, this.toonRampTexture, this.renderPipeline, this.presentation, this.toonSkinRampTexture);
+        if (this.isKoledaModel && isKoledaMaskMaterialName(material?.name)) {
+          material.visible = false;
+          material.transparent = true;
+          material.opacity = 0;
+          material.needsUpdate = true;
+        }
       }
     });
     fitModelToPresentation(mesh, this.presentation);
@@ -2947,6 +2962,11 @@ export class MMDCompanionRuntime {
       mouthI: this.findMorphIndex(dict, FIXED_MORPH_HINTS.mouthI),
       mouthU: this.findMorphIndex(dict, FIXED_MORPH_HINTS.mouthU),
     };
+    this.koledaClosedEyeMorphSlots = this.isKoledaModel
+      ? selectKoledaClosedEyeMorphNames(Object.keys(dict))
+          .map((name) => dict[name])
+          .filter((index) => typeof index === "number")
+      : [];
     this.expressionMorphSlots = Object.fromEntries(
       Object.entries(FIXED_EXPRESSION_MORPH_NAMES).map(([slot, names]) => [
         slot,
@@ -3540,6 +3560,9 @@ export class MMDCompanionRuntime {
     setMorph(morphSlots.sad, 0);
 
     setMorph(morphSlots.blink, 0);
+    for (const index of this.koledaClosedEyeMorphSlots || []) {
+      setMorph(index, 1);
+    }
 
     const expressionTargets = this.getExpressionTargets();
     for (const [slot, target] of Object.entries(expressionTargets)) {

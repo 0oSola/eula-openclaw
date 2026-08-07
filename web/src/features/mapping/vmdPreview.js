@@ -22,6 +22,8 @@ export const CLICK_FALLBACK_EXCLUDED_VMD_CATEGORIES = Object.freeze([
   VMD_MOTION_CATEGORIES.IDLE_LOOP,
   VMD_MOTION_CATEGORIES.ENTRY_FALLBACK,
 ]);
+const UNIVERSAL_FAVORITE_PREFIX = "usage/vmd/优菈_by_原神_339146e6e418d79e85a515b26414c0b0[动作]/";
+const UNIVERSAL_BUILTIN_PREFIX = "usage/vmd/_builtin/";
 
 function describeVmdAsset(asset) {
   return [asset?.source_relative_path, asset?.filename, asset?.display_name, asset?.url]
@@ -92,18 +94,57 @@ export function isCompanionSafeVmdAsset(asset) {
   return profile.companion_safe !== false;
 }
 
+/**
+ * 64 字节的 VMD 只包含文件头与空轨道计数，既没有骨骼帧也没有形态帧。
+ * reze-engine 对这种零时长剪辑不会触发结束事件，因此不能把它当作可播放动作。
+ */
+export function isEmptyVmdAsset(asset) {
+  return Number(asset?.size_bytes) > 0 && Number(asset.size_bytes) <= 64;
+}
+
 export function excludeCompanionUnsafeAssets(assets = []) {
-  return Array.isArray(assets) ? assets.filter((asset) => isCompanionSafeVmdAsset(asset)) : [];
+  return Array.isArray(assets)
+    ? assets.filter((asset) => isCompanionSafeVmdAsset(asset) && !isEmptyVmdAsset(asset))
+    : [];
+}
+
+export function isEulaFavoriteMotionAsset(asset) {
+  if (!asset?.is_favorite) return false;
+  return describeVmdAssetPath(asset).startsWith(UNIVERSAL_FAVORITE_PREFIX.toLowerCase());
+}
+
+export function isUniversalBuiltInMotionAsset(asset) {
+  return describeVmdAssetPath(asset).startsWith(UNIVERSAL_BUILTIN_PREFIX.toLowerCase());
+}
+
+export function mergeFavoriteMotionAssets(primaryAssets = [], sharedAssets = []) {
+  const merged = [];
+  const seenIds = new Set();
+  for (const asset of [...(Array.isArray(primaryAssets) ? primaryAssets : []), ...(Array.isArray(sharedAssets) ? sharedAssets : [])]) {
+    const assetId = String(asset?.asset_id || asset?.url || "");
+    if (!assetId || seenIds.has(assetId)) continue;
+    seenIds.add(assetId);
+    merged.push(asset);
+  }
+  return merged;
 }
 
 function getPlayableVmdAssets(assets = []) {
   return excludeCompanionUnsafeAssets(Array.isArray(assets) ? assets : []).filter((asset) => asset?.url);
 }
 
-export function selectAutoplayIdleVmdAssets(assets = []) {
-  const categorizedIdleAssets = getPlayableVmdAssets(filterVmdAssetsByCategories(assets, IDLE_LOOP_VMD_CATEGORIES));
-  if (categorizedIdleAssets.length) return categorizedIdleAssets;
+function selectCategorizedIdleVmdAssets(assets = []) {
+  return getPlayableVmdAssets(filterVmdAssetsByCategories(assets, IDLE_LOOP_VMD_CATEGORIES));
+}
+
+function selectSafeStandbyFallbackAssets(assets = []) {
   return getPlayableVmdAssets(excludeEntryStandbyAssets(assets));
+}
+
+export function selectAutoplayIdleVmdAssets(assets = []) {
+  const categorizedIdleAssets = selectCategorizedIdleVmdAssets(assets);
+  if (categorizedIdleAssets.length) return categorizedIdleAssets;
+  return selectSafeStandbyFallbackAssets(assets);
 }
 
 /**
@@ -113,9 +154,26 @@ export function selectAutoplayIdleVmdAssets(assets = []) {
  * 调用方不得把 returned fallback 用于资源库、收藏/取消收藏、聊天意图解析或
  * 点击动作；它只用于避免 PMX 在没有本模型待机时回到 T 姿 bind pose。
  */
-export function resolveAutoplayVmdAssetPool(currentModelAssets = [], sharedIdleAssets = []) {
-  if (selectAutoplayIdleVmdAssets(currentModelAssets).length) return currentModelAssets;
-  return Array.isArray(sharedIdleAssets) ? sharedIdleAssets : [];
+export function resolveAutoplayVmdAssetPool(currentModelAssets = [], eulaFavoriteAssets = [], sharedIdleAssets = []) {
+  const currentModelIdleAssets = selectCategorizedIdleVmdAssets(currentModelAssets);
+  if (currentModelIdleAssets.length) return currentModelIdleAssets;
+
+  const eulaIdleAssets = selectCategorizedIdleVmdAssets(eulaFavoriteAssets);
+  if (eulaIdleAssets.length) return eulaIdleAssets;
+
+  const sharedIdlePool = selectCategorizedIdleVmdAssets(sharedIdleAssets);
+  if (sharedIdlePool.length) return sharedIdlePool;
+
+  const currentModelFallbackAssets = selectSafeStandbyFallbackAssets(currentModelAssets);
+  if (currentModelFallbackAssets.length) return currentModelFallbackAssets;
+
+  const eulaFallbackAssets = selectSafeStandbyFallbackAssets(eulaFavoriteAssets);
+  if (eulaFallbackAssets.length) return eulaFallbackAssets;
+
+  const sharedFallbackAssets = selectSafeStandbyFallbackAssets(sharedIdleAssets);
+  if (sharedFallbackAssets.length) return sharedFallbackAssets;
+
+  return [];
 }
 
 export function selectIdleFallbackVmdAsset(assets = [], { randomValue = Math.random() } = {}) {

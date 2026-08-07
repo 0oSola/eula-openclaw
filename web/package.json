@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node ./scripts/patch-reze-engine.mjs",
     "dev": "node ./scripts/run-next.mjs dev",
+    "prebuild": "node ./scripts/patch-reze-engine.mjs",
     "build": "node ./scripts/run-next.mjs build",
     "start": "node ./scripts/run-next.mjs start",
     "check:basic": "node ./tests/run-basic-checks.mjs"

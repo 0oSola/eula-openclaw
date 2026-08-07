@@ -48,7 +48,7 @@ def _normalize_message_visibility(value: str | None) -> str:
 _BRIDGE_ECHO_SUPPRESSION_WINDOW_SECONDS = 5 * 60
 _BRIDGE_DUPLICATE_SUPPRESSION_WINDOW_SECONDS = 30
 _BRIDGE_DUPLICATE_SYNC_SOURCES = {"realtime", "realtime_backfill"}
-COMPANION_RENDER_PIPELINES = ("classic", "hero-shot", "genshin", "mio-reference", "reze-npr", "reze-design", "k3")
+COMPANION_RENDER_PIPELINES = ("classic", "hero-shot", "genshin", "mio-reference", "reze-npr", "reze-design", "k3", "reze-k3")
 _COMPANION_RENDER_PIPELINE_SET = set(COMPANION_RENDER_PIPELINES)
 _COMPANION_RENDER_PIPELINE_SQL_VALUES = ", ".join(f"'{pipeline}'" for pipeline in COMPANION_RENDER_PIPELINES)
 _DESKTOP_PET_FIRST_PROMPT_PREVIEW_MAX_LENGTH = 240
@@ -237,10 +237,19 @@ class TraceStore:
         self.ndjson_dir.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode = WAL")
+        self._conn.execute("PRAGMA busy_timeout = 5000")
         self._init_db()
 
     def close(self) -> None:
         self._conn.close()
+
+    def _open_companion_shared_config_connection(self) -> sqlite3.Connection:
+        """为 Pet 同步配置建立独立短连接，避免与长生命周期业务连接跨线程争用。"""
+        connection = sqlite3.connect(self.db_path, timeout=5)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 5000")
+        return connection
 
     def _init_db(self) -> None:
         cursor = self._conn.cursor()
@@ -301,7 +310,8 @@ class TraceStore:
                 user_id TEXT PRIMARY KEY,
                 selected_model_path TEXT,
                 render_pipeline TEXT NOT NULL DEFAULT 'classic'
-                    CHECK (render_pipeline IN ('classic', 'hero-shot', 'genshin', 'mio-reference', 'reze-npr', 'reze-design', 'k3')),
+                    CHECK (render_pipeline IN ('classic', 'hero-shot', 'genshin', 'mio-reference', 'reze-npr', 'reze-design', 'k3', 'reze-k3')),
+                reze_stage_document_json TEXT,
                 updated_at TEXT NOT NULL
             );
 
@@ -922,6 +932,14 @@ class TraceStore:
             """
         )
         self._migrate_companion_shared_config_render_pipeline_check()
+        shared_config_columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(companion_shared_config)").fetchall()
+        }
+        self._add_column_if_missing(
+            shared_config_columns,
+            "reze_stage_document_json",
+            "ALTER TABLE companion_shared_config ADD COLUMN reze_stage_document_json TEXT",
+        )
         existing_columns = {
             row["name"] for row in self._conn.execute("PRAGMA table_info(asset_registry)").fetchall()
         }
@@ -1009,6 +1027,7 @@ class TraceStore:
                 selected_model_path TEXT,
                 render_pipeline TEXT NOT NULL DEFAULT 'classic'
                     CHECK (render_pipeline IN ({_COMPANION_RENDER_PIPELINE_SQL_VALUES})),
+                reze_stage_document_json TEXT,
                 updated_at TEXT NOT NULL
             )
             """
@@ -1016,12 +1035,13 @@ class TraceStore:
         self._conn.execute(
             f"""
             INSERT INTO companion_shared_config_next (
-                user_id, selected_model_path, render_pipeline, updated_at
+                user_id, selected_model_path, render_pipeline, reze_stage_document_json, updated_at
             )
             SELECT
                 user_id,
                 selected_model_path,
                 lower(trim(render_pipeline)),
+                NULL,
                 updated_at
             FROM companion_shared_config
             WHERE lower(trim(render_pipeline)) IN ({_COMPANION_RENDER_PIPELINE_SQL_VALUES})
@@ -4911,18 +4931,22 @@ class TraceStore:
         return {row["slot"]: json.loads(row["config_json"]) for row in rows}
 
     def get_companion_shared_config(self, user_id: str) -> dict[str, Any]:
-        row = self._conn.execute(
-            "SELECT * FROM companion_shared_config WHERE user_id = ?",
-            (user_id,),
-        ).fetchone()
+        with self._open_companion_shared_config_connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM companion_shared_config WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
         if row is None:
             return {
                 "user_id": user_id,
                 "selected_model_path": None,
                 "render_pipeline": "classic",
+                "reze_stage_document": None,
                 "updated_at": None,
             }
-        return dict(row)
+        item = dict(row)
+        item["reze_stage_document"] = self._json_loads(item.pop("reze_stage_document_json", None), None)
+        return item
 
     def upsert_companion_shared_config(
         self,
@@ -4930,6 +4954,7 @@ class TraceStore:
         user_id: str,
         selected_model_path: str | None,
         render_pipeline: str,
+        reze_stage_document: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         if not isinstance(render_pipeline, str):
             raise ValueError(f"render_pipeline must be one of {', '.join(COMPANION_RENDER_PIPELINES)}")
@@ -4937,20 +4962,37 @@ class TraceStore:
         if not normalized_pipeline or normalized_pipeline not in _COMPANION_RENDER_PIPELINE_SET:
             raise ValueError(f"render_pipeline must be one of {', '.join(COMPANION_RENDER_PIPELINES)}")
         now = _utc_now_iso()
-        self._conn.execute(
-            """
-            INSERT INTO companion_shared_config (
-                user_id, selected_model_path, render_pipeline, updated_at
-            ) VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                selected_model_path = excluded.selected_model_path,
-                render_pipeline = excluded.render_pipeline,
-                updated_at = excluded.updated_at
-            """,
-            (user_id, selected_model_path, normalized_pipeline, now),
-        )
-        self._conn.commit()
-        return self.get_companion_shared_config(user_id)
+        reze_stage_document_json = json.dumps(reze_stage_document, ensure_ascii=False) if reze_stage_document else None
+        with self._open_companion_shared_config_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO companion_shared_config (
+                    user_id, selected_model_path, render_pipeline, reze_stage_document_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    selected_model_path = excluded.selected_model_path,
+                    render_pipeline = excluded.render_pipeline,
+                    reze_stage_document_json = excluded.reze_stage_document_json,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, selected_model_path, normalized_pipeline, reze_stage_document_json, now),
+            )
+            connection.commit()
+            row = connection.execute(
+                "SELECT * FROM companion_shared_config WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        if row:
+            item = dict(row)
+            item["reze_stage_document"] = self._json_loads(item.pop("reze_stage_document_json", None), None)
+            return item
+        return {
+            "user_id": user_id,
+            "selected_model_path": None,
+            "render_pipeline": "classic",
+            "reze_stage_document": None,
+            "updated_at": None,
+        }
 
     @staticmethod
     def _desktop_pet_display_title(

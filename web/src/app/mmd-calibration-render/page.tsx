@@ -20,7 +20,8 @@ function readRenderPipeline(value: string | null): RenderPipeline {
     value === "mio-reference" ||
     value === "reze-npr" ||
     value === "reze-design" ||
-    value === "k3"
+    value === "k3" ||
+    value === "reze-k3"
   ) {
     return value;
   }

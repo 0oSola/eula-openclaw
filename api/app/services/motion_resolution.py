@@ -8,6 +8,8 @@ THINKING_MOTION_TOKENS = {"think", "thinking", "thinking_tilt"}
 THINKING_VMD_CATEGORY = "03_thinking_waiting"
 AKIMBO_MOTION_TOKENS = {"akimbo", "hands_on_hips", "hands-on-hips", "arms_akimbo", "arms-akimbo", "叉腰"}
 AKIMBO_VMD_CATEGORY = "06_strong_personality"
+UNIVERSAL_FAVORITE_PREFIX = "usage/vmd/优菈_by_原神_339146e6e418d79e85a515b26414c0b0[动作]/"
+UNIVERSAL_BUILTIN_PREFIX = "usage/vmd/_builtin/"
 
 
 def motion_plan_templates(motion_plan: dict | None) -> list[str]:
@@ -71,6 +73,35 @@ def _asset_path_text(asset: dict) -> str:
         .replace("\\", "/")
         .lower()
     )
+
+
+def _is_universal_favorite_asset(asset: dict) -> bool:
+    if not asset.get("is_favorite"):
+        return False
+    path = _asset_path_text(asset).strip("/")
+    return path.startswith(UNIVERSAL_FAVORITE_PREFIX.rstrip("/").lower())
+
+
+def _is_universal_builtin_asset(asset: dict) -> bool:
+    path = _asset_path_text(asset).strip("/")
+    return path.startswith(UNIVERSAL_BUILTIN_PREFIX.rstrip("/").lower())
+
+
+def list_available_favorite_motion_assets(store: Any, user_id: str, selected_model_path: str) -> list[dict]:
+    """返回规范收藏动作与所有 PMX 可读的通用内置动作。"""
+    all_user_assets = store.list_assets(requester_user_id=user_id, is_admin=False, user_id_filter=user_id)
+    universal_favorites = [asset for asset in all_user_assets if _is_universal_favorite_asset(asset)]
+    builtins = [asset for asset in all_user_assets if _is_universal_builtin_asset(asset)]
+
+    merged: list[dict] = []
+    seen_asset_ids: set[str] = set()
+    for asset in [*universal_favorites, *builtins]:
+        asset_id = str(asset.get("asset_id") or "")
+        if not asset_id or asset_id in seen_asset_ids:
+            continue
+        seen_asset_ids.add(asset_id)
+        merged.append(asset)
+    return merged
 
 
 def _asset_in_vmd_category(asset: dict, category: str) -> bool:
@@ -167,7 +198,7 @@ def resolve_motion_resolution(
             "fallback_reason": "missing_selected_model_path",
         }
 
-    assets = store.list_favorite_assets_for_model(user_id, selected_model_path)
+    assets = list_available_favorite_motion_assets(store, user_id, selected_model_path)
     token_index: dict[str, dict] = {}
     for asset in assets:
         for token in _match_tokens(asset):

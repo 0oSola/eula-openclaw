@@ -54,6 +54,37 @@ export const REZE_DESIGN_SCENE_DEFAULTS: RezeSceneDebugSettings = {
   groundGridEnabled: true,
 };
 
+/**
+ * Reze K3 的默认场景（来自 MMD_stage/ak-12.json 的 scene 字段）。
+ *
+ * 与 reze-design 的紫调舞台不同：k3 复刻走明亮的中性光（白主光/白世界光/白地面），
+ * 相机更近、目标点更高，画布透明后由页面 MIO CSS 背景透出。
+ */
+export const REZE_K3_SCENE_DEFAULTS: RezeSceneDebugSettings = {
+  sunAzimuth: 10,
+  sunElevation: 55,
+  keyIntensity: 1.07,
+  ambientIntensity: 0.73,
+  bloomThreshold: 0.67,
+  bloomKnee: 0.55,
+  bloomRadius: 0.7,
+  bloomStrength: 0.03,
+  cameraDistance: 21.2,
+  cameraTargetX: -2.1,
+  cameraTargetY: 12.3,
+  cameraTargetZ: 2.2,
+  sunColor: "#ffffff",
+  worldColor: "#ffffff",
+  bloomColor: "#ff9e9e",
+  backgroundColor: "#ffffff",
+  groundColor: "#ffffff",
+  groundSize: 141,
+  groundOpacity: 0.19,
+  groundShadow: true,
+  groundGridColor: "#fafaf9",
+  groundGridEnabled: true,
+};
+
 /** 新写的、与参考效果语义兼容的星空背景标识。 */
 export const REZE_BACKGROUND_EFFECTS = ["Shining Stars", "关闭"] as const;
 export type RezeBackgroundEffect = (typeof REZE_BACKGROUND_EFFECTS)[number];

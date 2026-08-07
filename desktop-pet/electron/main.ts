@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isInjectedCodexContext, resolveCodexTaskTitle } from "./codexPresentation.js";
 import {
   type ContextMenuPositionInput,
   resolveContextMenuPosition,
@@ -81,13 +82,17 @@ import {
   DEFAULT_INTERACTION_MODE,
   type PetInteractionMode,
   normalizeInteractionMode,
+  shouldOpenPetContextMenu,
 } from "./interactionMode.js";
 import {
   WM_LBUTTONDOWN,
   WM_LBUTTONUP,
   WM_MOUSEMOVE,
   WM_RBUTTONUP,
-  shouldStartNativeWindowDrag,
+  hasNativeClickMoved,
+  readNativeClientPoint,
+  shouldActivateNativeWindowDrag,
+  shouldDispatchNativePetClick,
 } from "./nativeMouseInput.js";
 import { createPetBrowserWindowOptions } from "./petWindowOptions.js";
 import {
@@ -197,6 +202,15 @@ let contextMenuWindow: BrowserWindow | null = null;
 let diagnosticBlankWindow: BrowserWindow | null = null;
 let nativeMenuOwnerWindow: BrowserWindow | null = null;
 const windowDragState = new WeakMap<BrowserWindow, WindowDragSession>();
+const nativeClickCandidateState = new WeakMap<
+  BrowserWindow,
+  {
+    originBounds: Rectangle;
+    originCursor: ScreenPoint;
+    originClient: ScreenPoint;
+    moved: boolean;
+  }
+>();
 type ActiveSessionWindow = {
   workspacePath: string;
   userDataDir?: string;
@@ -532,26 +546,12 @@ function trimOutputText(value: unknown): string {
   return typeof value === "string" ? value.replace(/\r\n/g, "\n").trim() : "";
 }
 
-function redactSensitiveText(value: string): string {
-  return value
-    .replace(
-      /\b((?:[\w.-]*?(?:token|password|passwd|pwd|secret|api[_-]?key|access[_-]?key|private[_-]?key)[\w.-]*?)\s*[:=]\s*)(["']?)[^\s"',;]+/gi,
-      "$1[redacted]",
-    )
-    .replace(/\b(?:sk|ghp|github_pat|xox[abprs])[-_][A-Za-z0-9._-]{8,}\b/g, "[redacted]");
-}
-
-function truncateText(value: string, maxLength: number): string {
-  if (value.length <= maxLength) return value;
-  const clipped = value.slice(0, maxLength - 3);
-  const lastSpace = clipped.lastIndexOf(" ");
-  const boundary = lastSpace >= Math.floor(maxLength * 0.62) ? lastSpace : clipped.length;
-  return `${clipped.slice(0, boundary).trimEnd()}...`;
-}
-
 function sessionTitle(session: PetMenuSession): string {
-  const rawTitle = compactText(session.display_title) || compactText(session.first_prompt_preview) || "Codex session";
-  return truncateText(redactSensitiveText(rawTitle), 80);
+  return resolveCodexTaskTitle(
+    [session.display_title, session.first_prompt_preview, session.last_summary],
+    session.workspace_path,
+    80,
+  );
 }
 
 function sessionLastOutput(session: PetMenuSession): string | undefined {
@@ -836,14 +836,23 @@ function toMenuSessionFromAgentRecord(
 } {
   const primaryEvidence =
     session.evidence.find((evidence) => evidence.source !== "process") ?? session.evidence[0];
+  const firstPromptPreview =
+    session.firstPromptPreview && !isInjectedCodexContext(session.firstPromptPreview)
+      ? session.firstPromptPreview
+      : null;
+  const displayTitle = resolveCodexTaskTitle(
+    [session.displayTitle, firstPromptPreview, session.lastSummary],
+    session.workspacePath,
+    80,
+  );
   const payload: DesktopPetSessionPayload = {
     pet_session_id: `${session.provider}:${session.sessionId}`,
     codex_session_id: session.sessionId,
     workspace_id: null,
     workspace_path: session.workspacePath,
     codex_home: agentHome,
-    display_title: session.displayTitle,
-    first_prompt_preview: session.firstPromptPreview,
+    display_title: displayTitle,
+    first_prompt_preview: firstPromptPreview,
     last_summary: session.lastSummary,
     last_status: session.state,
     launch_mode: session.agent === "claude" || session.runtime === "app-server" ? "interactive" : "workspace-write",
@@ -1015,7 +1024,11 @@ function payloadFromMenuSession(session: PetMenuSession, lastStatus?: CodexSessi
     workspace_id: session.workspace_id ?? null,
     workspace_path: workspacePath,
     codex_home: session.codex_home ?? resolveCodexHome(process.env),
-    display_title: truncateText(sessionTitle(session), 48),
+    display_title: resolveCodexTaskTitle(
+      [session.display_title, session.first_prompt_preview, session.last_summary],
+      workspacePath,
+      48,
+    ),
     first_prompt_preview: session.first_prompt_preview ?? null,
     last_summary: session.last_summary ?? null,
     last_status: lastStatus ?? normalizeCodexSessionStatus(session.last_status),
@@ -1885,6 +1898,10 @@ async function openPetContextMenu(
   input?: ContextMenuPositionInput,
   source: ContextMenuPopupSource = "native",
 ) {
+  if (!shouldOpenPetContextMenu(currentInteractionMode)) {
+    logPetDebugEvent("context-menu:ignored-camera-adjust", { source, input });
+    return;
+  }
   const now = Date.now();
   const cursor = screen.getCursorScreenPoint();
   const bounds = window.getBounds();
@@ -2042,15 +2059,19 @@ function openNativeContextMenu(
   });
 }
 
-function startPetWindowDrag(window: BrowserWindow, source: WindowDragSource) {
+function startPetWindowDrag(
+  window: BrowserWindow,
+  source: WindowDragSource,
+  seed?: Pick<WindowDragSession, "originBounds" | "originCursor">,
+) {
   const activeDrag = windowDragState.get(window);
   if (!shouldAcceptWindowDragStart(activeDrag?.source, source)) {
     logPetDebugEvent("window-drag:start-ignored", { source, activeSource: activeDrag?.source });
     return;
   }
   windowDragState.set(window, {
-    originBounds: window.getBounds(),
-    originCursor: screen.getCursorScreenPoint(),
+    originBounds: seed?.originBounds ?? window.getBounds(),
+    originCursor: seed?.originCursor ?? screen.getCursorScreenPoint(),
     source,
   });
   logPetDebugEvent("window-drag:start", { source, ...(windowDragState.get(window) ?? {}) });
@@ -2096,31 +2117,75 @@ function installNativeMouseHooks(window: BrowserWindow) {
     void openPetContextMenu(window, { space: "screen", point }, "native");
   });
 
-  window.hookWindowMessage(WM_LBUTTONDOWN, () => {
+  window.hookWindowMessage(WM_LBUTTONDOWN, (_wParam, lParam) => {
+    const originCursor = screen.getCursorScreenPoint();
+    nativeClickCandidateState.set(window, {
+      originBounds: window.getBounds(),
+      originCursor,
+      originClient: readNativeClientPoint(lParam) ?? originCursor,
+      moved: false,
+    });
     logPetDebugEvent("native-mouse:left-button-down", { interactionMode: currentInteractionMode });
+  });
+
+  window.hookWindowMessage(WM_MOUSEMOVE, (_wParam, lParam) => {
+    const candidate = nativeClickCandidateState.get(window);
+    if (candidate && !candidate.moved) {
+      const currentClient = readNativeClientPoint(lParam) ?? screen.getCursorScreenPoint();
+      candidate.moved = hasNativeClickMoved({
+        origin: candidate.originClient,
+        current: currentClient,
+      });
+    }
     if (
-      !shouldStartNativeWindowDrag({
+      candidate &&
+      shouldActivateNativeWindowDrag({
         interactionMode: currentInteractionMode,
+        moved: candidate.moved,
         contextMenuActive,
         lastContextMenuClosedAtMs,
       })
     ) {
-      logPetDebugEvent("window-drag:native-start-suppressed", {
-        interactionMode: currentInteractionMode,
-        contextMenuActive,
-        lastContextMenuClosedAtMs,
+      startPetWindowDrag(window, "native", {
+        originBounds: candidate.originBounds,
+        originCursor: candidate.originCursor,
       });
-      return;
     }
-    startPetWindowDrag(window, "native");
-  });
-
-  window.hookWindowMessage(WM_MOUSEMOVE, () => {
     movePetWindowDrag(window, "native");
   });
 
-  window.hookWindowMessage(WM_LBUTTONUP, () => {
-    endPetWindowDrag(window, "native");
+  window.hookWindowMessage(WM_LBUTTONUP, (_wParam, lParam) => {
+    const candidate = nativeClickCandidateState.get(window);
+    nativeClickCandidateState.delete(window);
+    if (windowDragState.has(window)) {
+      endPetWindowDrag(window, "native");
+      return;
+    }
+    if (
+      candidate &&
+      shouldDispatchNativePetClick({
+        interactionMode: currentInteractionMode,
+        moved: candidate.moved,
+        contextMenuActive,
+        lastContextMenuClosedAtMs,
+      })
+    ) {
+      const bounds = window.getBounds();
+      const point = readNativeClientPoint(lParam) ?? (() => {
+        const cursor = screen.getCursorScreenPoint();
+        return { x: cursor.x - bounds.x, y: cursor.y - bounds.y };
+      })();
+      window.webContents.send("pet:native-left-click", {
+        clientX: point.x,
+        clientY: point.y,
+      });
+      logPetDebugEvent("native-mouse:left-click-fallback", {
+        clientX: point.x,
+        clientY: point.y,
+        interactionMode: currentInteractionMode,
+        source: "native-click-candidate",
+      });
+    }
   });
 }
 
@@ -2291,6 +2356,13 @@ async function createPetWindow() {
   }
   const window = new BrowserWindow(windowOptions);
   petWindow = window;
+  const createdBounds = window.getBounds();
+  window.setBounds({
+    x: windowOptions.x ?? createdBounds.x,
+    y: windowOptions.y ?? createdBounds.y,
+    width: windowOptions.width ?? createdBounds.width,
+    height: windowOptions.height ?? createdBounds.height,
+  });
 
   void refreshApiRuntimeStatus();
   applyPetAlwaysOnTop(window, currentAlwaysOnTop);
@@ -2321,7 +2393,8 @@ async function createPetWindow() {
     if (petWindow === window) petWindow = null;
     logPetDebugEvent("pet-window:closed");
   });
-  window.webContents.on("context-menu", (_event, params) => {
+  window.webContents.on("context-menu", (event, params) => {
+    event.preventDefault();
     logPetDebugEvent("context-menu:webcontents-event", { x: params.x, y: params.y });
     openPetContextMenu(window, { space: "window", point: { x: params.x, y: params.y } }, "webcontents");
   });

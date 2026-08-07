@@ -6,7 +6,11 @@ import { getModelDisplayLabel } from "@/features/stage/modelCatalog.js";
 import { shouldTriggerStageCharacterClick } from "@/features/stage/stageCharacterClick.js";
 import { applyStageRuntimeState, MMDCompanionRuntime } from "@/features/stage/mmdCompanionRuntime.js";
 import { RezeWebGpuStage } from "@/features/stage/RezeWebGpuStage";
-import type { RezeBackgroundEffect, RezeGradePreset } from "@/features/stage/rezeDesignDefaults";
+import type {
+  RezeBackgroundEffect,
+  RezeGradePreset,
+  RezeSceneDebugSettings,
+} from "@/features/stage/rezeDesignDefaults";
 import type { MmdCameraSnapshot, MmdModelAsset, RenderPipeline } from "@/lib/types";
 
 declare global {
@@ -28,6 +32,7 @@ type StageInteraction = {
   lockLowerBody?: boolean;
   disableCrossfade?: boolean;
   playbackRate?: number;
+  vmdRequestId?: number;
   sequence?: Array<{
     template: string;
     action: string;
@@ -73,6 +78,7 @@ export type MMDStageHandle = {
   lockCamera: () => MmdCameraSnapshot | null;
   captureCamera: () => MmdCameraSnapshot | null;
   resetCamera: () => MmdCameraSnapshot | null;
+  adjustCameraDistance?: (delta: number) => MmdCameraSnapshot | number | null;
   hitTestCharacterAtClientPoint: (clientX: number, clientY: number) => boolean;
   getStageRect: () => DOMRect | null;
   setSpeechLevel: (level: number) => void;
@@ -123,6 +129,8 @@ type MMDStageProps = {
   rezeBackgroundEffect?: RezeBackgroundEffect;
   rezeGrade?: RezeGradePreset;
   rezeGradeIntensity?: number;
+  rezeSceneDebugSettings?: RezeSceneDebugSettings;
+  rezeTransparentBackground?: boolean;
 };
 
 export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDStage({
@@ -146,6 +154,8 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   rezeBackgroundEffect = "Shining Stars",
   rezeGrade = "中性",
   rezeGradeIntensity = 1,
+  rezeSceneDebugSettings,
+  rezeTransparentBackground = false,
 }: MMDStageProps, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const statusRef = useRef<HTMLParagraphElement | null>(null);
@@ -179,11 +189,18 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       resetCamera() {
         return webGpuStageRef.current?.resetCamera?.() ?? runtimeRef.current?.resetCameraToDefault?.() ?? null;
       },
+      adjustCameraDistance(delta: number) {
+        return webGpuStageRef.current?.adjustCameraDistance?.(delta) ?? null;
+      },
       hitTestCharacterAtClientPoint(clientX: number, clientY: number) {
         return webGpuStageRef.current?.hitTestCharacterAtClientPoint?.(clientX, clientY) ?? Boolean(runtimeRef.current?.hitTestModelAtClientPoint?.(clientX, clientY));
       },
       getStageRect() {
-        return containerRef.current?.getBoundingClientRect() ?? null;
+        return (
+          containerRef.current?.getBoundingClientRect() ??
+          webGpuStageRef.current?.getStageRect?.() ??
+          null
+        );
       },
       setSpeechLevel(level: number) {
         runtimeRef.current?.setSpeechLevel?.(level);
@@ -221,7 +238,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
 
   useEffect(() => {
     if (!containerRef.current || !statusRef.current) return;
-    if (renderPipeline === "reze-design") {
+    if (renderPipeline === "reze-design" || renderPipeline === "reze-k3") {
       runtimeRef.current = null;
       return;
     }
@@ -394,8 +411,12 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
     ) {
       return;
     }
-    const runtime = runtimeRef.current;
-    if (!runtime?.hitTestModelAtClientPoint?.(event.clientX, event.clientY)) return;
+    const hitCharacter =
+      renderPipeline === "reze-design" ||
+      renderPipeline === "reze-k3" ||
+      (webGpuStageRef.current?.hitTestCharacterAtClientPoint?.(event.clientX, event.clientY) ??
+        Boolean(runtimeRef.current?.hitTestModelAtClientPoint?.(event.clientX, event.clientY)));
+    if (!hitCharacter) return;
     onCharacterClick?.({
       clientX: event.clientX,
       clientY: event.clientY,
@@ -422,6 +443,19 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
     );
   }
 
+  // WebGPU 分支（reze-design / reze-k3）的 RezeWebGpuStage 不会像 Three.js
+  // 分支那样在内部对 interaction.vmdUrl 调用 toAbsolute；这里统一转为绝对 URL，
+  // 否则 loadVmd 会把相对路径 /assets/... 请求到 web 前端而不是 API，返回 404。
+  const webGpuInteraction =
+    interaction.mode === "vmd" && interaction.vmdUrl
+      ? {
+          ...interaction,
+          vmdUrl: toAbsolute(interaction.vmdUrl),
+          vmdLoopUrls: interaction.vmdLoopUrls?.map((url) => toAbsolute(url)),
+          standbyVmdUrl: interaction.standbyVmdUrl ? toAbsolute(interaction.standbyVmdUrl) : interaction.standbyVmdUrl,
+        }
+      : interaction;
+
   if (chrome === "bare") {
     return (
       <section
@@ -432,16 +466,20 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
         onPointerUp={handleStagePointerUp}
         onPointerCancel={handleStagePointerCancel}
       >
-        {renderPipeline === "reze-design" ? (
+        {renderPipeline === "reze-design" || renderPipeline === "reze-k3" ? (
           <RezeWebGpuStage
             ref={webGpuStageRef}
             modelUrl={toAbsolute(modelUrl)}
+            modelIdentifier={selectedModelPath || modelLabel}
             localModelImport={rezeLocalModelImport}
-            interaction={interaction}
+            interaction={webGpuInteraction}
             backgroundEffect={rezeBackgroundEffect}
             grade={rezeGrade}
             gradeIntensity={rezeGradeIntensity}
+            sceneSettings={rezeSceneDebugSettings}
+            transparentBackground={rezeTransparentBackground}
             cameraSnapshot={cameraSnapshot}
+            onInteractionComplete={onInteractionComplete}
             onReadyChange={(ready, detail) => {
               if (statusRef.current) statusRef.current.textContent = detail || (ready ? "WebGPU 舞台已就绪。" : "WebGPU 舞台初始化失败。");
             }}
@@ -480,9 +518,9 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
           </select>
         </label>
       </header>
-      {renderPipeline === "reze-design" ? (
+      {renderPipeline === "reze-design" || renderPipeline === "reze-k3" ? (
         <div style={{ margin: "0.45rem 0.95rem", minHeight: 0, borderRadius: "0.8rem", border: "1px solid rgba(140, 209, 255, 0.19)", overflow: "hidden" }}>
-          <RezeWebGpuStage ref={webGpuStageRef} modelUrl={toAbsolute(modelUrl)} localModelImport={rezeLocalModelImport} interaction={interaction} backgroundEffect={rezeBackgroundEffect} grade={rezeGrade} gradeIntensity={rezeGradeIntensity} cameraSnapshot={cameraSnapshot} />
+          <RezeWebGpuStage ref={webGpuStageRef} modelUrl={toAbsolute(modelUrl)} modelIdentifier={selectedModelPath || modelLabel} localModelImport={rezeLocalModelImport} interaction={webGpuInteraction} backgroundEffect={rezeBackgroundEffect} grade={rezeGrade} gradeIntensity={rezeGradeIntensity} sceneSettings={rezeSceneDebugSettings} transparentBackground={rezeTransparentBackground} cameraSnapshot={cameraSnapshot} onInteractionComplete={onInteractionComplete} />
         </div>
       ) : (
         <div

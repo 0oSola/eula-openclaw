@@ -24,6 +24,9 @@ declare global {
         move: () => void;
         end: () => void;
       };
+      nativeClick: {
+        on: (callback: (point: { clientX: number; clientY: number }) => void) => () => void;
+      };
       notificationProfile: {
         get: () => Promise<"low" | "medium" | "high">;
       };

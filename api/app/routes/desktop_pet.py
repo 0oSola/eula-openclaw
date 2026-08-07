@@ -18,7 +18,8 @@ _CODEX_REVIEWABLE_STATUSES = {"completed", "failed", "waiting_approval", "file_c
 
 class CompanionSharedConfigPayload(BaseModel):
     selected_model_path: str | None = Field(default=None, max_length=1000)
-    render_pipeline: Literal["classic", "hero-shot", "genshin", "mio-reference", "reze-npr", "reze-design", "k3"] = "classic"
+    render_pipeline: Literal["classic", "hero-shot", "genshin", "mio-reference", "reze-npr", "reze-design", "k3", "reze-k3"] = "classic"
+    reze_stage_document: dict[str, object] | None = None
 
 
 class DesktopPetSessionPayload(BaseModel):
@@ -127,6 +128,7 @@ def put_shared_config(
             user_id=requester.user_id,
             selected_model_path=payload.selected_model_path,
             render_pipeline=payload.render_pipeline,
+            reze_stage_document=payload.reze_stage_document,
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
