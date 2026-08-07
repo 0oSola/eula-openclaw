@@ -555,7 +555,7 @@ async function writePackage({ input, envelope, options, message }) {
     path,
     media_type,
     size: Buffer.byteLength(content, "utf8"),
-    sha256: sha256(content),
+    sha256: sha256(content).replace(/^sha256:/u, ""),
   }));
   const metadata = buildMetadata(
     input,
@@ -574,7 +574,7 @@ async function writePackage({ input, envelope, options, message }) {
   }];
   const completeContent = [
     `handoff_id: ${handoffId}`,
-    `package_sha256: ${packageManifestHash(artifactRecords)}`,
+    `package_sha256: ${packageManifestHash(artifactRecords).replace(/^sha256:/u, "")}`,
     `completed_at: ${capturedAt}`,
     "",
   ].join("\n");
