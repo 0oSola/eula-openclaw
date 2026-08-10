@@ -294,6 +294,8 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     if (canvasRef.current) {
       canvasRef.current.dataset.vmdIkPolicy = policy.mode;
       canvasRef.current.dataset.vmdIkEnabled = String(enabled);
+      canvasRef.current.dataset.vmdIkLastPolicy = policy.mode;
+      canvasRef.current.dataset.vmdIkLastEnabled = String(enabled);
     }
     return enabled;
   };
