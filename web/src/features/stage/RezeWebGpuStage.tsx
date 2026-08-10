@@ -25,7 +25,13 @@ import {
   type RezeSceneDebugSettings,
 } from "@/features/stage/rezeDesignDefaults";
 import { createRezeVmdRequestGuard } from "@/features/stage/rezeVmdRequestGuard.js";
-import { playRezeVmd, resetRezeModelToBindPose, setRezeVmdCompletionHandler } from "@/features/stage/rezeVmdPlayback.js";
+import {
+  applyRezeVmdIkPolicy,
+  fetchRezeVmdIkPolicy,
+  playRezeVmd,
+  resetRezeModelToBindPose,
+  setRezeVmdCompletionHandler,
+} from "@/features/stage/rezeVmdPlayback.js";
 import {
   isKoledaMaskMaterialName,
   isKoledaModelIdentifier,
@@ -204,6 +210,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   });
   const engineRef = useRef<Engine | null>(null);
   const engineReadyRef = useRef(false);
+  const defaultIkEnabledRef = useRef(true);
   const settingsRef = useRef<RezeSceneDebugSettings>(DEFAULT_SETTINGS);
   const cameraSnapshotRef = useRef<MmdCameraSnapshot | null>(cameraSnapshot);
   const modelRef = useRef<Awaited<ReturnType<Engine["loadModel"]>> | null>(null);
@@ -212,6 +219,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   const lastLoopVmdUrlRef = useRef("");
   const vmdCompletionFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const vmdRequestGuardRef = useRef(createRezeVmdRequestGuard());
+  const vmdIkPolicyCacheRef = useRef(new Map<string, ReturnType<typeof fetchRezeVmdIkPolicy>>());
   const interactionRef = useRef(interaction);
   const backgroundEffectRef = useRef<RezeBackgroundEffect>(backgroundEffect);
   const gradeRef = useRef<RezeGradePreset>(grade);
@@ -258,6 +266,48 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     vmdCompletionFallbackTimerRef.current = null;
   };
 
+  const readRezeVmdIkPolicy = async (url: string) => {
+    let pending = vmdIkPolicyCacheRef.current.get(url);
+    if (!pending) {
+      pending = fetchRezeVmdIkPolicy(url);
+      vmdIkPolicyCacheRef.current.set(url, pending);
+    }
+    try {
+      return await pending;
+    } catch (error) {
+      vmdIkPolicyCacheRef.current.delete(url);
+      console.warn("[reze-vmd] 无法读取 VMD IK 状态，保持舞台默认 IK", error);
+      return {
+        mode: "unavailable",
+        engineIkEnabled: null,
+        ikFrameCount: 0,
+        footIkEntryCount: 0,
+      };
+    }
+  };
+
+  const applyVmdIkPolicy = (
+    engine: Engine,
+    policy: Awaited<ReturnType<typeof readRezeVmdIkPolicy>>,
+  ) => {
+    const enabled = applyRezeVmdIkPolicy(engine, policy, defaultIkEnabledRef.current);
+    if (canvasRef.current) {
+      canvasRef.current.dataset.vmdIkPolicy = policy.mode;
+      canvasRef.current.dataset.vmdIkEnabled = String(enabled);
+    }
+    return enabled;
+  };
+
+  const restoreDefaultIk = () => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.setIKEnabled(defaultIkEnabledRef.current);
+    if (canvasRef.current) {
+      canvasRef.current.dataset.vmdIkPolicy = "default";
+      canvasRef.current.dataset.vmdIkEnabled = String(defaultIkEnabledRef.current);
+    }
+  };
+
   const handleRezeVmdFinished = (
     model: Awaited<ReturnType<Engine["loadModel"]>>,
     finishedName: string,
@@ -282,12 +332,19 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       const nextName = nextUrl.split("/").pop() || "motion.vmd";
       void (async () => {
         try {
-          await model.loadVmd(nextName, nextUrl);
+          const [policy] = await Promise.all([
+            readRezeVmdIkPolicy(nextUrl),
+            model.loadVmd(nextName, nextUrl),
+          ]);
           if (model !== modelRef.current) return;
+          const engine = engineRef.current;
+          if (!engine) return;
+          applyVmdIkPolicy(engine, policy);
           playRezeVmd(model, nextName, { preserveCurrentPose: true });
           currentVmdUrlRef.current = nextUrl;
           lastLoopVmdUrlRef.current = nextUrl;
           armRezeVmdCompletionFallback(model, nextName, nextUrl);
+          engine.resetPhysics();
         } catch (error) {
           reportStatus("error", `循环动作切换失败：${error instanceof Error ? error.message : String(error)}`);
         }
@@ -299,6 +356,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     // animationState.onEnd。无论来自引擎结束事件还是兜底计时器，都统一复原姿势
     // 并通知页面恢复待机。
     currentVmdUrlRef.current = "";
+    restoreDefaultIk();
     resetRezeModelToBindPose(model);
     applyKoledaDefaultAppearance(model);
     onInteractionCompleteRef.current?.();
@@ -538,6 +596,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
        await engine.init();
        if (disposed) return;
        engineReadyRef.current = true;
+       defaultIkEnabledRef.current = engine.getIKEnabled?.() ?? true;
        const initialBackgroundEffect = await engine.setBackgroundEffect(
          backgroundEffectRef.current === "Shining Stars" ? REZE_SHINING_STARS_WGSL : null,
        );
@@ -572,8 +631,12 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       if (initialInteraction.mode === "vmd" && initialInteraction.vmdUrl) {
         const requestId = vmdRequestGuardRef.current.begin();
         const name = initialInteraction.vmdUrl.split("/").pop() || "motion.vmd";
-        await model.loadVmd(name, initialInteraction.vmdUrl);
+        const [policy] = await Promise.all([
+          readRezeVmdIkPolicy(initialInteraction.vmdUrl),
+          model.loadVmd(name, initialInteraction.vmdUrl),
+        ]);
         if (disposed || !vmdRequestGuardRef.current.isCurrent(requestId)) return;
+        applyVmdIkPolicy(engine, policy);
         playRezeVmd(model, name);
         currentVmdUrlRef.current = initialInteraction.vmdUrl;
         armRezeVmdCompletionFallback(model, name, initialInteraction.vmdUrl);
@@ -590,6 +653,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       engineReadyRef.current = false;
       modelRef.current = null;
       clearVmdCompletionFallback();
+      vmdIkPolicyCacheRef.current.clear();
       materialStateRef.current.clear();
       engineRef.current?.dispose();
       engineRef.current = null;
@@ -625,8 +689,14 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       try {
         const url = interaction.vmdUrl!;
         const name = url.split("/").pop() || "motion.vmd";
-        await model.loadVmd(name, url);
+        const [policy] = await Promise.all([
+          readRezeVmdIkPolicy(url),
+          model.loadVmd(name, url),
+        ]);
         if (!vmdRequestGuardRef.current.isCurrent(requestId) || model !== modelRef.current) return;
+        const engine = engineRef.current;
+        if (!engine) return;
+        applyVmdIkPolicy(engine, policy);
         // 只有在「上一个动作已经结束（currentVmdUrlRef 已被完成回调清空）」时
         // 才代表真的没有动作在播，直接 show/play 从绑定姿势起跳；只要前一个
         // 动作仍在进行中（currentVmdUrlRef 非空），新动作必须保留当前姿势，避免
@@ -635,7 +705,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         currentVmdUrlRef.current = url;
         if (interaction.vmdLoopUrls?.includes(url)) lastLoopVmdUrlRef.current = url;
         armRezeVmdCompletionFallback(model, name, url);
-        engineRef.current?.resetPhysics();
+        engine.resetPhysics();
       } catch (error) {
         if (!vmdRequestGuardRef.current.isCurrent(requestId)) return;
         reportStatus("error", `VMD 加载失败：${error instanceof Error ? error.message : String(error)}`);
@@ -648,6 +718,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     if (interaction.mode === "vmd" && interaction.vmdUrl) return;
     clearVmdCompletionFallback();
     currentVmdUrlRef.current = "";
+    restoreDefaultIk();
   }, [interaction.mode, interaction.vmdUrl]);
 
   return (
