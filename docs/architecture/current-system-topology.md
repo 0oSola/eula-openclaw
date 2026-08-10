@@ -42,6 +42,8 @@ Companion Reze Design
 
 `reze-npr`、`classic` 等模式仍由 `MMDCompanionRuntime`（Three.js/WebGL）处理。两条路径的骨骼、Grant 付与求解器、点击、口型和物理实现不能视为等价：WebGPU 舞台使用 reze-engine 自己的 IK/物理，未验证功能不得跨分支承诺。浏览器无 WebGPU 或当前 PMX/VMD 无法被引擎解析时，舞台必须显示错误，用户需手动切换 `reze-npr` 恢复既有兼容路径；不得静默降级并继续显示为 WebGPU。
 
+Reze WebGPU 播放 VMD 前会额外读取文件尾部的显示/IK 帧。`reze-engine@0.26.0` 自身只把骨骼帧和 Morph 帧装入动画剪辑，且默认在每次应用 VMD FK 后运行全局 IK；如果忽略 VMD 中“关闭足 IK”的状态，PMX 足 IK 会覆盖腿、膝和足首轨道，使完整 FK 动作表现为下半身锁定。当前前端只有在 VMD 中至少出现足 IK 条目、且文件内全部 IK 条目始终关闭时，才在该剪辑播放期间调用 `Engine.setIKEnabled(false)`；没有 IK 条目、包含开启条目或中途切换状态时保持舞台默认 IK，避免 Reze 的全局开关误伤其它 IK 链。单次动作完成、退出 VMD 模式或切换到不要求关闭 IK 的剪辑时必须恢复引擎初始 IK 状态。解析结果按 VMD URL 缓存，循环动作不得重复下载整份文件。
+
 WebGPU 场景调试直接写入 engine 的 world、sun、bloom、ground、background、camera 和 color grading；材质预设映射至 WGSL style group。`reze-design` 的默认场景以 `D:\workspace\reze-design\reze-design\lib\default-scene.ts` 为参数参照：世界光 `#ed6aff/0.66`、太阳 `#ffffff/2.0/205°/21°`、Bloom `threshold=0.5/knee=0.5/radius=4/intensity=0.05/#ffc9c9`、背景 `#4b004f + Shining Stars`、地面 `#c800de/160/0.42/#fafaf9/grid=true`、相机 `26.2/[0,11.4,0]`。调色预设采用参考工程 `content/grades.json` 的中性、血色、赛博朋克、神圣、月光和樱色 ASC CDL 数值，并以 0–1 强度实时写入 `engine.setColorGrading()`；它不是只变更界面文本或 CSS 滤镜。Shining Stars 以本项目独立 WGSL 实现写入 reze-engine，不复制参考工程 AGPL 编辑器源码。当前单项透明度、发光强度尚无引擎公开 API 映射，前端禁用这两项而不制造虚假的视觉结果。PNG 导出包含 WebGPU 内的背景和星空，不包含页面其它 CSS 装饰。
 
 Reze 资产页还支持本地 PMX 目录导入。前端只接受一个目录中的单一 PMX 以及全部贴图文件，生成浏览器内存中的 `File[]`，经 `MMDStage` 传给 `RezeWebGpuStage`，最终调用 `engine.loadModel("companion", { files, pmxFile })`。该路径让引擎使用文件映射解析 PMX 的相对贴图路径，不向 FastAPI 上传模型，不改变用户的主站模型选择或 desktop-pet 共享配置；刷新页面后文件集会丢失。
