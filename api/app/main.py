@@ -32,6 +32,7 @@ from app.services.message_tts_reference import create_or_enqueue_message_tts_ref
 from app.services.message_tts_worker import run_message_tts_worker
 from app.services.codex_app_server_client import CodexAppServerClient
 from app.services.codex_interactive_provider import CodexInteractiveProvider, DeterministicCodexInteractiveProvider
+from app.services.codex_interactive_control import CodexInteractiveSessionControl
 from app.services.codex_knowledge_extraction import run_codex_knowledge_extraction_worker
 from app.services.codex_author_knowledge_handoff import run_codex_author_knowledge_reconciliation_worker
 from app.services.codex_author_knowledge_handoff_store import CodexAuthorKnowledgeHandoffStore
@@ -296,6 +297,7 @@ def create_app(overrides: dict | None = None) -> FastAPI:
     app.state.tts_client = tts_client
     app.state.message_bridge_service = message_bridge_service
     app.state.codex_interactive_provider = codex_interactive_provider
+    app.state.codex_interactive_control = CodexInteractiveSessionControl()
     app.state.codex_worktree_manager = codex_worktree_manager
     app.state.codex_check_commands = {
         "api": [["pytest", "api/tests", "-q"]],

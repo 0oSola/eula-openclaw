@@ -7,7 +7,7 @@ describe("Codex approval fallback", () => {
     expect(buildApprovalFallback({ state: "running" }, "medium")).toBeNull();
   });
 
-  it("makes waiting approval actionable only by focusing VSCode", () => {
+  it("makes waiting approval actionable by focusing the Codex session", () => {
     const fallback = buildApprovalFallback(
       {
         state: "waiting_approval",
@@ -21,13 +21,13 @@ describe("Codex approval fallback", () => {
       canApprove: false,
       canDeny: false,
       primaryAction: {
-        type: "focus-vscode",
-        label: "Open VSCode",
+        type: "focus-codex-session",
+        label: "Open Codex session",
       },
       limitationCode: "scanner-missing-approval-id",
     });
     expect(fallback?.message).toBe(
-      "Codex needs approval · npm install · Open VSCode to approve or deny in the Codex terminal.",
+      "Codex needs approval · npm install · Open the Codex session to approve or deny the pending request.",
     );
     expect(fallback?.limitation).toContain("JSONL scanner does not expose an approval id");
   });

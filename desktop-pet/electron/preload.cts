@@ -102,9 +102,23 @@ contextBridge.exposeInMainWorld("desktopPet", {
   },
   prompt: {
     send: (prompt: string) => ipcRenderer.invoke("pet:prompt:send", prompt),
+    sendToSession: (options: {
+      workspacePath: string;
+      petSessionId?: string;
+      codexSessionId?: string;
+      prompt: string;
+    }) => ipcRenderer.invoke("pet:prompt:send-to-session", options),
   },
   vscode: {
     focus: (options?: { workspacePath?: string }) => ipcRenderer.invoke("pet:vscode:focus", options),
+  },
+  codex: {
+    focus: (options?: {
+      workspacePath?: string;
+      codexSessionId?: string;
+      source?: "status" | "approval" | "completion";
+    }) =>
+      ipcRenderer.invoke("pet:codex:focus", options),
   },
   clipboard: {
     writeText: (text: string) => ipcRenderer.invoke("pet:clipboard:write-text", text),
@@ -116,6 +130,21 @@ contextBridge.exposeInMainWorld("desktopPet", {
       ipcRenderer.on("pet:codex-status:changed", listener);
       return () => ipcRenderer.removeListener("pet:codex-status:changed", listener);
     },
+  },
+  completionNotice: {
+    status: {
+      get: () => ipcRenderer.invoke("pet:completion-notice:status:get"),
+      onChanged: (callback: (state: any) => void) => {
+        const listener = (_event: unknown, state: any) => callback(state);
+        ipcRenderer.on("pet:completion-notice:status:changed", listener);
+        return () => ipcRenderer.removeListener("pet:completion-notice:status:changed", listener);
+      },
+    },
+    expand: () => ipcRenderer.invoke("pet:completion-notice:expand"),
+    collapse: () => ipcRenderer.invoke("pet:completion-notice:collapse"),
+    dismiss: (key: string) => ipcRenderer.invoke("pet:completion-notice:dismiss", key),
+    restore: (key: string) => ipcRenderer.invoke("pet:completion-notice:restore", key),
+    stop: (key: string) => ipcRenderer.invoke("pet:completion-notice:stop", key),
   },
   agent: {
     get: () => ipcRenderer.invoke("pet:agent:get"),

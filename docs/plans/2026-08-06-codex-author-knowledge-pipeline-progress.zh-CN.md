@@ -19,6 +19,7 @@ KH-02 Pet 扫描与运输  已提交 + 测试通过
 KH-03 FastAPI Gate    已提交 + 测试通过
 KH-04 OpenClaw 审核与发布 已提交 + 测试通过（运行时适配仍是缺口）
 KH-05 切断/恢复/端到端    未开始
+链路自检（2026-08-12）   Hook/Pet/FastAPI/Gate 实测通过；OpenClaw 审核未验证
 ```
 
 当前最大风险不是缺代码，而是缺“真实运行时接线”：
@@ -146,7 +147,77 @@ uv run --with-requirements api/requirements.txt pytest api/tests/test_codex_auth
 
 状态：未开始。本盘点 worktree `C:\w\kh-05` 已按隔离要求创建，可作为实施起点。
 
-## 4. 方案完成标准（14 条）映射
+### 3.6 2026-08-12 链路自检证据清单（Codex → Hook → Pet → FastAPI）
+
+目的：对已运行系统的第 0 至第 3 步做只读实测，确认 Hook 注册、Pet 投递、FastAPI 接收和
+Gate 分流在真实运行路径上有效。本清单不包含 OpenClaw 认领、人工双审核、Obsidian 落盘
+（第 4 步），这些仍待验证。
+
+#### 证据 1：Stop Hook 已注册并启用
+
+- `C:\Users\KSG\.codex\hooks.json` 的 Stop 事件第二条指向
+  `codex-knowledge-handoff\stop-hook.mjs`；
+- `C:\Users\KSG\.codex\config.toml` 中 `[hooks.state.'C:\Users\KSG\.codex\hooks.json:stop:1:0']`
+  为 `enabled = true` 且已写入 `trusted_hash`。
+
+#### 证据 2：Pet 真实投递（2026-08-07 / 2026-08-11）
+
+队列文件：`C:\Users\KSG\AppData\Roaming\mmd-codex-desktop-pet\knowledge-handoff-transport\queue.json`
+
+| handoff_id | status | attempts | ack_id | lastError |
+|---|---|---|---|---|
+| kh_299d5318… | delivered | 1 | ack_9ff7f226… | 空 |
+| kh_8f57fca8… | delivered | 1 | ack_64ea1be5… | 空 |
+| kh_06c548c0… | delivered | 1 | ack_fb43126a… | 空 |
+
+三条记录均为首次尝试即成功，无重试错误。
+
+#### 证据 3：FastAPI 接收与 Gate 分流
+
+`http://127.0.0.1:8100`（本机只读 GET）：
+
+- `/healthz` → 200；
+- `GET /codex/knowledge/handoffs`（transport token）→ 200，共 3 个包；
+- `GET /codex/knowledge/openclaw-deliveries`（OpenClaw token）→ 200，共 15 条 delivery，
+  全部 `status=pending`、`attempt_count=0`、`ack_id=null`（OpenClaw 尚未认领）。
+
+Gate 分流与候选对应：
+
+| 包（handoff_id） | 候选 local_id | 类型 | pending_verification | 是否生成 delivery |
+|---|---|---|---|---|
+| kh_06c548c0… | art-directed-face-shadow-states | concept | 非空 | 否（needs_evidence） |
+| kh_8f57fca8… | codex-knowledge-handoff-trigger | rule | 非空 | 否 |
+| kh_8f57fca8… | codex-knowledge-assets-deployment | contract | 非空 | 否 |
+| kh_299d5318… | openclaw-source-whitelist-admin | gate | 非空 | 否 |
+| kh_299d5318… | handoff-package-sha256-contract | contract | 空 | 是（rev1、rev2 均有 delivery） |
+
+即：真实运行中只有 `pending_verification` 为空的候选通过 Gate 并生成 delivery，其余四个
+带验证缺口的候选全部进入 `needs_evidence`，与设计一致。
+
+#### 证据 4：白名单与开关事实
+
+- `api/data/knowledge_handoff/openclaw_whitelist.json` 当前包含
+  `10.11.252.164/32`（OpenClaw）与 `127.0.0.1/32`（本地回环）；
+- `api/.env`：`CODEX_AUTHOR_KNOWLEDGE_HANDOFF_ENABLED=true`、
+  `CODEX_AUTHOR_KNOWLEDGE_OPENCLAW_DELIVERY_ENABLED=false`（仅控制旧 sidecar worker；
+  `review-claims` 路由不依赖该开关）、transport/OpenClaw token 均已配置。
+
+#### 观察项（待确认，不阻断本清单）
+
+`handoff-package-sha256-contract` 同一候选同一 revision（rev2）在 2026-08-07 至
+2026-08-11 期间累计生成 13 条 `pending` delivery，疑似 reconciliation 重复创建 delivery。
+认领走 `knowledge_candidate_revision` 队列，不直接消费 delivery 表，因此不阻断审核，
+但会堆积 pending 记录，需单独核查是否需要按 `(candidate_id, candidate_revision)` 幂等去重。
+
+#### 结论边界
+
+- 第 0 至第 3 步（Hook → Pet → FastAPI → Gate）已有真实运行证据；
+- 第 4 步（OpenClaw 认领 → 人工双审核 → Obsidian MCP → Git commit/push → 回执）仍未验证，
+  完成标准 16 的端到端证书尚未产生；
+- 真实 SQLite `trace.db` 仍为 malformed，但作者知识链使用独立的
+  `api/data/sqlite/knowledge_handoff.db`，本清单的实测结果证明该独立库可用。
+
+## 4. 方案完成标准（16 条）映射
 
 | # | 完成标准 | 当前状态 |
 |---|---|---|

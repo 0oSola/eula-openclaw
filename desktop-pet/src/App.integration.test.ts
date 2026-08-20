@@ -15,7 +15,7 @@ describe("Desktop Pet App integration wiring", () => {
     expect(source).toContain("approvalFallback");
   });
 
-  it("renders Codex status output as a clickable VSCode focus target", () => {
+  it("renders Codex status output as a clickable Codex session focus target", () => {
     const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
     const styles = readFileSync(path.resolve(__dirname, "styles.css"), "utf8");
 
@@ -24,7 +24,7 @@ describe("Desktop Pet App integration wiring", () => {
     expect(source).toContain("const visibleCodexStatusCard = codexStatusCard ?? idleCodexStatusCard");
     expect(source).toContain("data-status-tone={codexStatusPresentation.statusTone}");
     expect(source).toContain('data-codex-card={visibleCodexStatusCard && !menuStatus ? "true" : "false"}');
-    expect(source).toContain("focusVscodeForStatus");
+    expect(source).toContain("focusCodexForStatus");
     expect(source).toContain("workspacePath: codexStatus?.workspacePath");
     expect(source).toContain("pet-status-output");
     expect(styles).toContain('.pet-status[data-codex-card="true"] .pet-status-title');
@@ -33,20 +33,13 @@ describe("Desktop Pet App integration wiring", () => {
     expect(styles).toContain('.pet-status[data-status-tone="attention"] .pet-status-dot');
   });
 
-  it("renders a manually dismissible completion bubble that opens the completed workspace", () => {
+  it("keeps completion notices outside the Pet renderer", () => {
     const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
     const styles = readFileSync(path.resolve(__dirname, "styles.css"), "utf8");
 
-    expect(source).toContain("resolveLatchedCodexCompletionNotice");
-    expect(source).toContain("dismissedCompletionNoticeKeys");
-    expect(source).toContain("setCompletionNotice");
-    expect(source).toContain("pet-completion-bubble");
-    expect(source).toContain("focusWorkspaceFromCompletionNotice");
-    expect(source).toContain("addDismissedCompletionNoticeKey(keys, noticeKey)");
-    expect(source).toContain('closest(".pet-panel, .pet-status-action, .pet-completion-bubble")');
-    expect(styles).toContain(".pet-completion-bubble");
-    expect(styles).toContain(".pet-completion-dismiss");
-    expect(styles).toContain(".pet-completion-bubble::after");
+    expect(source).not.toContain("pet-completion-bubble");
+    expect(source).not.toContain("resolveLatchedCodexCompletionNotice");
+    expect(styles).not.toContain(".pet-completion-bubble");
   });
 
   it("wraps long Codex status output instead of truncating it to a single line", () => {
@@ -62,12 +55,24 @@ describe("Desktop Pet App integration wiring", () => {
     expect(outputLineBlock).not.toContain("white-space: nowrap;");
   });
 
-  it("clears the VSCode focus toast after a successful focus request", () => {
+  it("clears the Codex focus toast after a successful focus request", () => {
     const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
 
-    expect(source).toContain("showVscodeFocusSuccess");
-    expect(source.match(/\.then\(showVscodeFocusSuccess\)/g)?.length).toBe(3);
-    expect(source).toContain('setMenuStatus("VSCode workspace open")');
+    expect(source).toContain("showFocusSuccess");
+    expect(source.match(/\.then\(showFocusSuccess\)/g)?.length).toBe(3);
+    expect(source).toContain('setMenuStatus("Codex session open")');
+  });
+
+  it("routes status and approval clicks through the target-aware Codex session focus IPC", () => {
+    const source = readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
+    const statusAndApprovalBlock = source.slice(
+      source.indexOf("const focusCodexForApproval"),
+      source.indexOf("const codexStatusText"),
+    );
+
+    expect(statusAndApprovalBlock).toContain("window.desktopPet?.codex?.focus?.(");
+    expect(statusAndApprovalBlock).not.toContain("window.desktopPet?.vscode?.focus?.(");
+    expect(statusAndApprovalBlock).toContain("codexSessionId: codexStatus?.codexSessionId");
   });
 
   it("focuses active sessions from the bottom dialog instead of restoring a duplicate window", () => {
@@ -157,7 +162,7 @@ describe("Desktop Pet App integration wiring", () => {
 
     expect(source).not.toContain("window.desktopPet?.menu?.onShow");
     expect(source).not.toContain("pet-context-menu");
-    expect(source).toContain('closest(".pet-panel, .pet-status-action, .pet-completion-bubble")');
+    expect(source).toContain('closest(".pet-panel, .pet-status-action")');
   });
 
   it("provides a camera-mode save and exit button without routing its click into stage actions", () => {

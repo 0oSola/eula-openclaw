@@ -12,14 +12,6 @@ import { normalizeRezeStageDocument } from "@/features/stage/rezeEditorScene";
 import { REZE_DESIGN_SCENE_DEFAULTS, REZE_K3_SCENE_DEFAULTS } from "@/features/stage/rezeDesignDefaults";
 
 import { getCodexStatusPresentation, type CodexStatus } from "./codex/codexStatus";
-import {
-  addDismissedCompletionNoticeKey,
-  DISMISSED_COMPLETION_NOTICE_STORAGE_KEY,
-  parseDismissedCompletionNoticeKeys,
-  resolveLatchedCodexCompletionNotice,
-  serializeDismissedCompletionNoticeKeys,
-  type CodexCompletionNotice,
-} from "./codex/completionNotice";
 import { buildCodexStatusCard, buildIdleCodexStatusCardFallback } from "./codex/codexStatusCard";
 import { buildApprovalFallback } from "./codex/approvalFallback";
 import { formatCodexStatusNotification } from "./codex/notificationDetail";
@@ -153,18 +145,6 @@ export function App() {
   const [interactionMode, setInteractionMode] = useState<PetInteractionMode>("window-drag");
   const [notificationProfile, setNotificationProfile] = useState<NotificationProfile>("medium");
   const [codexStatus, setCodexStatus] = useState<CodexStatus | null>(null);
-  const [dismissedCompletionNoticeKeys, setDismissedCompletionNoticeKeys] = useState<string[]>(
-    () => {
-      try {
-        return parseDismissedCompletionNoticeKeys(
-          window.localStorage.getItem(DISMISSED_COMPLETION_NOTICE_STORAGE_KEY),
-        );
-      } catch {
-        return [];
-      }
-    },
-  );
-  const [completionNotice, setCompletionNotice] = useState<CodexCompletionNotice | null>(null);
   const [agent, setAgent] = useState<DesktopPetAgent>("codex");
   const [commandCopied, setCommandCopied] = useState(false);
   const [menuStatus, setMenuStatus] = useState<string | null>(null);
@@ -220,17 +200,6 @@ export function App() {
       .catch(() => {});
     return window.desktopPet?.codexStatus?.onChanged((status) => setCodexStatus(status));
   }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        DISMISSED_COMPLETION_NOTICE_STORAGE_KEY,
-        serializeDismissedCompletionNoticeKeys(dismissedCompletionNoticeKeys),
-      );
-    } catch {
-      // Completion notices remain dismissible for the current renderer lifetime.
-    }
-  }, [dismissedCompletionNoticeKeys]);
 
   useEffect(() => {
     window.desktopPet?.agent
@@ -322,16 +291,6 @@ export function App() {
     [api, selectedModel, vmdAssets],
   );
   const agentLabel = agent === "claude" ? "Claude" : "Codex";
-  useEffect(() => {
-    setCompletionNotice((current) =>
-      resolveLatchedCodexCompletionNotice(
-        current,
-        codexStatus,
-        dismissedCompletionNoticeKeys,
-        agentLabel,
-      ),
-    );
-  }, [agentLabel, codexStatus, dismissedCompletionNoticeKeys]);
   const codexStatusPresentation = useMemo(() => getCodexStatusPresentation(codexStatus), [codexStatus]);
   const codexStatusCard = useMemo(
     () => buildCodexStatusCard(codexStatus, notificationProfile, agentLabel),
@@ -626,8 +585,8 @@ export function App() {
       .finally(() => setApiRuntimeRetrying(false));
   }, [loadPetState]);
 
-  const showVscodeFocusSuccess = useCallback(() => {
-    setMenuStatus("VSCode workspace open");
+  const showFocusSuccess = useCallback(() => {
+    setMenuStatus("Codex session open");
     window.setTimeout(() => setMenuStatus(null), 1800);
   }, []);
 
@@ -642,64 +601,55 @@ export function App() {
         return;
       }
       focusRequest
-        .then(() => showVscodeFocusSuccess())
+        .then(showFocusSuccess)
         .catch((error: Error) => {
           setMenuStatus(`Open active task failed: ${error.message}`);
           window.setTimeout(() => setMenuStatus(null), 4200);
         });
     },
-    [showVscodeFocusSuccess],
+    [showFocusSuccess],
   );
 
-  const focusVscodeForApproval = useCallback(() => {
-    setMenuStatus("Opening VSCode workspace...");
-    const focusRequest = window.desktopPet?.vscode?.focus?.({ workspacePath: codexStatus?.workspacePath });
+  const focusCodexForApproval = useCallback(() => {
+    setMenuStatus("Opening Codex session...");
+    const focusRequest = window.desktopPet?.codex?.focus?.({
+      workspacePath: codexStatus?.workspacePath,
+      codexSessionId: codexStatus?.codexSessionId,
+      source: "approval",
+    });
     if (!focusRequest) {
-      setMenuStatus("Open VSCode unavailable");
+      setMenuStatus("Open Codex session unavailable");
       window.setTimeout(() => setMenuStatus(null), 2800);
       return;
     }
     focusRequest
-      .then(showVscodeFocusSuccess)
+      .then(showFocusSuccess)
       .catch((error: Error) => {
-        setMenuStatus(`Open VSCode failed: ${error.message}`);
+        setMenuStatus(`Open Codex session failed: ${error.message}`);
         window.setTimeout(() => setMenuStatus(null), 4200);
       });
-  }, [codexStatus?.workspacePath, showVscodeFocusSuccess]);
+  }, [codexStatus?.codexSessionId, codexStatus?.workspacePath, showFocusSuccess]);
 
-  const focusVscodeForStatus = useCallback(() => {
+  const focusCodexForStatus = useCallback(() => {
     if (!codexStatus?.workspacePath) return;
-    setMenuStatus("Opening VSCode workspace...");
-    const focusRequest = window.desktopPet?.vscode?.focus?.({ workspacePath: codexStatus?.workspacePath });
+    setMenuStatus("Opening Codex session...");
+    const focusRequest = window.desktopPet?.codex?.focus?.({
+      workspacePath: codexStatus.workspacePath,
+      codexSessionId: codexStatus.codexSessionId,
+      source: "status",
+    });
     if (!focusRequest) {
-      setMenuStatus("Open VSCode unavailable");
+      setMenuStatus("Open Codex session unavailable");
       window.setTimeout(() => setMenuStatus(null), 2800);
       return;
     }
     focusRequest
-      .then(showVscodeFocusSuccess)
+      .then(showFocusSuccess)
       .catch((error: Error) => {
-        setMenuStatus(`Open VSCode failed: ${error.message}`);
+        setMenuStatus(`Open Codex session failed: ${error.message}`);
         window.setTimeout(() => setMenuStatus(null), 4200);
       });
-  }, [codexStatus?.workspacePath, showVscodeFocusSuccess]);
-
-  const focusWorkspaceFromCompletionNotice = useCallback(() => {
-    if (!completionNotice?.workspacePath) return;
-    setMenuStatus("Opening VSCode workspace...");
-    const focusRequest = window.desktopPet?.vscode?.focus?.({ workspacePath: completionNotice.workspacePath });
-    if (!focusRequest) {
-      setMenuStatus("Open VSCode unavailable");
-      window.setTimeout(() => setMenuStatus(null), 2800);
-      return;
-    }
-    focusRequest
-      .then(showVscodeFocusSuccess)
-      .catch((error: Error) => {
-        setMenuStatus(`Open VSCode failed: ${error.message}`);
-        window.setTimeout(() => setMenuStatus(null), 4200);
-      });
-  }, [completionNotice?.workspacePath, showVscodeFocusSuccess]);
+  }, [codexStatus, showFocusSuccess]);
 
   const copyCommandFromStatus = useCallback((commandLine: string) => {
     const command = commandLine.trim();
@@ -787,7 +737,7 @@ export function App() {
 
   useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
-      if (event.target instanceof Element && event.target.closest(".pet-panel, .pet-status-action, .pet-completion-bubble")) return;
+      if (event.target instanceof Element && event.target.closest(".pet-panel, .pet-status-action")) return;
       if (event.target instanceof Element && event.target.closest(".pet-camera-save-exit")) return;
       if (event.target instanceof Element && event.target.closest(".pet-status-main")) return;
       if (event.button === 0) {
@@ -976,34 +926,6 @@ export function App() {
           Save &amp; Exit Camera
         </button>
       ) : null}
-      {completionNotice && !sessionPanelOpen && !promptPanelOpen ? (
-        <section className="pet-completion-bubble" role="status" aria-live="polite">
-          <button
-            type="button"
-            className="pet-completion-main"
-            title={completionNotice.workspacePath}
-            onClick={focusWorkspaceFromCompletionNotice}
-          >
-            <span className="pet-completion-title">{completionNotice.title}</span>
-            <span className="pet-completion-workspace">{completionNotice.workspaceLabel}</span>
-            {completionNotice.taskLabel ? <span className="pet-completion-task">{completionNotice.taskLabel}</span> : null}
-          </button>
-          <button
-            type="button"
-            className="pet-completion-dismiss"
-            aria-label="Close completed task"
-            onClick={() => {
-              const noticeKey = completionNotice.key;
-              setDismissedCompletionNoticeKeys((keys) =>
-                addDismissedCompletionNoticeKey(keys, noticeKey),
-              );
-              setCompletionNotice((current) => (current?.key === noticeKey ? null : current));
-            }}
-          >
-            x
-          </button>
-        </section>
-      ) : null}
       {sessionPanelOpen ? (
         <section className="pet-panel pet-session-panel" aria-label="Codex sessions">
           <div className="pet-session-panel-header">
@@ -1107,7 +1029,7 @@ export function App() {
             <button
               type="button"
               className="pet-status-main"
-              onClick={focusVscodeForStatus}
+              onClick={focusCodexForStatus}
             >
               <span className="pet-status-dot" />
               <span className="pet-status-content">
@@ -1140,7 +1062,7 @@ export function App() {
             <button
               type="button"
               className="pet-status-action"
-              onClick={focusVscodeForApproval}
+              onClick={focusCodexForApproval}
             >
               {approvalFallback.primaryAction.label}
             </button>

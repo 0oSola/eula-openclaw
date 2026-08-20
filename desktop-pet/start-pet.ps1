@@ -4,7 +4,8 @@ param(
   [string]$WorkspacePath = "",
   [switch]$ReuseExisting,
   [switch]$ForceNew,
-  [switch]$NoDebugEvents
+  [switch]$NoDebugEvents,
+  [int]$RemoteDebuggingPort = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -170,6 +171,7 @@ $previousDebugEvents = $env:MMD_PET_DEBUG_EVENTS
 $previousDebugEventsLog = $env:MMD_PET_DEBUG_EVENTS_LOG
 $previousApiBaseUrl = $env:MMD_PET_API_BASE_URL
 $previousWorkspacePath = $env:MMD_PET_WORKSPACE_PATH
+$previousRemoteDebuggingPort = $env:MMD_PET_REMOTE_DEBUGGING_PORT
 $previousKnowledgeTransport = $env:MMD_PET_KNOWLEDGE_HANDOFF_TRANSPORT_ENABLED
 $previousKnowledgeToken = $env:MMD_PET_KNOWLEDGE_HANDOFF_TOKEN
 
@@ -184,6 +186,9 @@ try {
   }
   if ($WorkspacePath) {
     $env:MMD_PET_WORKSPACE_PATH = $WorkspacePath
+  }
+  if ($RemoteDebuggingPort -gt 0) {
+    $env:MMD_PET_REMOTE_DEBUGGING_PORT = [string]$RemoteDebuggingPort
   }
   $knowledgeToken = Resolve-KnowledgeHandoffToken
   if ($knowledgeToken) {
@@ -200,6 +205,7 @@ try {
   $env:MMD_PET_DEBUG_EVENTS_LOG = $previousDebugEventsLog
   $env:MMD_PET_API_BASE_URL = $previousApiBaseUrl
   $env:MMD_PET_WORKSPACE_PATH = $previousWorkspacePath
+  $env:MMD_PET_REMOTE_DEBUGGING_PORT = $previousRemoteDebuggingPort
   $env:MMD_PET_KNOWLEDGE_HANDOFF_TRANSPORT_ENABLED = $previousKnowledgeTransport
   $env:MMD_PET_KNOWLEDGE_HANDOFF_TOKEN = $previousKnowledgeToken
 }

@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildCodexDesktopThreadUrl,
   buildCodexDesktopNewThreadUrl,
+  launchCodexDesktopExistingSession,
   launchNewCodexDesktopUnboundSession,
   launchNewCodexDesktopSession,
 } from "./codexDesktopLauncher.js";
@@ -44,6 +46,24 @@ describe("Codex Desktop launcher", () => {
     expect(result).toEqual({ url: "codex://threads/new" });
   });
 
+  it("builds and opens the Codex Desktop route for an existing thread", async () => {
+    const openExternal = vi.fn(async () => undefined);
+    const codexSessionId = "7b6c5d4e-3210-4fed-9abc-0123456789ab";
+
+    expect(buildCodexDesktopThreadUrl(codexSessionId)).toBe(`codex://threads/${codexSessionId}`);
+
+    const result = await launchCodexDesktopExistingSession({
+      codexSessionId,
+      openExternal,
+    });
+
+    expect(openExternal).toHaveBeenCalledWith(`codex://threads/${codexSessionId}`);
+    expect(result).toEqual({
+      codexSessionId,
+      url: `codex://threads/${codexSessionId}`,
+    });
+  });
+
   it("rejects an empty workspace and propagates protocol launch failures", async () => {
     await expect(
       launchNewCodexDesktopSession({
@@ -51,6 +71,14 @@ describe("Codex Desktop launcher", () => {
         openExternal: vi.fn(),
       }),
     ).rejects.toThrow("Workspace path is required");
+
+    expect(() => buildCodexDesktopThreadUrl(" ")).toThrow("Codex session ID is required");
+    await expect(
+      launchCodexDesktopExistingSession({
+        codexSessionId: " ",
+        openExternal: vi.fn(),
+      }),
+    ).rejects.toThrow("Codex session ID is required");
 
     await expect(
       launchNewCodexDesktopSession({

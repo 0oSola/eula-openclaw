@@ -845,6 +845,26 @@ async def discard_codex_interactive_session(
     return {"session_id": codex_session_id, "status": closed["status"] if closed else "closed"}
 
 
+@router.post("/codex/interactive/{codex_session_id}/cancel")
+async def cancel_codex_interactive_session(
+    codex_session_id: str,
+    request: Request,
+    x_user_id: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _not_found_if_disabled(request)
+    user_id = _require_codex_user(request, x_user_id or "")
+    _require_session(request, codex_session_id, user_id)
+    control = getattr(request.app.state, "codex_interactive_control", None)
+    if control is None:
+        return {
+            "session_id": codex_session_id,
+            "cancelled": False,
+            "reason": "not-running",
+            "message": "当前任务没有正在运行的回合",
+        }
+    return await control.cancel(codex_session_id)
+
+
 @router.websocket("/ws/codex/interactive/{codex_session_id}")
 async def codex_interactive_websocket(websocket: WebSocket, codex_session_id: str):
     try:
@@ -921,7 +941,35 @@ async def codex_interactive_websocket(websocket: WebSocket, codex_session_id: st
             turn_id,
         )
 
+    async def cancel_active_turn() -> dict[str, Any]:
+        nonlocal active_turn_id
+        turn_id = active_turn_id
+        if not turn_id or (active_task is not None and active_task.done()):
+            active_turn_id = None
+            return {
+                "session_id": codex_session_id,
+                "cancelled": False,
+                "reason": "not-running",
+                "message": "当前任务没有正在运行的回合",
+            }
+        await websocket.app.state.codex_interactive_provider.cancel_turn(codex_session_id, turn_id)
+        if active_task is not None and not active_task.done():
+            active_task.cancel()
+            await active_task
+        elif active_turn_id:
+            await send_and_store(
+                {"type": "turn_failed", "turn_id": active_turn_id, "error": "Turn cancelled."},
+                active_turn_id,
+            )
+        return {
+            "session_id": codex_session_id,
+            "cancelled": True,
+            "turn_id": turn_id,
+            "status": "cancelled",
+        }
+
     async def run_turn(turn_id: str, user_message: str, mode: str) -> None:
+        nonlocal active_turn_id
         try:
             current_session = store.get_codex_interactive_session(codex_session_id) or session
             async for event in websocket.app.state.codex_interactive_provider.stream_turn(
@@ -957,8 +1005,14 @@ async def codex_interactive_websocket(websocket: WebSocket, codex_session_id: st
             store.update_codex_turn(turn_id, status="failed", error=str(exc))
             store.update_codex_interactive_session(codex_session_id, status="failed", error=str(exc))
             await send_and_store({"type": "turn_failed", "turn_id": turn_id, "error": str(exc)}, turn_id)
+        finally:
+            if active_turn_id == turn_id:
+                active_turn_id = None
 
     await send_and_store({"type": "session_ready", "session_id": codex_session_id, "thread_id": session.get("codex_thread_id")})
+    control = getattr(websocket.app.state, "codex_interactive_control", None)
+    if control is not None:
+        await control.register(codex_session_id, cancel_active_turn)
 
     try:
         while True:
@@ -975,13 +1029,7 @@ async def codex_interactive_websocket(websocket: WebSocket, codex_session_id: st
                 return
 
             if event_type == "cancel_turn":
-                if active_turn_id:
-                    await websocket.app.state.codex_interactive_provider.cancel_turn(codex_session_id, active_turn_id)
-                if active_task and not active_task.done():
-                    active_task.cancel()
-                    await active_task
-                elif active_turn_id:
-                    await send_and_store({"type": "turn_failed", "turn_id": active_turn_id, "error": "Turn cancelled."}, active_turn_id)
+                await cancel_active_turn()
                 continue
 
             if event_type == "approval_decision":
@@ -1050,3 +1098,6 @@ async def codex_interactive_websocket(websocket: WebSocket, codex_session_id: st
             with contextlib.suppress(asyncio.CancelledError):
                 await active_task
         await websocket.app.state.codex_interactive_provider.close_session(codex_session_id)
+    finally:
+        if control is not None:
+            await control.unregister(codex_session_id, cancel_active_turn)

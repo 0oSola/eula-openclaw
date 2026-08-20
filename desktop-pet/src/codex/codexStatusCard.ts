@@ -4,9 +4,8 @@ import {
   type NotificationDetailLevel,
 } from "./notificationDetail";
 import {
+  buildCodexCompletedPresentation,
   formatCodexOutputLines,
-  resolveCodexTaskTitle,
-  workspaceLabelFromPath,
 } from "../../electron/codexPresentation";
 
 export type CodexStatusCard = {
@@ -19,20 +18,21 @@ export type CodexStatusCard = {
 };
 
 function statusCardTitle(status: CodexStatus, detailLevel: NotificationDetailLevel, agentLabel: string): string | null {
-  if (status.state === "completed") return `${agentLabel} completed - ${workspaceLabelFromPath(status.workspacePath)}`;
+  if (status.state === "completed") {
+    return buildCodexCompletedPresentation(status, agentLabel).title;
+  }
   return formatCodexStatusNotification(status, detailLevel, agentLabel);
 }
 
-function completedTaskLine(status: CodexStatus): string | null {
-  if (status.state !== "completed") return null;
-  const task = resolveCodexTaskTitle([status.sessionTitle], status.workspacePath);
-  if (!task || task === workspaceLabelFromPath(status.workspacePath)) return null;
-  return `Task: ${task}`;
-}
-
 function buildOutputLines(status: CodexStatus): string[] {
+  if (status.state === "completed") {
+    const presentation = buildCodexCompletedPresentation(status);
+    return [presentation.taskLabel ? `Task: ${presentation.taskLabel}` : null, ...presentation.outputLines]
+      .filter((line): line is string => Boolean(line))
+      .slice(0, 3);
+  }
   const rawOutput = status.lastOutput || (status.state === "failed" ? status.error : "");
-  return [completedTaskLine(status), ...formatCodexOutputLines(rawOutput)]
+  return [...formatCodexOutputLines(rawOutput)]
     .filter((line): line is string => Boolean(line))
     .slice(0, 3);
 }

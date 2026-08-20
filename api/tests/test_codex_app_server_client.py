@@ -230,6 +230,39 @@ def test_events_until_turn_complete_continues_after_retriable_error():
     asyncio.run(run_case())
 
 
+def test_events_until_turn_complete_ignores_events_from_previous_turn():
+    async def run_case():
+        client, _ = _client_with_writer()
+
+        await client.handle_message_for_tests(
+            {
+                "method": "turn/completed",
+                "params": {"threadId": "thread-1", "turn": {"id": "old-turn", "items": []}},
+            }
+        )
+        await client.handle_message_for_tests(
+            {
+                "method": "turn/completed",
+                "params": {"threadId": "thread-1", "turn": {"id": "new-turn", "items": []}},
+            }
+        )
+
+        events = []
+        async for event in client.events_until_turn_complete(codex_turn_id="new-turn"):
+            events.append(event)
+
+        assert events == [
+            {
+                "type": "turn_completed",
+                "turn_id": "new-turn",
+                "final_text": "",
+                "raw_method": "turn/completed",
+            }
+        ]
+
+    asyncio.run(run_case())
+
+
 def test_windows_cmd_shim_resolves_to_packaged_native_executable():
     if os.name != "nt":
         return
@@ -333,6 +366,47 @@ def test_wsl_bridge_env_excludes_windows_keys():
     assert env["HOME"] == "/home/ksg/.codex"
     assert env["CODEX_HOME"] == "/home/ksg/.codex"
     assert env["NO_COLOR"] == "1"
-    assert "SystemRoot" not in env
+    assert env["SystemRoot"] == "C:/Windows"
     assert "WINDIR" not in env
     assert "OPENCLAW_TOKEN" not in env
+
+
+def test_wsl_runtime_path_converts_windows_workspace_paths():
+    client = CodexAppServerClient(
+        codex_bin="codex",
+        codex_home=Path("/home/ksg/.codex"),
+        wsl_enabled=True,
+    )
+
+    assert client._runtime_path(Path(r"D:\workspace\MMD project")) == "/mnt/d/workspace/MMD project"
+    assert client._runtime_path("/mnt/d/workspace/MMD project") == "/mnt/d/workspace/MMD project"
+
+
+def test_wsl_start_turn_converts_cwd_and_writable_roots():
+    async def run_case():
+        client, writer = _client_with_writer()
+        client.wsl_enabled = True
+        task = asyncio.create_task(
+            client.start_turn(
+                thread_id="thread-1",
+                user_message="inspect",
+                cwd=Path(r"D:\workspace\MMD project"),
+                sandbox_policy={
+                    "type": "workspaceWrite",
+                    "writableRoots": [r"D:\workspace\MMD project"],
+                    "networkAccess": False,
+                },
+            )
+        )
+        await asyncio.sleep(0)
+
+        assert writer.lines[-1]["params"]["cwd"] == "/mnt/d/workspace/MMD project"
+        assert writer.lines[-1]["params"]["sandboxPolicy"]["writableRoots"] == [
+            "/mnt/d/workspace/MMD project"
+        ]
+        await client.handle_message_for_tests(
+            {"id": "codex_req_1", "result": {"turn": {"id": "turn-1"}}}
+        )
+        assert await task == {"turn": {"id": "turn-1"}}
+
+    asyncio.run(run_case())

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import subprocess
@@ -71,6 +72,7 @@ class FakeRouteProvider:
         self.close_all_count = 0
         self.fail_turn = False
         self.session_closed_turn = False
+        self.block_turn = False
 
     async def prepare_session(self, session: dict) -> dict:
         self.prepared.append(session)
@@ -83,6 +85,8 @@ class FakeRouteProvider:
         if self.session_closed_turn:
             yield {"type": "session_closed", "turn_id": turn_id, "reason": "process_stdout_closed", "exit_code": 1}
             return
+        if self.block_turn:
+            await asyncio.sleep(3600)
         yield {"type": "text_delta", "turn_id": turn_id, "text": "real output"}
         yield {"type": "turn_completed", "turn_id": turn_id, "final_text": "done"}
 
@@ -780,6 +784,7 @@ def test_codex_websocket_process_close_marks_session_failed_and_health_last_erro
 
 def test_codex_websocket_cancel_and_close_forward_to_provider():
     provider = FakeRouteProvider()
+    provider.block_turn = True
     client, _ = _client_with_provider(provider)
     session = client.post(
         "/codex/interactive/sessions",
@@ -801,6 +806,41 @@ def test_codex_websocket_cancel_and_close_forward_to_provider():
     assert provider.cancelled == [(session["id"], turn_started["turn_id"])]
     assert provider.closed == [session["id"]]
     assert closed["type"] == "session_closed"
+
+
+def test_codex_http_cancel_controls_turn_owned_by_another_websocket():
+    provider = FakeRouteProvider()
+    provider.block_turn = True
+    client, _ = _client_with_provider(provider)
+    session = client.post(
+        "/codex/interactive/sessions",
+        json={"workspace_id": "mmd-companion", "mode": "read_only"},
+        headers={"x-user-id": "admin-1"},
+    ).json()
+
+    with client.websocket_connect(f"/ws/codex/interactive/{session['id']}?user_id=admin-1") as owner:
+        assert owner.receive_json()["type"] == "session_ready"
+        owner.send_json({"type": "user_message", "text": "slow", "mode": "read_only"})
+        turn_started = owner.receive_json()
+
+        response = client.post(
+            f"/codex/interactive/{session['id']}/cancel",
+            headers={"x-user-id": "admin-1"},
+        )
+        assert response.status_code == 200
+        assert response.json() == {
+            "session_id": session["id"],
+            "cancelled": True,
+            "turn_id": turn_started["turn_id"],
+            "status": "cancelled",
+        }
+        assert owner.receive_json() == {
+            "type": "turn_failed",
+            "turn_id": turn_started["turn_id"],
+            "error": "Turn cancelled.",
+        }
+
+    assert provider.cancelled == [(session["id"], turn_started["turn_id"])]
 
 
 def test_codex_websocket_rejects_wrong_user():

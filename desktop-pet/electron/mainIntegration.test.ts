@@ -111,11 +111,36 @@ describe("Electron main runtime integration", () => {
     expect(contextMenuBlock).not.toContain("scheduleAgentSessionRefresh");
   });
 
-  it("does not treat an unsupported process platform as a completed empty scan", () => {
+  it("moves global agent session discovery off the Electron main thread", () => {
     const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
-    const processRefreshBlock = mainSource.slice(
-      mainSource.indexOf("let processScanCompleted = false"),
-      mainSource.indexOf("const records = candidates.map"),
+    const discoveryBlock = mainSource.slice(
+      mainSource.indexOf("async function readAllLocalAgentSessions"),
+      mainSource.indexOf("async function upsertDesktopPetSession"),
+    );
+    const workerSource = readFileSync(
+      path.resolve(__dirname, "agentSessionDiscoveryWorker.ts"),
+      "utf8",
+    );
+
+    expect(mainSource).toContain('new Worker(new URL("./agentSessionDiscoveryWorker.js", import.meta.url))');
+    expect(mainSource).toContain("AGENT_SESSION_DISCOVERY_TIMEOUT_MS");
+    expect(discoveryBlock).toContain("runAgentSessionDiscoveryInWorker(limit)");
+    expect(discoveryBlock).not.toContain("scanRecentCodexSessionFiles");
+    expect(discoveryBlock).not.toContain("scanRecentClaudeSessionFiles");
+    expect(discoveryBlock).not.toContain("createWindowsAgentProcessScanner");
+    expect(workerSource).toContain("scanRecentCodexSessionFiles");
+    expect(workerSource).toContain("scanRecentClaudeSessionFiles");
+    expect(workerSource).toContain("createWindowsAgentProcessScanner");
+  });
+
+  it("does not treat an unsupported process platform as a completed empty scan", () => {
+    const workerSource = readFileSync(
+      path.resolve(__dirname, "agentSessionDiscoveryWorker.ts"),
+      "utf8",
+    );
+    const processRefreshBlock = workerSource.slice(
+      workerSource.indexOf("let processScanCompleted"),
+      workerSource.indexOf("return { candidates"),
     );
 
     expect(processRefreshBlock).toContain('if (process.platform === "win32")');
@@ -387,6 +412,129 @@ describe("Electron main runtime integration", () => {
     expect(ipcFocusBlock).not.toContain('state: "vscode-opened"');
   });
 
+  it("routes renderer status and completion notice focus through the selected Codex launch target", () => {
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+    const preloadSource = readFileSync(path.resolve(__dirname, "preload.cts"), "utf8");
+    const completionSource = readFileSync(path.resolve(__dirname, "../src/CompletionNoticeWindow.tsx"), "utf8");
+
+    expect(mainSource).toContain('ipcMain.handle("pet:codex:focus"');
+    expect(mainSource).toContain("launchCodexDesktopExistingSession");
+    expect(mainSource).toContain("codex-desktop-launch:focus-status");
+    expect(mainSource).toContain("codex-desktop-launch:focus-approval");
+    expect(mainSource).toContain("codex-desktop-launch:focus-completion");
+    expect(preloadSource).toContain('"pet:codex:focus"');
+    expect(completionSource).toContain("window.desktopPet.codex.focus");
+    expect(completionSource).toContain("codexSessionId: notice.codexSessionId");
+    expect(completionSource).not.toContain("completionNotice.focusWorkspace");
+  });
+
+  it("keeps completion-notice actions sender-checked and session-bound with app-server controls and fallback modes", () => {
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+    const completionWindowSource = readFileSync(
+      path.resolve(__dirname, "completionNoticeWindow.ts"),
+      "utf8",
+    );
+    const notificationCssSource = readFileSync(path.resolve(__dirname, "../src/notification.css"), "utf8");
+    const completionRendererSource = readFileSync(
+      path.resolve(__dirname, "../src/CompletionNoticeWindow.tsx"),
+      "utf8",
+    );
+    const relaySource = readFileSync(path.resolve(__dirname, "codexInteractiveRelay.ts"), "utf8");
+    const senderGuardBlock = mainSource.slice(
+      mainSource.indexOf("function completionNoticeSenderIsCurrent"),
+      mainSource.indexOf("function codexFocusSourceForRequest"),
+    );
+    const noticeIpcBlock = mainSource.slice(
+      mainSource.indexOf('ipcMain.handle("pet:completion-notice:status:get"'),
+      mainSource.indexOf('ipcMain.handle("pet:codex:focus"'),
+    );
+    const stopCapabilityBlock = mainSource.slice(
+      mainSource.indexOf("function completionNoticeStopSupportedForSession"),
+      mainSource.indexOf("function completionNoticeSessionForNotice"),
+    );
+    const followUpBlock = mainSource.slice(
+      mainSource.indexOf('ipcMain.handle("pet:prompt:send-to-session"'),
+      mainSource.indexOf('ipcMain.on("pet:renderer-error"'),
+    );
+
+    expect(completionWindowSource).toContain(
+      "export const COMPLETION_NOTICE_EXPANDED_HEIGHT = 190",
+    );
+    expect(completionWindowSource).toContain(
+      "noticeCount * COMPLETION_NOTICE_EXPANDED_HEIGHT +",
+    );
+    expect(completionWindowSource).toContain(
+      "(noticeCount - 1) * COMPLETION_NOTICE_CARD_GAP",
+    );
+    expect(notificationCssSource).toContain("height: 190px;");
+    expect(notificationCssSource).toContain("min-height: 190px;");
+    expect(senderGuardBlock).toContain(
+      "BrowserWindow.fromWebContents(event.sender) === window",
+    );
+    for (const channel of [
+      "pet:completion-notice:status:get",
+      "pet:completion-notice:expand",
+      "pet:completion-notice:collapse",
+      "pet:completion-notice:dismiss",
+      "pet:completion-notice:restore",
+      "pet:completion-notice:stop",
+    ]) {
+      const handlerStart = noticeIpcBlock.indexOf(`ipcMain.handle("${channel}"`);
+      const nextHandlerStart = noticeIpcBlock.indexOf("ipcMain.handle(", handlerStart + 1);
+      const handlerBlock = noticeIpcBlock.slice(
+        handlerStart,
+        nextHandlerStart === -1 ? undefined : nextHandlerStart,
+      );
+
+      expect(handlerStart).toBeGreaterThanOrEqual(0);
+      expect(handlerBlock).toContain("completionNoticeSenderIsCurrent(event)");
+    }
+    expect(noticeIpcBlock).toContain('ipcMain.handle("pet:completion-notice:restore"');
+    expect(noticeIpcBlock).toContain('type: "restore-session"');
+    expect(noticeIpcBlock).toContain(
+      'petSessionId: session.pet_session_id || session.codex_session_id || ""',
+    );
+    expect(noticeIpcBlock).toContain('return { ok: true, mode: "restore-requested" }');
+    expect(stopCapabilityBlock).toContain("return Boolean(completionNoticeAppServerSessionId(session));");
+    expect(mainSource).toContain("function completionNoticeAppServerSessionId");
+    expect(noticeIpcBlock).toContain('ipcMain.handle("pet:completion-notice:stop"');
+    expect(noticeIpcBlock).toContain('reason: "unsupported-runtime"');
+    expect(noticeIpcBlock).toContain('message: "当前运行模式不支持自动停止"');
+    expect(noticeIpcBlock).toContain("const sessionId = completionNoticeAppServerSessionId(session)");
+    expect(noticeIpcBlock).toContain("getCodexInteractiveRelay().cancelTurn(sessionId)");
+    expect(relaySource).toContain('mode: "stop-requested"');
+
+    expect(completionRendererSource).toContain("继续/恢复任务");
+    expect(completionRendererSource).toContain("停止任务");
+    expect(completionRendererSource).toContain("继续跟进");
+    expect(completionRendererSource).toContain("window.desktopPet.completionNotice.restore(key)");
+    expect(completionRendererSource).toContain("window.desktopPet.completionNotice.stop(key)");
+    expect(completionRendererSource).toContain("window.desktopPet.prompt.sendToSession");
+    expect(completionRendererSource).toContain("workspacePath: notice.workspacePath");
+    expect(completionRendererSource).toContain("petSessionId: notice.petSessionId");
+    expect(completionRendererSource).toContain("codexSessionId: notice.codexSessionId");
+
+    expect(followUpBlock).toContain("completionNoticeSenderIsCurrent(event)");
+    expect(followUpBlock).toContain("workspacePath?: unknown");
+    expect(followUpBlock).toContain("petSessionId?: unknown");
+    expect(followUpBlock).toContain("codexSessionId?: unknown");
+    expect(followUpBlock).toContain(
+      "const session = findMenuSessionByPetId(petSessionId || codexSessionId)",
+    );
+    expect(followUpBlock).toContain("normalizeWorkspacePathIdentity(workspacePath)");
+    expect(followUpBlock).toContain(
+      "normalizeWorkspacePathIdentity(session.workspace_path)",
+    );
+    expect(followUpBlock).toContain("clipboard.writeText(promptText)");
+    expect(followUpBlock).toContain('execution: "copy-only"');
+    expect(followUpBlock).toContain('return { ok: true, mode: "copy-only" }');
+    expect(followUpBlock).toContain("getCodexInteractiveRelay().sendUserMessage");
+    expect(relaySource).toContain('mode: "follow-up-sent"');
+    expect(followUpBlock).not.toContain("dispatchMenuAction(");
+    expect(followUpBlock).not.toContain("startCodexSessionOutputWatch(");
+    expect(followUpBlock).not.toContain("resumeCodexSession(");
+  });
+
   it("installs crash diagnostics for renderer, child process, and main-process failures", () => {
     const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
     const crashDiagnosticsSource = readFileSync(path.resolve(__dirname, "crashDiagnostics.ts"), "utf8");
@@ -558,6 +706,29 @@ describe("Electron main runtime integration", () => {
     expect(newSessionBlock).toContain('"codex-desktop-launch:new-session-error"');
     expect(newSessionBlock).toContain("launchNewCodexSession({ workspacePath, codexEnvMode: launchCodexEnvMode })");
     expect(newSessionBlock).toContain("launchNewClaudeSession({ workspacePath })");
+  });
+
+  it("routes Codex Desktop restore and active-session focus through the selected Codex Desktop thread", () => {
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+    const restoreSessionBlock = mainSource.slice(
+      mainSource.indexOf('if (action.type === "restore-session")'),
+      mainSource.indexOf('if (action.type === "focus-active-session")'),
+    );
+    const focusActiveBlock = mainSource.slice(
+      mainSource.indexOf('if (action.type === "focus-active-session")'),
+      mainSource.indexOf('if (action.type === "more-sessions")'),
+    );
+
+    expect(restoreSessionBlock).toContain("const launchCodexTarget = currentCodexLaunchTarget");
+    expect(restoreSessionBlock).toContain("launchCodexDesktopExistingSession({ codexSessionId })");
+    const desktopRestoreBranch = restoreSessionBlock.slice(
+      restoreSessionBlock.indexOf('if (launchAgent === "codex" && launchCodexTarget === "codex-desktop")'),
+      restoreSessionBlock.indexOf("const result =", restoreSessionBlock.indexOf('if (launchAgent === "codex" && launchCodexTarget === "codex-desktop")')),
+    );
+    expect(desktopRestoreBranch).not.toContain("resumeCodexSession(");
+    expect(focusActiveBlock).toContain("const launchCodexTarget = currentCodexLaunchTarget");
+    expect(focusActiveBlock).toContain("launchCodexDesktopExistingSession({ codexSessionId })");
+    expect(focusActiveBlock).toContain("if (currentAgent === \"codex\" && launchCodexTarget === \"codex-desktop\")");
   });
 
   it("invalidates the transparent Pet window after Codex status updates so unfocused status cards repaint", () => {

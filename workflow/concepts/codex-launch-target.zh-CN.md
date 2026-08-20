@@ -12,7 +12,7 @@ Codex 启动目标
 
 ## 概念定义
 
-Codex 启动目标表示 Desktop Pet 在执行“新建 Codex 会话”时，应把当前工作区交给哪一个用户可见工具。它与“编程助手”分离：编程助手决定使用 Codex 还是 Claude，启动目标只细分 Codex 的新建方式。
+Codex 启动目标表示 Desktop Pet 在执行 Codex 会话的新建、历史恢复或活动会话聚焦时，应把动作交给哪一个用户可见工具。它与“编程助手”分离：编程助手决定使用 Codex 还是 Claude，启动目标只细分 Codex 的入口。
 
 ## 解决的问题
 
@@ -21,13 +21,13 @@ Codex 启动目标表示 Desktop Pet 在执行“新建 Codex 会话”时，应
 ## 适用场景
 
 - 当前编程助手为 Codex。
-- 用户从 Pet 右键菜单执行“新建 Codex 会话”。
+- 用户从 Pet 右键菜单新建会话、恢复最近会话，或聚焦活动会话。
 - 需要在重启 Pet 后保留默认启动工具。
 
 ## 不适用场景
 
 - 当前编程助手为 Claude。
-- 恢复历史 Codex/Claude 会话。
+- Pet app-server 会话已经由 Pet 自己管理。
 - 在已存在的 Codex Desktop 任务中发送后续消息。
 - 无提示自动提交 Codex Desktop 第一条消息。
 
@@ -35,15 +35,15 @@ Codex 启动目标表示 Desktop Pet 在执行“新建 Codex 会话”时，应
 
 1. 默认值必须为 `vscode-cli`，升级不得改变既有行为。
 2. `vscode-cli` 对本地工作区必须复用 scoped VSCode workspace、terminal request 和 ACK 路线；对已选择的受限远程项目，必须通过 `macCodex-pet` 在 Windows Terminal 中启动 SSH PTY，并在白名单工程目录执行 `/Users/sola-codex/.local/bin/codex`。远程路径、SSH Host 和 Codex 路径不得来自未验证的界面输入。远程 CLI 会话不读取本机 `CODEX_HOME`，不得启动本地 JSONL watcher 或伪造远端完成状态。
-3. `codex-desktop` 对本地工作区打开 `codex://new?path=<工作区>`；对 Codex Desktop SSH 远程项目必须先显示 Pet 原生确认框，说明不能自动绑定或自动弹出项目选择器。确认后先复制远程路径，再打开 `codex://threads/new` 未绑定入口，因为当前协议不接受远程 `hostId` 或 `projectId`。无参数 `codex://new` 是空路由，不得用于远程降级；外部项目选择器快捷键依赖窗口焦点，也不得作为正式路线。取消不得打开 Desktop。两条路线都不模拟键盘或鼠标，不自动发送第一条消息。
+3. `codex-desktop` 的新建动作对本地工作区打开 `codex://new?path=<工作区>`；恢复或聚焦已有会话打开 `codex://threads/<codex_session_id>`。对 Codex Desktop SSH 远程项目的新建动作必须先显示 Pet 原生确认框，说明不能自动绑定或自动弹出项目选择器。确认后先复制远程路径，再打开 `codex://threads/new` 未绑定入口，因为当前协议不接受远程 `hostId` 或 `projectId`。无参数 `codex://new` 是空路由，不得用于远程降级；外部项目选择器快捷键依赖窗口焦点，也不得作为正式路线。取消不得打开 Desktop。所有路线都不模拟键盘或鼠标，不自动发送第一条消息。
 4. Desktop 启动失败时不得静默回退到 VSCode。
-5. 该设置只影响 Codex 新建会话，不改变历史会话恢复路线。
+5. 该设置影响 Codex 的新建、历史恢复和活动会话聚焦；Claude、Pet app-server 会话和显式“打开 VSCode 工作区”不受影响。
 
 ## 证据与计算口径
 
 - 设置证据：Electron `userData/pet-settings.json` 中的 `codexLaunchTarget`。
 - 菜单证据：“Codex 启动工具”子菜单中唯一勾选的 radio 项。
-- Desktop 路由证据：日志 `codex-desktop-launch:new-session-requested`。
+- Desktop 路由证据：新建日志 `codex-desktop-launch:new-session-requested`；恢复日志 `codex-desktop-launch:restore-session-requested`；聚焦日志 `codex-desktop-launch:focus-active-session`。已有会话 URI 必须为 `codex://threads/<codex_session_id>`。
 - CLI 路由证据：本地工作区为既有 `codex-launch:new-session-requested` 与 VSCode terminal request ACK；受限远程工作区为 Windows Terminal 对 `macCodex-pet` 的 SSH 启动请求。
 - 完成口径：单元/集成测试通过只能证明路由与 URI 构造；用户真实点击后 Codex Desktop 显示绑定工作区的新任务界面，才构成端到端验收。
 
@@ -85,5 +85,5 @@ Codex 启动目标表示 Desktop Pet 在执行“新建 Codex 会话”时，应
 
 - “编程助手”决定 `codex` 或 `claude`。
 - “Codex 环境”决定 CLI 使用 Windows 或 WSL，仅适用于 `vscode-cli`。
-- “Codex 启动目标”决定 Codex 新建会话使用 VSCode CLI 或 Codex Desktop。
+- “Codex 启动目标”决定 Codex 新建、恢复和活动会话聚焦使用 VSCode CLI 或 Codex Desktop；“编程助手”仍决定 Codex 或 Claude。
 - “工作区选择”提供两种启动目标共同使用的 workspace path。

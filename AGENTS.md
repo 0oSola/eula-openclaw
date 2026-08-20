@@ -1,13 +1,3 @@
-# Project Agent Notes
-
-## Superpowers System
-
-Superpowers skills are discovered natively from:
-
-- `~/.agents/skills/superpowers` (junction/symlink)
-
-No bootstrap command is required.
-
 ## Architecture Documentation
 
 When changing project functionality, service topology, external integrations, environment variables, data storage, API contracts, or runtime behavior, update:

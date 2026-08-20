@@ -6,8 +6,8 @@ export type ApprovalFallback = {
   canApprove: false;
   canDeny: false;
   primaryAction: {
-    type: "focus-vscode";
-    label: "Open VSCode";
+    type: "focus-codex-session";
+    label: "Open Codex session";
   };
   message: string;
   limitation: string;
@@ -20,13 +20,13 @@ export function buildApprovalFallback(
 ): ApprovalFallback | null {
   if (!status || status.state !== "waiting_approval") return null;
 
-  const message = `${formatCodexStatusNotification(status, detailLevel) ?? "Codex needs approval"} · Open VSCode to approve or deny in the Codex terminal.`;
+  const message = `${formatCodexStatusNotification(status, detailLevel) ?? "Codex needs approval"} · Open the Codex session to approve or deny the pending request.`;
   return {
     canApprove: false,
     canDeny: false,
     primaryAction: {
-      type: "focus-vscode",
-      label: "Open VSCode",
+      type: "focus-codex-session",
+      label: "Open Codex session",
     },
     message,
     limitation: "The local JSONL scanner does not expose an approval id, so Desktop Pet cannot submit approve or deny decisions.",

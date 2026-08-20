@@ -36,13 +36,32 @@ declare global {
       };
       prompt: {
         send: (prompt: string) => Promise<boolean>;
+        sendToSession: (options: DesktopPetPromptSessionOptions) => Promise<DesktopPetCompletionNoticeActionResult>;
       };
       vscode: {
         focus: (options?: { workspacePath?: string }) => Promise<boolean>;
       };
+      codex: {
+        focus: (options?: {
+          workspacePath?: string;
+          codexSessionId?: string;
+          source?: "status" | "approval" | "completion";
+        }) => Promise<boolean>;
+      };
       codexStatus: {
         get: () => Promise<DesktopPetCodexStatus>;
         onChanged: (callback: (status: DesktopPetCodexStatus) => void) => () => void;
+      };
+      completionNotice: {
+        status: {
+          get: () => Promise<DesktopPetCompletionNoticeWindowState | null>;
+          onChanged: (callback: (state: DesktopPetCompletionNoticeWindowState) => void) => () => void;
+        };
+        expand: () => Promise<boolean>;
+        collapse: () => Promise<boolean>;
+        dismiss: (key: string) => Promise<boolean>;
+        restore: (key: string) => Promise<DesktopPetCompletionNoticeActionResult>;
+        stop: (key: string) => Promise<DesktopPetCompletionNoticeActionResult>;
       };
       interactionMode: {
         get: () => Promise<"window-drag" | "camera-adjust">;
@@ -126,6 +145,39 @@ type DesktopPetCodexStatus = {
   updatedAt?: string;
   commandLine?: string;
   source?: "codex-jsonl" | "claude-jsonl" | "app-server" | "terminal";
+};
+
+type DesktopPetCompletionNotice = {
+  key: string;
+  title: string;
+  workspaceLabel: string;
+  taskLabel?: string;
+  outputLines: string[];
+  workspacePath: string;
+  petSessionId?: string;
+  codexSessionId?: string;
+  stopSupported: boolean;
+};
+
+type DesktopPetCompletionNoticeWindowState = {
+  notices: DesktopPetCompletionNotice[];
+  expanded: boolean;
+};
+
+type DesktopPetCompletionNoticeActionResult =
+  | boolean
+  | {
+      ok: boolean;
+      message?: string;
+      mode?: string;
+      reason?: string;
+    };
+
+type DesktopPetPromptSessionOptions = {
+  workspacePath: string;
+  petSessionId?: string;
+  codexSessionId?: string;
+  prompt: string;
 };
 
 type DesktopPetApiRuntimeStatus = {

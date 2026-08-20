@@ -16,9 +16,9 @@
 - 枚举值：
   - `vscode-cli`：通过 VSCode 内置终端启动 Codex CLI。
   - `codex-desktop`：通过 `codex://` 协议打开 Codex Desktop 新任务界面。
-- 允许用法：描述 Desktop Pet 新建 Codex 会话时选择的宿主工具。
-- 禁止用法：不得把它等同于“编程助手”；`agent=codex|claude` 决定助手类型，`codexLaunchTarget` 只决定 Codex 的新建入口。
-- 路由影响：仅影响 `new-session` 且当前 `agent=codex` 的分支；恢复历史会话和 Claude 新建会话不受影响。
+- 允许用法：描述 Desktop Pet 为 Codex 新建、恢复和活动会话聚焦选择的宿主工具。
+- 禁止用法：不得把它等同于“编程助手”；`agent=codex|claude` 决定助手类型，`codexLaunchTarget` 只决定 Codex 的入口。
+- 路由影响：仅影响当前 `agent=codex` 的 `new-session`、`restore-session` 和 `focus-active-session` 分支；Claude、Pet app-server 会话和显式“打开 VSCode 工作区”路径不受影响。
 - 完整定义：见 `workflow/concepts/codex-launch-target.zh-CN.md`。
 # Codex Desktop SSH 项目
 
@@ -191,10 +191,28 @@
 
 - 英文机器名：`CodexSessionPresentationSanitization`
 - 含义：Desktop Pet 在会话汇合和 UI 展示边界，对注入上下文、旧缓存标题、机器输出包装行和敏感值进行统一过滤、回退、脱敏与限长。
-- 允许用法：会话标题、prompt/summary 预览、完成气泡、底部状态卡和状态通知的共同展示规则。
+- 允许用法：会话标题、prompt/summary 预览、Pet 完成状态卡和独立完成通知窗口的共同展示规则。
 - 禁止用法：不得把清洗后的展示文本当作完整 transcript；不得以展示回退值覆盖原始会话证据；不得把进度条、`Exit code` 或分隔线当作用户任务结果。
 - 路由影响：Electron 主进程在 `AgentSessionRecord` 汇合点清洗一次，renderer 的完成通知、状态卡和会话选择器再次按同一纯函数规则防御旧数据；无效标题回退到工作区或有效摘要。
 - 完整定义：见 `workflow/concepts/codex-session-presentation-sanitization.zh-CN.md`。
+
+# Pet 独立完成通知窗口
+
+- 英文机器名：`PetCompletionNoticeWindow`
+- 含义：由 Electron 主进程创建的独立完成通知 `BrowserWindow`；收起态是单个聚合胶囊，展开态最多显示 3 条纵向通知，窗口高度遵循固定收起高度和按条数计算的展开高度；通知加载独立页面，通过受限 preload IPC 支持收起、展开、关闭和聚焦 workspace，并随 Pet 移动/缩放重新定位。
+- 允许用法：真实完成事件的桌面悬浮通知、独立窗口边界验收、窗口关闭 key 的主进程持久化。
+- 禁止用法：把它描述为 Pet 主窗口 DOM 内容、Windows 系统 Toast，或用历史 completed 扫描直接触发；不能用窗口级截图替代 HWND/bounds 或自动化测试证据。
+- 路由影响：主进程 completion tracker/reducer 决定是否弹出；通知窗口与 Pet 主窗口分别拥有生命周期和 bounds；关闭 key 写入 Electron `userData/dismissed-completion-notice.json`；通知文本必须与完成状态卡共享清洗语义。
+- 完整定义：见 `workflow/concepts/pet-completion-notice-window.zh-CN.md`。
+
+# Desktop Pet 会话发现 Worker
+
+- 英文机器名：`agentSessionDiscoveryWorker`
+- 含义：由 Electron 主进程调度的独立 Node Worker，执行 Codex、Claude、Pet app-server 会话发现和 Windows 进程增强；主进程只接收序列化结果，不执行全局同步 JSONL/进程扫描。
+- 允许用法：启动预热、15 秒周期刷新、菜单会话缓存和发现超时隔离。
+- 禁止用法：不得把同步全局扫描重新放回 Electron 主进程；Worker 超时不得伪装成空会话，也不得阻塞窗口交互。
+- 路由影响：`desktop-pet/electron/main.ts` 通过 `runAgentSessionDiscoveryInWorker()` 串行调度并以 30 秒上限终止；Worker 失败只记录刷新错误并保留主进程可响应性。
+- 完整定义：见 `workflow/concepts/pet-agent-session-discovery-worker.zh-CN.md`。
 
 # Codex 作者知识交接
 

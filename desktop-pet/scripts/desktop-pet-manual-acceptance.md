@@ -11,6 +11,7 @@
 - [ ] 需要强制新开并保留旧实例时运行 `.\start-pet.ps1 -ForceNew`。
 - [ ] 需要前台查看 Vite/Electron 日志时，可手动分两步运行：`npm run dev`，再另开终端执行 `$env:MMD_PET_DEBUG_EVENTS="1"; $env:MMD_PET_DEBUG_EVENTS_LOG="D:\workspace\MMD project\.worktrees\desktop-mmd-codex-pet\desktop-pet-debug-events.ndjson"; npm run dev:electron`。
 - [ ] 确认 Pet 窗口可见，右键菜单可打开，日志文件持续写入 `context-menu:*` 事件。
+- [ ] 完成通知验收时确认截图包含 Pet 主窗口和独立完成通知窗口；通知窗口不应只是 Pet 内部的 DOM 气泡。
 
 ## 自动脚本
 
@@ -96,6 +97,16 @@
 - [ ] VSCode 内置终端执行 `codex resume --cd <workspace> <session_id>`。
 - [ ] Pet 常驻状态条显示恢复中的 session 状态，且没有创建外部 `cmd.exe`。
 
+### Codex Desktop 新建、恢复与聚焦
+
+- [ ] 在 `Coding Agent` 中选择 `Codex`，再在 `Codex Launch Target` / `Codex 启动工具` 中选择 `Codex Desktop`；重新打开右键菜单确认 radio 勾选仍保留。
+- [ ] 点击 `New Codex Session`，确认打开 Codex Desktop 的 `codex://new?path=...` 新任务界面，而不是 VSCode。
+- [ ] 在 `Recent Sessions` 中选择一个非 app-server 的历史 Codex 会话，确认打开的是对应 Codex Desktop 线程；日志包含 `codex-desktop-launch:restore-session-requested`，URI 为 `codex://threads/<session_id>`，不出现 `codex resume` 或 VSCode terminal request。
+- [ ] 在 `Active Workspaces` 或 `More Sessions...` 中选择一个仍在运行的 Codex 会话，确认 Codex Desktop 聚焦同一 `session_id`；日志包含 `codex-desktop-launch:focus-active-session`，不打开新的 VSCode 窗口。
+- [ ] 切回 `VSCode + Codex CLI`，再次恢复历史会话，确认恢复为 VSCode 内置终端 `codex resume --cd <workspace> <session_id>`，证明两条路由可切换。
+- [ ] 选择 Claude 后执行新建/恢复，确认仍走 Claude 原有 VSCode 路径；选择 Pet app-server 会话时不调用 Desktop session deeplink。
+- [ ] 若 Codex Desktop 未安装或协议失败，确认 Pet 显示失败，不静默回退到 VSCode。
+
 ### Codex WSL 模式
 
 - [ ] 在右键菜单 `Codex Environment` / `Codex 环境` 选择 `WSL`；关闭并重新打开菜单后仍勾选 `WSL`，重启 Pet 后选择保持。
@@ -103,13 +114,17 @@
 - [ ] 恢复一条会话，确认命令为 `wsl.exe --cd <workspace> --exec codex ... resume --cd . <session_id>`，Linux Codex 参数中没有 `D:\...` workspace。
 - [ ] 切回 `Windows` 后新建/恢复，确认仍执行原生 `codex` / `codex resume --cd <workspace> <session_id>`，不经过 `wsl.exe`。
 
-### PET-INT-077 / 078 完成气泡去重
+### PET-INT-077 / 078 完成通知去重与独立窗口
 
 - [ ] 准备两个可快速完成的 session A、B；A 完成后先不要关闭气泡，打开右键菜单并等待 background refresh，确认普通 running/历史 completed/status card 更新不会让 A 气泡消失。
-- [ ] 让 B 产生新的显式完成事件，确认 B 气泡替换当前 A latch；点击 `x` 后 B 气泡立即消失。
+- [ ] 确认 A 以独立 Electron `BrowserWindow` 出现在 Pet 主窗口外侧，通知窗口不占用 Pet DOM 布局，也不出现在任务栏。
+- [ ] 让 B 产生新的显式完成事件，确认独立通知窗口中的 B 替换当前 A latch；点击 `x` 后通知窗口立即消失。
+- [ ] 点击通知正文，确认会聚焦通知对应 workspace 的 VSCode 窗口。
+- [ ] 点击收起/展开控制，确认通知窗口高度分别变化，且窗口仍位于当前显示器可见工作区内。
+- [ ] 移动或缩放 Pet 主窗口，确认独立通知窗口跟随 Pet 重新定位/调整，不重新嵌回 Pet 窗口。
 - [ ] 依次关闭 A、B 后，通过受控状态 fixture 或重复 publisher 按 A → B → A 重放相同 completion key，确认 A、B 都不重新弹出。
-- [ ] 重启 Pet，确认历史 completed session 仍可显示在常驻状态卡或最近会话列表中，但没有 `completionNoticeKey` 时不弹完成气泡。
-- [ ] 检查 Electron Local Storage 中 `pet:dismissed-completion-notice` 已迁移为 JSON array；连续关闭超过 100 个测试 key 时只保留最近 100 个且无重复项。
+- [ ] 重启 Pet，确认历史 completed session 仍可显示在常驻状态卡或最近会话列表中，但没有 `completionNoticeKey` 时不弹完成通知。
+- [ ] 检查 Electron `userData/dismissed-completion-notice.json` 已保存 JSON array；连续关闭超过 100 个测试 key 时只保留最近 100 个且无重复项。
 
 ### PET-INT-079 completed watcher 停止
 
@@ -148,7 +163,12 @@
 - Windows 显示器布局：
 - PET-INT-024 脚本输出摘要：
 - PET-INT-025 重启恢复结果：
-- PET-INT-077 / 078 完成气泡结果：
+- PET-INT-077 / 078 完成通知窗口结果：
+- 独立通知截图路径：
+  - 收起：
+  - 展开：
+  - Pet 移动后：
+  - 关闭后：
 - PET-INT-079 completed watcher 日志：
 - PET-INT-080 workspace / agent watcher-stop 日志：
 - PET-INT-081 当前 workspace publisher 结果：

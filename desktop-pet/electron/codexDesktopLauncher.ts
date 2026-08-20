@@ -2,6 +2,7 @@ type OpenExternal = (url: string) => Promise<void>;
 
 export type CodexDesktopLaunchResult = {
   workspacePath?: string;
+  codexSessionId?: string;
   url: string;
 };
 
@@ -17,6 +18,12 @@ export function buildCodexDesktopNewThreadUrl(options: {
   const prompt = options.prompt?.trim();
   if (prompt) url.searchParams.set("prompt", prompt);
   return url.toString();
+}
+
+export function buildCodexDesktopThreadUrl(codexSessionId: string): string {
+  const sessionId = codexSessionId.trim();
+  if (!sessionId) throw new Error("Codex session ID is required");
+  return `codex://threads/${encodeURIComponent(sessionId)}`;
 }
 
 async function openExternalWithElectron(url: string): Promise<void> {
@@ -44,4 +51,14 @@ export async function launchNewCodexDesktopSession(options: {
   });
   await (options.openExternal ?? openExternalWithElectron)(url);
   return { workspacePath, url };
+}
+
+export async function launchCodexDesktopExistingSession(options: {
+  codexSessionId: string;
+  openExternal?: OpenExternal;
+}): Promise<CodexDesktopLaunchResult> {
+  const codexSessionId = options.codexSessionId.trim();
+  const url = buildCodexDesktopThreadUrl(codexSessionId);
+  await (options.openExternal ?? openExternalWithElectron)(url);
+  return { codexSessionId, url };
 }

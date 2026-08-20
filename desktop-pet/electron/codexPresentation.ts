@@ -87,3 +87,33 @@ export function formatCodexOutputLines(
   }
   return lines;
 }
+
+export type CodexCompletedPresentation = {
+  title: string;
+  workspaceLabel: string;
+  taskLabel?: string;
+  outputLines: string[];
+};
+
+export function buildCodexCompletedPresentation(
+  options: {
+    workspacePath?: string | null;
+    sessionTitle?: string | null;
+    lastOutput?: string | null;
+  },
+  agentLabel = "Codex",
+): CodexCompletedPresentation {
+  const workspaceLabel = workspaceLabelFromPath(options.workspacePath);
+  const taskCandidate = resolveCodexTaskTitle([options.sessionTitle], options.workspacePath);
+  const taskLabel = taskCandidate !== workspaceLabel ? taskCandidate : undefined;
+  const outputLines = formatCodexOutputLines(options.lastOutput, {
+    maxLines: taskLabel ? 2 : 3,
+  });
+
+  return {
+    title: `${compactCodexText(agentLabel) || "Codex"} completed - ${workspaceLabel}`,
+    workspaceLabel,
+    taskLabel,
+    outputLines,
+  };
+}
