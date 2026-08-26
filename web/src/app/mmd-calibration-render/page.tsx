@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { MMDStage } from "@/features/stage/MMDStage";
+import {
+  V14D_COLOR_BASELINE_CAMERA,
+  V14D_COLOR_BASELINE_HEIGHT,
+  V14D_COLOR_BASELINE_WIDTH,
+} from "@/features/stage/v14dColorBaseline";
 import type { MmdCameraSnapshot, RenderPipeline } from "@/lib/types";
 
 type CalibrationQuery = {
@@ -11,6 +16,7 @@ type CalibrationQuery = {
   renderPipeline: RenderPipeline;
   cameraSnapshot: MmdCameraSnapshot | null;
   v14dUnlitDiagnostic: boolean;
+  v14dColorBaseline: boolean;
 };
 
 function readRenderPipeline(value: string | null): RenderPipeline {
@@ -59,15 +65,18 @@ function readCalibrationQuery(): CalibrationQuery {
       renderPipeline: "genshin",
       cameraSnapshot: null,
       v14dUnlitDiagnostic: false,
+      v14dColorBaseline: false,
     };
   }
   const params = new URLSearchParams(window.location.search);
+  const v14dColorBaseline = params.get("v14dColorBaseline") === "1";
   return {
     modelUrl: params.get("modelUrl") || "",
     vmdUrl: params.get("vmdUrl") || "",
-    renderPipeline: readRenderPipeline(params.get("renderPipeline")),
-    cameraSnapshot: readCameraSnapshot(params.get("camera")),
-    v14dUnlitDiagnostic: params.get("v14dUnlit") === "1",
+    renderPipeline: v14dColorBaseline ? "reze-k3" : readRenderPipeline(params.get("renderPipeline")),
+    cameraSnapshot: v14dColorBaseline ? V14D_COLOR_BASELINE_CAMERA : readCameraSnapshot(params.get("camera")),
+    v14dUnlitDiagnostic: params.get("v14dUnlit") === "1" || v14dColorBaseline,
+    v14dColorBaseline,
   };
 }
 
@@ -84,7 +93,7 @@ function createCalibrationInteraction(vmdUrl: string) {
 }
 
 export default function MmdCalibrationRenderPage() {
-  const [query, setQuery] = useState<CalibrationQuery>(() => readCalibrationQuery());
+  const [query, setQuery] = useState<CalibrationQuery | null>(null);
 
   useEffect(() => {
     setQuery(readCalibrationQuery());
@@ -100,10 +109,43 @@ export default function MmdCalibrationRenderPage() {
     };
   }, []);
 
-  const interaction = useMemo(() => createCalibrationInteraction(query.vmdUrl), [query.vmdUrl]);
+  const interaction = useMemo(() => createCalibrationInteraction(query?.vmdUrl ?? ""), [query?.vmdUrl]);
+
+  if (!query) {
+    return (
+      <main
+        className="mmd-calibration-render"
+        data-testid="mmd-calibration-render"
+        data-v14d-color-baseline="false"
+        data-v14d-color-baseline-size={`${V14D_COLOR_BASELINE_WIDTH}x${V14D_COLOR_BASELINE_HEIGHT}`}
+        data-v14d-color-baseline-frame=""
+        data-v14d-color-baseline-seconds=""
+        data-v14d-color-baseline-lighting=""
+      >
+        <style jsx global>{`
+          html,
+          body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: transparent;
+          }
+        `}</style>
+      </main>
+    );
+  }
 
   return (
-    <main className="mmd-calibration-render" data-testid="mmd-calibration-render">
+    <main
+      className="mmd-calibration-render"
+      data-testid="mmd-calibration-render"
+      data-v14d-color-baseline={query.v14dColorBaseline ? "true" : "false"}
+      data-v14d-color-baseline-size={`${V14D_COLOR_BASELINE_WIDTH}x${V14D_COLOR_BASELINE_HEIGHT}`}
+      data-v14d-color-baseline-frame={query.v14dColorBaseline ? "120" : ""}
+      data-v14d-color-baseline-seconds={query.v14dColorBaseline ? "4.0" : ""}
+      data-v14d-color-baseline-lighting={query.v14dColorBaseline ? "white" : ""}
+    >
       <MMDStage
         interaction={interaction}
         speaking={false}
@@ -115,6 +157,11 @@ export default function MmdCalibrationRenderPage() {
         renderPipeline={query.renderPipeline}
         cameraSnapshot={query.cameraSnapshot}
         v14dUnlitDiagnostic={query.v14dUnlitDiagnostic}
+        v14dColorBaseline={query.v14dColorBaseline}
+        rezeBackgroundEffect={query.v14dColorBaseline ? "关闭" : undefined}
+        rezeTransparentBackground={query.v14dColorBaseline ? false : undefined}
+        rezeGrade={query.v14dColorBaseline ? "中性" : undefined}
+        rezeGradeIntensity={query.v14dColorBaseline ? 1 : undefined}
         chrome="bare"
         enableCharacterClickCapture={false}
         cameraLocked
@@ -126,7 +173,7 @@ export default function MmdCalibrationRenderPage() {
           width: 100%;
           height: 100%;
           overflow: hidden;
-          background: transparent;
+          background: ${query.v14dColorBaseline ? "#ffffff" : "transparent"};
         }
 
         .mmd-calibration-render,
@@ -136,7 +183,7 @@ export default function MmdCalibrationRenderPage() {
           height: 100vh;
           min-width: 100vw;
           min-height: 100vh;
-          background: transparent;
+          background: ${query.v14dColorBaseline ? "#ffffff" : "transparent"};
         }
       `}</style>
     </main>

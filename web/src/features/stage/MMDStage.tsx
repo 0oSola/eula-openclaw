@@ -11,6 +11,7 @@ import type {
   RezeGradePreset,
   RezeSceneDebugSettings,
 } from "@/features/stage/rezeDesignDefaults";
+import type { V14dColorBaselineResult } from "@/features/stage/v14dColorBaseline";
 import type { MmdCameraSnapshot, MmdModelAsset, RenderPipeline } from "@/lib/types";
 
 declare global {
@@ -101,6 +102,8 @@ export type MMDStageHandle = {
   captureStagePng: () => string | null;
   setSceneDebugSettings: (settings: Record<string, number | string | boolean>) => Record<string, number | string | boolean> | null;
   resetSceneDebugSettings: () => Record<string, number | string | boolean> | null;
+  captureColorBaseline?: () => Promise<V14dColorBaselineResult>;
+  getColorBaselineResult?: () => V14dColorBaselineResult | null;
   getRendererLabel?: () => string;
 };
 
@@ -131,6 +134,7 @@ type MMDStageProps = {
   rezeGradeIntensity?: number;
   rezeSceneDebugSettings?: RezeSceneDebugSettings;
   v14dUnlitDiagnostic?: boolean;
+  v14dColorBaseline?: boolean;
   rezeTransparentBackground?: boolean;
 };
 
@@ -157,6 +161,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   rezeGradeIntensity = 1,
   rezeSceneDebugSettings,
   v14dUnlitDiagnostic = false,
+  v14dColorBaseline = false,
   rezeTransparentBackground = false,
 }: MMDStageProps, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -230,6 +235,12 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       },
       resetSceneDebugSettings() {
         return webGpuStageRef.current?.resetSceneDebugSettings?.() ?? runtimeRef.current?.resetSceneDebugSettings?.() ?? null;
+      },
+      captureColorBaseline() {
+        return webGpuStageRef.current?.captureColorBaseline?.() ?? Promise.reject(new Error("当前渲染管线不支持 V14D 颜色基线采集。"));
+      },
+      getColorBaselineResult() {
+        return webGpuStageRef.current?.getColorBaselineResult?.() ?? null;
       },
       getRendererLabel() {
         return webGpuStageRef.current?.getRendererLabel?.() ?? "Three.js MMD";
@@ -481,6 +492,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
             sceneSettings={rezeSceneDebugSettings}
             scenePreset={renderPipeline === "reze-k3" ? "reze-k3" : "reze-design"}
             v14dUnlitDiagnostic={v14dUnlitDiagnostic}
+            v14dColorBaseline={v14dColorBaseline}
             transparentBackground={rezeTransparentBackground}
             cameraSnapshot={cameraSnapshot}
             onInteractionComplete={onInteractionComplete}
@@ -524,7 +536,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       </header>
       {renderPipeline === "reze-design" || renderPipeline === "reze-k3" ? (
         <div style={{ margin: "0.45rem 0.95rem", minHeight: 0, borderRadius: "0.8rem", border: "1px solid rgba(140, 209, 255, 0.19)", overflow: "hidden" }}>
-        <RezeWebGpuStage ref={webGpuStageRef} modelUrl={toAbsolute(modelUrl)} modelIdentifier={selectedModelPath || modelLabel} localModelImport={rezeLocalModelImport} interaction={webGpuInteraction} backgroundEffect={rezeBackgroundEffect} grade={rezeGrade} gradeIntensity={rezeGradeIntensity} sceneSettings={rezeSceneDebugSettings} scenePreset={renderPipeline === "reze-k3" ? "reze-k3" : "reze-design"} v14dUnlitDiagnostic={v14dUnlitDiagnostic} transparentBackground={rezeTransparentBackground} cameraSnapshot={cameraSnapshot} onInteractionComplete={onInteractionComplete} />
+        <RezeWebGpuStage ref={webGpuStageRef} modelUrl={toAbsolute(modelUrl)} modelIdentifier={selectedModelPath || modelLabel} localModelImport={rezeLocalModelImport} interaction={webGpuInteraction} backgroundEffect={rezeBackgroundEffect} grade={rezeGrade} gradeIntensity={rezeGradeIntensity} sceneSettings={rezeSceneDebugSettings} scenePreset={renderPipeline === "reze-k3" ? "reze-k3" : "reze-design"} v14dUnlitDiagnostic={v14dUnlitDiagnostic} v14dColorBaseline={v14dColorBaseline} transparentBackground={rezeTransparentBackground} cameraSnapshot={cameraSnapshot} onInteractionComplete={onInteractionComplete} />
         </div>
       ) : (
         <div

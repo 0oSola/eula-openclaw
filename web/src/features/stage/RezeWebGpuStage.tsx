@@ -39,6 +39,36 @@ import {
   lockKoledaMorphWeights,
   selectKoledaClosedEyeMorphNames,
 } from "@/features/stage/koledaDefaultAppearance.js";
+import {
+  analyzeV14dColorBaselineRois,
+  createV14dColorBaselineResult,
+  makeV14dLinearImage,
+  readV14dCanvasDisplay,
+  readV14dColorBaselineMaterialMask,
+  readV14dColorBaselineResolveTargets,
+  validateV14dColorBaselineScene,
+  V14D_COLOR_BASELINE_CAMERA,
+  V14D_COLOR_BASELINE_EPSILON,
+  V14D_COLOR_BASELINE_FRAME,
+  V14D_COLOR_BASELINE_FPS,
+  V14D_COLOR_BASELINE_HEIGHT,
+  V14D_COLOR_BASELINE_ROIS,
+  V14D_COLOR_BASELINE_SECONDS,
+  V14D_COLOR_BASELINE_WIDTH,
+  type V14dAnimationEvidence,
+  type V14dAnimationProgressEvidence,
+  type V14dColorBaselineResult,
+  type V14dNormalizedImage,
+} from "@/features/stage/v14dColorBaseline";
+
+declare global {
+  interface Window {
+    __v14dColorBaseline?: {
+      capture: () => Promise<V14dColorBaselineResult>;
+      getResult: () => V14dColorBaselineResult | null;
+    };
+  }
+}
 
 type RezeStageProps = {
   modelUrl: string;
@@ -72,6 +102,8 @@ type RezeStageProps = {
   scenePreset?: "reze-design" | "reze-k3";
   /** 仅用于 V14D 材质迁移取证；默认关闭，不改变生产渲染路径。 */
   v14dUnlitDiagnostic?: boolean;
+  /** 仅用于 V14D 三层颜色基线取证；默认关闭，不改变生产渲染路径。 */
+  v14dColorBaseline?: boolean;
   /** true 时 WebGPU 画布透明，由页面 MIO CSS 背景透出；false 用场景背景色。 */
   transparentBackground?: boolean;
   cameraSnapshot?: MmdCameraSnapshot | null;
@@ -112,7 +144,7 @@ const V14D_UNLIT_MATERIAL_GROUPS = [
   {
     id: "v14d-unlit-body-skin",
     label: "V14D Unlit Skin",
-    materials: ["BodySkin"],
+    materials: ["BodySkin", "Face"],
   },
   {
     id: "v14d-unlit-white-clothes",
@@ -126,6 +158,65 @@ const V14D_UNLIT_MATERIAL_GROUPS = [
     renderClass: "hair" as const,
   },
 ] as const;
+
+type RezeStyleGroup = ReturnType<Engine["getStyleGroups"]>[number];
+
+function buildV14dUnlitStyleGroups(
+  originalGroups: readonly RezeStyleGroup[],
+  modelMaterialNames: ReadonlySet<string>,
+) {
+  const targetMaterials = new Set<string>(
+    V14D_UNLIT_MATERIAL_GROUPS.flatMap((group) => group.materials),
+  );
+  const retainedGroups = originalGroups
+    .map((group) => ({
+      ...group,
+      materials: group.materials.filter((materialName) => !targetMaterials.has(materialName)),
+    }))
+    .filter((group) => group.materials.length > 0);
+  const appliedGroups: string[] = [];
+  const unknownMaterials: string[] = [];
+  const unlitGroups: RezeStyleGroup[] = [];
+
+  for (const group of V14D_UNLIT_MATERIAL_GROUPS) {
+    const matchedMaterials = group.materials.filter((materialName) => modelMaterialNames.has(materialName));
+    unknownMaterials.push(...group.materials.filter((materialName) => !modelMaterialNames.has(materialName)));
+    if (!matchedMaterials.length) continue;
+    unlitGroups.push({
+      id: group.id,
+      label: group.label,
+      materials: matchedMaterials,
+      graph: V14D_MATERIAL_UNLIT_DIAGNOSTIC_GRAPH,
+      ...("renderClass" in group && group.renderClass ? { renderClass: group.renderClass } : {}),
+    });
+    appliedGroups.push(group.id);
+  }
+
+  return {
+    groups: [...retainedGroups, ...unlitGroups],
+    appliedGroups,
+    unknownMaterials,
+  };
+}
+
+async function applyV14dUnlitStyleGroups(
+  engine: Engine,
+  modelMaterialNames: ReadonlySet<string>,
+  originalGroups: readonly RezeStyleGroup[],
+) {
+  const plan = buildV14dUnlitStyleGroups(originalGroups, modelMaterialNames);
+  const result = await engine.applyStyleGroups("companion", plan.groups);
+  if (!result.ok) {
+    const diagnostics = result.groups
+      .flatMap((group) => group.diagnostics.map((diagnostic) => diagnostic.message))
+      .join("; ");
+    throw new Error(`V14D Unlit 诊断图编译失败：${diagnostics || "unknown error"}`);
+  }
+  return {
+    ...plan,
+    result,
+  };
+}
 
 function hexToLinearVec3(hex: string): Vec3 {
   const clean = hex.replace("#", "");
@@ -242,8 +333,83 @@ function isKoledaFaceOrBodyMaterialName(materialName: string): boolean {
   );
 }
 
+function createEmptyV14dColorBaselineReadback(): V14dColorBaselineResult["readback"] {
+  return {
+    roiReadback: false,
+    linearHdrReadback: false,
+    finalDisplayReadback: false,
+    materialMaskReadback: false,
+    materialMaskSource: null,
+    materialMaskSourceFormat: null,
+    baseColorSource: null,
+    linearHdrSource: null,
+    hdrSourceFormat: null,
+    maskSourceFormat: null,
+    width: V14D_COLOR_BASELINE_WIDTH,
+    height: V14D_COLOR_BASELINE_HEIGHT,
+    rowPitch: { hdr: null, mask: null },
+    nanCount: null,
+    infCount: null,
+  };
+}
+
+function readV14dAnimationProgress(
+  model: Awaited<ReturnType<Engine["loadModel"]>> | null,
+): V14dAnimationProgressEvidence | null {
+  if (!model || typeof model.getAnimationProgress !== "function") return null;
+  const progress = model.getAnimationProgress();
+  const currentSeconds = Number(progress.current);
+  const durationSeconds = Number(progress.duration);
+  const percentage = Number(progress.percentage);
+  if (![currentSeconds, durationSeconds, percentage].every(Number.isFinite)) return null;
+  const currentFrame = currentSeconds * V14D_COLOR_BASELINE_FPS;
+  return {
+    animationName: progress.animationName ?? null,
+    currentSeconds,
+    durationSeconds,
+    percentage,
+    currentFrame,
+    expectedFrame: V14D_COLOR_BASELINE_FRAME,
+    frameError: currentFrame - V14D_COLOR_BASELINE_FRAME,
+    looping: Boolean(progress.looping),
+    playing: Boolean(progress.playing),
+    paused: Boolean(progress.paused),
+  };
+}
+
+function createV14dAnimationEvidence(
+  beforeRenderFrame: V14dAnimationProgressEvidence | null,
+  afterBaseColorRenderFrame: V14dAnimationProgressEvidence | null,
+  afterLinearHdrRenderFrame: V14dAnimationProgressEvidence | null,
+): V14dAnimationEvidence {
+  const samples = [
+    beforeRenderFrame,
+    afterBaseColorRenderFrame,
+    afterLinearHdrRenderFrame,
+  ].filter((sample): sample is V14dAnimationProgressEvidence => sample !== null);
+  const renderFrameStable =
+    samples.length >= 2 &&
+    samples.every((sample) => Math.abs(sample.frameError) <= V14D_COLOR_BASELINE_EPSILON) &&
+    samples.every(
+      (sample) =>
+        Math.abs(sample.currentSeconds - samples[0].currentSeconds) <= V14D_COLOR_BASELINE_EPSILON,
+    );
+  return {
+    beforeRenderFrame,
+    afterBaseColorRenderFrame,
+    afterLinearHdrRenderFrame,
+    expectedFrame: V14D_COLOR_BASELINE_FRAME,
+    fps: V14D_COLOR_BASELINE_FPS,
+    renderFrameStable,
+    frame120Verified:
+      samples.length > 0 &&
+      samples.every((sample) => Math.abs(sample.frameError) <= V14D_COLOR_BASELINE_EPSILON) &&
+      samples.every((sample) => sample.paused && !sample.playing),
+  };
+}
+
 export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(function RezeWebGpuStage(
-  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, scenePreset = "reze-design", v14dUnlitDiagnostic = false, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
+  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, scenePreset = "reze-design", v14dUnlitDiagnostic = false, v14dColorBaseline = false, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
   ref,
 ) {
   const pipelineDefaultSettings = scenePreset === "reze-k3" ? REZE_K3_SCENE_DEFAULTS : DEFAULT_SETTINGS;
@@ -264,6 +430,12 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   const vmdCompletionFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const vmdRequestGuardRef = useRef(createRezeVmdRequestGuard());
   const vmdIkPolicyCacheRef = useRef(new Map<string, ReturnType<typeof fetchRezeVmdIkPolicy>>());
+  const v14dColorBaselineRef = useRef(v14dColorBaseline);
+  const baselineOriginalStyleGroupsRef = useRef<RezeStyleGroup[] | null>(null);
+  const baselineResultRef = useRef<V14dColorBaselineResult | null>(null);
+  const baselineCapturePromiseRef = useRef<Promise<V14dColorBaselineResult> | null>(null);
+  const baselineCaptureFnRef = useRef<(() => Promise<V14dColorBaselineResult>) | null>(null);
+  const baselineVmdLoadedRef = useRef(false);
   const interactionRef = useRef(interaction);
   const backgroundEffectRef = useRef<RezeBackgroundEffect>(backgroundEffect);
   const gradeRef = useRef<RezeGradePreset>(grade);
@@ -272,6 +444,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   const onReadyChangeRef = useRef(onReadyChange);
   const onInteractionCompleteRef = useRef(onInteractionComplete);
   interactionRef.current = interaction;
+  v14dColorBaselineRef.current = v14dColorBaseline;
   backgroundEffectRef.current = backgroundEffect;
   gradeRef.current = grade;
   gradeIntensityRef.current = gradeIntensity;
@@ -500,6 +673,309 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     return captureRezeCameraSnapshot(engine);
   };
 
+  const updateV14dColorBaselineDataset = (result: V14dColorBaselineResult) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.dataset.v14dColorBaseline = "true";
+    canvas.dataset.v14dColorBaselineStatus = result.status;
+    canvas.dataset.v14dColorBaselineScene = result.scene.status;
+    canvas.dataset.v14dColorBaselineRoiReadback = String(result.readback.roiReadback);
+    canvas.dataset.v14dColorBaselineLinearHdrReadback = String(result.readback.linearHdrReadback);
+    canvas.dataset.v14dColorBaselineFinalDisplayReadback = String(result.readback.finalDisplayReadback);
+    canvas.dataset.v14dColorBaselineMaterialMaskReadback = String(result.readback.materialMaskReadback);
+    canvas.dataset.v14dColorBaselineMaterialMaskSource = result.readback.materialMaskSource || "";
+    canvas.dataset.v14dColorBaselineMaterialMaskSourceFormat = result.readback.materialMaskSourceFormat || "";
+    canvas.dataset.v14dColorBaselineFirstDivergence = result.firstDivergenceLevel || result.firstDivergenceStatus;
+    canvas.dataset.v14dColorBaselineVmdLoaded = String(result.input.vmdLoaded);
+    canvas.dataset.v14dColorBaselineRenderLoopStopped = String(result.input.renderLoopStopped);
+    canvas.dataset.v14dColorBaselineBaseColorSource = result.readback.baseColorSource || "";
+    canvas.dataset.v14dColorBaselineLinearHdrSource = result.readback.linearHdrSource || "";
+    canvas.dataset.v14dColorBaselineHdrSourceFormat = result.readback.hdrSourceFormat || "";
+    canvas.dataset.v14dColorBaselineMaskSourceFormat = result.readback.maskSourceFormat || "";
+    canvas.dataset.v14dColorBaselineNanCount =
+      result.readback.nanCount === null ? "" : String(result.readback.nanCount);
+    canvas.dataset.v14dColorBaselineInfCount =
+      result.readback.infCount === null ? "" : String(result.readback.infCount);
+    const animation = result.input.animation;
+    const finalProgress = animation.afterLinearHdrRenderFrame ?? animation.beforeRenderFrame;
+    canvas.dataset.v14dColorBaselineAnimationName = finalProgress?.animationName || "";
+    canvas.dataset.v14dColorBaselineAnimationCurrentSeconds =
+      finalProgress ? String(finalProgress.currentSeconds) : "";
+    canvas.dataset.v14dColorBaselineAnimationDurationSeconds =
+      finalProgress ? String(finalProgress.durationSeconds) : "";
+    canvas.dataset.v14dColorBaselineAnimationCurrentFrame =
+      finalProgress ? String(finalProgress.currentFrame) : "";
+    canvas.dataset.v14dColorBaselineAnimationPlaying =
+      finalProgress ? String(finalProgress.playing) : "";
+    canvas.dataset.v14dColorBaselineAnimationPaused =
+      finalProgress ? String(finalProgress.paused) : "";
+    canvas.dataset.v14dColorBaselineAnimationFrame120Verified = String(animation.frame120Verified);
+    canvas.dataset.v14dColorBaselineAnimationRenderFrameStable = String(animation.renderFrameStable);
+  };
+
+  const createV14dColorBaselineInput = (
+    animation = createV14dAnimationEvidence(null, null, null),
+  ) => ({
+    width: V14D_COLOR_BASELINE_WIDTH,
+    height: V14D_COLOR_BASELINE_HEIGHT,
+    frame: V14D_COLOR_BASELINE_FRAME,
+    fps: V14D_COLOR_BASELINE_FPS,
+    seconds: V14D_COLOR_BASELINE_SECONDS,
+    camera: V14D_COLOR_BASELINE_CAMERA,
+    vmdUrl: interactionRef.current.vmdUrl || "",
+    vmdLoaded: baselineVmdLoadedRef.current,
+    renderLoopStopped: true,
+    renderFrameDeltaSeconds: 0 as const,
+    animation,
+  });
+
+  const captureV14dColorBaseline = (): Promise<V14dColorBaselineResult> => {
+    if (!v14dColorBaselineRef.current) {
+      return Promise.reject(new Error("V14D 颜色基线入口未启用，请使用 v14dColorBaseline=1。"));
+    }
+    const pending = baselineCapturePromiseRef.current;
+    if (pending) return pending;
+
+    const promise = (async () => {
+      const engine = engineRef.current;
+      const model = modelRef.current;
+      const canvas = canvasRef.current;
+      let input = createV14dColorBaselineInput();
+      const scene = validateV14dColorBaselineScene(settingsRef.current);
+      const readback = createEmptyV14dColorBaselineReadback();
+      if (!engine || !model || !canvas || !engineReadyRef.current) {
+        const result = createV14dColorBaselineResult({
+          status: "error",
+          scene,
+          input,
+          readback,
+          error: "WebGPU 引擎或 PMX 模型尚未就绪，无法执行固定单帧颜色基线采集。",
+        });
+        baselineResultRef.current = result;
+        updateV14dColorBaselineDataset(result);
+        return result;
+      }
+
+      engine.stopRenderLoop();
+      model.pause();
+      let beforeRenderFrame = readV14dAnimationProgress(model);
+      let afterBaseColorRenderFrame: V14dAnimationProgressEvidence | null = null;
+      let afterLinearHdrRenderFrame: V14dAnimationProgressEvidence | null = null;
+      input = createV14dColorBaselineInput(
+        createV14dAnimationEvidence(beforeRenderFrame, null, null),
+      );
+
+      const originalGroups =
+        baselineOriginalStyleGroupsRef.current ?? engine.getStyleGroups("companion");
+      baselineOriginalStyleGroupsRef.current = originalGroups.map((group) => ({
+        ...group,
+        materials: [...group.materials],
+      }));
+      const restoreGroups = baselineOriginalStyleGroupsRef.current;
+      let styleGroupsRestored = false;
+      let baseResolve: Awaited<ReturnType<typeof readV14dColorBaselineResolveTargets>> | null = null;
+      let linearResolve: Awaited<ReturnType<typeof readV14dColorBaselineResolveTargets>> | null = null;
+      let materialMask: Awaited<ReturnType<typeof readV14dColorBaselineMaterialMask>> | null = null;
+      let finalDisplay: V14dNormalizedImage | null = null;
+
+      const restoreProductionStyleGroups = async () => {
+        const restored = await engine.applyStyleGroups("companion", restoreGroups);
+        if (!restored.ok) {
+          const diagnostics = restored.groups
+            .flatMap((group) => group.diagnostics.map((diagnostic) => diagnostic.message))
+            .join("; ");
+          throw new Error(`恢复生产材质组失败：${diagnostics || "unknown error"}`);
+        }
+        styleGroupsRestored = true;
+      };
+
+      try {
+        const modelMaterialNames = new Set(model.getMaterials().map((material) => material.name));
+        let nextMaterialId = 1;
+        const materialIdByName: Record<string, number> = {};
+        for (const material of model.getMaterials()) {
+          if (material.vertexCount === 0) continue;
+          materialIdByName[material.name] = nextMaterialId;
+          nextMaterialId += 1;
+        }
+        const unlit = await applyV14dUnlitStyleGroups(engine, modelMaterialNames, restoreGroups);
+        if (canvasRef.current) {
+          canvasRef.current.dataset.v14dUnlitDiagnostic = "true";
+          canvasRef.current.dataset.v14dUnlitGraph = V14D_MATERIAL_UNLIT_DIAGNOSTIC_GRAPH.name;
+          canvasRef.current.dataset.v14dUnlitGroups = unlit.appliedGroups.join(",");
+          canvasRef.current.dataset.v14dUnlitUnknownMaterials = unlit.unknownMaterials.join(",");
+        }
+
+        // BaseColor 只来自 texture-only Unlit 组；这里禁止把生产材质组的 HDR
+        // 读回同时当作 BaseColor，两个阶段必须各自 render + readback。
+        engine.stopRenderLoop();
+        model.pause();
+        engine.renderFrame(0);
+        afterBaseColorRenderFrame = readV14dAnimationProgress(model);
+        input = createV14dColorBaselineInput(
+          createV14dAnimationEvidence(beforeRenderFrame, afterBaseColorRenderFrame, null),
+        );
+        baseResolve = await readV14dColorBaselineResolveTargets(
+          engine,
+          V14D_COLOR_BASELINE_WIDTH,
+          V14D_COLOR_BASELINE_HEIGHT,
+        );
+        materialMask = await readV14dColorBaselineMaterialMask(
+          engine,
+          V14D_COLOR_BASELINE_WIDTH,
+          V14D_COLOR_BASELINE_HEIGHT,
+        );
+
+        await restoreProductionStyleGroups();
+        engine.stopRenderLoop();
+        model.pause();
+        engine.renderFrame(0);
+        afterLinearHdrRenderFrame = readV14dAnimationProgress(model);
+        input = createV14dColorBaselineInput(
+          createV14dAnimationEvidence(
+            beforeRenderFrame,
+            afterBaseColorRenderFrame,
+            afterLinearHdrRenderFrame,
+          ),
+        );
+        linearResolve = await readV14dColorBaselineResolveTargets(
+          engine,
+          V14D_COLOR_BASELINE_WIDTH,
+          V14D_COLOR_BASELINE_HEIGHT,
+        );
+        finalDisplay = await readV14dCanvasDisplay(canvas);
+
+        const baseColorImage = baseResolve ? makeV14dLinearImage(
+          V14D_COLOR_BASELINE_WIDTH,
+          V14D_COLOR_BASELINE_HEIGHT,
+          baseResolve.hdr.data,
+        ) : null;
+        const linearHdrImage = linearResolve ? makeV14dLinearImage(
+          V14D_COLOR_BASELINE_WIDTH,
+          V14D_COLOR_BASELINE_HEIGHT,
+          linearResolve.hdr.data,
+        ) : null;
+        const analysis = analyzeV14dColorBaselineRois({
+          readback: {
+            baseColor: baseColorImage,
+            linearHdr: linearHdrImage,
+            finalDisplay,
+            // Geometry and camera are unchanged between the two passes; use the
+            // production pass mask plus the diagnostic material/depth mask as the
+            // authoritative background exclusion.
+            mask: linearResolve?.mask.data ?? baseResolve?.mask.data ?? null,
+            materialMask: materialMask?.data ?? null,
+          },
+          materialIdByName,
+          scene,
+        });
+        const hasReadyRoi = V14D_COLOR_BASELINE_ROIS.some((roi) => roi.calibrationStatus === "ready");
+        const allRoiLevelsMeasured =
+          hasReadyRoi &&
+          analysis.rois.length > 0 &&
+          analysis.rois.every((roi) =>
+            (["baseColor", "linearHdr", "finalDisplay"] as const).every(
+              (level) => roi.levels[level].status === "measured",
+            ),
+          );
+        const resultReadback: V14dColorBaselineResult["readback"] = {
+          roiReadback: hasReadyRoi && Boolean(baseResolve && linearResolve && materialMask),
+          linearHdrReadback: Boolean(linearResolve),
+          finalDisplayReadback: Boolean(finalDisplay),
+          materialMaskReadback: Boolean(materialMask),
+          materialMaskSource: materialMask ? "engine-pick-material-id-depth" : null,
+          materialMaskSourceFormat: materialMask?.sourceFormat ?? null,
+          baseColorSource: baseResolve ? "v14d-unlit-texture-only" : null,
+          linearHdrSource: linearResolve ? "production-style-groups" : null,
+          hdrSourceFormat: linearResolve?.hdr.sourceFormat ?? baseResolve?.hdr.sourceFormat ?? null,
+          maskSourceFormat: linearResolve?.mask.sourceFormat ?? baseResolve?.mask.sourceFormat ?? null,
+          width: V14D_COLOR_BASELINE_WIDTH,
+          height: V14D_COLOR_BASELINE_HEIGHT,
+          rowPitch: {
+            hdr: linearResolve?.hdr.rowPitch ?? baseResolve?.hdr.rowPitch ?? null,
+            mask: linearResolve?.mask.rowPitch ?? baseResolve?.mask.rowPitch ?? null,
+          },
+          nanCount: linearResolve?.hdr.nanCount ?? baseResolve?.hdr.nanCount ?? null,
+          infCount: linearResolve?.hdr.infCount ?? baseResolve?.hdr.infCount ?? null,
+        };
+        const result = createV14dColorBaselineResult({
+          status:
+            scene.valid &&
+            input.vmdLoaded &&
+            resultReadback.roiReadback &&
+            resultReadback.linearHdrReadback &&
+            resultReadback.finalDisplayReadback &&
+            allRoiLevelsMeasured
+              ? "ready"
+              : "invalid",
+          scene,
+          input,
+          readback: resultReadback,
+          rois: analysis.rois,
+          firstDivergenceStatus: analysis.firstDivergence.status,
+          firstDivergenceLevel: analysis.firstDivergence.level,
+          firstDivergenceReason: analysis.firstDivergence.reason,
+        });
+        baselineResultRef.current = result;
+        updateV14dColorBaselineDataset(result);
+        return result;
+      } catch (error) {
+        const resultReadback: V14dColorBaselineResult["readback"] = {
+          roiReadback: Boolean(baseResolve && linearResolve && materialMask && V14D_COLOR_BASELINE_ROIS.some((roi) => roi.calibrationStatus === "ready")),
+          linearHdrReadback: Boolean(linearResolve),
+          finalDisplayReadback: Boolean(finalDisplay),
+          materialMaskReadback: Boolean(materialMask),
+          materialMaskSource: materialMask ? "engine-pick-material-id-depth" : null,
+          materialMaskSourceFormat: materialMask?.sourceFormat ?? null,
+          baseColorSource: baseResolve ? "v14d-unlit-texture-only" : null,
+          linearHdrSource: linearResolve ? "production-style-groups" : null,
+          hdrSourceFormat: linearResolve?.hdr.sourceFormat ?? baseResolve?.hdr.sourceFormat ?? null,
+          maskSourceFormat: linearResolve?.mask.sourceFormat ?? baseResolve?.mask.sourceFormat ?? null,
+          width: V14D_COLOR_BASELINE_WIDTH,
+          height: V14D_COLOR_BASELINE_HEIGHT,
+          rowPitch: {
+            hdr: linearResolve?.hdr.rowPitch ?? baseResolve?.hdr.rowPitch ?? null,
+            mask: linearResolve?.mask.rowPitch ?? baseResolve?.mask.rowPitch ?? null,
+          },
+          nanCount: linearResolve?.hdr.nanCount ?? baseResolve?.hdr.nanCount ?? null,
+          infCount: linearResolve?.hdr.infCount ?? baseResolve?.hdr.infCount ?? null,
+        };
+        const result = createV14dColorBaselineResult({
+          status: "error",
+          scene,
+          input,
+          readback: resultReadback,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        baselineResultRef.current = result;
+        updateV14dColorBaselineDataset(result);
+        return result;
+      } finally {
+        if (!styleGroupsRestored) {
+          try {
+            await restoreProductionStyleGroups();
+            engine.stopRenderLoop();
+            model.pause();
+            engine.renderFrame(0);
+          } catch (restoreError) {
+            console.error("[v14d-color-baseline] 恢复生产材质组失败", restoreError);
+          }
+        }
+      }
+    })();
+    baselineCapturePromiseRef.current = promise;
+    void promise.then(
+      () => {
+        if (baselineCapturePromiseRef.current === promise) baselineCapturePromiseRef.current = null;
+      },
+      () => {
+        if (baselineCapturePromiseRef.current === promise) baselineCapturePromiseRef.current = null;
+      },
+    );
+    return promise;
+  };
+  baselineCaptureFnRef.current = captureV14dColorBaseline;
+
   useImperativeHandle(ref, () => ({
     unlockCamera: () => {
       readRezeCamera(engineRef.current)?.setInputLocked(false);
@@ -605,48 +1081,75 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     captureStagePng: () => canvasRef.current?.toDataURL("image/png") ?? null,
     setSceneDebugSettings: (settings) => applySceneSettings(settings as RezeSceneDebugSettings),
     resetSceneDebugSettings: () => applySceneSettings(DEFAULT_SETTINGS),
+    captureColorBaseline: () =>
+      baselineCaptureFnRef.current?.() ??
+      Promise.reject(new Error("V14D 颜色基线采集接口尚未初始化。")),
+    getColorBaselineResult: () => baselineResultRef.current,
   }), []);
+
+  useEffect(() => {
+    if (!v14dColorBaseline) return;
+    const api = {
+      capture: () =>
+        baselineCaptureFnRef.current?.() ??
+        Promise.reject(new Error("V14D 颜色基线采集接口尚未初始化。")),
+      getResult: () => baselineResultRef.current,
+    };
+    window.__v14dColorBaseline = api;
+    return () => {
+      if (window.__v14dColorBaseline === api) delete window.__v14dColorBaseline;
+    };
+  }, [v14dColorBaseline]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !modelUrl) return;
     let disposed = false;
     const initialSettings = sceneSettings ?? pipelineDefaultSettings;
+    const effectiveInitialSettings = v14dColorBaseline ? REZE_K3_SCENE_DEFAULTS : initialSettings;
     const boot = async () => {
       reportStatus("loading", "正在初始化 reze-engine WebGPU…");
       if (!("gpu" in navigator)) throw new Error("当前浏览器不支持 WebGPU，请改用 Reze NPR（WebGL）模式。");
-      settingsRef.current = { ...DEFAULT_SETTINGS, ...initialSettings };
+      settingsRef.current = { ...DEFAULT_SETTINGS, ...effectiveInitialSettings };
       engineReadyRef.current = false;
       const engine = new Engine(canvas, {
-        background: transparentBackgroundRef.current ? null : hexToSrgbVec3(initialSettings.backgroundColor),
+        background: transparentBackgroundRef.current ? null : hexToSrgbVec3(effectiveInitialSettings.backgroundColor),
         camera: {
-          distance: initialSettings.cameraDistance,
-          target: new Vec3(initialSettings.cameraTargetX, initialSettings.cameraTargetY, initialSettings.cameraTargetZ),
+          distance: effectiveInitialSettings.cameraDistance,
+          target: new Vec3(effectiveInitialSettings.cameraTargetX, effectiveInitialSettings.cameraTargetY, effectiveInitialSettings.cameraTargetZ),
         },
-        world: { color: hexToLinearVec3(initialSettings.worldColor), strength: initialSettings.ambientIntensity },
+        world: { color: hexToLinearVec3(effectiveInitialSettings.worldColor), strength: effectiveInitialSettings.ambientIntensity },
         sun: {
-          color: hexToLinearVec3(initialSettings.sunColor),
-          strength: initialSettings.keyIntensity,
-          direction: azElToDirection(initialSettings.sunAzimuth, initialSettings.sunElevation),
+          color: hexToLinearVec3(effectiveInitialSettings.sunColor),
+          strength: effectiveInitialSettings.keyIntensity,
+          direction: azElToDirection(effectiveInitialSettings.sunAzimuth, effectiveInitialSettings.sunElevation),
         },
         bloom: {
-          enabled: initialSettings.bloomStrength > 0,
-          threshold: initialSettings.bloomThreshold,
-          knee: initialSettings.bloomKnee,
-          radius: initialSettings.bloomRadius,
-          intensity: initialSettings.bloomStrength,
-          color: hexToLinearVec3(initialSettings.bloomColor),
+          enabled: effectiveInitialSettings.bloomStrength > 0,
+          threshold: effectiveInitialSettings.bloomThreshold,
+          knee: effectiveInitialSettings.bloomKnee,
+          radius: effectiveInitialSettings.bloomRadius,
+          intensity: effectiveInitialSettings.bloomStrength,
+          color: hexToLinearVec3(effectiveInitialSettings.bloomColor),
         },
+        // 仅为颜色基线诊断启用引擎已有的材质 pick 资源；生产路径不创建
+        // pick draw call，也不改变生产材质 shader 或灯光行为。
+        onRaycast: v14dColorBaseline ? () => undefined : undefined,
       });
-       engineRef.current = engine;
-       await engine.init();
-       if (disposed) return;
-       engineReadyRef.current = true;
-       defaultIkEnabledRef.current = engine.getIKEnabled?.() ?? true;
-       const initialBackgroundEffect = await engine.setBackgroundEffect(
-         backgroundEffectRef.current === "Shining Stars" ? REZE_SHINING_STARS_WGSL : null,
-       );
-       if (!initialBackgroundEffect.ok) throw new Error(`Shining Stars 背景编译失败：${initialBackgroundEffect.diagnostics.join("; ")}`);
+      engineRef.current = engine;
+      await engine.init();
+      if (disposed) return;
+      engineReadyRef.current = true;
+      if (v14dColorBaseline) {
+        engine.setRenderSize(V14D_COLOR_BASELINE_WIDTH, V14D_COLOR_BASELINE_HEIGHT);
+      }
+      defaultIkEnabledRef.current = engine.getIKEnabled?.() ?? true;
+      const initialBackgroundEffect = await engine.setBackgroundEffect(
+        v14dColorBaseline || backgroundEffectRef.current === "关闭" || backgroundEffectRef.current !== "Shining Stars"
+          ? null
+          : REZE_SHINING_STARS_WGSL,
+      );
+      if (!initialBackgroundEffect.ok) throw new Error(`Shining Stars 背景编译失败：${initialBackgroundEffect.diagnostics.join("; ")}`);
       const model = localModelImport
         ? await engine.loadModel("companion", { files: localModelImport.files, pmxFile: localModelImport.pmxFile })
         : await engine.loadModel("companion", modelUrl);
@@ -662,31 +1165,26 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         "companion",
         koledaFaceAndBodyMaterials.length ? { cloth_smooth: koledaFaceAndBodyMaterials } : undefined,
       );
+      const originalStyleGroups = engine.getStyleGroups("companion");
+      baselineOriginalStyleGroupsRef.current = originalStyleGroups.map((group) => ({
+        ...group,
+        materials: [...group.materials],
+      }));
       if (v14dUnlitDiagnostic) {
         const modelMaterialNames = new Set(model.getMaterials().map((material) => material.name));
-        const appliedGroups: string[] = [];
-        const unknownMaterials: string[] = [];
-        for (const group of V14D_UNLIT_MATERIAL_GROUPS) {
-          const matchedMaterials = group.materials.filter((materialName) => modelMaterialNames.has(materialName));
-          unknownMaterials.push(...group.materials.filter((materialName) => !modelMaterialNames.has(materialName)));
-          if (!matchedMaterials.length) continue;
-          const result = await engine.upsertStyleGroup("companion", {
-            ...group,
-            materials: matchedMaterials,
-            graph: V14D_MATERIAL_UNLIT_DIAGNOSTIC_GRAPH,
-          });
-          if (!result.ok) {
-            throw new Error(
-              `V14D Unlit 诊断图编译失败（${group.id}）：${result.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}`,
-            );
-          }
-          appliedGroups.push(group.id);
-        }
+        const unlitPlan = buildV14dUnlitStyleGroups(originalStyleGroups, modelMaterialNames);
         if (canvasRef.current) {
           canvasRef.current.dataset.v14dUnlitDiagnostic = "true";
           canvasRef.current.dataset.v14dUnlitGraph = V14D_MATERIAL_UNLIT_DIAGNOSTIC_GRAPH.name;
-          canvasRef.current.dataset.v14dUnlitGroups = appliedGroups.join(",");
-          canvasRef.current.dataset.v14dUnlitUnknownMaterials = unknownMaterials.join(",");
+          canvasRef.current.dataset.v14dUnlitGroups = unlitPlan.appliedGroups.join(",");
+          canvasRef.current.dataset.v14dUnlitUnknownMaterials = unlitPlan.unknownMaterials.join(",");
+        }
+        if (!v14dColorBaseline) {
+          const unlit = await applyV14dUnlitStyleGroups(engine, modelMaterialNames, originalStyleGroups);
+          if (canvasRef.current) {
+            canvasRef.current.dataset.v14dUnlitGroups = unlit.appliedGroups.join(",");
+            canvasRef.current.dataset.v14dUnlitUnknownMaterials = unlit.unknownMaterials.join(",");
+          }
         }
       }
       if (isKoleda) {
@@ -696,9 +1194,15 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           materialStateRef.current.set(stableMaterialId(index), { ...current, preset: "柔滑布料" });
         }
       }
-       if (disposed) return;
-       applySceneSettings(settingsRef.current);
-       restorePersistedCamera();
+      if (disposed) return;
+      if (v14dColorBaseline) applySceneSettings(effectiveInitialSettings);
+      else applySceneSettings(initialSettings);
+      if (v14dColorBaseline) {
+        restorePersistedCamera(V14D_COLOR_BASELINE_CAMERA);
+        readRezeCamera(engine)?.setInputLocked(true);
+      } else {
+        restorePersistedCamera();
+      }
       applyGrade(gradeRef.current, gradeIntensityRef.current);
       const initialInteraction = interactionRef.current;
       if (initialInteraction.mode === "vmd" && initialInteraction.vmdUrl) {
@@ -710,15 +1214,31 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         ]);
         if (disposed || !vmdRequestGuardRef.current.isCurrent(requestId)) return;
         applyVmdIkPolicy(engine, policy);
-        playRezeVmd(model, name);
-        currentVmdUrlRef.current = initialInteraction.vmdUrl;
-        armRezeVmdCompletionFallback(model, name, initialInteraction.vmdUrl);
+        baselineVmdLoadedRef.current = true;
+        if (v14dColorBaseline) {
+          // loadVmd() 只登记剪辑；必须先把它设为当前动作，seek() 才会
+          // 写入 frame 120。否则固定单帧诊断会继续渲染绑定姿态。
+          playRezeVmd(model, name);
+          model.seek(V14D_COLOR_BASELINE_SECONDS);
+          model.pause();
+          currentVmdUrlRef.current = initialInteraction.vmdUrl;
+        } else {
+          playRezeVmd(model, name);
+          currentVmdUrlRef.current = initialInteraction.vmdUrl;
+          armRezeVmdCompletionFallback(model, name, initialInteraction.vmdUrl);
+        }
         engine.resetPhysics();
       }
-      engine.runRenderLoop();
+      if (v14dColorBaseline) {
+        engine.stopRenderLoop();
+        model.pause();
+        engine.renderFrame(0);
+      } else {
+        engine.runRenderLoop();
+      }
       reportStatus(
         "ready",
-        `${localModelImport ? `已导入 ${localModelImport.pmxFile.name}` : "WebGPU 已就绪"} · ${model.getMaterials().length} 个 PMX 材质${v14dUnlitDiagnostic ? " · V14D Unlit 诊断" : ""}`,
+        `${localModelImport ? `已导入 ${localModelImport.pmxFile.name}` : "WebGPU 已就绪"} · ${model.getMaterials().length} 个 PMX 材质${v14dUnlitDiagnostic ? " · V14D Unlit 诊断" : ""}${v14dColorBaseline ? " · 白光颜色基线单帧" : ""}`,
       );
     };
     void boot().catch((error: unknown) => {
@@ -731,33 +1251,40 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       clearVmdCompletionFallback();
       vmdIkPolicyCacheRef.current.clear();
       materialStateRef.current.clear();
+      baselineOriginalStyleGroupsRef.current = null;
+      baselineResultRef.current = null;
+      baselineVmdLoadedRef.current = false;
+      baselineCapturePromiseRef.current = null;
       engineRef.current?.dispose();
       engineRef.current = null;
     };
-  }, [modelUrl, localModelImport, modelIdentifier, v14dUnlitDiagnostic]);
+  }, [modelUrl, localModelImport, modelIdentifier, v14dUnlitDiagnostic, v14dColorBaseline, scenePreset]);
 
   useEffect(() => {
-    if (!sceneSettings) return;
+    if (v14dColorBaseline || !sceneSettings) return;
     applySceneSettings(sceneSettings);
-  }, [sceneSettings]);
+  }, [sceneSettings, v14dColorBaseline]);
 
   useEffect(() => {
+    if (v14dColorBaseline) return;
     restorePersistedCamera(cameraSnapshot);
-  }, [cameraSnapshot]);
+  }, [cameraSnapshot, v14dColorBaseline]);
 
   useEffect(() => {
+    if (v14dColorBaseline) return;
     const engine = engineRef.current;
     if (!engine || !engineReadyRef.current) return;
     void engine.setBackgroundEffect(backgroundEffect === "Shining Stars" ? REZE_SHINING_STARS_WGSL : null).then((result) => {
       if (!result.ok) reportStatus("error", `Shining Stars 背景编译失败：${result.diagnostics.join("; ")}`);
     });
-  }, [backgroundEffect]);
+  }, [backgroundEffect, v14dColorBaseline]);
 
   useEffect(() => {
     applyGrade(grade, gradeIntensity);
   }, [grade, gradeIntensity]);
 
   useEffect(() => {
+    if (v14dColorBaseline) return;
     const requestId = vmdRequestGuardRef.current.begin();
     const model = modelRef.current;
     if (!model || interaction.mode !== "vmd" || !interaction.vmdUrl) return;
@@ -788,9 +1315,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       }
     };
     void load();
-  }, [interaction.mode, interaction.vmdUrl, interaction.playbackRate, interaction.vmdRequestId]);
+  }, [interaction.mode, interaction.vmdUrl, interaction.playbackRate, interaction.vmdRequestId, v14dColorBaseline]);
 
   useEffect(() => {
+    if (v14dColorBaseline) return;
     if (interaction.mode === "vmd" && interaction.vmdUrl) return;
     clearVmdCompletionFallback();
     currentVmdUrlRef.current = "";
@@ -802,12 +1330,14 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       className="mio-stage-webgpu-shell"
       data-webgpu-status={runtimeStatus.state}
       data-v14d-unlit-diagnostic={v14dUnlitDiagnostic ? "true" : "false"}
+      data-v14d-color-baseline={v14dColorBaseline ? "true" : "false"}
     >
       <canvas
         ref={canvasRef}
         className="mio-stage-canvas mio-stage-canvas--webgpu"
         data-renderer="reze-engine-webgpu"
         data-v14d-unlit-diagnostic={v14dUnlitDiagnostic ? "true" : "false"}
+        data-v14d-color-baseline={v14dColorBaseline ? "true" : "false"}
       />
       {runtimeStatus.state !== "ready" ? <p className="mio-stage-webgpu-status" role="status">{runtimeStatus.detail}</p> : null}
     </div>
