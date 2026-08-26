@@ -19,6 +19,7 @@ import type { MMDStageHandle } from "@/features/stage/MMDStage";
 import {
   type RezeBackgroundEffect,
   REZE_DESIGN_SCENE_DEFAULTS,
+  REZE_K3_SCENE_DEFAULTS,
   REZE_SHINING_STARS_WGSL,
   resolveRezeGrade,
   type RezeGradePreset,
@@ -64,6 +65,11 @@ type RezeStageProps = {
   grade?: RezeGradePreset;
   gradeIntensity?: number;
   sceneSettings?: RezeSceneDebugSettings;
+  /**
+   * WebGPU 管线的默认场景。reze-k3 用明亮中性光（与 companion 页面一致），
+   * reze-design 保持紫调舞台；上层显式传入 sceneSettings 时此预设被覆盖。
+   */
+  scenePreset?: "reze-design" | "reze-k3";
   /** 仅用于 V14D 材质迁移取证；默认关闭，不改变生产渲染路径。 */
   v14dUnlitDiagnostic?: boolean;
   /** true 时 WebGPU 画布透明，由页面 MIO CSS 背景透出；false 用场景背景色。 */
@@ -237,9 +243,10 @@ function isKoledaFaceOrBodyMaterialName(materialName: string): boolean {
 }
 
 export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(function RezeWebGpuStage(
-  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, v14dUnlitDiagnostic = false, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
+  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, scenePreset = "reze-design", v14dUnlitDiagnostic = false, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
   ref,
 ) {
+  const pipelineDefaultSettings = scenePreset === "reze-k3" ? REZE_K3_SCENE_DEFAULTS : DEFAULT_SETTINGS;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<{ state: "loading" | "ready" | "error"; detail: string }>({
     state: "loading",
@@ -604,7 +611,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     const canvas = canvasRef.current;
     if (!canvas || !modelUrl) return;
     let disposed = false;
-    const initialSettings = sceneSettings ?? DEFAULT_SETTINGS;
+    const initialSettings = sceneSettings ?? pipelineDefaultSettings;
     const boot = async () => {
       reportStatus("loading", "正在初始化 reze-engine WebGPU…");
       if (!("gpu" in navigator)) throw new Error("当前浏览器不支持 WebGPU，请改用 Reze NPR（WebGL）模式。");
