@@ -64,6 +64,8 @@ type RezeStageProps = {
   grade?: RezeGradePreset;
   gradeIntensity?: number;
   sceneSettings?: RezeSceneDebugSettings;
+  /** 仅用于 V14D 材质迁移取证；默认关闭，不改变生产渲染路径。 */
+  v14dUnlitDiagnostic?: boolean;
   /** true 时 WebGPU 画布透明，由页面 MIO CSS 背景透出；false 用场景背景色。 */
   transparentBackground?: boolean;
   cameraSnapshot?: MmdCameraSnapshot | null;
@@ -83,6 +85,41 @@ const MATERIAL_GRAPHS: Record<string, ShaderGraph> = {
   "金属": METAL_GRAPH,
   "半透材质": CLOTH_SMOOTH_GRAPH,
 };
+
+/**
+ * V14D 最小迁移 PoC 的诊断图。
+ *
+ * 这个图只把引擎已经绑定的 PMX diffuse texture 原样输出，不引入灯光、
+ * 法线、球面贴图、toon、Fresnel 或材质高光。纹理绑定本身使用
+ * `rgba8unorm-srgb`，因此这里不能再次手工做 sRGB 解码。
+ */
+const V14D_MATERIAL_UNLIT_DIAGNOSTIC_GRAPH: ShaderGraph = {
+  version: 1,
+  name: "V14D Material Unlit Diagnostic",
+  tags: ["diagnostic", "v14d", "unlit"],
+  nodes: [{ id: "tex", type: "texture" }],
+  links: [],
+  output: { node: "tex", socket: "color" },
+};
+
+const V14D_UNLIT_MATERIAL_GROUPS = [
+  {
+    id: "v14d-unlit-body-skin",
+    label: "V14D Unlit Skin",
+    materials: ["BodySkin"],
+  },
+  {
+    id: "v14d-unlit-white-clothes",
+    label: "V14D Unlit White Clothes",
+    materials: ["Cth1-Top"],
+  },
+  {
+    id: "v14d-unlit-hair",
+    label: "V14D Unlit Hair",
+    materials: ["HairA", "HairB"],
+    renderClass: "hair" as const,
+  },
+] as const;
 
 function hexToLinearVec3(hex: string): Vec3 {
   const clean = hex.replace("#", "");
@@ -200,7 +237,7 @@ function isKoledaFaceOrBodyMaterialName(materialName: string): boolean {
 }
 
 export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(function RezeWebGpuStage(
-  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
+  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, v14dUnlitDiagnostic = false, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
   ref,
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -618,6 +655,33 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         "companion",
         koledaFaceAndBodyMaterials.length ? { cloth_smooth: koledaFaceAndBodyMaterials } : undefined,
       );
+      if (v14dUnlitDiagnostic) {
+        const modelMaterialNames = new Set(model.getMaterials().map((material) => material.name));
+        const appliedGroups: string[] = [];
+        const unknownMaterials: string[] = [];
+        for (const group of V14D_UNLIT_MATERIAL_GROUPS) {
+          const matchedMaterials = group.materials.filter((materialName) => modelMaterialNames.has(materialName));
+          unknownMaterials.push(...group.materials.filter((materialName) => !modelMaterialNames.has(materialName)));
+          if (!matchedMaterials.length) continue;
+          const result = await engine.upsertStyleGroup("companion", {
+            ...group,
+            materials: matchedMaterials,
+            graph: V14D_MATERIAL_UNLIT_DIAGNOSTIC_GRAPH,
+          });
+          if (!result.ok) {
+            throw new Error(
+              `V14D Unlit 诊断图编译失败（${group.id}）：${result.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}`,
+            );
+          }
+          appliedGroups.push(group.id);
+        }
+        if (canvasRef.current) {
+          canvasRef.current.dataset.v14dUnlitDiagnostic = "true";
+          canvasRef.current.dataset.v14dUnlitGraph = V14D_MATERIAL_UNLIT_DIAGNOSTIC_GRAPH.name;
+          canvasRef.current.dataset.v14dUnlitGroups = appliedGroups.join(",");
+          canvasRef.current.dataset.v14dUnlitUnknownMaterials = unknownMaterials.join(",");
+        }
+      }
       if (isKoleda) {
         for (const [index, material] of model.getMaterials().entries()) {
           if (!isKoledaFaceOrBodyMaterialName(material.name)) continue;
@@ -645,7 +709,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         engine.resetPhysics();
       }
       engine.runRenderLoop();
-      reportStatus("ready", `${localModelImport ? `已导入 ${localModelImport.pmxFile.name}` : "WebGPU 已就绪"} · ${model.getMaterials().length} 个 PMX 材质`);
+      reportStatus(
+        "ready",
+        `${localModelImport ? `已导入 ${localModelImport.pmxFile.name}` : "WebGPU 已就绪"} · ${model.getMaterials().length} 个 PMX 材质${v14dUnlitDiagnostic ? " · V14D Unlit 诊断" : ""}`,
+      );
     };
     void boot().catch((error: unknown) => {
       if (!disposed) reportStatus("error", error instanceof Error ? error.message : String(error));
@@ -660,7 +727,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       engineRef.current?.dispose();
       engineRef.current = null;
     };
-  }, [modelUrl, localModelImport, modelIdentifier]);
+  }, [modelUrl, localModelImport, modelIdentifier, v14dUnlitDiagnostic]);
 
   useEffect(() => {
     if (!sceneSettings) return;
@@ -724,8 +791,17 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   }, [interaction.mode, interaction.vmdUrl]);
 
   return (
-    <div className="mio-stage-webgpu-shell" data-webgpu-status={runtimeStatus.state}>
-      <canvas ref={canvasRef} className="mio-stage-canvas mio-stage-canvas--webgpu" data-renderer="reze-engine-webgpu" />
+    <div
+      className="mio-stage-webgpu-shell"
+      data-webgpu-status={runtimeStatus.state}
+      data-v14d-unlit-diagnostic={v14dUnlitDiagnostic ? "true" : "false"}
+    >
+      <canvas
+        ref={canvasRef}
+        className="mio-stage-canvas mio-stage-canvas--webgpu"
+        data-renderer="reze-engine-webgpu"
+        data-v14d-unlit-diagnostic={v14dUnlitDiagnostic ? "true" : "false"}
+      />
       {runtimeStatus.state !== "ready" ? <p className="mio-stage-webgpu-status" role="status">{runtimeStatus.detail}</p> : null}
     </div>
   );

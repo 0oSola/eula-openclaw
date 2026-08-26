@@ -10,6 +10,7 @@ type CalibrationQuery = {
   vmdUrl: string;
   renderPipeline: RenderPipeline;
   cameraSnapshot: MmdCameraSnapshot | null;
+  v14dUnlitDiagnostic: boolean;
 };
 
 function readRenderPipeline(value: string | null): RenderPipeline {
@@ -57,6 +58,7 @@ function readCalibrationQuery(): CalibrationQuery {
       vmdUrl: "",
       renderPipeline: "genshin",
       cameraSnapshot: null,
+      v14dUnlitDiagnostic: false,
     };
   }
   const params = new URLSearchParams(window.location.search);
@@ -65,6 +67,7 @@ function readCalibrationQuery(): CalibrationQuery {
     vmdUrl: params.get("vmdUrl") || "",
     renderPipeline: readRenderPipeline(params.get("renderPipeline")),
     cameraSnapshot: readCameraSnapshot(params.get("camera")),
+    v14dUnlitDiagnostic: params.get("v14dUnlit") === "1",
   };
 }
 
@@ -111,6 +114,7 @@ export default function MmdCalibrationRenderPage() {
         onModelChange={() => {}}
         renderPipeline={query.renderPipeline}
         cameraSnapshot={query.cameraSnapshot}
+        v14dUnlitDiagnostic={query.v14dUnlitDiagnostic}
         chrome="bare"
         enableCharacterClickCapture={false}
         cameraLocked

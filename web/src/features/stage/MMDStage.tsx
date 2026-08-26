@@ -130,6 +130,7 @@ type MMDStageProps = {
   rezeGrade?: RezeGradePreset;
   rezeGradeIntensity?: number;
   rezeSceneDebugSettings?: RezeSceneDebugSettings;
+  v14dUnlitDiagnostic?: boolean;
   rezeTransparentBackground?: boolean;
 };
 
@@ -155,6 +156,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   rezeGrade = "中性",
   rezeGradeIntensity = 1,
   rezeSceneDebugSettings,
+  v14dUnlitDiagnostic = false,
   rezeTransparentBackground = false,
 }: MMDStageProps, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -477,6 +479,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
             grade={rezeGrade}
             gradeIntensity={rezeGradeIntensity}
             sceneSettings={rezeSceneDebugSettings}
+            v14dUnlitDiagnostic={v14dUnlitDiagnostic}
             transparentBackground={rezeTransparentBackground}
             cameraSnapshot={cameraSnapshot}
             onInteractionComplete={onInteractionComplete}
@@ -520,7 +523,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       </header>
       {renderPipeline === "reze-design" || renderPipeline === "reze-k3" ? (
         <div style={{ margin: "0.45rem 0.95rem", minHeight: 0, borderRadius: "0.8rem", border: "1px solid rgba(140, 209, 255, 0.19)", overflow: "hidden" }}>
-          <RezeWebGpuStage ref={webGpuStageRef} modelUrl={toAbsolute(modelUrl)} modelIdentifier={selectedModelPath || modelLabel} localModelImport={rezeLocalModelImport} interaction={webGpuInteraction} backgroundEffect={rezeBackgroundEffect} grade={rezeGrade} gradeIntensity={rezeGradeIntensity} sceneSettings={rezeSceneDebugSettings} transparentBackground={rezeTransparentBackground} cameraSnapshot={cameraSnapshot} onInteractionComplete={onInteractionComplete} />
+          <RezeWebGpuStage ref={webGpuStageRef} modelUrl={toAbsolute(modelUrl)} modelIdentifier={selectedModelPath || modelLabel} localModelImport={rezeLocalModelImport} interaction={webGpuInteraction} backgroundEffect={rezeBackgroundEffect} grade={rezeGrade} gradeIntensity={rezeGradeIntensity} sceneSettings={rezeSceneDebugSettings} v14dUnlitDiagnostic={v14dUnlitDiagnostic} transparentBackground={rezeTransparentBackground} cameraSnapshot={cameraSnapshot} onInteractionComplete={onInteractionComplete} />
         </div>
       ) : (
         <div
