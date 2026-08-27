@@ -135,6 +135,8 @@ type MMDStageProps = {
   rezeSceneDebugSettings?: RezeSceneDebugSettings;
   v14dUnlitDiagnostic?: boolean;
   v14dColorBaseline?: boolean;
+  v14dFaceStatic?: boolean;
+  v14dFaceStaticMode?: "normal" | "faceShadowOnly" | "finalFaceComposite";
   rezeTransparentBackground?: boolean;
 };
 
@@ -162,6 +164,8 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   rezeSceneDebugSettings,
   v14dUnlitDiagnostic = false,
   v14dColorBaseline = false,
+  v14dFaceStatic = false,
+  v14dFaceStaticMode = "normal",
   rezeTransparentBackground = false,
 }: MMDStageProps, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -493,6 +497,8 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
             scenePreset={renderPipeline === "reze-k3" ? "reze-k3" : "reze-design"}
             v14dUnlitDiagnostic={v14dUnlitDiagnostic}
             v14dColorBaseline={v14dColorBaseline}
+            v14dFaceStatic={v14dFaceStatic}
+            v14dFaceStaticMode={v14dFaceStaticMode}
             transparentBackground={rezeTransparentBackground}
             cameraSnapshot={cameraSnapshot}
             onInteractionComplete={onInteractionComplete}

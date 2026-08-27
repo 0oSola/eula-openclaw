@@ -47,6 +47,7 @@ import {
   readV14dCanvasDisplay,
   readV14dColorBaselineMaterialMask,
   readV14dColorBaselineResolveTargets,
+  srgbToLinear,
   validateV14dColorBaselineScene,
   V14D_COLOR_BASELINE_CAMERA,
   V14D_COLOR_BASELINE_EPSILON,
@@ -61,6 +62,23 @@ import {
   type V14dColorBaselineResult,
   type V14dNormalizedImage,
 } from "@/features/stage/v14dColorBaseline";
+import {
+  V14D_FACE_MATERIAL_NAME,
+  V14D_FACE_STATIC_AUTHORITY,
+  V14D_FACE_STATIC_BLEND,
+  V14D_FACE_STATIC_CAMERA,
+  V14D_FACE_STATIC_DATASET,
+  V14D_FACE_STATIC_FPS,
+  V14D_FACE_STATIC_FRAME,
+  V14D_FACE_STATIC_ROI_NORM,
+  V14D_FACE_STATIC_SECONDS,
+  V14D_FACE_STATIC_SIZE,
+  V14D_FACE_STATIC_STATE,
+  v14dFaceStaticFacePickId,
+  v14dFaceStaticTextureName,
+  type V14dFaceStaticAssetSource,
+  type V14dFaceStaticMode,
+} from "@/features/stage/v14dFaceStatic";
 
 declare global {
   interface Window {
@@ -68,8 +86,36 @@ declare global {
       capture: () => Promise<V14dColorBaselineResult>;
       getResult: () => V14dColorBaselineResult | null;
     };
+    __v14dFaceStatic?: {
+      capture: () => Promise<V14dFaceStaticCapture>;
+      exportFaceMaskPng: () => Promise<string | null>;
+    };
+    /** faceStatic 注入的权威资产集（File 形式，引擎 files 变体局部解析）。 */
+    __v14dFaceStaticAssets?: V14dFaceStaticAssetSource;
   }
 }
+
+export type V14dFaceStaticCapture = {
+  mode: V14dFaceStaticMode;
+  frame: number;
+  state: number;
+  blend: number;
+  cameraLocked: boolean;
+  paused: boolean;
+  texture: string;
+  width: number;
+  height: number;
+  /** Face 材质名映射推导出的 pick ID；门控失败时为 null，不硬编码。 */
+  faceMaterialId: number | null;
+  faceMaterialName: string;
+  /** 权威资产门控是否通过（PMX/VMD/派生纹理可追溯）。 */
+  authorityOk: boolean;
+  roi: { px: [number, number, number, number]; samples: number; faceSamples: number };
+  /** 脸部 ROI (Face 材质 ID + 模型覆盖 + 深度前景) 的显示 sRGB 与线性均值。 */
+  meanSrgb: [number, number, number] | null;
+  meanLinear: [number, number, number] | null;
+  error?: string;
+};
 
 type RezeStageProps = {
   modelUrl: string;
@@ -105,6 +151,9 @@ type RezeStageProps = {
   v14dUnlitDiagnostic?: boolean;
   /** 仅用于 V14D 三层颜色基线取证；默认关闭，不改变生产渲染路径。 */
   v14dColorBaseline?: boolean;
+  /** 仅用于 V14D Face State 2 静态黄金帧预览；默认关闭，不改变生产渲染路径。 */
+  v14dFaceStatic?: boolean;
+  v14dFaceStaticMode?: V14dFaceStaticMode;
   /** true 时 WebGPU 画布透明，由页面 MIO CSS 背景透出；false 用场景背景色。 */
   transparentBackground?: boolean;
   cameraSnapshot?: MmdCameraSnapshot | null;
@@ -160,15 +209,33 @@ const V14D_UNLIT_MATERIAL_GROUPS = [
   },
 ] as const;
 
+/**
+ * V14D Face State 2 静态预览图：只输出引擎已绑定的 Face diffuse 纹理
+ * （该纹理由自定义 AssetReader 在 faceStatic 模式下重定向到预烘焙合成图）。
+ * 与 Stage 1 unlit 同口径 —— 纯纹理采样，无灯光/法线/toon/AgX。
+ */
+const V14D_FACE_STATIC_GRAPH: ShaderGraph = {
+  version: 1,
+  name: "V14D Face Static State2",
+  tags: ["diagnostic", "v14d", "face-static"],
+  nodes: [{ id: "tex", type: "texture" }],
+  links: [],
+  output: { node: "tex", socket: "color" },
+};
+
 type RezeStyleGroup = ReturnType<Engine["getStyleGroups"]>[number];
 
 function buildV14dUnlitStyleGroups(
   originalGroups: readonly RezeStyleGroup[],
   modelMaterialNames: ReadonlySet<string>,
+  excludeFace = false,
 ) {
   const targetMaterials = new Set<string>(
     V14D_UNLIT_MATERIAL_GROUPS.flatMap((group) => group.materials),
   );
+  // faceStatic：Face 由 face-static 块单独套纯纹理 graph（三模式 A/B），
+  // 不进入全局 unlit 分组。
+  if (excludeFace) targetMaterials.delete(V14D_FACE_MATERIAL_NAME);
   const retainedGroups = originalGroups
     .map((group) => ({
       ...group,
@@ -410,7 +477,7 @@ function createV14dAnimationEvidence(
 }
 
 export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(function RezeWebGpuStage(
-  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, scenePreset = "reze-design", v14dUnlitDiagnostic = false, v14dColorBaseline = false, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
+  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, scenePreset = "reze-design", v14dUnlitDiagnostic = false, v14dColorBaseline = false, v14dFaceStatic = false, v14dFaceStaticMode = "normal", transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
   ref,
 ) {
   const pipelineDefaultSettings = scenePreset === "reze-k3" ? REZE_K3_SCENE_DEFAULTS : DEFAULT_SETTINGS;
@@ -432,6 +499,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   const vmdRequestGuardRef = useRef(createRezeVmdRequestGuard());
   const vmdIkPolicyCacheRef = useRef(new Map<string, ReturnType<typeof fetchRezeVmdIkPolicy>>());
   const v14dColorBaselineRef = useRef(v14dColorBaseline);
+  const v14dFaceStaticRef = useRef(v14dFaceStatic);
   const baselineOriginalStyleGroupsRef = useRef<RezeStyleGroup[] | null>(null);
   const baselineResultRef = useRef<V14dColorBaselineResult | null>(null);
   const baselineCapturePromiseRef = useRef<Promise<V14dColorBaselineResult> | null>(null);
@@ -446,6 +514,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   const onInteractionCompleteRef = useRef(onInteractionComplete);
   interactionRef.current = interaction;
   v14dColorBaselineRef.current = v14dColorBaseline;
+  v14dFaceStaticRef.current = v14dFaceStatic;
   backgroundEffectRef.current = backgroundEffect;
   gradeRef.current = grade;
   gradeIntensityRef.current = gradeIntensity;
@@ -464,7 +533,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   };
 
   const applyKoledaDefaultAppearance = (model: Awaited<ReturnType<Engine["loadModel"]>>) => {
-    const enabled = isKoledaModelIdentifier(modelIdentifier, modelUrl, localModelImport?.pmxFile?.name);
+    // faceStatic：权威 PMX 已强门控为 Koleda，外观/形变锁定与 Koleda 判定不依赖外部
+    // modelIdentifier/modelUrl（该模式下未传入 target modelUrl），强制视为 Koleda。
+    const enabled =
+      v14dFaceStatic || isKoledaModelIdentifier(modelIdentifier, modelUrl, localModelImport?.pmxFile?.name);
     if (!enabled) return;
 
     for (const [index, material] of model.getMaterials().entries()) {
@@ -985,6 +1057,125 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   };
   baselineCaptureFnRef.current = captureV14dColorBaseline;
 
+  /**
+   * V14D Face State 2 静态预览采集：固定单帧（frame120）后，用 Face 材质 ID
+   * pick mask + 模型覆盖 alpha + 深度前景隔离脸部 ROI，返回显示 sRGB/线性均值。
+   * 只读消费渲染结果，不写回动画 Runtime；生产路径不创建 pick 资源。
+   */
+  const captureV14dFaceStatic = async (): Promise<V14dFaceStaticCapture> => {
+    const canvas = canvasRef.current;
+    const engine = engineRef.current;
+    const model = modelRef.current;
+    const mode = v14dFaceStaticMode;
+    const texture = v14dFaceStaticTextureName(mode);
+    const base: V14dFaceStaticCapture = {
+      mode,
+      frame: V14D_FACE_STATIC_FRAME,
+      state: V14D_FACE_STATIC_STATE,
+      blend: V14D_FACE_STATIC_BLEND,
+      cameraLocked: true,
+      paused: true,
+      texture,
+      width: V14D_FACE_STATIC_SIZE,
+      height: V14D_FACE_STATIC_SIZE,
+      faceMaterialId: null,
+      faceMaterialName: V14D_FACE_MATERIAL_NAME,
+      authorityOk: false,
+      roi: { px: [0, 0, 0, 0], samples: 0, faceSamples: 0 },
+      meanSrgb: null,
+      meanLinear: null,
+    };
+    if (!canvas || !engine || !model || !v14dFaceStaticRef.current) {
+      return { ...base, error: "V14D Face Static 未启用或引擎未就绪。" };
+    }
+    try {
+      // Face pick ID 从材质名映射推导（不硬编码）：引擎 pick mask 只统计
+      // vertexCount>0 的材质，1-based，0=无命中。
+      const faceMaterialId = v14dFaceStaticFacePickId(
+        model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount })),
+      );
+      if (faceMaterialId === null) {
+        return { ...base, error: `未在 PMX 材质中找到权威 Face 材质（${V14D_FACE_MATERIAL_NAME}）。` };
+      }
+      base.faceMaterialId = faceMaterialId;
+      base.authorityOk = true;
+      const materialMask = await readV14dColorBaselineMaterialMask(engine, V14D_FACE_STATIC_SIZE, V14D_FACE_STATIC_SIZE);
+      const display = await readV14dCanvasDisplay(canvas);
+      const [rx, ry, rw, rh] = V14D_FACE_STATIC_ROI_NORM;
+      const x0 = Math.floor(rx * V14D_FACE_STATIC_SIZE);
+      const y0 = Math.floor(ry * V14D_FACE_STATIC_SIZE);
+      const x1 = Math.min(V14D_FACE_STATIC_SIZE - 1, Math.ceil((rx + rw) * V14D_FACE_STATIC_SIZE) - 1);
+      const y1 = Math.min(V14D_FACE_STATIC_SIZE - 1, Math.ceil((ry + rh) * V14D_FACE_STATIC_SIZE) - 1);
+      let samples = 0;
+      let faceSamples = 0;
+      const srgbSum = [0, 0, 0];
+      const linearSum = [0, 0, 0];
+      for (let y = y0; y <= y1; y += 1) {
+        for (let x = x0; x <= x1; x += 1) {
+          samples += 1;
+          const off = (y * V14D_FACE_STATIC_SIZE + x) * 4;
+          const modelId = materialMask.data[off];
+          const matId = materialMask.data[off + 1];
+          if (modelId === 0 || matId !== faceMaterialId) continue;
+          faceSamples += 1;
+          const r = display.data[off];
+          const g = display.data[off + 1];
+          const b = display.data[off + 2];
+          srgbSum[0] += r; srgbSum[1] += g; srgbSum[2] += b;
+          linearSum[0] += srgbToLinear(r); linearSum[1] += srgbToLinear(g); linearSum[2] += srgbToLinear(b);
+        }
+      }
+      if (faceSamples > 0) {
+        base.meanSrgb = [srgbSum[0] / faceSamples, srgbSum[1] / faceSamples, srgbSum[2] / faceSamples];
+        base.meanLinear = [linearSum[0] / faceSamples, linearSum[1] / faceSamples, linearSum[2] / faceSamples];
+      }
+      base.roi = { px: [x0, y0, x1 - x0 + 1, y1 - y0 + 1], samples, faceSamples };
+      return base;
+    } catch (error) {
+      return { ...base, error: error instanceof Error ? error.message : String(error) };
+    }
+  };
+
+  /** 导出脸部像素 mask（PNG base64）：Face 材质命中像素=白，其余=黑。
+   *  供同口径分量 Gate 在 Blender 参考图上复用同一脸部像素定义量化。 */
+  const exportV14dFaceMaskPng = async (): Promise<string | null> => {
+    const engine = engineRef.current;
+    const model = modelRef.current;
+    if (!engine || !model || !v14dFaceStaticRef.current) return null;
+    try {
+      const faceMaterialId = v14dFaceStaticFacePickId(
+        model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount })),
+      );
+      if (faceMaterialId === null) return null;
+      const materialMask = await readV14dColorBaselineMaterialMask(engine, V14D_FACE_STATIC_SIZE, V14D_FACE_STATIC_SIZE);
+      const c = document.createElement("canvas");
+      c.width = V14D_FACE_STATIC_SIZE; c.height = V14D_FACE_STATIC_SIZE;
+      const ctx = c.getContext("2d");
+      if (!ctx) return null;
+      const img = ctx.createImageData(V14D_FACE_STATIC_SIZE, V14D_FACE_STATIC_SIZE);
+      for (let i = 0; i < V14D_FACE_STATIC_SIZE * V14D_FACE_STATIC_SIZE; i += 1) {
+        const off = i * 4;
+        const isFace = materialMask.data[off] !== 0 && materialMask.data[off + 1] === faceMaterialId;
+        const v = isFace ? 255 : 0;
+        img.data[off] = v; img.data[off + 1] = v; img.data[off + 2] = v; img.data[off + 3] = 255;
+      }
+      ctx.putImageData(img, 0, 0);
+      return c.toDataURL("image/png").split(",")[1] ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    if (!v14dFaceStatic) return;
+    window.__v14dFaceStatic = { capture: () => captureV14dFaceStatic(), exportFaceMaskPng: () => exportV14dFaceMaskPng() };
+    return () => {
+      if (window.__v14dFaceStatic) delete window.__v14dFaceStatic;
+    };
+    // captureV14dFaceStatic 读取最新 ref/mode，稳定引用即可。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [v14dFaceStatic]);
+
   useImperativeHandle(ref, () => ({
     unlockCamera: () => {
       readRezeCamera(engineRef.current)?.setInputLocked(false);
@@ -1112,7 +1303,8 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !modelUrl) return;
+    // faceStatic：资产经注入（File）提供，不依赖 modelUrl，故空 modelUrl 也要启动 boot。
+    if (!canvas || (!modelUrl && !v14dFaceStatic)) return;
     let disposed = false;
     const initialSettings = sceneSettings ?? pipelineDefaultSettings;
     const effectiveInitialSettings = v14dColorBaseline ? REZE_K3_SCENE_DEFAULTS : initialSettings;
@@ -1143,30 +1335,74 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         },
         // 仅为颜色基线诊断启用引擎已有的材质 pick 资源；生产路径不创建
         // pick draw call，也不改变生产材质 shader 或灯光行为。
-        onRaycast: v14dColorBaseline ? () => undefined : undefined,
+        onRaycast: v14dColorBaseline || v14dFaceStatic ? () => undefined : undefined,
       });
       engineRef.current = engine;
       await engine.init();
       if (disposed) return;
       engineReadyRef.current = true;
-      if (v14dColorBaseline) {
+      if (v14dFaceStatic) {
+        engine.setRenderSize(V14D_FACE_STATIC_SIZE, V14D_FACE_STATIC_SIZE);
+      } else if (v14dColorBaseline) {
         engine.setRenderSize(V14D_COLOR_BASELINE_WIDTH, V14D_COLOR_BASELINE_HEIGHT);
       }
       defaultIkEnabledRef.current = engine.getIKEnabled?.() ?? true;
       const initialBackgroundEffect = await engine.setBackgroundEffect(
-        v14dColorBaseline || backgroundEffectRef.current === "关闭" || backgroundEffectRef.current !== "Shining Stars"
+        v14dColorBaseline || v14dFaceStatic || backgroundEffectRef.current === "关闭" || backgroundEffectRef.current !== "Shining Stars"
           ? null
           : REZE_SHINING_STARS_WGSL,
       );
       if (!initialBackgroundEffect.ok) throw new Error(`Shining Stars 背景编译失败：${initialBackgroundEffect.diagnostics.join("; ")}`);
-      const model = localModelImport
-        ? await engine.loadModel("companion", { files: localModelImport.files, pmxFile: localModelImport.pmxFile })
-        : await engine.loadModel("companion", modelUrl);
+      let model: Awaited<ReturnType<Engine["loadModel"]>>;
+      if (v14dFaceStatic) {
+        // V14D Face State 2 静态预览：权威 PMX/纹理/VMD 与派生纹理以 File 注入，
+        // 引擎 files 变体用 createFileMapAssetReader 完全局部解析（无网络、无 404、
+        // 不全局包装 window.fetch）。仓库不捆绑第三方资产（README 资产政策）。
+        // 强门控：pmxFile 必须是权威 Koleda PMX，否则抛错不静默回退。
+        // 资产由 addInitScript/用户注入，可能晚于 boot；轮询等待其就绪（有界 30s）。
+        let assets = window.__v14dFaceStaticAssets;
+        const waitStart = Date.now();
+        while (!assets && Date.now() - waitStart < 30000) {
+          await new Promise((r) => setTimeout(r, 100));
+          if (disposed) return;
+          assets = window.__v14dFaceStaticAssets;
+        }
+        if (!assets) {
+          throw new Error(
+            "v14dFaceStatic 需要权威资产集（window.__v14dFaceStaticAssets）：由采集脚本注入或用户 folder 选择提供。",
+          );
+        }
+        if (assets.pmxFile.name !== V14D_FACE_STATIC_AUTHORITY.pmxFileName) {
+          throw new Error(
+            `v14dFaceStatic 仅支持权威 Koleda PMX（${V14D_FACE_STATIC_AUTHORITY.pmxFileName}），收到 ${assets.pmxFile.name}`,
+          );
+        }
+        // 派生/原始 Face diffuse：按当前模式选纹理（faceTextures 优先，否则单一 faceOverride），
+        // 覆盖 face_d 逻辑键后并入模型文件列表。
+        const faceOverride = assets.faceTextures?.[v14dFaceStaticMode] ?? assets.faceOverride ?? null;
+        const modelFiles = faceOverride
+          ? [...assets.modelFiles, faceOverride]
+          : assets.modelFiles;
+        model = await engine.loadModel("companion", {
+          files: modelFiles,
+          pmxFile: assets.pmxFile,
+        });
+        if (canvasRef.current) {
+          canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.texture] =
+            v14dFaceStaticTextureName(v14dFaceStaticMode);
+        }
+      } else if (localModelImport) {
+        model = await engine.loadModel("companion", { files: localModelImport.files, pmxFile: localModelImport.pmxFile });
+      } else {
+        model = await engine.loadModel("companion", modelUrl);
+      }
       if (disposed) return;
       modelRef.current = model;
       applyKoledaDefaultAppearance(model);
       setRezeVmdCompletionHandler(model, (finishedName: string) => handleRezeVmdFinished(model, finishedName));
-      const isKoleda = isKoledaModelIdentifier(modelIdentifier, modelUrl, localModelImport?.pmxFile?.name);
+      // faceStatic：权威 PMX 已强门控为 Koleda，材质预设/分组不依赖外部 modelIdentifier/modelUrl。
+      const isKoleda =
+        v14dFaceStatic || isKoledaModelIdentifier(modelIdentifier, modelUrl, localModelImport?.pmxFile?.name);
       const koledaFaceAndBodyMaterials = isKoleda
         ? model.getMaterials().map((material) => material.name).filter(isKoledaFaceOrBodyMaterialName)
         : [];
@@ -1181,7 +1417,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       }));
       if (v14dUnlitDiagnostic) {
         const modelMaterialNames = new Set(model.getMaterials().map((material) => material.name));
-        const unlitPlan = buildV14dUnlitStyleGroups(originalStyleGroups, modelMaterialNames);
+        const unlitPlan = buildV14dUnlitStyleGroups(originalStyleGroups, modelMaterialNames, v14dFaceStatic);
         if (canvasRef.current) {
           canvasRef.current.dataset.v14dUnlitDiagnostic = "true";
           canvasRef.current.dataset.v14dUnlitGraph = V14D_MATERIAL_UNLIT_DIAGNOSTIC_GRAPH.name;
@@ -1196,6 +1432,31 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           }
         }
       }
+      if (v14dFaceStatic) {
+        // 三个模式（normal/faceShadowOnly/finalFaceComposite）都只把 Face 材质切到
+        // 纯纹理 unlit graph，仅纹理不同（原始 face_d / 衰减图 / 合成图），
+        // 保证「只有 Face 纹理变化」的严格 A/B；其余材质保持 reze-k3 正常分组，
+        // 不套全局 unlit。Face 不再随 v14dUnlitDiagnostic 的全局 graph 走。
+        const faceGroups = originalStyleGroups.map((group) => ({
+          ...group,
+          materials: group.materials.filter((name) => name !== V14D_FACE_MATERIAL_NAME),
+        })).filter((group) => group.materials.length > 0);
+        const faceResult = await engine.applyStyleGroups("companion", [
+          ...faceGroups,
+          {
+            id: "v14d-face-static",
+            label: "V14D Face Static State2",
+            materials: [V14D_FACE_MATERIAL_NAME],
+            graph: V14D_FACE_STATIC_GRAPH,
+          },
+        ]);
+        if (canvasRef.current) {
+          canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.faceMaterialApplied] = String(faceResult.ok);
+        }
+        if (!faceResult.ok) {
+          console.warn("[v14d-face-static] Face 材质 graph 应用失败", faceResult);
+        }
+      }
       if (isKoleda) {
         for (const [index, material] of model.getMaterials().entries()) {
           if (!isKoledaFaceOrBodyMaterialName(material.name)) continue;
@@ -1204,9 +1465,12 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         }
       }
       if (disposed) return;
-      if (v14dColorBaseline) applySceneSettings(effectiveInitialSettings);
+      if (v14dColorBaseline || v14dFaceStatic) applySceneSettings(effectiveInitialSettings);
       else applySceneSettings(initialSettings);
-      if (v14dColorBaseline) {
+      if (v14dFaceStatic) {
+        restorePersistedCamera(V14D_FACE_STATIC_CAMERA);
+        readRezeCamera(engine)?.setInputLocked(true);
+      } else if (v14dColorBaseline) {
         restorePersistedCamera(V14D_COLOR_BASELINE_CAMERA);
         readRezeCamera(engine)?.setInputLocked(true);
       } else {
@@ -1214,40 +1478,63 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       }
       applyGrade(gradeRef.current, gradeIntensityRef.current);
       const initialInteraction = interactionRef.current;
-      if (initialInteraction.mode === "vmd" && initialInteraction.vmdUrl) {
+      // faceStatic：用注入的权威 VMD File（对象 URL），不经网络 URL。
+      const faceStaticVmdUrl =
+        v14dFaceStatic && window.__v14dFaceStaticAssets?.vmdFile
+          ? URL.createObjectURL(window.__v14dFaceStaticAssets.vmdFile)
+          : null;
+      const effectiveVmdUrl: string = v14dFaceStatic
+        ? faceStaticVmdUrl ?? ""
+        : initialInteraction.vmdUrl || "";
+      if (effectiveVmdUrl) {
         const requestId = vmdRequestGuardRef.current.begin();
-        const name = initialInteraction.vmdUrl.split("/").pop() || "motion.vmd";
+        const vmdSrc = effectiveVmdUrl;
+        const name = v14dFaceStatic
+          ? V14D_FACE_STATIC_AUTHORITY.vmdFileName
+          : vmdSrc.split("/").pop() || "motion.vmd";
         const [policy] = await Promise.all([
-          readRezeVmdIkPolicy(initialInteraction.vmdUrl),
-          model.loadVmd(name, initialInteraction.vmdUrl),
+          readRezeVmdIkPolicy(vmdSrc),
+          model.loadVmd(name, vmdSrc),
         ]);
         if (disposed || !vmdRequestGuardRef.current.isCurrent(requestId)) return;
         applyVmdIkPolicy(engine, policy);
         baselineVmdLoadedRef.current = true;
-        if (v14dColorBaseline) {
+        if (v14dColorBaseline || v14dFaceStatic) {
           // loadVmd() 只登记剪辑；必须先把它设为当前动作，seek() 才会
           // 写入 frame 120。否则固定单帧诊断会继续渲染绑定姿态。
           playRezeVmd(model, name);
-          model.seek(V14D_COLOR_BASELINE_SECONDS);
+          model.seek(v14dFaceStatic ? V14D_FACE_STATIC_SECONDS : V14D_COLOR_BASELINE_SECONDS);
           model.pause();
-          currentVmdUrlRef.current = initialInteraction.vmdUrl;
+          currentVmdUrlRef.current = vmdSrc;
         } else {
           playRezeVmd(model, name);
-          currentVmdUrlRef.current = initialInteraction.vmdUrl;
-          armRezeVmdCompletionFallback(model, name, initialInteraction.vmdUrl);
+          currentVmdUrlRef.current = vmdSrc;
+          armRezeVmdCompletionFallback(model, name, vmdSrc);
         }
         engine.resetPhysics();
       }
-      if (v14dColorBaseline) {
+      if (v14dColorBaseline || v14dFaceStatic) {
         engine.stopRenderLoop();
         model.pause();
         engine.renderFrame(0);
       } else {
         engine.runRenderLoop();
       }
+      if (v14dFaceStatic && canvasRef.current) {
+        const canvas = canvasRef.current;
+        canvas.dataset[V14D_FACE_STATIC_DATASET.enabled] = "true";
+        canvas.dataset[V14D_FACE_STATIC_DATASET.mode] = v14dFaceStaticMode;
+        canvas.dataset[V14D_FACE_STATIC_DATASET.frame] = String(V14D_FACE_STATIC_FRAME);
+        canvas.dataset[V14D_FACE_STATIC_DATASET.state] = String(V14D_FACE_STATIC_STATE);
+        canvas.dataset[V14D_FACE_STATIC_DATASET.blend] = V14D_FACE_STATIC_BLEND.toFixed(2);
+        canvas.dataset[V14D_FACE_STATIC_DATASET.cameraLocked] = "true";
+        canvas.dataset[V14D_FACE_STATIC_DATASET.paused] = "true";
+        canvas.dataset[V14D_FACE_STATIC_DATASET.authority] =
+          `${V14D_FACE_STATIC_AUTHORITY.pmxFileName}#${V14D_FACE_STATIC_AUTHORITY.vmdFileName}`;
+      }
       reportStatus(
         "ready",
-        `${localModelImport ? `已导入 ${localModelImport.pmxFile.name}` : "WebGPU 已就绪"} · ${model.getMaterials().length} 个 PMX 材质${v14dUnlitDiagnostic ? " · V14D Unlit 诊断" : ""}${v14dColorBaseline ? " · 白光颜色基线单帧" : ""}`,
+        `${localModelImport ? `已导入 ${localModelImport.pmxFile.name}` : "WebGPU 已就绪"} · ${model.getMaterials().length} 个 PMX 材质${v14dUnlitDiagnostic ? " · V14D Unlit 诊断" : ""}${v14dColorBaseline ? " · 白光颜色基线单帧" : ""}${v14dFaceStatic ? ` · V14D Face Static ${v14dFaceStaticMode} f${V14D_FACE_STATIC_FRAME}` : ""}`,
       );
     };
     void boot().catch((error: unknown) => {
@@ -1267,20 +1554,20 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       engineRef.current?.dispose();
       engineRef.current = null;
     };
-  }, [modelUrl, localModelImport, modelIdentifier, v14dUnlitDiagnostic, v14dColorBaseline, scenePreset]);
+  }, [modelUrl, localModelImport, modelIdentifier, v14dUnlitDiagnostic, v14dColorBaseline, v14dFaceStatic, v14dFaceStaticMode, scenePreset]);
 
   useEffect(() => {
-    if (v14dColorBaseline || !sceneSettings) return;
+    if (v14dColorBaseline || v14dFaceStatic || !sceneSettings) return;
     applySceneSettings(sceneSettings);
-  }, [sceneSettings, v14dColorBaseline]);
+  }, [sceneSettings, v14dColorBaseline, v14dFaceStatic]);
 
   useEffect(() => {
-    if (v14dColorBaseline) return;
+    if (v14dColorBaseline || v14dFaceStatic) return;
     restorePersistedCamera(cameraSnapshot);
-  }, [cameraSnapshot, v14dColorBaseline]);
+  }, [cameraSnapshot, v14dColorBaseline, v14dFaceStatic]);
 
   useEffect(() => {
-    if (v14dColorBaseline) return;
+    if (v14dColorBaseline || v14dFaceStatic) return;
     const engine = engineRef.current;
     if (!engine || !engineReadyRef.current) return;
     void engine.setBackgroundEffect(backgroundEffect === "Shining Stars" ? REZE_SHINING_STARS_WGSL : null).then((result) => {
@@ -1293,7 +1580,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   }, [grade, gradeIntensity]);
 
   useEffect(() => {
-    if (v14dColorBaseline) return;
+    // 固定单帧诊断（colorBaseline / faceStatic）在 boot 内一次性加载 VMD 并
+    // seek→pause→stopRenderLoop→renderFrame(0)，通用 VMD effect 不得再 play/resetPhysics。
+    if (v14dColorBaseline || v14dFaceStatic) return;
     const requestId = vmdRequestGuardRef.current.begin();
     const model = modelRef.current;
     if (!model || interaction.mode !== "vmd" || !interaction.vmdUrl) return;
@@ -1324,10 +1613,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       }
     };
     void load();
-  }, [interaction.mode, interaction.vmdUrl, interaction.playbackRate, interaction.vmdRequestId, v14dColorBaseline]);
+  }, [interaction.mode, interaction.vmdUrl, interaction.playbackRate, interaction.vmdRequestId, v14dColorBaseline, v14dFaceStatic]);
 
   useEffect(() => {
-    if (v14dColorBaseline) return;
+    if (v14dColorBaseline || v14dFaceStatic) return;
     if (interaction.mode === "vmd" && interaction.vmdUrl) return;
     clearVmdCompletionFallback();
     currentVmdUrlRef.current = "";
