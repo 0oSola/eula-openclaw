@@ -124,6 +124,7 @@ const MODE_LABEL: Record<V14dFaceStaticMode, string> = {
   normal: "正常基线",
   faceShadowOnly: "脸部阴影分量",
   finalFaceComposite: "最终脸部合成",
+  uvDebug: "UV 调试",
 };
 
 const FACE_D_KEY = "Textures/c_Koleda_slg_face_d.png";
@@ -400,7 +401,7 @@ export default function MmdCalibrationRenderPage() {
         >
           {`V14D Static Golden Frame
 Frame ${V14D_FACE_STATIC_FRAME} · Face State ${V14D_FACE_STATIC_STATE} · Blend ${V14D_FACE_STATIC_BLEND.toFixed(2)}
-Mode ${faceStaticMode} · tex ${V14D_FACE_STATIC_MODE_TEXTURE[faceStaticMode]}
+Mode ${faceStaticMode} · tex ${faceStaticMode === "uvDebug" ? "uv-debug" : V14D_FACE_STATIC_MODE_TEXTURE[faceStaticMode]}
 Camera Locked · Animation Paused
 静态脸部合成分量预览 · 不代表完整 Blender 最终视觉`}
         </div>

@@ -89,6 +89,7 @@ declare global {
     __v14dFaceStatic?: {
       capture: () => Promise<V14dFaceStaticCapture>;
       exportFaceMaskPng: () => Promise<string | null>;
+      exportFaceUvPng: () => Promise<string | null>;
     };
     /** faceStatic 注入的权威资产集（File 形式，引擎 files 变体局部解析）。 */
     __v14dFaceStaticAssets?: V14dFaceStaticAssetSource;
@@ -221,6 +222,21 @@ const V14D_FACE_STATIC_GRAPH: ShaderGraph = {
   nodes: [{ id: "tex", type: "texture" }],
   links: [],
   output: { node: "tex", socket: "color" },
+};
+
+/**
+ * V14D Face 静态 UV 调试图：只输出 Face 材质的插值 UV（R=u, G=v, B=0）。
+ * 与 V14D_FACE_STATIC_GRAPH 同一条渲染管线、同一几何/相机/pick mask，
+ * 只是 fragment 用 `input.uv` 替代纹理采样，供 UV-direct 逐纹素对账读取
+ * 每个脸部像素在 Web 侧实际使用的 UV 坐标。仅诊断，不改变生产渲染。
+ */
+const V14D_FACE_UV_DEBUG_GRAPH: ShaderGraph = {
+  version: 1,
+  name: "V14D Face UV Debug",
+  tags: ["diagnostic", "v14d", "face-static", "uv"],
+  nodes: [{ id: "uv", type: "geometry" }],
+  links: [],
+  output: { node: "uv", socket: "uv" },
 };
 
 type RezeStyleGroup = ReturnType<Engine["getStyleGroups"]>[number];
@@ -1166,9 +1182,50 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     }
   };
 
+  /**
+   * 导出 Face 材质逐像素插值 UV（R=u, G=v, B=0）的 PNG base64。
+   * 与 exportV14dFaceMaskPng 用同一 Face pick mask 隔离脸部像素；
+   * 仅在 faceStatic 模式且 Face 已切到 V14D_FACE_UV_DEBUG_GRAPH 时有意义。
+   * 供 UV-direct 对账读取 Web 侧每个脸部像素实际使用的 UV 坐标。
+   */
+  const exportV14dFaceUvPng = async (): Promise<string | null> => {
+    const engine = engineRef.current;
+    const model = modelRef.current;
+    const canvas = canvasRef.current;
+    if (!engine || !model || !canvas || !v14dFaceStaticRef.current) return null;
+    try {
+      const faceMaterialId = v14dFaceStaticFacePickId(
+        model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount })),
+      );
+      if (faceMaterialId === null) return null;
+      const materialMask = await readV14dColorBaselineMaterialMask(engine, V14D_FACE_STATIC_SIZE, V14D_FACE_STATIC_SIZE);
+      const display = await readV14dCanvasDisplay(canvas);
+      const c = document.createElement("canvas");
+      c.width = V14D_FACE_STATIC_SIZE; c.height = V14D_FACE_STATIC_SIZE;
+      const ctx = c.getContext("2d");
+      if (!ctx) return null;
+      const img = ctx.createImageData(V14D_FACE_STATIC_SIZE, V14D_FACE_STATIC_SIZE);
+      for (let i = 0; i < V14D_FACE_STATIC_SIZE * V14D_FACE_STATIC_SIZE; i += 1) {
+        const off = i * 4;
+        const isFace = materialMask.data[off] !== 0 && materialMask.data[off + 1] === faceMaterialId;
+        const u = isFace ? Math.round(Math.max(0, Math.min(255, display.data[off] * 255))) : 0;
+        const v = isFace ? Math.round(Math.max(0, Math.min(255, display.data[off + 1] * 255))) : 0;
+        img.data[off] = u; img.data[off + 1] = v; img.data[off + 2] = 0; img.data[off + 3] = 255;
+      }
+      ctx.putImageData(img, 0, 0);
+      return c.toDataURL("image/png").split(",")[1] ?? null;
+    } catch {
+      return null;
+    }
+  };
+
   useEffect(() => {
     if (!v14dFaceStatic) return;
-    window.__v14dFaceStatic = { capture: () => captureV14dFaceStatic(), exportFaceMaskPng: () => exportV14dFaceMaskPng() };
+    window.__v14dFaceStatic = {
+      capture: () => captureV14dFaceStatic(),
+      exportFaceMaskPng: () => exportV14dFaceMaskPng(),
+      exportFaceUvPng: () => exportV14dFaceUvPng(),
+    };
     return () => {
       if (window.__v14dFaceStatic) delete window.__v14dFaceStatic;
     };
@@ -1379,7 +1436,11 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         }
         // 派生/原始 Face diffuse：按当前模式选纹理（faceTextures 优先，否则单一 faceOverride），
         // 覆盖 face_d 逻辑键后并入模型文件列表。
-        const faceOverride = assets.faceTextures?.[v14dFaceStaticMode] ?? assets.faceOverride ?? null;
+        // uvDebug 模式不需要纹理（Face 只输出 UV），用原始 face_d 占位即可。
+        const isUvDebug = v14dFaceStaticMode === "uvDebug";
+        const faceOverride = isUvDebug
+          ? assets.faceTextures?.normal ?? assets.faceOverride ?? null
+          : (assets.faceTextures?.[v14dFaceStaticMode] ?? assets.faceOverride ?? null);
         const modelFiles = faceOverride
           ? [...assets.modelFiles, faceOverride]
           : assets.modelFiles;
@@ -1389,7 +1450,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         });
         if (canvasRef.current) {
           canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.texture] =
-            v14dFaceStaticTextureName(v14dFaceStaticMode);
+            isUvDebug ? "uv-debug" : v14dFaceStaticTextureName(v14dFaceStaticMode);
         }
       } else if (localModelImport) {
         model = await engine.loadModel("companion", { files: localModelImport.files, pmxFile: localModelImport.pmxFile });
@@ -1437,6 +1498,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         // 纯纹理 unlit graph，仅纹理不同（原始 face_d / 衰减图 / 合成图），
         // 保证「只有 Face 纹理变化」的严格 A/B；其余材质保持 reze-k3 正常分组，
         // 不套全局 unlit。Face 不再随 v14dUnlitDiagnostic 的全局 graph 走。
+        // uvDebug 模式只输出 Face 的插值 UV（几何节点），供 UV-direct 对账。
+        const faceGraph =
+          v14dFaceStaticMode === "uvDebug" ? V14D_FACE_UV_DEBUG_GRAPH : V14D_FACE_STATIC_GRAPH;
         const faceGroups = originalStyleGroups.map((group) => ({
           ...group,
           materials: group.materials.filter((name) => name !== V14D_FACE_MATERIAL_NAME),
@@ -1447,7 +1511,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             id: "v14d-face-static",
             label: "V14D Face Static State2",
             materials: [V14D_FACE_MATERIAL_NAME],
-            graph: V14D_FACE_STATIC_GRAPH,
+            graph: faceGraph,
           },
         ]);
         if (canvasRef.current) {

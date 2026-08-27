@@ -136,7 +136,7 @@ type MMDStageProps = {
   v14dUnlitDiagnostic?: boolean;
   v14dColorBaseline?: boolean;
   v14dFaceStatic?: boolean;
-  v14dFaceStaticMode?: "normal" | "faceShadowOnly" | "finalFaceComposite";
+  v14dFaceStaticMode?: "normal" | "faceShadowOnly" | "finalFaceComposite" | "uvDebug";
   rezeTransparentBackground?: boolean;
 };
 

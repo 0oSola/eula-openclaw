@@ -67,7 +67,13 @@ export const V14D_FACE_STATIC_MODE_TEXTURE = {
   faceShadowOnly: V14D_FACE_STATIC_DERIVED.attenuation,
 } as const;
 
-export type V14dFaceStaticMode = keyof typeof V14D_FACE_STATIC_MODE_TEXTURE;
+/**
+ * 诊断模式：Face 材质输出插值 UV（R=u, G=v, B=0），不采样纹理。
+ * 仅供 UV-direct 逐纹素对账；不改变三模式语义，默认关闭。
+ */
+export const V14D_FACE_UV_DEBUG_MODE = "uvDebug";
+
+export type V14dFaceStaticMode = keyof typeof V14D_FACE_STATIC_MODE_TEXTURE | typeof V14D_FACE_UV_DEBUG_MODE;
 
 export const V14D_FACE_STATIC_MODES: readonly V14dFaceStaticMode[] = [
   "normal",
@@ -76,16 +82,23 @@ export const V14D_FACE_STATIC_MODES: readonly V14dFaceStaticMode[] = [
 ];
 
 export function isV14dFaceStaticMode(value: string | null): value is V14dFaceStaticMode {
-  return value === "normal" || value === "faceShadowOnly" || value === "finalFaceComposite";
+  return (
+    value === "normal" ||
+    value === "faceShadowOnly" ||
+    value === "finalFaceComposite" ||
+    value === V14D_FACE_UV_DEBUG_MODE
+  );
 }
 
 /** 模式是否用派生纹理（normal 直接用 PMX 原始 face_d）。 */
 export function v14dFaceStaticIsDerivedMode(mode: V14dFaceStaticMode): boolean {
+  if (mode === V14D_FACE_UV_DEBUG_MODE) return false;
   return mode !== "normal";
 }
 
 /** 模式对应的 Face diffuse 文件名（用于徽章/capture 显示与 fileMap 键）。 */
 export function v14dFaceStaticTextureName(mode: V14dFaceStaticMode): string {
+  if (mode === V14D_FACE_UV_DEBUG_MODE) return "uv-debug";
   return V14D_FACE_STATIC_MODE_TEXTURE[mode];
 }
 
