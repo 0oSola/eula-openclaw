@@ -22,9 +22,9 @@ try {
     const c = document.querySelector("canvas");
     const badge = document.querySelector("[data-testid='v14d-face-static-badge']");
     const main = document.querySelector("[data-testid='mmd-calibration-render']");
-    return { faceStaticCanvas: (c && c.dataset.v14dFaceStatic) ?? "(unset)", faceStaticMain: (main && main.dataset.v14dFaceStatic) ?? "(unset)", badgePresent: Boolean(badge), assetsInjected: Boolean(window.__v14dFaceStaticAssets) };
+    return { faceStaticCanvas: (c && c.dataset.v14dFaceStatic) ?? "(unset)", faceStaticMain: (main && main.dataset.v14dFaceStatic) ?? "(unset)", badgePresent: Boolean(badge), assetsInjected: Boolean(window.__v14dFaceStaticAssets), probePresent: Boolean(window.__rezeEngineProbe) };
   });
-  const pass = result.faceStaticCanvas === "(unset)" && result.faceStaticMain === "false" && !result.badgePresent && !result.assetsInjected && derivedReqs.length === 0 && pageErrors.length === 0;
+  const pass = result.faceStaticCanvas === "(unset)" && result.faceStaticMain === "false" && !result.badgePresent && !result.assetsInjected && !result.probePresent && derivedReqs.length === 0 && pageErrors.length === 0;
   console.log(JSON.stringify({ pass, result, derivedReqs, httpBad, pageErrors }, null, 2));
   console.log(pass ? "===DEFAULT-GATING-OK===" : "===DEFAULT-GATING-FAIL===");
   if (!pass) process.exitCode = 1;

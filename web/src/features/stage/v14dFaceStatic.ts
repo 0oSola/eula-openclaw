@@ -57,6 +57,26 @@ export const V14D_FACE_STATIC_DERIVED = {
   attenuation: "v14d-face-shadow-attenuation-state2.png",
 } as const;
 
+/** 黄金帧可见岛逐材质烘焙纹理（Blender frame120 BaseColor 反照率,发射+mask 法）。 */
+export const V14D_BAKED_TEXTURES = {
+  face: "baked_face.png",
+  hairA: "baked_hairA.png",
+  hairB: "baked_hairB.png",
+  body: "baked_body.png",
+  top: "baked_top.png",
+  cape: "baked_cape.png",
+} as const;
+
+/** 烘焙纹理 -> PMX 材质逻辑名（webkitRelativePath 覆盖键）。 */
+export const V14D_BAKED_MATERIAL_MAP: Readonly<Record<string, string>> = {
+  face: "Textures/c_Koleda_slg_face_d.png",
+  hairA: "Textures/c_KoledaSSR01_slg_hair_d.png",
+  hairB: "Textures/c_KoledaSSR01_slg_hair_d.png",
+  body: "Textures/body_d.png",
+  top: "Textures/c_KoledaSSR01_slg_cloth1_da.png",
+  cape: "Textures/c_KoledaSSR01_slg_cloth1_da.png",
+};
+
 /**
  * 三模式 -> Face 材质 diffuse 应使用的文件名。
  * normal 用 PMX 包内原始 face_d；另两模式用本地派生文件（覆盖 face_d 逻辑名）。
@@ -76,12 +96,15 @@ export const V14D_FACE_UV_DEBUG_MODE = "uvDebug";
 export const V14D_FACE_STATIC_WORLD_POS_MODE = "worldPos";
 /** 黄金帧材质验证模式：所有材质输出 material_diffuse 颜色（无光照）。 */
 export const V14D_FACE_STATIC_DIFFUSE_MODE = "diffuseFlat";
+/** 黄金帧烘焙模式：可见岛逐材质 unlit 显示 Blender frame120 烘焙纹理。 */
+export const V14D_FACE_STATIC_BAKED_MODE = "bakedGolden";
 
 export type V14dFaceStaticMode =
   | keyof typeof V14D_FACE_STATIC_MODE_TEXTURE
   | typeof V14D_FACE_UV_DEBUG_MODE
   | typeof V14D_FACE_STATIC_WORLD_POS_MODE
-  | typeof V14D_FACE_STATIC_DIFFUSE_MODE;
+  | typeof V14D_FACE_STATIC_DIFFUSE_MODE
+  | typeof V14D_FACE_STATIC_BAKED_MODE;
 
 export const V14D_FACE_STATIC_MODES: readonly V14dFaceStaticMode[] = [
   "normal",
@@ -96,7 +119,8 @@ export function isV14dFaceStaticMode(value: string | null): value is V14dFaceSta
     value === "finalFaceComposite" ||
     value === V14D_FACE_UV_DEBUG_MODE ||
     value === V14D_FACE_STATIC_WORLD_POS_MODE ||
-    value === V14D_FACE_STATIC_DIFFUSE_MODE
+    value === V14D_FACE_STATIC_DIFFUSE_MODE ||
+    value === V14D_FACE_STATIC_BAKED_MODE
   );
 }
 
@@ -111,6 +135,7 @@ export function v14dFaceStaticTextureName(mode: V14dFaceStaticMode): string {
   if (mode === V14D_FACE_UV_DEBUG_MODE) return "uv-debug";
   if (mode === V14D_FACE_STATIC_WORLD_POS_MODE) return "world-pos";
   if (mode === V14D_FACE_STATIC_DIFFUSE_MODE) return "diffuse-flat";
+  if (mode === V14D_FACE_STATIC_BAKED_MODE) return "baked-golden";
   return V14D_FACE_STATIC_MODE_TEXTURE[mode];
 }
 
@@ -190,4 +215,6 @@ export type V14dFaceStaticAssetSource = {
   faceOverride: File | null;
   /** 三模式各自的 Face diffuse 纹理（页面 UI 一次提供三张，运行时按模式选用；与 faceOverride 二选一）。 */
   faceTextures?: Partial<Record<V14dFaceStaticMode, File>>;
+  /** 黄金帧烘焙纹理（bakedGolden 模式）：逐材质 baked_* File，运行时按 V14D_BAKED_MATERIAL_MAP 覆盖。 */
+  bakedTextures?: Partial<Record<keyof typeof V14D_BAKED_TEXTURES, File>>;
 };

@@ -16,6 +16,8 @@ import {
   V14D_FACE_STATIC_FRAME,
   V14D_FACE_STATIC_AUTHORITY,
   V14D_FACE_STATIC_DERIVED,
+  V14D_BAKED_MATERIAL_MAP,
+  V14D_BAKED_TEXTURES,
   V14D_FACE_STATIC_MODES,
   V14D_FACE_MATERIAL_NAME,
   isV14dFaceStaticMode,
@@ -131,7 +133,8 @@ const MODE_LABEL: Record<V14dFaceStaticMode, string> = {
   finalFaceComposite: "最终脸部合成",
   uvDebug: "UV 调试",
   worldPos: "世界坐标调试",
-  diffuseFlat: "无光照 diffuse 调试",
+  diffuseFlat: "无光照漫反射调试",
+  bakedGolden: "反照率烘焙诊断（失败实验）",
 };
 
 const FACE_D_KEY = "Textures/c_Koleda_slg_face_d.png";
@@ -151,6 +154,7 @@ function FaceStaticAssetPanel(props: {
   const [vmdFile, setVmdFile] = useState<File | null>(null);
   const [compositeFile, setCompositeFile] = useState<File | null>(null);
   const [attenuationFile, setAttenuationFile] = useState<File | null>(null);
+  const [bakedDir, setBakedDir] = useState<FileList | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -189,6 +193,18 @@ function FaceStaticAssetPanel(props: {
         faceShadowOnly: withRel(attenuationFile, FACE_D_KEY),
       },
     };
+    // 黄金帧烘焙纹理（可选）：选择包含 baked_*.png 的目录后按材质逻辑名覆盖。
+    if (bakedDir && bakedDir.length) {
+      const baked: Partial<Record<string, File>> = {};
+      for (const f of Array.from(bakedDir)) {
+        for (const [key, filename] of Object.entries(V14D_BAKED_TEXTURES)) {
+          if (f.name === filename) {
+            baked[key] = withRel(f, V14D_BAKED_MATERIAL_MAP[key]);
+          }
+        }
+      }
+      source.bakedTextures = baked as V14dFaceStaticAssetSource["bakedTextures"];
+    }
     return { source, missing: [] };
   };
 
@@ -263,6 +279,17 @@ function FaceStaticAssetPanel(props: {
           <div style={{ marginBottom: 4 }}>4. 派生阴影分量图（{V14D_FACE_STATIC_DERIVED.attenuation}）</div>
           <input data-testid="v14d-face-attenuation-input" type="file" accept="image/png" onChange={(e) => setAttenuationFile(e.target.files?.[0] ?? null)} />
         </label>
+        <label style={{ display: "block", marginBottom: 14 }}>
+          <div style={{ marginBottom: 4 }}>5. 黄金帧烘焙纹理目录（baked_*.png，可选；选后启用「黄金帧烘焙」模式）</div>
+          <input
+            data-testid="v14d-baked-dir-input"
+            type="file"
+            // @ts-expect-error webkitdirectory 非标准属性
+            webkitdirectory=""
+            multiple
+            onChange={(e) => setBakedDir(e.target.files)}
+          />
+        </label>
 
         {missing.length ? (
           <div data-testid="v14d-face-missing" style={{ color: "#f2b8b8", marginBottom: 12, whiteSpace: "pre-wrap" }}>
@@ -301,7 +328,7 @@ function FaceStaticAssetPanel(props: {
 export default function MmdCalibrationRenderPage() {
   const [query, setQuery] = useState<CalibrationQuery | null>(null);
   const [faceStaticAssets, setFaceStaticAssets] = useState<FaceStaticAssetsState>({ status: "idle" });
-  const [faceStaticMode, setFaceStaticMode] = useState<V14dFaceStaticMode>("normal");
+  const [faceStaticMode, setFaceStaticMode] = useState<V14dFaceStaticMode>("finalFaceComposite");
 
   useEffect(() => {
     const q = readCalibrationQuery();
@@ -419,7 +446,7 @@ Camera Locked · Animation Paused
           data-testid="v14d-face-static-mode-bar"
           style={{ position: "fixed", left: 12, bottom: 12, zIndex: 10, display: "flex", gap: 8 }}
         >
-          {V14D_FACE_STATIC_MODES.map((m) => (
+          {[...V14D_FACE_STATIC_MODES, "bakedGolden" as const].map((m) => (
             <button
               key={m}
               type="button"

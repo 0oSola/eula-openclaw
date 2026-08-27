@@ -136,7 +136,7 @@ type MMDStageProps = {
   v14dUnlitDiagnostic?: boolean;
   v14dColorBaseline?: boolean;
   v14dFaceStatic?: boolean;
-  v14dFaceStaticMode?: "normal" | "faceShadowOnly" | "finalFaceComposite" | "uvDebug" | "worldPos" | "diffuseFlat";
+  v14dFaceStaticMode?: "normal" | "faceShadowOnly" | "finalFaceComposite" | "uvDebug" | "worldPos" | "diffuseFlat" | "bakedGolden";
   /** 黄金帧诊断 ROI/pick 门控：仅 finalFaceComposite 模式启用脸部取样口径。 */
   v14dFaceStaticGated?: boolean;
   rezeTransparentBackground?: boolean;

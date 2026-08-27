@@ -222,3 +222,12 @@
 - 禁止用法：不得由普通 Review `accept` 触发；不得在 marker 中决定 Obsidian 路径、主题身份或发布动作；不得把 candidate 声明为 canonical knowledge；不得在无知识变化时生成空包。
 - 路由影响：数据主链固定为 `Codex -> Pet -> FastAPI -> OpenClaw -> Obsidian`；FastAPI 负责 Repository Evidence 和 Gate，OpenClaw 负责双审核、Vault Topic Resolution、Accepted Wiki Change Set 和发布。
 - 完整定义：见 `workflow/concepts/codex-author-knowledge-handoff.zh-CN.md`。
+
+# 黄金帧反照率烘焙诊断（bakedGolden）
+
+- 英文机器名：`bakedGolden`（`v14dFaceMode=bakedGolden`）
+- 含义：V14D 固定黄金帧诊断入口下的一个**非默认**实验模式，把 Blender frame120 用「发射 + 逐材质 mask」法烘焙出的 **BaseColor 反照率**纹理（`baked_<材质>.png`）注入 Web，并对 Face/HairA/HairB/BodySkin/Cth1-Top/Cth1-Cape 套纯纹理 unlit graph 显示。它只固化反照率，**不含光照**（六 AREA/世界光/Toon 均未进入纹理）。
+- 允许用法：仅作反照率烘焙链路诊断/留档，供人工对照；用户可见名称固定为「反照率烘焙诊断（失败实验）」。
+- 禁止用法：**不得作为默认模式**（默认仍为 `finalFaceComposite`）；**不得作为「明显视觉对齐」或任何 Gate 的通过状态**——实测并排 ROI MAE 不降反升，材质/光照视觉 Gate 未通过。
+- 路由影响：只影响 `/mmd-calibration-render?v14dFaceStatic=1&v14dFaceMode=bakedGolden` 诊断渲染层，不影响 PMX/VMD Runtime；默认生产入口与 `finalFaceComposite` 默认模式均不启用。
+- 完整定义：见 `docs/handoff/2026-08-28-v14d-static-golden-frame.md`「修正轮烘焙尝试与阻塞」。

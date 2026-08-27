@@ -65,6 +65,7 @@ import {
 import {
   V14D_FACE_MATERIAL_NAME,
   V14D_FACE_STATIC_AUTHORITY,
+  V14D_BAKED_MATERIAL_MAP,
   V14D_FACE_STATIC_BLEND,
   V14D_FACE_STATIC_CAMERA,
   V14D_FACE_STATIC_DATASET,
@@ -1580,9 +1581,15 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         const faceOverride = isUvDebug
           ? assets.faceTextures?.normal ?? assets.faceOverride ?? null
           : (assets.faceTextures?.[v14dFaceStaticMode] ?? assets.faceOverride ?? null);
-        const modelFiles = faceOverride
-          ? [...assets.modelFiles, faceOverride]
-          : assets.modelFiles;
+        const isBaked = v14dFaceStaticMode === "bakedGolden";
+        const bakedFiles = isBaked && assets.bakedTextures
+          ? (Object.values(assets.bakedTextures) as File[])
+          : [];
+        const modelFiles = [
+          ...assets.modelFiles,
+          ...(faceOverride ? [faceOverride] : []),
+          ...bakedFiles,
+        ];
         model = await engine.loadModel("companion", {
           files: modelFiles,
           pmxFile: assets.pmxFile,
@@ -1654,6 +1661,31 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         // 不套全局 unlit。Face 不再随 v14dUnlitDiagnostic 的全局 graph 走。
         // uvDebug 模式只输出 Face 的插值 UV（几何节点），供 UV-direct 对账。
         if (v14dFaceStaticMode !== "worldPos" && v14dFaceStaticMode !== "diffuseFlat") {
+        if (v14dFaceStaticMode === "bakedGolden") {
+          // 黄金帧烘焙模式：把全部烘焙材质（Face/HairA/HairB/BodySkin/Cth1-Top/Cth1-Cape）
+          // 切到纯纹理 unlit graph，纹理已由 AssetReader 按材质逻辑名替换为
+          // Blender frame120 可见岛烘焙图（含手绘阴影/高光，保留 alpha cutout）。
+          const bakedMaterials = Object.keys(V14D_BAKED_MATERIAL_MAP);
+          const bakedGroups = originalStyleGroups.map((group) => ({
+            ...group,
+            materials: group.materials.filter((name) => !bakedMaterials.includes(name)),
+          })).filter((group) => group.materials.length > 0);
+          const bakedResult = await engine.applyStyleGroups("companion", [
+            ...bakedGroups,
+            {
+              id: "v14d-baked-golden",
+              label: "V14D Baked Golden Frame",
+              materials: bakedMaterials,
+              graph: V14D_MATERIAL_UNLIT_DIAGNOSTIC_GRAPH,
+            },
+          ]);
+          if (canvasRef.current) {
+            canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.faceMaterialApplied] = String(bakedResult.ok);
+          }
+          if (!bakedResult.ok) {
+            console.warn("[v14d-face-static] bakedGolden graph 应用失败", bakedResult);
+          }
+        } else {
         const faceGraph =
           v14dFaceStaticMode === "uvDebug" ? V14D_FACE_UV_DEBUG_GRAPH_LEGACY : V14D_FACE_STATIC_GRAPH;
         const faceGroups = originalStyleGroups.map((group) => ({
@@ -1676,6 +1708,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           console.warn("[v14d-face-static] Face 材质 graph 应用失败", faceResult);
         }
         }
+        }
       }
       if (isKoleda) {
         for (const [index, material] of model.getMaterials().entries()) {
@@ -1695,7 +1728,13 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           faceEngine.setBackgroundColor(hexToLinearVec3("#050505"));
           faceEngine.addGround({ opacity: 0, width: 0, height: 0 });
           faceEngine.setBloomOptions({ enabled: false, intensity: 0 });
-          faceEngine.setViewTransformOptions({ exposure: -0.56, gamma: 1.0 });
+          // bakedGolden：烘焙纹理=BaseColor 反照率（已含手绘阴影/高光），
+          // 用 Standard/曝光0 原样显示；其余三模式仍对齐权威 AgX 曝光 -0.56。
+          faceEngine.setViewTransformOptions(
+            v14dFaceStaticMode === "bakedGolden"
+              ? { exposure: 0, gamma: 1.0 }
+              : { exposure: -0.56, gamma: 1.0 },
+          );
         }
         restorePersistedCamera(V14D_FACE_STATIC_CAMERA);
         readRezeCamera(engine)?.setInputLocked(true);
@@ -1757,165 +1796,58 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         const gfEngine = engineRef.current;
         const gfModel = modelRef.current;
         (window as unknown as { __rezeEngineProbe?: () => unknown }).__rezeEngineProbe = () => {
+          // 黄金帧诊断探针（最小字段）：仅暴露核对构图所需的引擎相机实际值、
+          // 模型变换与脸部皮肤后世界包围盒，供采集脚本核对相机/缩放对齐。
           const cam = gfEngine ? readRezeCamera(gfEngine) : null;
           const pos = cam?.getPosition?.();
-          let vertexBounds: { bind: { min: number[]; max: number[] }; skinnedHeadY: number | null; centerBoneY: number | null; headIndex: number; boneCount: number; ikEnabled: boolean | null; rootScale: number | null; headBonePos: number[] | null; localTransY: number | null; headSkinTY: number | null; headSkinDiag: number[] | null; faceCenter: number[] | null; faceSizeY: number | null; faceMinW: number[]; faceMaxW: number[]; debugVert: unknown; headMat: number[] | null; headWorldMat: number[] | null; headInvBind: number[] | null; bodyMin: number[]; bodyMax: number[] } | null = null;
+          let faceBox: { center: number[] | null; sizeY: number | null; minW: number[]; maxW: number[] } | null = null;
           try {
             const verts = (gfModel as unknown as { getVertices?: () => ArrayLike<number> | null })?.getVertices?.();
-            if (verts && verts.length >= 3) {
-              const head = gfModel?.getBoneWorldPosition?.("頭");
-              const headPos = head ? [head.x, head.y, head.z] : null;
-              const skeleton = gfModel?.getSkeleton?.();
-              const bones = skeleton?.bones ?? [];
-              const headIndex = bones.findIndex((b) => b.name === "頭");
-              const headBonePos = headIndex >= 0 ? Array.from(bones[headIndex].bindTranslation ?? [0, 0, 0]) : null;
-              // 头部顶端：绑定顶点中绑定到头骨(权重>0)的 y 最大值
-              let faceTop = -Infinity;
-              const skinning = gfModel?.getSkinning?.();
-              const joints = skinning?.joints;
-              const weights = skinning?.weights;
-              if (headPos && joints && weights && headIndex >= 0) {
-                for (let vi = 0; vi * 8 + 7 < verts.length; vi += 1) {
-                  let headW = 0;
-                  for (let k = 0; k < 4; k += 1) {
-                    if (joints[vi * 4 + k] === headIndex) headW += weights[vi * 4 + k] / 255;
-                  }
-                  if (headW > 0.25) {
-                    const y = verts[vi * 8 + 1];
-                    if (y > faceTop) faceTop = y;
-                  }
+            const skinning = gfModel?.getSkinning?.();
+            const joints = skinning?.joints;
+            const weights = skinning?.weights;
+            const skinMats = gfModel?.getSkinMatrices?.();
+            const mats = gfModel?.getMaterials?.() ?? [];
+            const indices = gfModel?.getIndices?.();
+            const faceMatIdx = mats.findIndex((m) => m.name === "Face");
+            if (verts && skinMats && joints && weights && indices && faceMatIdx >= 0) {
+              let idxStart = 0;
+              for (let mi = 0; mi < faceMatIdx; mi += 1) idxStart += mats[mi].vertexCount;
+              const idxEnd = idxStart + mats[faceMatIdx].vertexCount;
+              const faceVertSet = new Set<number>();
+              for (let k = idxStart; k < idxEnd; k += 1) faceVertSet.add(indices[k]);
+              const minW = [Infinity, Infinity, Infinity];
+              const maxW = [-Infinity, -Infinity, -Infinity];
+              const px: number[] = []; const py: number[] = []; const pz: number[] = [];
+              for (const vi of faceVertSet) {
+                const bx = verts[vi * 8], by = verts[vi * 8 + 1], bz = verts[vi * 8 + 2];
+                let wx = 0, wy = 0, wz = 0;
+                for (let k = 0; k < 4; k += 1) {
+                  const bi = joints[vi * 4 + k];
+                  const w = weights[vi * 4 + k] / 255;
+                  if (w <= 0) continue;
+                  const o = bi * 16;
+                  wx += w * (skinMats[o] * bx + skinMats[o + 4] * by + skinMats[o + 8] * bz + skinMats[o + 12]);
+                  wy += w * (skinMats[o + 1] * bx + skinMats[o + 5] * by + skinMats[o + 9] * bz + skinMats[o + 13]);
+                  wz += w * (skinMats[o + 2] * bx + skinMats[o + 6] * by + skinMats[o + 10] * bz + skinMats[o + 14]);
                 }
+                px.push(wx); py.push(wy); pz.push(wz);
+                minW[0] = Math.min(minW[0], wx); maxW[0] = Math.max(maxW[0], wx);
+                minW[1] = Math.min(minW[1], wy); maxW[1] = Math.max(maxW[1], wy);
+                minW[2] = Math.min(minW[2], wz); maxW[2] = Math.max(maxW[2], wz);
               }
-              const rootScale = typeof gfModel?.scale === "number" ? gfModel.scale : null;
-              const ikEnabled = typeof gfEngine?.getIKEnabled === "function" ? gfEngine.getIKEnabled() : null;
-              const center = gfModel?.getBoneWorldPosition?.("センター");
-              const centerBoneY = center ? center.y : null;
-              const localTransY = headIndex >= 0 ? (gfModel as unknown as { runtimeSkeleton?: { localTranslations?: Vec3[] } })?.runtimeSkeleton?.localTranslations?.[headIndex]?.y ?? null : null;
-              const skinMats = gfModel?.getSkinMatrices?.();
-              const headSkinTY = skinMats && headIndex >= 0 ? skinMats[headIndex * 16 + 13] : null;
-              const headSkinDiag = skinMats && headIndex >= 0 ? [skinMats[headIndex * 16 + 0], skinMats[headIndex * 16 + 5], skinMats[headIndex * 16 + 10]] : null;
-              // 皮肤后脸部顶点世界位置采样：CPU 侧 skinning（双四元数线性混合）
-              let faceCenter: number[] | null = null;
-              let faceSizeY: number | null = null;
-              let debugVert: { vi: number; bind: number[]; skinned: number[]; j: number[]; w: number[] } | null = null;
-              const faceMinW = [Infinity, Infinity, Infinity];
-              const faceMaxW = [-Infinity, -Infinity, -Infinity];
-              try {
-                const mats = gfModel?.getMaterials?.() ?? [];
-                const faceMatIdx = mats.findIndex((m) => m.name === "Face");
-                const indices = gfModel?.getIndices?.();
-                if (faceMatIdx >= 0 && indices && skinMats && joints && weights) {
-                  const faceVertSet = new Set<number>();
-                  // PMX 材质按 vertexCount 分段索引；face 材质索引范围由材质表推导
-                  let idxStart = 0;
-                  for (let mi = 0; mi < faceMatIdx; mi += 1) idxStart += mats[mi].vertexCount;
-                  const idxEnd = idxStart + mats[faceMatIdx].vertexCount;
-                  for (let k = idxStart; k < idxEnd; k += 1) faceVertSet.add(indices[k]);
-                  const sample = [...faceVertSet].filter((_, i2) => i2 % 7 === 0).slice(0, 1200);
-                  let ymin = Infinity; let ymax = -Infinity;
-                  let n = 0;
-                  const px: number[] = []; const py: number[] = []; const pz: number[] = [];
-                  for (const vi of sample) {
-                    const bx = verts[vi * 8], by = verts[vi * 8 + 1], bz = verts[vi * 8 + 2];
-                    let wx = 0, wy = 0, wz = 0;
-                    for (let k = 0; k < 4; k += 1) {
-                      const bi = joints[vi * 4 + k];
-                      const w = weights[vi * 4 + k] / 255;
-                      if (w <= 0 || bi >= bones.length) continue;
-                      const m = skinMats;
-                      const o = bi * 16;
-                      wx += w * (m[o] * bx + m[o + 4] * by + m[o + 8] * bz + m[o + 12]);
-                      wy += w * (m[o + 1] * bx + m[o + 5] * by + m[o + 9] * bz + m[o + 13]);
-                      wz += w * (m[o + 2] * bx + m[o + 6] * by + m[o + 10] * bz + m[o + 14]);
-                    }
-                    px.push(wx); py.push(wy); pz.push(wz); n += 1;
-                    if (wy < ymin) ymin = wy;
-                    if (wy > ymax) ymax = wy;
-                    if (wx < faceMinW[0]) faceMinW[0] = wx; if (wx > faceMaxW[0]) faceMaxW[0] = wx;
-                    if (wy < faceMinW[1]) faceMinW[1] = wy; if (wy > faceMaxW[1]) faceMaxW[1] = wy;
-                    if (wz < faceMinW[2]) faceMinW[2] = wz; if (wz > faceMaxW[2]) faceMaxW[2] = wz;
-                  }
-                  if (n > 0) {
-                    const med = (a: number[]) => { const s = [...a].sort((p, q2) => p - q2); return s[Math.floor(s.length / 2)]; };
-                    faceCenter = [med(px), med(py), med(pz)];
-                    faceSizeY = ymax - ymin;
-                  }
-                  // 单顶点调试：记录中值采样点的逐骨骼贡献
-                  const dv = sample[Math.floor(sample.length / 2)] ?? sample[0];
-                  const db = [verts[dv * 8], verts[dv * 8 + 1], verts[dv * 8 + 2]];
-                  let dwx = 0, dwy = 0, dwz = 0;
-                  for (let k = 0; k < 4; k += 1) {
-                    const bi = joints[dv * 4 + k];
-                    const w = weights[dv * 4 + k] / 255;
-                    const o = bi * 16;
-                    dwx += w * (skinMats[o] * db[0] + skinMats[o + 4] * db[1] + skinMats[o + 8] * db[2] + skinMats[o + 12]);
-                    dwy += w * (skinMats[o + 1] * db[0] + skinMats[o + 5] * db[1] + skinMats[o + 9] * db[2] + skinMats[o + 13]);
-                    dwz += w * (skinMats[o + 2] * db[0] + skinMats[o + 6] * db[1] + skinMats[o + 10] * db[2] + skinMats[o + 14]);
-                  }
-                  debugVert = { vi: dv, bind: db, skinned: [dwx, dwy, dwz], j: [joints[dv * 4], joints[dv * 4 + 1], joints[dv * 4 + 2], joints[dv * 4 + 3]], w: [weights[dv * 4], weights[dv * 4 + 1], weights[dv * 4 + 2], weights[dv * 4 + 3]] };
-                }
-              } catch { /* ignore */ }
-              const wm = (gfModel as unknown as { runtimeSkeleton?: { worldMatrices?: { values: Float32Array }[] } })?.runtimeSkeleton?.worldMatrices?.[headIndex]?.values;
-              const ibm = gfModel?.getSkeleton?.()?.inverseBindMatrices;
-              // 全身皮肤后世界 bbox（抽样 1/17 顶点控制成本）
-              let bodyMin = [Infinity, Infinity, Infinity];
-              let bodyMax = [-Infinity, -Infinity, -Infinity];
-              try {
-                for (let vi = 0; vi * 8 + 7 < verts.length; vi += 17) {
-                  const bx = verts[vi * 8], by = verts[vi * 8 + 1], bz = verts[vi * 8 + 2];
-                  let wx = 0, wy = 0, wz = 0;
-                  for (let k = 0; k < 4; k += 1) {
-                    const bi = joints?.[vi * 4 + k] ?? 0;
-                    const w = (weights?.[vi * 4 + k] ?? 0) / 255;
-                    if (w <= 0 || !skinMats || bi >= bones.length) continue;
-                    const o = bi * 16;
-                    wx += w * (skinMats[o] * bx + skinMats[o + 4] * by + skinMats[o + 8] * bz + skinMats[o + 12]);
-                    wy += w * (skinMats[o + 1] * bx + skinMats[o + 5] * by + skinMats[o + 9] * bz + skinMats[o + 13]);
-                    wz += w * (skinMats[o + 2] * bx + skinMats[o + 6] * by + skinMats[o + 10] * bz + skinMats[o + 14]);
-                  }
-                  if (wx < bodyMin[0]) bodyMin[0] = wx; if (wx > bodyMax[0]) bodyMax[0] = wx;
-                  if (wy < bodyMin[1]) bodyMin[1] = wy; if (wy > bodyMax[1]) bodyMax[1] = wy;
-                  if (wz < bodyMin[2]) bodyMin[2] = wz; if (wz > bodyMax[2]) bodyMax[2] = wz;
-                }
-              } catch { /* ignore */ }
-              vertexBounds = { bind: { min: [], max: [0, faceTop, 0] }, skinnedHeadY: headPos ? headPos[1] : null, centerBoneY, headIndex, boneCount: bones.length, ikEnabled, rootScale, headBonePos, localTransY, headSkinTY, headSkinDiag, faceCenter, faceSizeY, faceMinW, faceMaxW, debugVert, headMat: skinMats && headIndex >= 0 ? Array.from(skinMats.slice(headIndex * 16, headIndex * 16 + 16)) : null, headWorldMat: wm ? Array.from(wm) : null, headInvBind: ibm && headIndex >= 0 ? Array.from(ibm.slice(headIndex * 16, headIndex * 16 + 16)) : null, bodyMin, bodyMax };
-              // 关键骨骼局部旋转（deg），供姿态对比 Blender 侧 VMD 角度
-              const rs = (gfModel as unknown as { runtimeSkeleton?: { localRotations?: { x: number; y: number; z: number; w: number }[] } })?.runtimeSkeleton?.localRotations;
-              (vertexBounds as unknown as Record<string, unknown>).materialNames = gfModel?.getMaterials?.().map((m) => `${m.name}:${m.vertexCount}`) ?? [];
-              const quatEuler = (q: { x: number; y: number; z: number; w: number } | null | undefined) => {
-                if (!q) return null;
-                const { x, y, z, w } = q;
-                const rx = Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
-                const ry = Math.asin(Math.max(-1, Math.min(1, 2 * (w * y - z * x))));
-                const rz = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
-                return [rx, ry, rz].map((r2) => Math.round(r2 * 180 / Math.PI * 10) / 10);
-              };
-              const eulerOf = (name: string) => {
-                const idx = bones.findIndex((b) => b.name === name);
-                return idx >= 0 ? quatEuler(rs?.[idx]) : null;
-              };
-              (vertexBounds as unknown as Record<string, unknown>).boneEulers = {
-                "頭": eulerOf("頭"),
-                "首": eulerOf("首"),
-                "上半身2": eulerOf("上半身2"),
-                "上半身": eulerOf("上半身"),
-                "腰": eulerOf("腰"),
-              };
+              if (px.length > 0) {
+                const med = (a: number[]) => { const s = [...a].sort((p, q2) => p - q2); return s[Math.floor(s.length / 2)]; };
+                faceBox = { center: [med(px), med(py), med(pz)], sizeY: maxW[1] - minW[1], minW, maxW };
+              }
             }
           } catch { /* ignore */ }
           return {
             camera: cam && pos
-              ? {
-                  position: [pos.x, pos.y, pos.z],
-                  target: [cam.target.x, cam.target.y, cam.target.z],
-                  fovDeg: (cam.fov * 180) / Math.PI,
-                  radius: cam.radius,
-                  alpha: cam.alpha,
-                  beta: cam.beta,
-                }
+              ? { position: [pos.x, pos.y, pos.z], target: [cam.target.x, cam.target.y, cam.target.z], fovDeg: (cam.fov * 180) / Math.PI }
               : null,
             modelTransform: gfEngine?.getModelTransform?.("companion") ?? null,
-            vertexBounds,
+            faceBox,
           };
         };
         const canvas = canvasRef.current;
@@ -1941,6 +1873,8 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       disposed = true;
       engineReadyRef.current = false;
       modelRef.current = null;
+      // 黄金帧诊断探针：页面卸载/默认入口时清除，避免残留到生产路径。
+      delete (window as unknown as { __rezeEngineProbe?: unknown }).__rezeEngineProbe;
       clearVmdCompletionFallback();
       vmdIkPolicyCacheRef.current.clear();
       materialStateRef.current.clear();

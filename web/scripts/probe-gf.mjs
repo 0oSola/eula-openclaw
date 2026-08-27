@@ -9,6 +9,7 @@ const KOLEDA_DIR = "D:\\mmd\\克莱妲原皮";
 const PMX = path.join(KOLEDA_DIR, "GirlsFrontline KoledaDefault.pmx");
 const VMD = "C:\\w\\rk3-face-v14d\\web\\public\\assets\\mmd\\calibration\\koleda-v14d\\koleda-v14d-authoritative-pose-f120.vmd";
 const DERIVED_DIR = "C:\\w\\rk3-face-v14d\\.scratch\\v14d-face-static-derived";
+const BAKED_DIR = path.resolve(".scratch/v14d-static-golden-frame/baked");
 
 function collect(dir) {
   const out = [];
@@ -38,6 +39,7 @@ await page.route("**/*", async (route) => {
   const key = url.searchParams.get("v14dasset");
   const filePath = key === "pmx" ? PMX : key === "vmd" ? VMD : route0(key);
   function route0(k) {
+    if (k.startsWith("__baked__/")) return path.join(BAKED_DIR, k.slice(10));
     return k.startsWith("__derived__/") ? path.join(DERIVED_DIR, k.slice(12)) : path.join(KOLEDA_DIR, k);
   }
   try {
@@ -73,7 +75,34 @@ await page.evaluate(async ({ rels: r, koleda, pmx, vmd, derived }) => {
   const compBuf = await (await fetch(`http://v14d-asset.local/a?v14dasset=${encodeURIComponent("__derived__/v14d-face-composite-state2.png")}`)).arrayBuffer();
   const faceOverride = new File([compBuf], "v14d-face-composite-state2.png");
   Object.defineProperty(faceOverride, "webkitRelativePath", { value: "Textures/c_Koleda_slg_face_d.png" });
-  window.__v14dFaceStaticAssets = { modelFiles, pmxFile, vmdFile, faceOverride };
+  // 黄金帧烘焙纹理（baked_*）：按材质逻辑名覆盖，注入 bakedTextures。
+  const BAKED = {
+    face: "baked_face.png",
+    hairA: "baked_hairA.png",
+    hairB: "baked_hairB.png",
+    body: "baked_body.png",
+    top: "baked_top.png",
+    cape: "baked_cape.png",
+  };
+  const BAKED_MAP = {
+    face: "Textures/c_Koleda_slg_face_d.png",
+    hairA: "Textures/c_KoledaSSR01_slg_hair_d.png",
+    hairB: "Textures/c_KoledaSSR01_slg_hair_d.png",
+    body: "Textures/body_d.png",
+    top: "Textures/c_KoledaSSR01_slg_cloth1_da.png",
+    cape: "Textures/c_KoledaSSR01_slg_cloth1_da.png",
+  };
+  const bakedTextures = {};
+  for (const [key, fname] of Object.entries(BAKED)) {
+    try {
+      const buf = await (await fetch(`http://v14d-asset.local/a?v14dasset=${encodeURIComponent("__baked__/" + fname)}`)).arrayBuffer();
+      if (buf.byteLength < 100) continue;
+      const f = new File([buf], fname);
+      Object.defineProperty(f, "webkitRelativePath", { value: BAKED_MAP[key] });
+      bakedTextures[key] = f;
+    } catch { /* ignore */ }
+  }
+  window.__v14dFaceStaticAssets = { modelFiles, pmxFile, vmdFile, faceOverride, bakedTextures };
 }, { rels, koleda: KOLEDA_DIR, pmx: PMX, vmd: VMD, derived: DERIVED_DIR });
 
 await page.waitForSelector("canvas[data-webgpu-status='ready']", { timeout: 120000 });
