@@ -136,7 +136,9 @@ type MMDStageProps = {
   v14dUnlitDiagnostic?: boolean;
   v14dColorBaseline?: boolean;
   v14dFaceStatic?: boolean;
-  v14dFaceStaticMode?: "normal" | "faceShadowOnly" | "finalFaceComposite" | "uvDebug";
+  v14dFaceStaticMode?: "normal" | "faceShadowOnly" | "finalFaceComposite" | "uvDebug" | "worldPos" | "diffuseFlat";
+  /** 黄金帧诊断 ROI/pick 门控：仅 finalFaceComposite 模式启用脸部取样口径。 */
+  v14dFaceStaticGated?: boolean;
   rezeTransparentBackground?: boolean;
 };
 
@@ -166,6 +168,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   v14dColorBaseline = false,
   v14dFaceStatic = false,
   v14dFaceStaticMode = "normal",
+  v14dFaceStaticGated = false,
   rezeTransparentBackground = false,
 }: MMDStageProps, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -499,6 +502,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
             v14dColorBaseline={v14dColorBaseline}
             v14dFaceStatic={v14dFaceStatic}
             v14dFaceStaticMode={v14dFaceStaticMode}
+            v14dFaceStaticGated={v14dFaceStaticGated}
             transparentBackground={rezeTransparentBackground}
             cameraSnapshot={cameraSnapshot}
             onInteractionComplete={onInteractionComplete}

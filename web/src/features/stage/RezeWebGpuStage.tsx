@@ -171,6 +171,8 @@ type RezeStageProps = {
   /** 仅用于 V14D Face State 2 静态黄金帧预览；默认关闭，不改变生产渲染路径。 */
   v14dFaceStatic?: boolean;
   v14dFaceStaticMode?: V14dFaceStaticMode;
+  /** 黄金帧诊断 ROI/pick/HDR 取样门控（仅 faceStatic 页面启用；与组件门控分离）。 */
+  v14dFaceStaticGated?: boolean;
   /** true 时 WebGPU 画布透明，由页面 MIO CSS 背景透出；false 用场景背景色。 */
   transparentBackground?: boolean;
   cameraSnapshot?: MmdCameraSnapshot | null;
@@ -246,13 +248,40 @@ const V14D_FACE_STATIC_GRAPH: ShaderGraph = {
  * 只是 fragment 用 `input.uv` 替代纹理采样，供 UV-direct 逐纹素对账读取
  * 每个脸部像素在 Web 侧实际使用的 UV 坐标。仅诊断，不改变生产渲染。
  */
-const V14D_FACE_UV_DEBUG_GRAPH: ShaderGraph = {
+const V14D_FACE_UV_DEBUG_GRAPH_LEGACY: ShaderGraph = {
   version: 1,
   name: "V14D Face UV Debug",
   tags: ["diagnostic", "v14d", "face-static", "uv"],
   nodes: [{ id: "uv", type: "geometry" }],
   links: [],
   output: { node: "uv", socket: "uv" },
+};
+
+/**
+ * 黄金帧几何验证图：所有材质统一输出 world_pos 归一化颜色
+ * （(worldPos*0.05+0.5) 映射到可见色），用于肉眼核对相机/缩放对齐结果。
+ * 只读几何节点，不采样纹理、不受材质影响。
+ */
+const V14D_FACE_STATIC_WORLD_POS_GRAPH: ShaderGraph = {
+  version: 1,
+  name: "V14D GF World Pos Debug",
+  tags: ["diagnostic", "v14d", "face-static", "worldpos"],
+  nodes: [{ id: "geo", type: "geometry" }],
+  links: [],
+  output: { node: "geo", socket: "world_pos" },
+};
+
+/**
+ * 黄金帧材质验证图：所有材质统一输出 material_diffuse（无光照），
+ * 用于区分「几何/相机没对齐」与「光照/材质输出为黑」。
+ */
+const V14D_FACE_STATIC_DIFFUSE_GRAPH: ShaderGraph = {
+  version: 1,
+  name: "V14D GF Diffuse Flat",
+  tags: ["diagnostic", "v14d", "face-static", "diffuse"],
+  nodes: [{ id: "mat", type: "material_diffuse" }],
+  links: [],
+  output: { node: "mat", socket: "color" },
 };
 
 type RezeStyleGroup = ReturnType<Engine["getStyleGroups"]>[number];
@@ -509,7 +538,7 @@ function createV14dAnimationEvidence(
 }
 
 export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(function RezeWebGpuStage(
-  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, scenePreset = "reze-design", v14dUnlitDiagnostic = false, v14dColorBaseline = false, v14dFaceStatic = false, v14dFaceStaticMode = "normal", transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
+  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, scenePreset = "reze-design", v14dUnlitDiagnostic = false, v14dColorBaseline = false, v14dFaceStatic = false, v14dFaceStaticMode = "normal", v14dFaceStaticGated = false, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
   ref,
 ) {
   const pipelineDefaultSettings = scenePreset === "reze-k3" ? REZE_K3_SCENE_DEFAULTS : DEFAULT_SETTINGS;
@@ -532,6 +561,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   const vmdIkPolicyCacheRef = useRef(new Map<string, ReturnType<typeof fetchRezeVmdIkPolicy>>());
   const v14dColorBaselineRef = useRef(v14dColorBaseline);
   const v14dFaceStaticRef = useRef(v14dFaceStatic);
+  // 黄金帧组件/材质门控（Face unlit graph、暗背景等）与诊断 ROI 门控分离：
+  // 画面始终按票据纵切渲染；pick/HDR 诊断只在显式诊断模式下启用，避免
+  // 远景可见构图的取样口径被锁定在近景脸部 ROI 上。
+  const v14dFaceStaticGatedRef = useRef(v14dFaceStaticGated);
   const baselineOriginalStyleGroupsRef = useRef<RezeStyleGroup[] | null>(null);
   const baselineResultRef = useRef<V14dColorBaselineResult | null>(null);
   const baselineCapturePromiseRef = useRef<Promise<V14dColorBaselineResult> | null>(null);
@@ -547,6 +580,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   interactionRef.current = interaction;
   v14dColorBaselineRef.current = v14dColorBaseline;
   v14dFaceStaticRef.current = v14dFaceStatic;
+  v14dFaceStaticGatedRef.current = v14dFaceStaticGated;
   backgroundEffectRef.current = backgroundEffect;
   gradeRef.current = grade;
   gradeIntensityRef.current = gradeIntensity;
@@ -1117,7 +1151,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       meanSrgb: null,
       meanLinear: null,
     };
-    if (!canvas || !engine || !model || !v14dFaceStaticRef.current) {
+    if (!canvas || !engine || !model || !v14dFaceStaticRef.current || !v14dFaceStaticGatedRef.current) {
       return { ...base, error: "V14D Face Static 未启用或引擎未就绪。" };
     }
     try {
@@ -1173,7 +1207,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   const exportV14dFaceMaskPng = async (): Promise<string | null> => {
     const engine = engineRef.current;
     const model = modelRef.current;
-    if (!engine || !model || !v14dFaceStaticRef.current) return null;
+    if (!engine || !model || !v14dFaceStaticRef.current || !v14dFaceStaticGatedRef.current) return null;
     try {
       const faceMaterialId = v14dFaceStaticFacePickId(
         model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount })),
@@ -1218,7 +1252,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   } | null> => {
     const engine = engineRef.current;
     const model = modelRef.current;
-    if (!engine || !model || !v14dFaceStaticRef.current) return null;
+    if (!engine || !model || !v14dFaceStaticRef.current || !v14dFaceStaticGatedRef.current) return null;
     try {
       const faceMaterialId = v14dFaceStaticFacePickId(
         model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount })),
@@ -1465,7 +1499,11 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     if (!canvas || (!modelUrl && !v14dFaceStatic)) return;
     let disposed = false;
     const initialSettings = sceneSettings ?? pipelineDefaultSettings;
-    const effectiveInitialSettings = v14dColorBaseline ? REZE_K3_SCENE_DEFAULTS : initialSettings;
+    // faceStatic 黄金帧：复用 reze-k3 白光场景（票据确认口径），但按权威 blend
+    // 改为暗背景、无地面（blend 无地面网格）、bloom 关闭；相机随后由
+    // V14D_FACE_STATIC_CAMERA 覆盖（不受 settings 里的 cameraTarget/Distance 影响）。
+    const effectiveInitialSettings =
+      v14dColorBaseline || v14dFaceStatic ? REZE_K3_SCENE_DEFAULTS : initialSettings;
     const boot = async () => {
       reportStatus("loading", "正在初始化 reze-engine WebGPU…");
       if (!("gpu" in navigator)) throw new Error("当前浏览器不支持 WebGPU，请改用 Reze NPR（WebGL）模式。");
@@ -1595,13 +1633,29 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         }
       }
       if (v14dFaceStatic) {
+        // worldPos 模式：所有材质统一输出 world_pos 颜色，验证相机/缩放几何。
+        if (v14dFaceStaticMode === "worldPos" || v14dFaceStaticMode === "diffuseFlat") {
+          const allNames = model.getMaterials().map((m) => m.name);
+          const worldPosResult = await engine.applyStyleGroups("companion", [
+            {
+              id: "v14d-gf-world-pos",
+              label: "V14D GF World Pos Debug",
+              materials: allNames,
+              graph: v14dFaceStaticMode === "worldPos" ? V14D_FACE_STATIC_WORLD_POS_GRAPH : V14D_FACE_STATIC_DIFFUSE_GRAPH,
+            },
+          ]);
+          if (canvasRef.current) {
+            canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.faceMaterialApplied] = String(worldPosResult.ok);
+          }
+        }
         // 三个模式（normal/faceShadowOnly/finalFaceComposite）都只把 Face 材质切到
         // 纯纹理 unlit graph，仅纹理不同（原始 face_d / 衰减图 / 合成图），
         // 保证「只有 Face 纹理变化」的严格 A/B；其余材质保持 reze-k3 正常分组，
         // 不套全局 unlit。Face 不再随 v14dUnlitDiagnostic 的全局 graph 走。
         // uvDebug 模式只输出 Face 的插值 UV（几何节点），供 UV-direct 对账。
+        if (v14dFaceStaticMode !== "worldPos" && v14dFaceStaticMode !== "diffuseFlat") {
         const faceGraph =
-          v14dFaceStaticMode === "uvDebug" ? V14D_FACE_UV_DEBUG_GRAPH : V14D_FACE_STATIC_GRAPH;
+          v14dFaceStaticMode === "uvDebug" ? V14D_FACE_UV_DEBUG_GRAPH_LEGACY : V14D_FACE_STATIC_GRAPH;
         const faceGroups = originalStyleGroups.map((group) => ({
           ...group,
           materials: group.materials.filter((name) => name !== V14D_FACE_MATERIAL_NAME),
@@ -1621,6 +1675,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         if (!faceResult.ok) {
           console.warn("[v14d-face-static] Face 材质 graph 应用失败", faceResult);
         }
+        }
       }
       if (isKoleda) {
         for (const [index, material] of model.getMaterials().entries()) {
@@ -1633,6 +1688,15 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       if (v14dColorBaseline || v14dFaceStatic) applySceneSettings(effectiveInitialSettings);
       else applySceneSettings(initialSettings);
       if (v14dFaceStatic) {
+        // 黄金帧构图：暗背景 + 无地面 + bloom 关闭，对齐 blend 最终画面口径；
+        // 曝光 -0.56 对齐权威 AgX exposure，look 保持引擎默认 medium_high_contrast。
+        const faceEngine = engineRef.current;
+        if (faceEngine) {
+          faceEngine.setBackgroundColor(hexToLinearVec3("#050505"));
+          faceEngine.addGround({ opacity: 0, width: 0, height: 0 });
+          faceEngine.setBloomOptions({ enabled: false, intensity: 0 });
+          faceEngine.setViewTransformOptions({ exposure: -0.56, gamma: 1.0 });
+        }
         restorePersistedCamera(V14D_FACE_STATIC_CAMERA);
         readRezeCamera(engine)?.setInputLocked(true);
       } else if (v14dColorBaseline) {
@@ -1662,16 +1726,16 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           model.loadVmd(name, vmdSrc),
         ]);
         if (disposed || !vmdRequestGuardRef.current.isCurrent(requestId)) return;
-        applyVmdIkPolicy(engine, policy);
-        baselineVmdLoadedRef.current = true;
-        if (v14dColorBaseline || v14dFaceStatic) {
-          // loadVmd() 只登记剪辑；必须先把它设为当前动作，seek() 才会
-          // 写入 frame 120。否则固定单帧诊断会继续渲染绑定姿态。
-          playRezeVmd(model, name);
-          model.seek(v14dFaceStatic ? V14D_FACE_STATIC_SECONDS : V14D_COLOR_BASELINE_SECONDS);
-          model.pause();
-          currentVmdUrlRef.current = vmdSrc;
-        } else {
+          applyVmdIkPolicy(engine, policy);
+          baselineVmdLoadedRef.current = true;
+          if (v14dColorBaseline || v14dFaceStatic) {
+            // loadVmd() 只登记剪辑；必须先把它设为当前动作，seek() 才会
+            // 写入 frame 120。否则固定单帧诊断会继续渲染绑定姿态。
+            playRezeVmd(model, name);
+            model.seek(v14dFaceStatic ? V14D_FACE_STATIC_SECONDS : V14D_COLOR_BASELINE_SECONDS);
+            model.pause();
+            currentVmdUrlRef.current = vmdSrc;
+          } else {
           playRezeVmd(model, name);
           currentVmdUrlRef.current = vmdSrc;
           armRezeVmdCompletionFallback(model, name, vmdSrc);
@@ -1682,10 +1746,178 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         engine.stopRenderLoop();
         model.pause();
         engine.renderFrame(0);
+        // 黄金帧：模型以 PMX 单位渲染（实测 skinned head Y≈16.42，与相机
+        // 同单位），无需 setModelTransform 缩放；V14D_FACE_STATIC_CAMERA
+        // 已按 PMX 单位换算自权威 PROTO_GameCamera。
       } else {
         engine.runRenderLoop();
       }
       if (v14dFaceStatic && canvasRef.current) {
+        // 黄金帧诊断探针：暴露引擎相机实际值与模型世界包围盒，供采集脚本核对构图。
+        const gfEngine = engineRef.current;
+        const gfModel = modelRef.current;
+        (window as unknown as { __rezeEngineProbe?: () => unknown }).__rezeEngineProbe = () => {
+          const cam = gfEngine ? readRezeCamera(gfEngine) : null;
+          const pos = cam?.getPosition?.();
+          let vertexBounds: { bind: { min: number[]; max: number[] }; skinnedHeadY: number | null; centerBoneY: number | null; headIndex: number; boneCount: number; ikEnabled: boolean | null; rootScale: number | null; headBonePos: number[] | null; localTransY: number | null; headSkinTY: number | null; headSkinDiag: number[] | null; faceCenter: number[] | null; faceSizeY: number | null; faceMinW: number[]; faceMaxW: number[]; debugVert: unknown; headMat: number[] | null; headWorldMat: number[] | null; headInvBind: number[] | null; bodyMin: number[]; bodyMax: number[] } | null = null;
+          try {
+            const verts = (gfModel as unknown as { getVertices?: () => ArrayLike<number> | null })?.getVertices?.();
+            if (verts && verts.length >= 3) {
+              const head = gfModel?.getBoneWorldPosition?.("頭");
+              const headPos = head ? [head.x, head.y, head.z] : null;
+              const skeleton = gfModel?.getSkeleton?.();
+              const bones = skeleton?.bones ?? [];
+              const headIndex = bones.findIndex((b) => b.name === "頭");
+              const headBonePos = headIndex >= 0 ? Array.from(bones[headIndex].bindTranslation ?? [0, 0, 0]) : null;
+              // 头部顶端：绑定顶点中绑定到头骨(权重>0)的 y 最大值
+              let faceTop = -Infinity;
+              const skinning = gfModel?.getSkinning?.();
+              const joints = skinning?.joints;
+              const weights = skinning?.weights;
+              if (headPos && joints && weights && headIndex >= 0) {
+                for (let vi = 0; vi * 8 + 7 < verts.length; vi += 1) {
+                  let headW = 0;
+                  for (let k = 0; k < 4; k += 1) {
+                    if (joints[vi * 4 + k] === headIndex) headW += weights[vi * 4 + k] / 255;
+                  }
+                  if (headW > 0.25) {
+                    const y = verts[vi * 8 + 1];
+                    if (y > faceTop) faceTop = y;
+                  }
+                }
+              }
+              const rootScale = typeof gfModel?.scale === "number" ? gfModel.scale : null;
+              const ikEnabled = typeof gfEngine?.getIKEnabled === "function" ? gfEngine.getIKEnabled() : null;
+              const center = gfModel?.getBoneWorldPosition?.("センター");
+              const centerBoneY = center ? center.y : null;
+              const localTransY = headIndex >= 0 ? (gfModel as unknown as { runtimeSkeleton?: { localTranslations?: Vec3[] } })?.runtimeSkeleton?.localTranslations?.[headIndex]?.y ?? null : null;
+              const skinMats = gfModel?.getSkinMatrices?.();
+              const headSkinTY = skinMats && headIndex >= 0 ? skinMats[headIndex * 16 + 13] : null;
+              const headSkinDiag = skinMats && headIndex >= 0 ? [skinMats[headIndex * 16 + 0], skinMats[headIndex * 16 + 5], skinMats[headIndex * 16 + 10]] : null;
+              // 皮肤后脸部顶点世界位置采样：CPU 侧 skinning（双四元数线性混合）
+              let faceCenter: number[] | null = null;
+              let faceSizeY: number | null = null;
+              let debugVert: { vi: number; bind: number[]; skinned: number[]; j: number[]; w: number[] } | null = null;
+              const faceMinW = [Infinity, Infinity, Infinity];
+              const faceMaxW = [-Infinity, -Infinity, -Infinity];
+              try {
+                const mats = gfModel?.getMaterials?.() ?? [];
+                const faceMatIdx = mats.findIndex((m) => m.name === "Face");
+                const indices = gfModel?.getIndices?.();
+                if (faceMatIdx >= 0 && indices && skinMats && joints && weights) {
+                  const faceVertSet = new Set<number>();
+                  // PMX 材质按 vertexCount 分段索引；face 材质索引范围由材质表推导
+                  let idxStart = 0;
+                  for (let mi = 0; mi < faceMatIdx; mi += 1) idxStart += mats[mi].vertexCount;
+                  const idxEnd = idxStart + mats[faceMatIdx].vertexCount;
+                  for (let k = idxStart; k < idxEnd; k += 1) faceVertSet.add(indices[k]);
+                  const sample = [...faceVertSet].filter((_, i2) => i2 % 7 === 0).slice(0, 1200);
+                  let ymin = Infinity; let ymax = -Infinity;
+                  let n = 0;
+                  const px: number[] = []; const py: number[] = []; const pz: number[] = [];
+                  for (const vi of sample) {
+                    const bx = verts[vi * 8], by = verts[vi * 8 + 1], bz = verts[vi * 8 + 2];
+                    let wx = 0, wy = 0, wz = 0;
+                    for (let k = 0; k < 4; k += 1) {
+                      const bi = joints[vi * 4 + k];
+                      const w = weights[vi * 4 + k] / 255;
+                      if (w <= 0 || bi >= bones.length) continue;
+                      const m = skinMats;
+                      const o = bi * 16;
+                      wx += w * (m[o] * bx + m[o + 4] * by + m[o + 8] * bz + m[o + 12]);
+                      wy += w * (m[o + 1] * bx + m[o + 5] * by + m[o + 9] * bz + m[o + 13]);
+                      wz += w * (m[o + 2] * bx + m[o + 6] * by + m[o + 10] * bz + m[o + 14]);
+                    }
+                    px.push(wx); py.push(wy); pz.push(wz); n += 1;
+                    if (wy < ymin) ymin = wy;
+                    if (wy > ymax) ymax = wy;
+                    if (wx < faceMinW[0]) faceMinW[0] = wx; if (wx > faceMaxW[0]) faceMaxW[0] = wx;
+                    if (wy < faceMinW[1]) faceMinW[1] = wy; if (wy > faceMaxW[1]) faceMaxW[1] = wy;
+                    if (wz < faceMinW[2]) faceMinW[2] = wz; if (wz > faceMaxW[2]) faceMaxW[2] = wz;
+                  }
+                  if (n > 0) {
+                    const med = (a: number[]) => { const s = [...a].sort((p, q2) => p - q2); return s[Math.floor(s.length / 2)]; };
+                    faceCenter = [med(px), med(py), med(pz)];
+                    faceSizeY = ymax - ymin;
+                  }
+                  // 单顶点调试：记录中值采样点的逐骨骼贡献
+                  const dv = sample[Math.floor(sample.length / 2)] ?? sample[0];
+                  const db = [verts[dv * 8], verts[dv * 8 + 1], verts[dv * 8 + 2]];
+                  let dwx = 0, dwy = 0, dwz = 0;
+                  for (let k = 0; k < 4; k += 1) {
+                    const bi = joints[dv * 4 + k];
+                    const w = weights[dv * 4 + k] / 255;
+                    const o = bi * 16;
+                    dwx += w * (skinMats[o] * db[0] + skinMats[o + 4] * db[1] + skinMats[o + 8] * db[2] + skinMats[o + 12]);
+                    dwy += w * (skinMats[o + 1] * db[0] + skinMats[o + 5] * db[1] + skinMats[o + 9] * db[2] + skinMats[o + 13]);
+                    dwz += w * (skinMats[o + 2] * db[0] + skinMats[o + 6] * db[1] + skinMats[o + 10] * db[2] + skinMats[o + 14]);
+                  }
+                  debugVert = { vi: dv, bind: db, skinned: [dwx, dwy, dwz], j: [joints[dv * 4], joints[dv * 4 + 1], joints[dv * 4 + 2], joints[dv * 4 + 3]], w: [weights[dv * 4], weights[dv * 4 + 1], weights[dv * 4 + 2], weights[dv * 4 + 3]] };
+                }
+              } catch { /* ignore */ }
+              const wm = (gfModel as unknown as { runtimeSkeleton?: { worldMatrices?: { values: Float32Array }[] } })?.runtimeSkeleton?.worldMatrices?.[headIndex]?.values;
+              const ibm = gfModel?.getSkeleton?.()?.inverseBindMatrices;
+              // 全身皮肤后世界 bbox（抽样 1/17 顶点控制成本）
+              let bodyMin = [Infinity, Infinity, Infinity];
+              let bodyMax = [-Infinity, -Infinity, -Infinity];
+              try {
+                for (let vi = 0; vi * 8 + 7 < verts.length; vi += 17) {
+                  const bx = verts[vi * 8], by = verts[vi * 8 + 1], bz = verts[vi * 8 + 2];
+                  let wx = 0, wy = 0, wz = 0;
+                  for (let k = 0; k < 4; k += 1) {
+                    const bi = joints?.[vi * 4 + k] ?? 0;
+                    const w = (weights?.[vi * 4 + k] ?? 0) / 255;
+                    if (w <= 0 || !skinMats || bi >= bones.length) continue;
+                    const o = bi * 16;
+                    wx += w * (skinMats[o] * bx + skinMats[o + 4] * by + skinMats[o + 8] * bz + skinMats[o + 12]);
+                    wy += w * (skinMats[o + 1] * bx + skinMats[o + 5] * by + skinMats[o + 9] * bz + skinMats[o + 13]);
+                    wz += w * (skinMats[o + 2] * bx + skinMats[o + 6] * by + skinMats[o + 10] * bz + skinMats[o + 14]);
+                  }
+                  if (wx < bodyMin[0]) bodyMin[0] = wx; if (wx > bodyMax[0]) bodyMax[0] = wx;
+                  if (wy < bodyMin[1]) bodyMin[1] = wy; if (wy > bodyMax[1]) bodyMax[1] = wy;
+                  if (wz < bodyMin[2]) bodyMin[2] = wz; if (wz > bodyMax[2]) bodyMax[2] = wz;
+                }
+              } catch { /* ignore */ }
+              vertexBounds = { bind: { min: [], max: [0, faceTop, 0] }, skinnedHeadY: headPos ? headPos[1] : null, centerBoneY, headIndex, boneCount: bones.length, ikEnabled, rootScale, headBonePos, localTransY, headSkinTY, headSkinDiag, faceCenter, faceSizeY, faceMinW, faceMaxW, debugVert, headMat: skinMats && headIndex >= 0 ? Array.from(skinMats.slice(headIndex * 16, headIndex * 16 + 16)) : null, headWorldMat: wm ? Array.from(wm) : null, headInvBind: ibm && headIndex >= 0 ? Array.from(ibm.slice(headIndex * 16, headIndex * 16 + 16)) : null, bodyMin, bodyMax };
+              // 关键骨骼局部旋转（deg），供姿态对比 Blender 侧 VMD 角度
+              const rs = (gfModel as unknown as { runtimeSkeleton?: { localRotations?: { x: number; y: number; z: number; w: number }[] } })?.runtimeSkeleton?.localRotations;
+              (vertexBounds as unknown as Record<string, unknown>).materialNames = gfModel?.getMaterials?.().map((m) => `${m.name}:${m.vertexCount}`) ?? [];
+              const quatEuler = (q: { x: number; y: number; z: number; w: number } | null | undefined) => {
+                if (!q) return null;
+                const { x, y, z, w } = q;
+                const rx = Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
+                const ry = Math.asin(Math.max(-1, Math.min(1, 2 * (w * y - z * x))));
+                const rz = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+                return [rx, ry, rz].map((r2) => Math.round(r2 * 180 / Math.PI * 10) / 10);
+              };
+              const eulerOf = (name: string) => {
+                const idx = bones.findIndex((b) => b.name === name);
+                return idx >= 0 ? quatEuler(rs?.[idx]) : null;
+              };
+              (vertexBounds as unknown as Record<string, unknown>).boneEulers = {
+                "頭": eulerOf("頭"),
+                "首": eulerOf("首"),
+                "上半身2": eulerOf("上半身2"),
+                "上半身": eulerOf("上半身"),
+                "腰": eulerOf("腰"),
+              };
+            }
+          } catch { /* ignore */ }
+          return {
+            camera: cam && pos
+              ? {
+                  position: [pos.x, pos.y, pos.z],
+                  target: [cam.target.x, cam.target.y, cam.target.z],
+                  fovDeg: (cam.fov * 180) / Math.PI,
+                  radius: cam.radius,
+                  alpha: cam.alpha,
+                  beta: cam.beta,
+                }
+              : null,
+            modelTransform: gfEngine?.getModelTransform?.("companion") ?? null,
+            vertexBounds,
+          };
+        };
         const canvas = canvasRef.current;
         canvas.dataset[V14D_FACE_STATIC_DATASET.enabled] = "true";
         canvas.dataset[V14D_FACE_STATIC_DATASET.mode] = v14dFaceStaticMode;

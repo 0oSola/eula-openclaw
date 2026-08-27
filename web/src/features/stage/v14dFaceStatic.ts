@@ -72,8 +72,16 @@ export const V14D_FACE_STATIC_MODE_TEXTURE = {
  * 仅供 UV-direct 逐纹素对账；不改变三模式语义，默认关闭。
  */
 export const V14D_FACE_UV_DEBUG_MODE = "uvDebug";
+/** 黄金帧几何验证模式：所有材质输出 world_pos 颜色，肉眼核对相机/缩放。 */
+export const V14D_FACE_STATIC_WORLD_POS_MODE = "worldPos";
+/** 黄金帧材质验证模式：所有材质输出 material_diffuse 颜色（无光照）。 */
+export const V14D_FACE_STATIC_DIFFUSE_MODE = "diffuseFlat";
 
-export type V14dFaceStaticMode = keyof typeof V14D_FACE_STATIC_MODE_TEXTURE | typeof V14D_FACE_UV_DEBUG_MODE;
+export type V14dFaceStaticMode =
+  | keyof typeof V14D_FACE_STATIC_MODE_TEXTURE
+  | typeof V14D_FACE_UV_DEBUG_MODE
+  | typeof V14D_FACE_STATIC_WORLD_POS_MODE
+  | typeof V14D_FACE_STATIC_DIFFUSE_MODE;
 
 export const V14D_FACE_STATIC_MODES: readonly V14dFaceStaticMode[] = [
   "normal",
@@ -86,19 +94,23 @@ export function isV14dFaceStaticMode(value: string | null): value is V14dFaceSta
     value === "normal" ||
     value === "faceShadowOnly" ||
     value === "finalFaceComposite" ||
-    value === V14D_FACE_UV_DEBUG_MODE
+    value === V14D_FACE_UV_DEBUG_MODE ||
+    value === V14D_FACE_STATIC_WORLD_POS_MODE ||
+    value === V14D_FACE_STATIC_DIFFUSE_MODE
   );
 }
 
 /** 模式是否用派生纹理（normal 直接用 PMX 原始 face_d）。 */
 export function v14dFaceStaticIsDerivedMode(mode: V14dFaceStaticMode): boolean {
-  if (mode === V14D_FACE_UV_DEBUG_MODE) return false;
+  if (mode === V14D_FACE_UV_DEBUG_MODE || mode === V14D_FACE_STATIC_WORLD_POS_MODE || mode === V14D_FACE_STATIC_DIFFUSE_MODE) return false;
   return mode !== "normal";
 }
 
 /** 模式对应的 Face diffuse 文件名（用于徽章/capture 显示与 fileMap 键）。 */
 export function v14dFaceStaticTextureName(mode: V14dFaceStaticMode): string {
   if (mode === V14D_FACE_UV_DEBUG_MODE) return "uv-debug";
+  if (mode === V14D_FACE_STATIC_WORLD_POS_MODE) return "world-pos";
+  if (mode === V14D_FACE_STATIC_DIFFUSE_MODE) return "diffuse-flat";
   return V14D_FACE_STATIC_MODE_TEXTURE[mode];
 }
 
@@ -107,11 +119,24 @@ export const V14D_FACE_STATIC_ROI_NORM: readonly [number, number, number, number
   0.3462, 0.3142, 0.3052, 0.3354,
 ];
 
-/** 权威近景相机（PROTO_GameCamera: loc [0.03,-1.02,1.335]m, rotX=90deg, lens 72mm, sensor 36mm）。 */
+/**
+ * 权威近景相机（[Stage 2A-GF] 从 blend 取证 golden-frame.json）：
+ * PROTO_GameCamera loc=[0.03,-1.02,1.335]m, rotX=90deg/rotZ≈-0.21deg, lens 72mm, sensor 36mm(AUTO)。
+ * 引擎为垂直 FOV，square frame 下 vfov = 2*atan(36/(2*72)) = 28.0725°。
+ * Blender 角色身高约 1.49m（米）；reze 侧模型实测以 PMX 单位渲染
+ * （CPU 皮肤后脸部中心 [0.53,16.44,-1.17]，与 PMX bind 同单位），相机按
+ * PMX 单位换算：Blender frame120 脸相对相机约 (x≈0, y≈0.10m, 前方 1.02m)，
+ * 即 PMX 单位 (x≈0, y≈+1.25, 前方 12.75)；Web 相机 = 脸部中心 + 该偏移。
+ * （注：CPU 皮肤矩阵的 Y 列与 Blender 有约 0.84 的既有差异，超出本票范围。）
+ * 脸部相对相机偏移用 Blender 脸中心与相机的实际差值；但 Web 姿态脸部前倾更多，
+ * 中心 z≈-1.26（Blender ≈0）。由于 Web/Blender 姿态存在差异（Web 头前倾更大，
+ * 见 boneEulers 对比），相机 target 取 Web 实测脸部皮肤中位数，position 在
+ * Blender 的 PMX 前方 12.75 单位处，保证脸在画面中心且不被相机压入体内。
+ */
 export const V14D_FACE_STATIC_CAMERA: MmdCameraSnapshot = {
   fov: 28.072486935852954,
-  position: [0.375, 16.6875, -12.75],
-  target: [0.375, 16.6875, -12.125],
+  position: [0.564, 18.55, -13.0],
+  target: [0.564, 16.4125, -1.26],
   locked: true,
 };
 

@@ -19,6 +19,7 @@ import {
   V14D_FACE_STATIC_MODES,
   V14D_FACE_MATERIAL_NAME,
   isV14dFaceStaticMode,
+  v14dFaceStaticTextureName,
   type V14dFaceStaticMode,
   type V14dFaceStaticAssetSource,
 } from "@/features/stage/v14dFaceStatic";
@@ -90,7 +91,11 @@ function readCalibrationQuery(): CalibrationQuery {
   const v14dColorBaseline = params.get("v14dColorBaseline") === "1";
   const v14dFaceStatic = params.get("v14dFaceStatic") === "1";
   const modeParam = params.get("v14dFaceMode");
-  const v14dFaceStaticMode: V14dFaceStaticMode = isV14dFaceStaticMode(modeParam) ? modeParam : "normal";
+  const v14dFaceStaticMode: V14dFaceStaticMode = isV14dFaceStaticMode(modeParam)
+    ? modeParam
+    : v14dFaceStatic
+      ? "finalFaceComposite"
+      : "normal";
   return {
     modelUrl: params.get("modelUrl") || "",
     vmdUrl: params.get("vmdUrl") || "",
@@ -125,6 +130,8 @@ const MODE_LABEL: Record<V14dFaceStaticMode, string> = {
   faceShadowOnly: "脸部阴影分量",
   finalFaceComposite: "最终脸部合成",
   uvDebug: "UV 调试",
+  worldPos: "世界坐标调试",
+  diffuseFlat: "无光照 diffuse 调试",
 };
 
 const FACE_D_KEY = "Textures/c_Koleda_slg_face_d.png";
@@ -401,7 +408,7 @@ export default function MmdCalibrationRenderPage() {
         >
           {`V14D Static Golden Frame
 Frame ${V14D_FACE_STATIC_FRAME} · Face State ${V14D_FACE_STATIC_STATE} · Blend ${V14D_FACE_STATIC_BLEND.toFixed(2)}
-Mode ${faceStaticMode} · tex ${faceStaticMode === "uvDebug" ? "uv-debug" : V14D_FACE_STATIC_MODE_TEXTURE[faceStaticMode]}
+Mode ${faceStaticMode} · tex ${v14dFaceStaticTextureName(faceStaticMode)}
 Camera Locked · Animation Paused
 静态脸部合成分量预览 · 不代表完整 Blender 最终视觉`}
         </div>
@@ -452,6 +459,7 @@ Camera Locked · Animation Paused
           v14dColorBaseline={query.v14dColorBaseline}
           v14dFaceStatic={query.v14dFaceStatic}
           v14dFaceStaticMode={faceStaticMode}
+          v14dFaceStaticGated={query.v14dFaceStatic}
           rezeBackgroundEffect={query.v14dColorBaseline || query.v14dFaceStatic ? "关闭" : undefined}
           rezeTransparentBackground={query.v14dColorBaseline || query.v14dFaceStatic ? false : undefined}
           rezeGrade={query.v14dColorBaseline || query.v14dFaceStatic ? "中性" : undefined}

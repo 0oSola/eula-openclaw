@@ -44,6 +44,11 @@ const VMD = process.env.V14D_VMD || "C:\\w\\rk3-face-v14d\\web\\public\\assets\\
 const DERIVED_DIR = process.env.V14D_DERIVED_DIR || "C:\\w\\rk3-face-v14d\\.scratch\\v14d-face-static-derived";
 const FACE_D = path.join(KOLEDA_DIR, "Textures", "c_Koleda_slg_face_d.png");
 const FACE_D_REL = "Textures/c_Koleda_slg_face_d.png";
+// 额外模式：--mode=<名称> 只采集单一模式并输出 face-static-<名称>.png，跳过其余循环。
+const MODE_ARG = (() => {
+  const hit = process.argv.find((a) => a.startsWith("--mode="));
+  return hit ? hit.split("=", 2)[1] : null;
+})();
 fs.mkdirSync(OUT, { recursive: true });
 
 function collectModelFiles(dir) {
@@ -70,7 +75,9 @@ const DERIVED_FILE = {
 const MIME = { ".png": "image/png", ".bmp": "image/bmp", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".pmx": "application/octet-stream", ".vmd": "application/octet-stream", ".spa": "application/octet-stream", ".sph": "application/octet-stream", ".tga": "application/octet-stream" };
 
 const summary = { out: OUT, modes: {}, pageErrors: [], failedRequests: [], httpBadResponses: [] };
-for (const mode of ["normal", "faceShadowOnly", "finalFaceComposite"]) {
+const ALL_MODES = ["normal", "faceShadowOnly", "finalFaceComposite"];
+const MODES = MODE_ARG ? (ALL_MODES.includes(MODE_ARG) ? [MODE_ARG] : (() => { console.error(`未知 --mode=${MODE_ARG}`); process.exit(2); })()) : ALL_MODES;
+for (const mode of MODES) {
   // 每模式独立 context（仅一次 init script + 一次 route），避免多文档累积。
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "v14d-face-static-chrome-"));
   const context = await chromium.launchPersistentContext(profile, {
@@ -201,7 +208,7 @@ function validateHdrEvidence(mode, hdr, fails, FIXED = 640, MIN_FACE_SAMPLES = 1
   }
 }
 const fails = [];
-for (const mode of ["normal", "faceShadowOnly", "finalFaceComposite"]) {
+for (const mode of MODES) {
   const m = summary.modes[mode];
   if (!m) { fails.push(`${mode}: 无采集结果`); continue; }
   if (m.state.webgpuStatus !== "ready") fails.push(`${mode}: canvas 未 ready (${m.state.webgpuStatus})`);
