@@ -33,7 +33,11 @@ try{
   await page.waitForSelector("canvas[data-webgpu-status='ready']",{timeout:120000});
   await page.waitForSelector("canvas[data-v14d-face-static='true']",{timeout:60000});
   await page.waitForTimeout(1200);
-  const uvB64 = await page.evaluate(async()=>{ const api=window.__v14dFaceStatic; return api.exportFaceUvPng ? api.exportFaceUvPng() : null; });
-  if(!uvB64){ console.error("exportFaceUvPng 不存在或返回 null"); process.exitCode=1; }
-  else { fs.writeFileSync(path.join(OUT,"web-face-uv.png"), Buffer.from(uvB64,"base64")); console.log("uv exported"); }
+  const res = await page.evaluate(async()=>{ const api=window.__v14dFaceStatic; if(!api.exportFaceUvPng) return null; const r=await api.exportFaceUvPng(); if(!r) return null; return { png:r.png, width:r.width, height:r.height, faceMaterialId:r.faceMaterialId, uv:Array.from(r.uv), faceMask:Array.from(r.faceMask) }; });
+  if(!res){ console.error("exportFaceUvPng 不存在或返回 null"); process.exitCode=1; }
+  else {
+    fs.writeFileSync(path.join(OUT,"web-face-uv.png"), Buffer.from(res.png,"base64"));
+    fs.writeFileSync(path.join(OUT,"web-face-uv.float.json"), JSON.stringify({width:res.width,height:res.height,faceMaterialId:res.faceMaterialId,uv:res.uv,faceMask:res.faceMask}));
+    console.log("uv exported (pre-tonemap HDR readback, float UV + mask json + preview png)");
+  }
 } finally { await context.close(); }

@@ -71,7 +71,7 @@
     {
       "id": "linearHdr",
       "name": "Linear HDR",
-      "webSource": "恢复生产材质组后，tonemap 前 hdrResolveTexture 的私有 rgba16float readback",
+      "webSource": "该级别直接读取 tonemap 前 hdrResolveTexture 的诊断读回结果：源 hdrResolveTexture 随硬件为 rg11b10ufloat 或 rgba16float，诊断链统一 blit 到 rgba16float 读回目标",
       "comparison": "Blender Combined/OpenEXR Scene Linear"
     },
     {

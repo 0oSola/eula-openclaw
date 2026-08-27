@@ -52,3 +52,18 @@ report = {
 }
 (OUT / "same-mask-gate.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 print(json.dumps(report, ensure_ascii=False, indent=2))
+
+# 进程退出码反映 Gate 状态: 有可比对的模式(normal/finalFaceComposite)任一通道均值绝对差
+# 超过 0.03 目标时非零退出, 防止正式失败被误判为成功。faceShadowOnly 无 Blender 参考(本票
+# 未重渲), 不参与判定。
+import sys
+THRESH = 0.03
+fails = []
+for mode in ("normal", "finalFaceComposite"):
+    d = report[mode]["absDiff"]
+    if d is not None and any(v > THRESH for v in d):
+        fails.append(f"{mode} absDiff={[round(x,4) for x in d]} 超目标 {THRESH}")
+if fails:
+    print("GATE-FAIL: same-mask 同屏 Gate 未通过 - " + "; ".join(fails), file=sys.stderr)
+    sys.exit(1)
+print("GATE-OK: same-mask 同屏 Gate 通过")

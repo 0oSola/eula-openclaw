@@ -89,7 +89,23 @@ declare global {
     __v14dFaceStatic?: {
       capture: () => Promise<V14dFaceStaticCapture>;
       exportFaceMaskPng: () => Promise<string | null>;
-      exportFaceUvPng: () => Promise<string | null>;
+      exportFaceUvPng: () => Promise<{
+        png: string;
+        width: number;
+        height: number;
+        faceMaterialId: number;
+        uv: Float32Array;
+        faceMask: Uint8Array;
+      } | null>;
+      /** 导出当前模式的 pre-tonemap HDR（线性、未过 composite tonemap/grade/gamma）
+       *  逐像素浮点 RGB 与 Face mask，供 UV-direct Gate 用同口径线性值对账。 */
+      exportFaceHdrFloat: () => Promise<{
+        width: number;
+        height: number;
+        faceMaterialId: number;
+        rgb: Float32Array;
+        faceMask: Uint8Array;
+      } | null>;
     };
     /** faceStatic 注入的权威资产集（File 形式，引擎 files 变体局部解析）。 */
     __v14dFaceStaticAssets?: V14dFaceStaticAssetSource;
@@ -1188,32 +1204,116 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
    * 仅在 faceStatic 模式且 Face 已切到 V14D_FACE_UV_DEBUG_GRAPH 时有意义。
    * 供 UV-direct 对账读取 Web 侧每个脸部像素实际使用的 UV 坐标。
    */
-  const exportV14dFaceUvPng = async (): Promise<string | null> => {
+  /**
+   * 共享辅助：取 Face 材质 pick ID + pre-tonemap HDR resolve + 逐像素 Face mask。
+   * 两个导出函数（UV / HDR 浮点）复用，避免重复 Face ID、resolve/mask 与 mask 构造。
+   * pre-tonemap：源纹理 hdrResolveTexture（格式随硬件 rg11b10ufloat/rgba16float，
+   * 诊断链 blit 到 rgba16float 读回），未过 composite 的 bloom/exposure/tonemap/grade/gamma。
+   */
+  const readV14dFaceResolveAndMask = async (): Promise<{
+    faceMaterialId: number;
+    hdr: Float32Array;
+    faceMask: Uint8Array;
+    size: number;
+  } | null> => {
     const engine = engineRef.current;
     const model = modelRef.current;
-    const canvas = canvasRef.current;
-    if (!engine || !model || !canvas || !v14dFaceStaticRef.current) return null;
+    if (!engine || !model || !v14dFaceStaticRef.current) return null;
     try {
       const faceMaterialId = v14dFaceStaticFacePickId(
         model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount })),
       );
       if (faceMaterialId === null) return null;
+      const resolve = await readV14dColorBaselineResolveTargets(engine, V14D_FACE_STATIC_SIZE, V14D_FACE_STATIC_SIZE);
       const materialMask = await readV14dColorBaselineMaterialMask(engine, V14D_FACE_STATIC_SIZE, V14D_FACE_STATIC_SIZE);
-      const display = await readV14dCanvasDisplay(canvas);
+      const size = V14D_FACE_STATIC_SIZE;
+      const faceMaskArr = new Uint8Array(size * size);
+      for (let i = 0; i < size * size; i += 1) {
+        const off = i * 4;
+        faceMaskArr[i] = materialMask.data[off] !== 0 && materialMask.data[off + 1] === faceMaterialId ? 1 : 0;
+      }
+      return { faceMaterialId, hdr: resolve.hdr.data, faceMask: faceMaskArr, size };
+    } catch {
+      return null;
+    }
+  };
+
+  const exportV14dFaceUvPng = async (): Promise<{
+    png: string;
+    width: number;
+    height: number;
+    faceMaterialId: number;
+    /** 逐像素原始插值 UV（Float32，pre-tonemap HDR readback，非最终 canvas 显示色）。 */
+    uv: Float32Array;
+    /** 逐像素是否命中 Face 材质（同一 Face pick mask）。 */
+    faceMask: Uint8Array;
+  } | null> => {
+    try {
+      // 关键修复：uvDebug 的 Face fragment 输出 vec3f(input.uv, 0.0)，在场景 HDR pass
+      // 写入 pre-tonemap 的 hdrResolveTexture。必须从该 HDR resolve 做 GPU readback，
+      // 读取的 R/G 才是原始插值 UV。旧实现从最终 canvas（readV14dCanvasDisplay）反推，
+      // 已被 composite 的 bloom/exposure/Filmic LUT/color grading/gamma 污染，不是原始 UV。
+      const fr = await readV14dFaceResolveAndMask();
+      if (!fr) return null;
+      const { faceMaterialId, hdr, faceMask: faceMaskArr, size } = fr;
+      const uv = new Float32Array(size * size * 2);
       const c = document.createElement("canvas");
-      c.width = V14D_FACE_STATIC_SIZE; c.height = V14D_FACE_STATIC_SIZE;
+      c.width = size; c.height = size;
       const ctx = c.getContext("2d");
       if (!ctx) return null;
-      const img = ctx.createImageData(V14D_FACE_STATIC_SIZE, V14D_FACE_STATIC_SIZE);
-      for (let i = 0; i < V14D_FACE_STATIC_SIZE * V14D_FACE_STATIC_SIZE; i += 1) {
+      const img = ctx.createImageData(size, size);
+      for (let i = 0; i < size * size; i += 1) {
         const off = i * 4;
-        const isFace = materialMask.data[off] !== 0 && materialMask.data[off + 1] === faceMaterialId;
-        const u = isFace ? Math.round(Math.max(0, Math.min(255, display.data[off] * 255))) : 0;
-        const v = isFace ? Math.round(Math.max(0, Math.min(255, display.data[off + 1] * 255))) : 0;
-        img.data[off] = u; img.data[off + 1] = v; img.data[off + 2] = 0; img.data[off + 3] = 255;
+        const isFace = faceMaskArr[i] === 1;
+        // HDR readback 的 R=u, G=v（vec3f(input.uv, 0.0)），保持浮点精度。
+        const u = isFace ? hdr[off] : 0;
+        const v = isFace ? hdr[off + 1] : 0;
+        uv[i * 2] = u;
+        uv[i * 2 + 1] = v;
+        // PNG 仅供人眼检查（8-bit 量化），精确值用 uv Float32Array。
+        img.data[off] = Math.round(Math.max(0, Math.min(255, u * 255)));
+        img.data[off + 1] = Math.round(Math.max(0, Math.min(255, v * 255)));
+        img.data[off + 2] = 0;
+        img.data[off + 3] = 255;
       }
       ctx.putImageData(img, 0, 0);
-      return c.toDataURL("image/png").split(",")[1] ?? null;
+      const png = c.toDataURL("image/png").split(",")[1] ?? null;
+      if (!png) return null;
+      return { png, width: size, height: size, faceMaterialId, uv, faceMask: faceMaskArr };
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * 导出当前 faceStatic 模式 Face 材质的 pre-tonemap HDR 线性 RGB（逐像素浮点）。
+   * 从 hdrResolveTexture（场景 pass 输出，源格式随硬件为 rg11b10ufloat/rgba16float，
+   * 诊断链 blit 到 rgba16float 读回目标；未过 composite 的
+   * bloom/exposure/Filmic LUT/color grading/gamma）GPU readback。
+   * 与 uvDebug 用同一 Face pick mask；供 UV-direct Gate 用「同一线性口径」对账，
+   * 避免拿 tonemap 后的最终 canvas 对比未 tonemap 的 baker 参考（口径不一致）。
+   */
+  const exportV14dFaceHdrFloat = async (): Promise<{
+    width: number;
+    height: number;
+    faceMaterialId: number;
+    rgb: Float32Array;
+    faceMask: Uint8Array;
+  } | null> => {
+    try {
+      const fr = await readV14dFaceResolveAndMask();
+      if (!fr) return null;
+      const { faceMaterialId, hdr, faceMask: faceMaskArr, size } = fr;
+      const rgb = new Float32Array(size * size * 3);
+      for (let i = 0; i < size * size; i += 1) {
+        const off = i * 4;
+        if (faceMaskArr[i] === 1) {
+          rgb[i * 3] = hdr[off];
+          rgb[i * 3 + 1] = hdr[off + 1];
+          rgb[i * 3 + 2] = hdr[off + 2];
+        }
+      }
+      return { width: size, height: size, faceMaterialId, rgb, faceMask: faceMaskArr };
     } catch {
       return null;
     }
@@ -1225,6 +1325,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       capture: () => captureV14dFaceStatic(),
       exportFaceMaskPng: () => exportV14dFaceMaskPng(),
       exportFaceUvPng: () => exportV14dFaceUvPng(),
+      exportFaceHdrFloat: () => exportV14dFaceHdrFloat(),
     };
     return () => {
       if (window.__v14dFaceStatic) delete window.__v14dFaceStatic;
