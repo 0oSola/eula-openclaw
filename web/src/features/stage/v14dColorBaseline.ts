@@ -90,10 +90,10 @@ export const V14D_COLOR_BASELINE_ROIS: readonly V14dColorBaselineRoi[] = [
     },
     calibrationStatus: "ready",
     reference: {
-      baseColorSrgb: [0.6192478657010269, 0.6064017005759117, 0.6958600577870464],
+      baseColorSrgb: [0.66970604945617, 0.6523746335533499, 0.7086999554537097],
       linearHdrSrgb: [0.6273923359081031, 0.61601119993634, 0.6941206348890926],
       finalDisplaySrgb: [0.5134638775435728, 0.5118026991104822, 0.5720413683333714],
-      source: "Blender 5.1.1 白光 frame-120；材质 ID+深度 mask；boundsPx=[478,119,277,334]；edgeErosionPx=2。",
+      source: "Blender 5.1.1 纯纹理（无 tint/rmo/阴影节点树）白光 frame-120；材质 ID+深度 mask；boundsPx=[478,119,277,334]；edgeErosionPx=2。",
     },
   },
   {
@@ -119,10 +119,10 @@ export const V14D_COLOR_BASELINE_ROIS: readonly V14dColorBaselineRoi[] = [
     },
     calibrationStatus: "ready",
     reference: {
-      baseColorSrgb: [0.6979962719257877, 0.6831030453008409, 0.7727042791251163],
+      baseColorSrgb: [0.7545091590729425, 0.7346827763842059, 0.7870342315078118],
       linearHdrSrgb: [0.6719024066830409, 0.6586767342221878, 0.736478958865226],
       finalDisplaySrgb: [0.5532433312854331, 0.550117723014672, 0.6046184047457078],
-      source: "Blender 5.1.1 白光 frame-120；材质 ID+深度 mask；boundsPx=[497,190,343,530]；edgeErosionPx=2。",
+      source: "Blender 5.1.1 纯纹理（无 tint/rmo/阴影节点树）白光 frame-120；材质 ID+深度 mask；boundsPx=[497,190,343,530]；edgeErosionPx=2。",
     },
   },
   {
@@ -148,10 +148,10 @@ export const V14D_COLOR_BASELINE_ROIS: readonly V14dColorBaselineRoi[] = [
     },
     calibrationStatus: "ready",
     reference: {
-      baseColorSrgb: [0.9132579083182962, 0.7419629039500332, 0.7069570799908805],
+      baseColorSrgb: [0.9342793003323737, 0.7857934113911736, 0.7624051933801729],
       linearHdrSrgb: [0.8978616929789722, 0.72928035692014, 0.6941475070120563],
       finalDisplaySrgb: [0.7092495249852734, 0.60792236239141, 0.5855194395367366],
-      source: "Blender 5.1.1 白光 frame-120；材质 ID+深度 mask；boundsPx=[570,282,167,114]；edgeErosionPx=2。",
+      source: "Blender 5.1.1 纯纹理（无 tint/rmo/阴影节点树）白光 frame-120；材质 ID+深度 mask；boundsPx=[570,282,167,114]；edgeErosionPx=2。",
     },
   },
   {
@@ -177,10 +177,10 @@ export const V14D_COLOR_BASELINE_ROIS: readonly V14dColorBaselineRoi[] = [
     },
     calibrationStatus: "ready",
     reference: {
-      baseColorSrgb: [0.7200289657825898, 0.7133770533340273, 0.7333924686667868],
+      baseColorSrgb: [0.7200672970797082, 0.7134111692974934, 0.7334130523811577],
       linearHdrSrgb: [0.7093168193216505, 0.7030308601009203, 0.7200484540873416],
       finalDisplaySrgb: [0.5206145478093768, 0.5187587002798091, 0.5394622779201983],
-      source: "Blender 5.1.1 白光 frame-120；材质 ID+深度 mask；boundsPx=[523,434,297,286]；edgeErosionPx=2。",
+      source: "Blender 5.1.1 纯纹理（无 tint/rmo/阴影节点树）白光 frame-120；材质 ID+深度 mask；boundsPx=[523,434,297,286]；edgeErosionPx=2。",
     },
   },
   {
@@ -206,10 +206,10 @@ export const V14D_COLOR_BASELINE_ROIS: readonly V14dColorBaselineRoi[] = [
     },
     calibrationStatus: "ready",
     reference: {
-      baseColorSrgb: [0.7947090404170882, 0.7976081305607623, 0.8157320881122292],
+      baseColorSrgb: [0.7953772012503841, 0.7982162197952023, 0.8161731518402069],
       linearHdrSrgb: [0.7539505448306034, 0.7563871855599547, 0.7699739197593685],
       finalDisplaySrgb: [0.6277303755440624, 0.6306586179066459, 0.6387500862018414],
-      source: "Blender 5.1.1 白光 frame-120；材质 ID+深度 mask；boundsPx=[878,675,23,45]；edgeErosionPx=2；角色左袖/画面右下可见袖片。",
+      source: "Blender 5.1.1 纯纹理（无 tint/rmo/阴影节点树）白光 frame-120；材质 ID+深度 mask；boundsPx=[878,675,23,45]；edgeErosionPx=2；角色左袖/画面右下可见袖片。",
     },
   },
 ];
@@ -915,7 +915,7 @@ function compareRoiLevel(
   const deltaEs: number[] = [];
   let sampleCount = 0;
   let validSampleCount = 0;
-  const channelErrors = [0, 0, 0];
+  const actualLinearSum = [0, 0, 0];
   for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
     for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
       if (!pixelIsInRoi(roi, x, y, image.width, image.height)) continue;
@@ -935,9 +935,9 @@ function compareRoiLevel(
         ? srgbToLinearRgb(actualSrgb)
         : [image.data[offset], image.data[offset + 1], image.data[offset + 2]] as [number, number, number];
       validSampleCount += 1;
-      channelErrors[0] += Math.abs(actualLinear[0] - expectedLinear[0]) * 100;
-      channelErrors[1] += Math.abs(actualLinear[1] - expectedLinear[1]) * 100;
-      channelErrors[2] += Math.abs(actualLinear[2] - expectedLinear[2]) * 100;
+      actualLinearSum[0] += actualLinear[0];
+      actualLinearSum[1] += actualLinear[1];
+      actualLinearSum[2] += actualLinear[2];
       if (level === "finalDisplay") deltaEs.push(deltaE2000(srgbToLab(actualSrgb), srgbToLab(referenceSrgb)));
     }
   }
@@ -952,7 +952,12 @@ function compareRoiLevel(
       validRate: sampleCount ? validSampleCount / sampleCount : 0,
     };
   }
-  const channels = channelErrors.map((value) => value / validSampleCount);
+  const actualLinearMean = actualLinearSum.map((value) => value / validSampleCount);
+  // Stage 1 修复：BaseColor 级改为"ROI 均值对参考均值"的偏差（bias）口径。
+  // 原实现用 mean|逐像素 - 单一常数参考|，把纹理自身的空间方差计入了"误差"，
+  // 导致头发/胸口等纹理多变的 ROI 必然高达 13-27%，而颜色均匀的左袖只有 5%。
+  // 这里改为 |mean(actual) - expected|，只衡量真实采样偏差，纹理方差单独以诊断形式记录。
+  const channels = actualLinearMean.map((value, index) => Math.abs(value - expectedLinear[index]) * 100);
   return {
     status: "measured",
     sampleCount,
@@ -965,7 +970,8 @@ function compareRoiLevel(
       p95: deltaEs.length ? percentile95(deltaEs) : null,
     },
     notes: [
-      "有效像素同时满足模型覆盖 alpha、目标材质 ID 与 depth24plus 前景可见性；Linear RGB 误差按绝对线性通道差 × 100 计算。",
+      "有效像素同时满足模型覆盖 alpha、目标材质 ID 与 depth24plus 前景可见性；Linear RGB 误差按 ROI 均值的绝对线性通道差 × 100 计算（偏差口径，纹理空间方差不计入）。",
+      `诊断 actualLinearMean=${actualLinearMean.map((v) => v.toFixed(4)).join(",")} expectedLinear=${expectedLinear.map((v) => v.toFixed(4)).join(",")} imageColorSpace=${image.colorSpace}`,
       "当前没有正式 Gate 阈值。",
     ],
   };
@@ -1083,4 +1089,64 @@ export function makeV14dLinearImage(
   data: Float32Array,
 ): V14dNormalizedImage {
   return { width, height, data, colorSpace: "linear" };
+}
+
+/**
+ * 临时诊断探针：计算每个 ROI 内 Web unlit BaseColor 的实际均值（sRGB 与 linear），
+ * 只用于根因取证，不进入正式 Gate 判定。
+ */
+export function measureV14dRoiActualMeans({
+  rois = V14D_COLOR_BASELINE_ROIS,
+  image,
+  mask,
+  materialMask,
+  materialIdByName,
+}: {
+  rois?: readonly V14dColorBaselineRoi[];
+  image: V14dNormalizedImage | null;
+  mask: Uint8Array | null;
+  materialMask: Uint8Array | null;
+  materialIdByName: Readonly<Record<string, number>>;
+}): Record<string, { srgb: number[]; linear: number[]; n: number } | null> {
+  const out: Record<string, { srgb: number[]; linear: number[]; n: number } | null> = {};
+  for (const roi of rois) {
+    out[roi.id] = null;
+    if (!image || !mask || !materialMask) continue;
+    const materialId = materialIdByName[roi.material.web];
+    if (materialId == null) continue;
+    const bounds = getRoiPixelBounds(roi, image.width, image.height);
+    if (!bounds) continue;
+    let n = 0;
+    const linSum = [0, 0, 0];
+    const srgbSum = [0, 0, 0];
+    for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+      for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
+        if (!pixelIsInRoi(roi, x, y, image.width, image.height)) continue;
+        const offset = (y * image.width + x) * 4;
+        if (mask[offset + 1] / 255 < roi.backgroundExclusion.threshold) continue;
+        if (materialMask[offset] === 0 || materialMask[offset + 1] !== materialId) continue;
+        const lin: [number, number, number] =
+          image.colorSpace === "srgb"
+            ? srgbToLinearRgb([image.data[offset], image.data[offset + 1], image.data[offset + 2]])
+            : [image.data[offset], image.data[offset + 1], image.data[offset + 2]];
+        const srgb: [number, number, number] =
+          image.colorSpace === "srgb"
+            ? [image.data[offset], image.data[offset + 1], image.data[offset + 2]]
+            : [linearToSrgb(lin[0]), linearToSrgb(lin[1]), linearToSrgb(lin[2])];
+        for (let c = 0; c < 3; c += 1) {
+          linSum[c] += lin[c];
+          srgbSum[c] += srgb[c];
+        }
+        n += 1;
+      }
+    }
+    if (n > 0) {
+      out[roi.id] = {
+        srgb: srgbSum.map((v) => v / n),
+        linear: linSum.map((v) => v / n),
+        n,
+      };
+    }
+  }
+  return out;
 }

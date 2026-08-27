@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 
 const CHROME_EXE = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-const BASE = "http://127.0.0.1:3110/mmd-calibration-render";
-const MODEL = "http://127.0.0.1:3220/GirlsFrontline%20KoledaDefault.pmx";
-const VMD = "http://127.0.0.1:3220/koleda-v14d-authoritative-pose-f120.vmd";
+const BASE = process.env.V14D_CAPTURE_BASE || "http://127.0.0.1:3110/mmd-calibration-render";
+const ASSET = process.env.V14D_ASSET_BASE || "http://127.0.0.1:3220";
+const MODEL = `${ASSET}/GirlsFrontline%20KoledaDefault.pmx`;
+const VMD = `${ASSET}/koleda-v14d-authoritative-pose-f120.vmd`;
 const OUT = path.resolve(process.argv[2] || ".scratch/v14d-color-baseline-capture");
 fs.mkdirSync(OUT, { recursive: true });
 

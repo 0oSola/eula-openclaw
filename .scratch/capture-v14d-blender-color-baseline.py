@@ -114,7 +114,11 @@ def hide_existing_lights(scene: bpy.types.Scene) -> None:
 
 
 def select_vmd_root(root: bpy.types.Object) -> None:
-    bpy.ops.object.select_all(action="DESELECT")
+    # 避免 bpy.ops.object.select_all 在 background 模式下触发依赖图重建，
+    # 该重建会让后续 scene.objects.get("PROTO_GameCamera") 偶发返回 None。
+    # 改为直接遍历清选，不经过 ops 上下文。
+    for obj in bpy.context.scene.objects:
+        obj.select_set(False)
     root.hide_viewport = False
     root.hide_render = False
     root.hide_set(False)
@@ -168,7 +172,9 @@ def apply_authoritative_vmd(
 
 
 def set_camera(scene: bpy.types.Scene) -> dict:
-    camera = scene.objects.get(CAMERA_NAME)
+    # scene.objects 在 background 模式下经过 depsgraph 更新后可能偶发剔除对象；
+    # bpy.data.objects 是稳定的全局数据块集合，不受 view_layer 求值影响。
+    camera = bpy.data.objects.get(CAMERA_NAME) or scene.objects.get(CAMERA_NAME)
     if camera is None or camera.type != "CAMERA":
         raise RuntimeError(f"找不到 Blender 相机 {CAMERA_NAME}")
     camera_y_sign = float(os.environ.get("V14D_CAMERA_Y_SIGN", "-1"))
@@ -287,22 +293,50 @@ def build_unlit_material_copy(material: bpy.types.Material) -> bpy.types.Materia
     nodes = copy.node_tree.nodes
     links = copy.node_tree.links
     output = next((node for node in nodes if node.bl_idname == "ShaderNodeOutputMaterial"), None)
-    principled = find_principled(copy)
     if output is None:
         output = nodes.new("ShaderNodeOutputMaterial")
     emission = nodes.new("ShaderNodeEmission")
     emission.name = "V14D BaseColor Emission"
     emission.inputs["Strength"].default_value = 1.0
+
+    # Stage 1 修复：BaseColor 参考必须是"纯纹理直接采样"，与 Web unlit 诊断图同口径。
+    # 原实现接的是 Principled Base Color 的整条上游链，把 HairTint 乘色、
+    # Cth1-Top 的 rmo*0.62+0.38 缩放、Face 的阴影混合全部算进了"纹理"参考，
+    # 导致 Web 纯纹理值被系统性判为偏亮。这里改为直接追踪 Base Color 上游
+    # 第一个 sRGB 图像纹理节点，只把该纹理颜色接入 emission。
+    base_color = None
+    principled = find_principled(copy)
     if principled is not None:
         base_color = principled.inputs.get("Base Color")
-        if base_color is not None and base_color.is_linked:
-            links.new(base_color.links[0].from_socket, emission.inputs["Color"])
-        elif base_color is not None:
-            emission.inputs["Color"].default_value = base_color.default_value
-        else:
-            emission.inputs["Color"].default_value = material.diffuse_color
+
+    def first_color_texture_socket(socket, depth: int = 0):
+        """Depth-first 搜索 Base Color 上游第一个彩色图像纹理的 Color 输出。"""
+        if socket is None or depth > 16:
+            return None
+        for link in socket.links:
+            node = link.from_node
+            if node.bl_idname == "ShaderNodeTexImage":
+                image = getattr(node, "image", None)
+                colorspace = (image.colorspace_settings.name if image else "") or ""
+                # 只接受 sRGB 彩色纹理；Non-Color 的 rmo/mask 不属于 BaseColor 纹理。
+                if image is not None and colorspace.lower() == "srgb":
+                    return link.from_socket
+            for child in node.inputs:
+                found = first_color_texture_socket(child, depth + 1)
+                if found is not None:
+                    return found
+        return None
+
+    texture_socket = first_color_texture_socket(base_color)
+    if texture_socket is not None:
+        links.new(texture_socket, emission.inputs["Color"])
+    elif base_color is not None and base_color.is_linked:
+        links.new(base_color.links[0].from_socket, emission.inputs["Color"])
+    elif base_color is not None:
+        emission.inputs["Color"].default_value = base_color.default_value
     else:
         emission.inputs["Color"].default_value = material.diffuse_color
+
     for link in list(output.inputs["Surface"].links):
         links.remove(link)
     links.new(emission.outputs["Emission"], output.inputs["Surface"])
@@ -626,10 +660,13 @@ def mean_display_for_mask(pixels: list[float], mask: list[bool]) -> dict:
 def main() -> None:
     scene = bpy.context.scene
     configure_render(scene)
+    # 在任何 hide/VMD 导入前设置相机：background 模式下 hide_render/hide_viewport
+    # 与 view_layer pass 组合会偶发触发 depsgraph 重建，导致 scene.objects 暂时
+    # 取不到 PROTO_GameCamera。先在干净状态下锁定相机与 scene.camera 引用。
+    camera_meta = set_camera(scene)
     set_world_white(scene)
     hide_non_authoritative_meshes(scene)
     hide_existing_lights(scene)
-    camera_meta = set_camera(scene)
     sun_meta = add_white_sun(scene)
     obj = scene.objects.get(AUTH_OBJECT)
     if obj is None or obj.type != "MESH":

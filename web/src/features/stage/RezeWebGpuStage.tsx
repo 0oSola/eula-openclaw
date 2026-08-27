@@ -43,6 +43,7 @@ import {
   analyzeV14dColorBaselineRois,
   createV14dColorBaselineResult,
   makeV14dLinearImage,
+  measureV14dRoiActualMeans,
   readV14dCanvasDisplay,
   readV14dColorBaselineMaterialMask,
   readV14dColorBaselineResolveTargets,
@@ -916,6 +917,14 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           firstDivergenceLevel: analysis.firstDivergence.level,
           firstDivergenceReason: analysis.firstDivergence.reason,
         });
+        // 临时根因取证：记录 Web unlit BaseColor 每 ROI 实际均值。
+        (result as Record<string, unknown>).__webBaseColorActualMeans =
+          measureV14dRoiActualMeans({
+            image: baseColorImage,
+            mask: linearResolve?.mask.data ?? baseResolve?.mask.data ?? null,
+            materialMask: materialMask?.data ?? null,
+            materialIdByName,
+          });
         baselineResultRef.current = result;
         updateV14dColorBaselineDataset(result);
         return result;
