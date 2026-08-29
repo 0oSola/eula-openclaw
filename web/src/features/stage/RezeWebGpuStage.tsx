@@ -65,7 +65,7 @@ import {
 import {
   V14D_FACE_MATERIAL_NAME,
   V14D_FACE_STATIC_AUTHORITY,
-  V14D_BAKED_MATERIAL_MAP,
+  V14D_BAKED_BINDINGS,
   V14D_FACE_STATIC_BLEND,
   V14D_FACE_STATIC_CAMERA,
   V14D_FACE_STATIC_DATASET,
@@ -1590,10 +1590,45 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           ...(faceOverride ? [faceOverride] : []),
           ...bakedFiles,
         ];
+        // 真实 GPU 绑定：bakedGolden 模式把材质名→唯一 logicalPath 传给引擎，
+        // 由 loadModel 在 GPU 材质建立（setupMaterialsForInstance 上传 GPUTexture/建
+        // bind group）之前为每个目标材质追加独立 texture entry 并改 diffuseTextureIndex。
+        // 引擎补丁默认关闭（无 overrides 时 no-op）；仅 9 个文件齐全才传 overrides，
+        // 部分 bakedDir 不进入已绑定状态。cape 图可内容为空但文件/独立路径必须存在。
+        const bakedOverrides = isBaked
+          ? (() => {
+              const o: Record<string, string> = {};
+              for (const b of V14D_BAKED_BINDINGS) {
+                if (assets.bakedTextures?.[b.key]) o[b.pmxMaterial] = b.logicalPath;
+              }
+              return Object.keys(o).length === V14D_BAKED_BINDINGS.length ? o : undefined;
+            })()
+          : undefined;
         model = await engine.loadModel("companion", {
           files: modelFiles,
           pmxFile: assets.pmxFile,
-        });
+          ...(bakedOverrides ? { materialDiffuseOverrides: bakedOverrides } : {}),
+        } as Parameters<Engine["loadModel"]>[1]);
+        // 真实 GPU 绑定证明：loadModel 返回后从引擎读取每个目标材质最终的
+        // diffuseTextureIndex 与对应 logicalPath（此时 setupMaterialsForInstance 已用
+        // 该路径上传 GPUTexture 并建 bind group）。这不是自证名单——是引擎实际状态。
+        if (isBaked && canvasRef.current) {
+          const texs = model.getTextures();
+          // 追加纹理区间（引擎补丁在 GPU 材质建立前写入）：start=override 前原始纹理数，
+          // count=追加条数。Gate 据此校验九项 idx 恰好覆盖 [start, start+count)。
+          const range = (model as unknown as { __v14dBakedTextureRange?: { start: number; count: number } })
+            .__v14dBakedTextureRange;
+          const actual = model.getMaterials()
+            .filter((m) => V14D_BAKED_BINDINGS.some((b) => b.pmxMaterial === m.name))
+            .map((m) => {
+              const tex = m.diffuseTextureIndex >= 0 ? texs[m.diffuseTextureIndex] : null;
+              return `${m.name}|${m.diffuseTextureIndex}|${tex ? tex.path : ""}`;
+            });
+          canvasRef.current.dataset.v14dBakedActual = actual.join(";");
+          canvasRef.current.dataset.v14dBakedTexStart = range ? String(range.start) : "";
+          canvasRef.current.dataset.v14dBakedTexCount = range ? String(range.count) : "";
+          canvasRef.current.dataset.v14dBakedTexFinal = String(texs.length);
+        }
         if (canvasRef.current) {
           canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.texture] =
             isUvDebug ? "uv-debug" : v14dFaceStaticTextureName(v14dFaceStaticMode);
@@ -1662,10 +1697,18 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         // uvDebug 模式只输出 Face 的插值 UV（几何节点），供 UV-direct 对账。
         if (v14dFaceStaticMode !== "worldPos" && v14dFaceStaticMode !== "diffuseFlat") {
         if (v14dFaceStaticMode === "bakedGolden") {
-          // 黄金帧烘焙模式：把全部烘焙材质（Face/HairA/HairB/BodySkin/Cth1-Top/Cth1-Cape）
-          // 切到纯纹理 unlit graph，纹理已由 AssetReader 按材质逻辑名替换为
-          // Blender frame120 可见岛烘焙图（含手绘阴影/高光，保留 alpha cutout）。
-          const bakedMaterials = Object.keys(V14D_BAKED_MATERIAL_MAP);
+          // 黄金帧最终着色烘焙模式：把全部烘焙材质切到纯纹理 unlit graph，
+          // 纹理来自 Blender frame120 Cycles COMBINED 最终着色烘焙图
+          // （含六 AREA 灯/世界光/Toon/Face Shadow，保留 alpha cutout）。
+          //
+          // 逐材质独立绑定（修复重复逻辑键覆盖）：烘焙文件以唯一逻辑键
+          // Textures/v14d-baked/baked_<key>.png 注入 fileMap；加载后按 PMX 材质名
+          // 把该材质 diffuse 纹理路径改写为对应烘焙键，引擎按路径独立解析，
+          // 不再发生 EyeWhite 覆盖 Face / HairB 覆盖 HairA / 空 Cape 覆盖 Top。
+          // 真实 GPU 绑定已在 loadModel 内完成（materialDiffuseOverrides 在
+          // setupMaterialsForInstance 之前追加独立 texture entry 并改 diffuseTextureIndex，
+          // GPU 材质建立时即读取正确烘焙纹理）。此处仅切 unlit graph 做 passthrough 显示。
+          const bakedMaterials = V14D_BAKED_BINDINGS.map((b) => b.pmxMaterial);
           const bakedGroups = originalStyleGroups.map((group) => ({
             ...group,
             materials: group.materials.filter((name) => !bakedMaterials.includes(name)),
@@ -1728,8 +1771,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           faceEngine.setBackgroundColor(hexToLinearVec3("#050505"));
           faceEngine.addGround({ opacity: 0, width: 0, height: 0 });
           faceEngine.setBloomOptions({ enabled: false, intensity: 0 });
-          // bakedGolden：烘焙纹理=BaseColor 反照率（已含手绘阴影/高光），
-          // 用 Standard/曝光0 原样显示；其余三模式仍对齐权威 AgX 曝光 -0.56。
+          // bakedGolden：烘焙纹理=Cycles COMBINED 最终着色线性（含六灯/世界光/Toon/Face Shadow），
+          // 已含全部光照，用曝光 0 原样显示（Web 端不再叠加光照/曝光）；
+          // 其余三模式仍对齐权威 AgX 曝光 -0.56。
           faceEngine.setViewTransformOptions(
             v14dFaceStaticMode === "bakedGolden"
               ? { exposure: 0, gamma: 1.0 }

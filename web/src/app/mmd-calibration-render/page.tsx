@@ -16,8 +16,7 @@ import {
   V14D_FACE_STATIC_FRAME,
   V14D_FACE_STATIC_AUTHORITY,
   V14D_FACE_STATIC_DERIVED,
-  V14D_BAKED_MATERIAL_MAP,
-  V14D_BAKED_TEXTURES,
+  V14D_BAKED_BINDINGS,
   V14D_FACE_STATIC_MODES,
   V14D_FACE_MATERIAL_NAME,
   isV14dFaceStaticMode,
@@ -134,7 +133,7 @@ const MODE_LABEL: Record<V14dFaceStaticMode, string> = {
   uvDebug: "UV 调试",
   worldPos: "世界坐标调试",
   diffuseFlat: "无光照漫反射调试",
-  bakedGolden: "反照率烘焙诊断（失败实验）",
+  bakedGolden: "黄金帧最终着色烘焙",
 };
 
 const FACE_D_KEY = "Textures/c_Koleda_slg_face_d.png";
@@ -193,17 +192,22 @@ function FaceStaticAssetPanel(props: {
         faceShadowOnly: withRel(attenuationFile, FACE_D_KEY),
       },
     };
-    // 黄金帧烘焙纹理（可选）：选择包含 baked_*.png 的目录后按材质逻辑名覆盖。
+    // 黄金帧烘焙纹理（可选）：选择包含 baked_*.png 的目录后按唯一逻辑键注入
+    // （Textures/v14d-baked/<file>），加载后由 RezeWebGpuStage 按材质名独立绑定。
     if (bakedDir && bakedDir.length) {
       const baked: Partial<Record<string, File>> = {};
       for (const f of Array.from(bakedDir)) {
-        for (const [key, filename] of Object.entries(V14D_BAKED_TEXTURES)) {
-          if (f.name === filename) {
-            baked[key] = withRel(f, V14D_BAKED_MATERIAL_MAP[key]);
+        for (const binding of V14D_BAKED_BINDINGS) {
+          if (f.name === binding.bakedFile) {
+            baked[binding.key] = withRel(f, binding.logicalPath);
           }
         }
       }
-      source.bakedTextures = baked as V14dFaceStaticAssetSource["bakedTextures"];
+      // 边界：bakedGolden 仅当 9 个烘焙文件齐全才提供 bakedTextures，否则留空——
+      // RezeWebGpuStage 只在九件齐全时传 materialDiffuseOverrides，部分目录不进入已绑定状态。
+      // cape 图可内容为空但文件必须存在（baked_cape.png 仍须被选中）。
+      const allPresent = V14D_BAKED_BINDINGS.every((b) => baked[b.key]);
+      source.bakedTextures = allPresent ? (baked as V14dFaceStaticAssetSource["bakedTextures"]) : undefined;
     }
     return { source, missing: [] };
   };

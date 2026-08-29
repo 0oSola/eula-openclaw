@@ -223,11 +223,14 @@
 - 路由影响：数据主链固定为 `Codex -> Pet -> FastAPI -> OpenClaw -> Obsidian`；FastAPI 负责 Repository Evidence 和 Gate，OpenClaw 负责双审核、Vault Topic Resolution、Accepted Wiki Change Set 和发布。
 - 完整定义：见 `workflow/concepts/codex-author-knowledge-handoff.zh-CN.md`。
 
-# 黄金帧反照率烘焙诊断（bakedGolden）
+# 黄金帧最终着色烘焙（bakedGolden）
 
 - 英文机器名：`bakedGolden`（`v14dFaceMode=bakedGolden`）
-- 含义：V14D 固定黄金帧诊断入口下的一个**非默认**实验模式，把 Blender frame120 用「发射 + 逐材质 mask」法烘焙出的 **BaseColor 反照率**纹理（`baked_<材质>.png`）注入 Web，并对 Face/HairA/HairB/BodySkin/Cth1-Top/Cth1-Cape 套纯纹理 unlit graph 显示。它只固化反照率，**不含光照**（六 AREA/世界光/Toon 均未进入纹理）。
-- 允许用法：仅作反照率烘焙链路诊断/留档，供人工对照；用户可见名称固定为「反照率烘焙诊断（失败实验）」。
-- 禁止用法：**不得作为默认模式**（默认仍为 `finalFaceComposite`）；**不得作为「明显视觉对齐」或任何 Gate 的通过状态**——实测并排 ROI MAE 不降反升，材质/光照视觉 Gate 未通过。
+- 含义：V14D 固定黄金帧诊断入口下的一个**非默认**模式。[Stage 2A-GF2] 起为「最终着色烘焙」：在**带 UI 的 Blender 会话**（非 `-b` 无头）用 Cycles `bpy.ops.object.bake(type='COMBINED')` 把 frame120 的**六 AREA 灯 + 世界光 + Toon + Face Shadow(State2/Blend0)** 固化进逐材质线性纹理（`baked_<材质>.png`），经 `rgba8unorm-srgb` 绑定 + sRGB 解码注入 Web，对 Face/EyeWhite/Eyes/Eyes+/HairA/HairB/BodySkin/Cth1-Top/Cth1-Cape 套纯纹理 unlit graph 显示（exposure=0）。
+- 与旧「反照率烘焙诊断（失败实验）」的区别：旧版用「发射 + 逐材质 mask」只固化 BaseColor 反照率、**不含光照**（实测 ROI MAE 不降反升，已作废）；新版 Cycles COMBINED **含全部光照**，是真正闭合材质/光照视觉 Gate 的路线。带 UI 会话解除了无头环境 `bpy.ops.object.bake` `poll()` 恒 False 的硬阻塞。
+- 允许用法：作为固定帧（frame120/State2/Blend0）的视觉对齐诊断与验收；管线与资产政策不变（第三方 PMX/VMD/原始纹理不提交，派生烘焙图由用户本地目录注入）。
+- 禁止用法：**不得作为默认模式**（默认仍为 `finalFaceComposite`）；**不得实现动态五档/窄混合/迟滞/通用实时六灯**（那是独立票据）；**不得替代动态 VMD 播放渲染**。
+- 逐材质独立绑定不变量（验收修正轮）：烘焙文件以**唯一逻辑键** `Textures/v14d-baked/baked_<key>.png` 注入；真实 GPU 绑定由引擎 `materialDiffuseOverrides` 在 `loadFromReader` 后、GPU 材质建立（`setupMaterialsForInstance` 上传 GPUTexture/建 bind group）前为每个目标材质**追加独立 texture entry 并改 diffuseTextureIndex** 完成——loadModel 返回后才改 `tex.path` 属伪绑定（不重传 GPUTexture）。9 个目标材质一一对应、互不覆盖。禁止复用原始纹理键（face_d/hair_d/cloth1_da）冒充按槽绑定——`fileListToMap()` `Map.set()` 后写覆盖前写曾致 EyeWhite 覆盖 Face、HairB 覆盖 HairA、空 Cape 覆盖 Top。`faceApplied=true` 只证明 graph 应用，不作纹理注入通过证据；逐材质绑定硬 Gate `validateBakedBinding` 要求 9 材质全部命中且数量恰好为 9。
 - 路由影响：只影响 `/mmd-calibration-render?v14dFaceStatic=1&v14dFaceMode=bakedGolden` 诊断渲染层，不影响 PMX/VMD Runtime；默认生产入口与 `finalFaceComposite` 默认模式均不启用。
-- 完整定义：见 `docs/handoff/2026-08-28-v14d-static-golden-frame.md`「修正轮烘焙尝试与阻塞」。
+- 完整定义：见 `docs/handoff/2026-08-28-v14d-static-golden-frame.md`「修正轮烘焙尝试与阻塞」与本票交付报告（最终着色烘焙）。
+- 完整定义：见 `workflow/concepts/v14d-golden-frame-final-shading-bake.zh-CN.md`、`docs/handoff/2026-08-28-v14d-static-golden-frame.md`「修正轮烘焙尝试与阻塞」与本票交付报告（最终着色烘焙）。

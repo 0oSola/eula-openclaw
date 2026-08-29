@@ -1614,3 +1614,7 @@ Pet 进入 `camera-adjust` 后，renderer 的捕获阶段和 Electron `webConten
 - 自己回看时，能快速理解当前系统怎么跑。
 - 交给 OpenClaw、TTS、前端或渲染相关服务做优化时，对方能快速理解上下游边界。
 - 排障时，能从症状快速定位到对应服务、接口、配置或数据落点。
+
+## 近期渲染对齐票据状态（V14D 黄金帧）
+
+Stage 2A-GF2（`codex/v14d-ui-final-shading-bake`，2026-08-29）在带 UI Blender 5.1.1 会话（非 `-b`）中解除了无头环境 `bpy.ops.object.bake` `poll()` 恒 False 的硬阻塞，完成 9 材质 Cycles COMBINED 最终着色烘焙（face/eyeWhite/eyes/eyesPlus/body/top/cape/hairA/hairB）。**验收修正轮**发现原「按材质名精确注入」不成立——重复逻辑键（Face/EyeWhite 共用 face_d 等）被 `fileListToMap()` `Map.set()` 后写覆盖前写，已改为逐材质独立绑定（唯一逻辑键 `Textures/v14d-baked/baked_<key>.png` 注入 + 加载后按 PMX 材质名改写 diffuse 纹理路径）并新增逐材质绑定硬 Gate。【二次验收修正】此前在 loadModel 返回后改 path 不重传 GPUTexture/建 bind group（伪绑定）；已改为 patch-reze-engine.mjs 注入默认关闭的 materialDiffuseOverrides，在 loadFromReader 后、GPU 材质建立前为每个目标材质追加独立 texture entry 并改 diffuseTextureIndex（真实 GPU 绑定）；绑定 Gate 改读引擎实际绑定状态 v14dBakedActual（独立 diffuseTextureIndex 19–27 + 最终 logicalPath）并加错绑/漏绑负测。环境 Gate、烘焙资产 Gate、Web 注入 Gate 通过，模式默认关闭、生产入口不启用；但**视觉 Gate 未通过**，四 ROI（face/frontHair/backHair/chest）三通道 MAE 全部远超 ≤20/255 且未相对基线下降 ≥50%。映射修正后对照显示 Web 脸色偏亮偏白、缺少 EEVEE 暖色调与 State2 阴影层次，**Cycles/EEVEE 口径差异仅为候选根因**（修正前 ROI 由覆盖链主导，不能据此归因）；下一 failure family 为 EEVEE 等价最终着色捕获或 Web 实时六灯近似（均未在本票实施）。详见 `docs/handoff/2026-08-29-v14d-ui-final-shading-bake.md`。

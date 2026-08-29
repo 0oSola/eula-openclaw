@@ -57,25 +57,56 @@ export const V14D_FACE_STATIC_DERIVED = {
   attenuation: "v14d-face-shadow-attenuation-state2.png",
 } as const;
 
-/** 黄金帧可见岛逐材质烘焙纹理（Blender frame120 BaseColor 反照率,发射+mask 法）。 */
-export const V14D_BAKED_TEXTURES = {
-  face: "baked_face.png",
-  hairA: "baked_hairA.png",
-  hairB: "baked_hairB.png",
-  body: "baked_body.png",
-  top: "baked_top.png",
-  cape: "baked_cape.png",
-} as const;
-
-/** 烘焙纹理 -> PMX 材质逻辑名（webkitRelativePath 覆盖键）。 */
-export const V14D_BAKED_MATERIAL_MAP: Readonly<Record<string, string>> = {
-  face: "Textures/c_Koleda_slg_face_d.png",
-  hairA: "Textures/c_KoledaSSR01_slg_hair_d.png",
-  hairB: "Textures/c_KoledaSSR01_slg_hair_d.png",
-  body: "Textures/body_d.png",
-  top: "Textures/c_KoledaSSR01_slg_cloth1_da.png",
-  cape: "Textures/c_KoledaSSR01_slg_cloth1_da.png",
+/**
+ * 黄金帧可见岛逐材质最终着色烘焙绑定（单一权威描述，消除 TS/MJS/渲染三处重复）。
+ *
+ * 每条形如 { key, pmxMaterial, bakedFile, logicalPath }：
+ *   key         诊断键（face/hairA/...）；
+ *   pmxMaterial PMX 材质名（引擎按名命中槽位，逐材质独立绑定）；
+ *   bakedFile   本地烘焙文件名（用户目录注入，不提交仓库）；
+ *   logicalPath 注入用的**唯一**逻辑路径（webkitRelativePath）。
+ *
+ * 不变量：logicalPath 全局唯一，绝不复用原始纹理键。原实现把 Face/EyeWhite 共用
+ * face_d 键、HairA/HairB 共用 hair_d 键、Top/Cape 共用 cloth1_da 键，而
+ * reze-engine asset-reader 的 fileListToMap() 用 Map.set 后写覆盖前写，导致
+ * EyeWhite 覆盖 Face、HairB 覆盖 HairA、空 Cape 覆盖 Top（红黑脸/胸口近黑根因）。
+ * 唯一逻辑键 + 加载后改写材质 diffuse 纹理路径才是真正的逐材质独立绑定。
+ */
+export type V14dBakedBinding = {
+  readonly key: string;
+  readonly pmxMaterial: string;
+  readonly bakedFile: string;
+  readonly logicalPath: string;
 };
+
+const baked = (key: string, pmxMaterial: string, bakedFile: string): V14dBakedBinding => ({
+  key,
+  pmxMaterial,
+  bakedFile,
+  logicalPath: "Textures/v14d-baked/" + bakedFile,
+});
+
+export const V14D_BAKED_BINDINGS: readonly V14dBakedBinding[] = [
+  baked("face", "Face", "baked_face.png"),
+  baked("eyeWhite", "EyeWhite", "baked_eyeWhite.png"),
+  baked("eyes", "Eyes", "baked_eyes.png"),
+  baked("eyesPlus", "Eyes+", "baked_eyesPlus.png"),
+  baked("hairA", "HairA", "baked_hairA.png"),
+  baked("hairB", "HairB", "baked_hairB.png"),
+  baked("body", "BodySkin", "baked_body.png"),
+  baked("top", "Cth1-Top", "baked_top.png"),
+  baked("cape", "Cth1-Cape", "baked_cape.png"),
+];
+
+/** key -> 烘焙绑定（供 UI/脚本查找）。 */
+export const V14D_BAKED_BY_KEY: Readonly<Record<string, V14dBakedBinding>> = Object.fromEntries(
+  V14D_BAKED_BINDINGS.map((b) => [b.key, b]),
+);
+
+/** 烘焙文件名集合（UI 目录选择识别 baked_*.png）。 */
+export const V14D_BAKED_TEXTURES: Readonly<Record<string, string>> = Object.fromEntries(
+  V14D_BAKED_BINDINGS.map((b) => [b.key, b.bakedFile]),
+);
 
 /**
  * 三模式 -> Face 材质 diffuse 应使用的文件名。
@@ -215,6 +246,8 @@ export type V14dFaceStaticAssetSource = {
   faceOverride: File | null;
   /** 三模式各自的 Face diffuse 纹理（页面 UI 一次提供三张，运行时按模式选用；与 faceOverride 二选一）。 */
   faceTextures?: Partial<Record<V14dFaceStaticMode, File>>;
-  /** 黄金帧烘焙纹理（bakedGolden 模式）：逐材质 baked_* File，运行时按 V14D_BAKED_MATERIAL_MAP 覆盖。 */
+  /** 黄金帧烘焙纹理（bakedGolden 模式）：逐材质 baked_* File。真实 GPU 绑定由引擎
+   *  materialDiffuseOverrides 在 setupMaterialsForInstance 前改 diffuseTextureIndex 完成；
+   *  唯一逻辑键见 V14D_BAKED_BINDINGS[].logicalPath。 */
   bakedTextures?: Partial<Record<keyof typeof V14D_BAKED_TEXTURES, File>>;
 };

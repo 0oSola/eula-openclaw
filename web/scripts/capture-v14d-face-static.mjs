@@ -7,6 +7,71 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+// 绑定 Gate 负向自验（--self-test-binding-gate）：在 import/浏览器启动前直接退出。
+// 绑定描述内联于此（与 v14dFaceStatic.ts V14D_BAKED_BINDINGS 一致），避免在浏览器
+// 启动前依赖后定义的 validateBakedBinding/BAKED_BINDINGS。验证错绑/漏绑必被拒。
+if (process.argv.includes("--self-test-binding-gate")) {
+  const BINDINGS = [
+    ["face","Face","baked_face.png"],["eyeWhite","EyeWhite","baked_eyeWhite.png"],
+    ["eyes","Eyes","baked_eyes.png"],["eyesPlus","Eyes+","baked_eyesPlus.png"],
+    ["hairA","HairA","baked_hairA.png"],["hairB","HairB","baked_hairB.png"],
+    ["body","BodySkin","baked_body.png"],["top","Cth1-Top","baked_top.png"],
+    ["cape","Cth1-Cape","baked_cape.png"],
+  ];
+  const EXPECT = BINDINGS.map(([k, pmx, file]) => ({ pmx, logicalPath: "Textures/v14d-baked/" + file }));
+  // gate 与 validateBakedBinding 同逻辑（含追加区间校验）。state 需含 bakedTexStart/Count。
+  const gate = (actualStr, start, count, fails) => {
+    const actual = actualStr.split(";").filter(Boolean).map((s) => {
+      const [materialName, idx, logicalPath] = s.split("|");
+      return { materialName, idx: Number(idx), logicalPath };
+    });
+    if (actual.length !== EXPECT.length) fails.push("count " + actual.length + " != " + EXPECT.length);
+    for (const e of EXPECT) {
+      const a = actual.find((x) => x.materialName === e.pmx);
+      if (!a) { fails.push(e.pmx + " missing"); continue; }
+      if (a.logicalPath !== e.logicalPath) fails.push(e.pmx + " bound " + a.logicalPath + " != " + e.logicalPath);
+    }
+    const idxs = actual.map((a) => a.idx);
+    for (const a of actual) {
+      if (!Number.isInteger(a.idx) || a.idx < 0) fails.push(a.materialName + " idx 非法 " + a.idx);
+    }
+    const dup = idxs.filter((v, i) => idxs.indexOf(v) !== i);
+    if (dup.length) fails.push("idx 重复 " + [...new Set(dup)].join(","));
+    if (Number.isInteger(start) && Number.isInteger(count) && count === EXPECT.length) {
+      const sorted = [...idxs].sort((a, b) => a - b);
+      const range = Array.from({ length: count }, (_, i) => start + i);
+      if (!(sorted.length === range.length && sorted.every((v, i) => v === range[i]))) fails.push("idx 未覆盖追加区间");
+    } else {
+      fails.push("追加区间缺失 start=" + start + " count=" + count);
+    }
+  };
+  // 正常：原始纹理 0..18，追加区间 start=19 count=9，idx 19..27 连续。
+  const S = 19, C = 9;
+  const mk = (idxFn) => BINDINGS.map(([, pmx, file], i) => `${pmx}|${idxFn(i)}|Textures/v14d-baked/${file}`).join(";");
+  const good = mk((i) => S + i);
+  const wrongFace = BINDINGS.map(([k, pmx, file], i) => `${pmx}|${S + i}|Textures/v14d-baked/${k === "face" ? "baked_eyeWhite.png" : file}`).join(";");
+  const missingTop = BINDINGS.filter(([k]) => k !== "top").map(([, pmx, file], i) => `${pmx}|${S + i}|Textures/v14d-baked/${file}`).join(";");
+  const sharedIdx = mk(() => S); // 全部共享同一 idx
+  const negIdx = mk((i) => (i === 0 ? -1 : S + i)); // Face 负 idx
+  const inOriginalRange = mk((i) => i); // idx 落在原始区间 0..8
+  const f1 = []; gate(good, S, C, f1);
+  const f2 = []; gate(wrongFace, S, C, f2);
+  const f3 = []; gate(missingTop, S, C, f3);
+  const f4 = []; gate(sharedIdx, S, C, f4);
+  const f5 = []; gate(negIdx, S, C, f5);
+  const f6 = []; gate(inOriginalRange, S, C, f6);
+  let ok = true;
+  if (f1.length) { ok = false; console.error("SELF-TEST-FAIL: 正常九项被误拒", f1); }
+  if (!f2.length) { ok = false; console.error("SELF-TEST-FAIL: Face 错绑 EyeWhite 未被拒绝"); }
+  if (!f3.length) { ok = false; console.error("SELF-TEST-FAIL: 漏绑 Top 未被拒绝"); }
+  if (!f4.length) { ok = false; console.error("SELF-TEST-FAIL: 共享 idx 未被拒绝"); }
+  if (!f5.length) { ok = false; console.error("SELF-TEST-FAIL: 负 idx 未被拒绝"); }
+  if (!f6.length) { ok = false; console.error("SELF-TEST-FAIL: idx 落在原始纹理区间未被拒绝"); }
+  if (!ok) process.exit(1);
+  console.log("===SELF-TEST-BINDING-GATE-OK=== 正常九项(连续新增idx)通过; 错绑/漏绑/共享idx/负idx/落原始区间均被拒绝");
+  process.exit(0);
+}
+
 // 负向自验（--self-test-negative）：在任何资产加载/浏览器启动前运行。
 // 构造非法 faceMask（NaN/Infinity/非 0/1 值），证明 validateHdrEvidence 会拒绝；
 // 合法 mask 不被误拒。function 声明提升使 validateHdrEvidence 可在此调用。
@@ -44,6 +109,22 @@ const VMD = process.env.V14D_VMD || "C:\\w\\rk3-face-v14d\\web\\public\\assets\\
 const DERIVED_DIR = process.env.V14D_DERIVED_DIR || "C:\\w\\rk3-face-v14d\\.scratch\\v14d-face-static-derived";
 const FACE_D = path.join(KOLEDA_DIR, "Textures", "c_Koleda_slg_face_d.png");
 const FACE_D_REL = "Textures/c_Koleda_slg_face_d.png";
+// 黄金帧最终着色烘焙纹理目录（Cycles COMBINED 逐材质，含光照）。
+const BAKED_DIR = process.env.V14D_BAKED_DIR || "D:\\mmd\\克莱妲原皮\\v14d-baked-final";
+// 烘焙绑定（与 v14dFaceStatic.ts V14D_BAKED_BINDINGS 一致）：
+// [key, pmxMaterial, bakedFile]。注入逻辑键一律 Textures/v14d-baked/<bakedFile>（唯一，不覆盖）。
+const BAKED_BINDINGS = [
+  ["face", "Face", "baked_face.png"],
+  ["eyeWhite", "EyeWhite", "baked_eyeWhite.png"],
+  ["eyes", "Eyes", "baked_eyes.png"],
+  ["eyesPlus", "Eyes+", "baked_eyesPlus.png"],
+  ["hairA", "HairA", "baked_hairA.png"],
+  ["hairB", "HairB", "baked_hairB.png"],
+  ["body", "BodySkin", "baked_body.png"],
+  ["top", "Cth1-Top", "baked_top.png"],
+  ["cape", "Cth1-Cape", "baked_cape.png"],
+];
+const BAKED_FILES = Object.fromEntries(BAKED_BINDINGS.map(([k, , f]) => [k, [f, "Textures/v14d-baked/" + f]]));
 // 额外模式：--mode=<名称> 只采集单一模式并输出 face-static-<名称>.png，跳过其余循环。
 const MODE_ARG = (() => {
   const hit = process.argv.find((a) => a.startsWith("--mode="));
@@ -71,11 +152,12 @@ const DERIVED_FILE = {
   finalFaceComposite: "v14d-face-composite-state2.png",
   faceShadowOnly: "v14d-face-shadow-attenuation-state2.png",
   normal: null,
+  bakedGolden: null, // 脸部纹理由烘焙纹理提供（baked_face.png）
 };
 const MIME = { ".png": "image/png", ".bmp": "image/bmp", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".pmx": "application/octet-stream", ".vmd": "application/octet-stream", ".spa": "application/octet-stream", ".sph": "application/octet-stream", ".tga": "application/octet-stream" };
 
 const summary = { out: OUT, modes: {}, pageErrors: [], failedRequests: [], httpBadResponses: [] };
-const ALL_MODES = ["normal", "faceShadowOnly", "finalFaceComposite"];
+const ALL_MODES = ["normal", "faceShadowOnly", "finalFaceComposite", "bakedGolden"];
 const MODES = MODE_ARG ? (ALL_MODES.includes(MODE_ARG) ? [MODE_ARG] : (() => { console.error(`未知 --mode=${MODE_ARG}`); process.exit(2); })()) : ALL_MODES;
 for (const mode of MODES) {
   // 每模式独立 context（仅一次 init script + 一次 route），避免多文档累积。
@@ -101,6 +183,7 @@ for (const mode of MODES) {
     if (key === "pmx") filePath = PMX;
     else if (key === "vmd") filePath = VMD;
     else if (key.startsWith("__derived__/")) filePath = path.join(DERIVED_DIR, key.slice("__derived__/".length));
+    else if (key.startsWith("__baked__/")) filePath = path.join(BAKED_DIR, key.slice("__baked__/".length));
     else filePath = path.join(KOLEDA_DIR, key);
     if (filePath && fs.existsSync(filePath)) {
       const ext = path.extname(filePath).toLowerCase();
@@ -126,22 +209,37 @@ for (const mode of MODES) {
       };
       const manifest = await (await fetch(`${payload.route}?v14dasset=__manifest__`)).json();
       const modelFiles = [];
+      const bakedKeys = new Set(payload.bakedKeys || []);
       for (const rel of manifest.files) {
-        if (rel.toLowerCase().endsWith("c_koleda_slg_face_d.png")) continue; // 由 faceOverride 提供
+        // 烘焙用唯一逻辑键（Textures/v14d-baked/*），不再顶替原始纹理键；
+        // 原始 face_d 等全部正常注入，由引擎按材质改写后的路径独立解析烘焙图。
+        if (rel.toLowerCase().endsWith("c_koleda_slg_face_d.png") && !payload.isBaked) continue; // 非烘焙由 faceOverride 提供
         modelFiles.push(await fetchFile(rel, rel));
       }
       const pmxRel = manifest.files.find((r) => r.toLowerCase().endsWith(".pmx"));
       const pmxFile = await fetchFile(pmxRel, pmxRel);
       const vmdFile = await fetchFile("vmd", null);
       let faceOverride = null;
-      if (payload.faceRel) {
+      if (payload.faceRel && !payload.isBaked) {
         faceOverride = await fetchFile(payload.faceKey, payload.faceRel);
       }
-      window.__v14dFaceStaticAssets = { modelFiles, pmxFile, vmdFile, faceOverride };
+      // 烘焙模式：逐材质烘焙 File，按 webkitRelativePath=材质逻辑键覆盖。
+      let bakedTextures = null;
+      if (payload.isBaked) {
+        bakedTextures = {};
+        for (const [key, [file, relKey]] of Object.entries(payload.bakedMap)) {
+          bakedTextures[key] = await fetchFile(`__baked__/${file}`, relKey);
+        }
+      }
+      window.__v14dFaceStaticAssets = { modelFiles, pmxFile, vmdFile, faceOverride, bakedTextures };
     }, {
       route: "http://v14d-asset.local/a",
-      faceKey: mode === "normal" ? "Textures/c_Koleda_slg_face_d.png" : `__derived__/${DERIVED_FILE[mode]}`,
-      faceRel: "Textures/c_Koleda_slg_face_d.png",
+      isBaked: mode === "bakedGolden",
+      bakedKeys: mode === "bakedGolden" ? Object.values(BAKED_FILES).map(([, rel]) => rel) : [],
+      bakedMap: mode === "bakedGolden" ? BAKED_FILES : null,
+      faceKey: mode === "normal" || mode === "bakedGolden" ? "Textures/c_Koleda_slg_face_d.png" : `__derived__/${DERIVED_FILE[mode]}`,
+      // 烘焙模式下脸部纹理由 bakedTextures.face 提供，跳过 faceOverride。
+      faceRel: mode === "bakedGolden" ? null : "Textures/c_Koleda_slg_face_d.png",
     });
 
     const modelUrl = `http://v14d-asset.local/a?v14dasset=pmx`;
@@ -161,6 +259,11 @@ for (const mode of MODES) {
         cameraLocked: c?.dataset.v14dFaceStaticCameraLocked || "", paused: c?.dataset.v14dFaceStaticPaused || "",
         texture: c?.dataset.v14dFaceStaticTexture || "", faceApplied: c?.dataset.v14dFaceStaticFaceApplied || "",
         authority: c?.dataset.v14dFaceStaticAuthority || "", width: c?.width || 0, height: c?.height || 0,
+        bakedBound: c?.dataset.v14dBakedBound || "",
+        bakedActual: c?.dataset.v14dBakedActual || "",
+        bakedTexStart: c?.dataset.v14dBakedTexStart || "",
+        bakedTexCount: c?.dataset.v14dBakedTexCount || "",
+        bakedTexFinal: c?.dataset.v14dBakedTexFinal || "",
       };
     });
     const png = path.join(OUT, `face-static-${mode}.png`);
@@ -208,6 +311,69 @@ function validateHdrEvidence(mode, hdr, fails, FIXED = 640, MIN_FACE_SAMPLES = 1
   }
 }
 const fails = [];
+
+// 真实绑定硬 Gate（bakedGolden）：直接读取引擎在 GPU 材质建立后的真实绑定状态
+// canvas.dataset.v14dBakedActual（RezeWebGpuStage 从 model.getMaterials()/getTextures()
+// 读取的 materialName|diffuseTextureIndex|logicalPath）。逐项核对：材质名命中、
+// diffuseTextureIndex 指向独立追加的 texture entry、最终 logicalPath 等于预期唯一烘焙键。
+// 这不再是自证名单——是 setupMaterialsForInstance 上传 GPUTexture/建 bind group 时的
+// 实际来源。faceApplied=true 只证明 graph 应用，不作纹理注入通过证据。
+function validateBakedBinding(state, fails) {
+  const actual = (state.bakedActual || "").split(";").filter(Boolean).map((s) => {
+    const [materialName, idx, logicalPath] = s.split("|");
+    return { materialName, idx: Number(idx), logicalPath };
+  });
+  const expect = BAKED_BINDINGS.map(([key, pmx, file]) => ({ pmx, logicalPath: "Textures/v14d-baked/" + file }));
+  if (actual.length !== expect.length) {
+    fails.push(`bakedGolden: 引擎实际绑定材质数 ${actual.length} != 预期 ${expect.length}（真实 GPU 绑定未生效或缺文件）`);
+  }
+  // 逐项 path 匹配
+  for (const e of expect) {
+    const a = actual.find((x) => x.materialName === e.pmx);
+    if (!a) { fails.push(`bakedGolden: 材质 ${e.pmx} 未在引擎实际绑定中出现`); continue; }
+    if (a.logicalPath !== e.logicalPath) {
+      fails.push(`bakedGolden: 材质 ${e.pmx} 实际绑定 ${a.logicalPath} != 预期 ${e.logicalPath}（GPU 纹理来源错误）`);
+    }
+  }
+  // idx 必须为有限非负整数、互不相同，且恰好覆盖引擎报告的追加纹理区间 [start, start+count)。
+  const start = Number(state.bakedTexStart);
+  const count = Number(state.bakedTexCount);
+  const idxs = actual.map((a) => a.idx);
+  for (const a of actual) {
+    if (!Number.isInteger(a.idx) || a.idx < 0) fails.push(`bakedGolden: 材质 ${a.materialName} 的 diffuseTextureIndex ${a.idx} 非有限非负整数`);
+  }
+  const dup = idxs.filter((v, i) => idxs.indexOf(v) !== i);
+  if (dup.length) fails.push(`bakedGolden: diffuseTextureIndex 重复 [${[...new Set(dup)].join(",")}]（共享 texture entry，未独立绑定）`);
+  if (Number.isInteger(start) && Number.isInteger(count) && count === expect.length) {
+    const sorted = [...idxs].sort((a, b) => a - b);
+    const expectRange = Array.from({ length: count }, (_, i) => start + i);
+    const covers = sorted.length === expectRange.length && sorted.every((v, i) => v === expectRange[i]);
+    if (!covers) {
+      fails.push(`bakedGolden: 排序后 idx [${sorted.join(",")}] 未恰好覆盖追加区间 [${start}..${start + count - 1}]`);
+    }
+  } else {
+    fails.push(`bakedGolden: 引擎未报告有效追加纹理区间 start=${state.bakedTexStart} count=${state.bakedTexCount}（补丁未生效）`);
+  }
+}
+
+// 负向自验：故意错绑（Face→EyeWhite 的烘焙键）与漏绑（缺 Top）都必须被硬 Gate 拒绝，
+// 证明 Gate 不是恒通过的摆设。正常九项才 exit 0。
+if (process.argv.includes("--self-test-binding-gate")) {
+  const good = BAKED_BINDINGS.map(([, pmx, file]) => `${pmx}|5|Textures/v14d-baked/${file}`).join(";");
+  const wrongFace = BAKED_BINDINGS.map(([k, pmx, file]) => `${pmx}|5|Textures/v14d-baked/${k === "face" ? "baked_eyeWhite.png" : file}`).join(";");
+  const missingTop = BAKED_BINDINGS.filter(([k]) => k !== "top").map(([, pmx, file]) => `${pmx}|5|Textures/v14d-baked/${file}`).join(";");
+  const f1 = []; validateBakedBinding({ bakedActual: good }, f1);
+  const f2 = []; validateBakedBinding({ bakedActual: wrongFace }, f2);
+  const f3 = []; validateBakedBinding({ bakedActual: missingTop }, f3);
+  let ok = true;
+  if (f1.length) { ok = false; console.error("SELF-TEST-FAIL: 正常九项被误拒", f1); }
+  if (!f2.length) { ok = false; console.error("SELF-TEST-FAIL: Face 错绑 EyeWhite 未被拒绝"); }
+  if (!f3.length) { ok = false; console.error("SELF-TEST-FAIL: 漏绑 Top 未被拒绝"); }
+  if (!ok) process.exit(1);
+  console.log("===SELF-TEST-BINDING-GATE-OK=== 正常九项通过, 错绑/漏绑均被拒绝");
+  process.exit(0);
+}
+
 for (const mode of MODES) {
   const m = summary.modes[mode];
   if (!m) { fails.push(`${mode}: 无采集结果`); continue; }
@@ -222,6 +388,8 @@ for (const mode of MODES) {
   if (!m.roi?.meanLinear) fails.push(`${mode}: meanLinear 缺失`);
   // 正式浮点 HDR 证据硬校验：UV-direct Gate 的正式输入，缺任一项即失败。
   validateHdrEvidence(mode, m.hdr, fails);
+  // bakedGolden：逐材质独立绑定硬 Gate（faceApplied 不再作为纹理注入通过证据）。
+  if (mode === "bakedGolden") validateBakedBinding(m.state, fails);
 }
 if (summary.pageErrors.length) fails.push(`pageErrors=${summary.pageErrors.length}`);
 if (summary.failedRequests.length) fails.push(`failedRequests=${summary.failedRequests.length}`);
