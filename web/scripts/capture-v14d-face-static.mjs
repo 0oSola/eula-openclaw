@@ -6,6 +6,19 @@ import { chromium } from "playwright";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
+
+// G0 像素级对齐门控（--align-gate=1）：bakedGolden 模式额外采集「Blender 权威 PNG
+// alpha>8 剪影 对 Web faceMask 的 Face-specific 配准证据」。Blender alpha 编码整个模型
+// 剪影（含头发/身体），远大于 Face 子区，故不做整剪影 IoU、也不比较「整剪影质心 vs
+// Face 质心」（口径不同）。改用 Face-specific 判据：(a) Web faceMask 落在 Blender 剪影
+// 内的覆盖率 ≥ FACE_COVERAGE_MIN（无越界）；(b) Web faceMask 质心 与 交集
+// (webMask ∩ blenderSilhouette) 质心 偏移 ≤ CENTROID_MAX_PX（检测 Web faceMask 相对
+// Blender 模型的平移/缩放错位）。默认关闭，不影响既有 normal/bakedGolden 采集语义。
+const ALIGN_GATE = process.argv.includes("--align-gate=1") || process.env.V14D_ALIGN_GATE === "1";
+const FACE_COVERAGE_MIN = 0.99;
+const CENTROID_MAX_PX = 5;
+const ALPHA_THRESHOLD = 8;
 
 // 绑定 Gate 负向自验（--self-test-binding-gate）：在 import/浏览器启动前直接退出。
 // 绑定描述内联于此（与 v14dFaceStatic.ts V14D_BAKED_BINDINGS 一致），避免在浏览器
@@ -245,6 +258,7 @@ for (const mode of MODES) {
     const modelUrl = `http://v14d-asset.local/a?v14dasset=pmx`;
     const vmdUrl = `http://v14d-asset.local/a?v14dasset=vmd`;
     const query = new URLSearchParams({ modelUrl, vmdUrl, v14dFaceStatic: "1", v14dFaceMode: mode });
+    if (ALIGN_GATE && mode === "bakedGolden") query.set("v14dAlignGate", "1");
     await page.goto(`${BASE}?${query.toString()}`, { waitUntil: "domcontentloaded", timeout: 60000 });
     await page.waitForSelector("[data-testid='mmd-calibration-render']", { timeout: 60000 });
     await page.waitForSelector("canvas[data-webgpu-status='ready']", { timeout: 120000 });
@@ -257,6 +271,7 @@ for (const mode of MODES) {
         mode: c?.dataset.v14dFaceStaticMode || "", frame: c?.dataset.v14dFaceStaticFrame || "",
         state: c?.dataset.v14dFaceStaticState || "", blend: c?.dataset.v14dFaceStaticBlend || "",
         cameraLocked: c?.dataset.v14dFaceStaticCameraLocked || "", paused: c?.dataset.v14dFaceStaticPaused || "",
+        cameraFov: c?.dataset.v14dFaceStaticCameraFov || "", cameraPos: c?.dataset.v14dFaceStaticCameraPos || "",
         texture: c?.dataset.v14dFaceStaticTexture || "", faceApplied: c?.dataset.v14dFaceStaticFaceApplied || "",
         authority: c?.dataset.v14dFaceStaticAuthority || "", width: c?.width || 0, height: c?.height || 0,
         bakedBound: c?.dataset.v14dBakedBound || "",
@@ -285,6 +300,61 @@ for (const mode of MODES) {
       fs.writeFileSync(path.join(OUT, `face-static-${mode}.hdr.json`), JSON.stringify(hdr));
     }
     summary.modes[mode] = { state, roi: roiCapture, png, hdr };
+
+    // ── G0 像素级对齐采集（仅 --align-gate=1 且 bakedGolden） ──
+    if (ALIGN_GATE && mode === "bakedGolden") {
+      const uvCap = await page.evaluate(async () => {
+        const api = window.__v14dFaceStatic;
+        if (!api || !api.exportFaceUvPng) return null;
+        const r = await api.exportFaceUvPng();
+        if (!r) return null;
+        return { width: r.width, height: r.height, faceMask: Array.from(r.faceMask) };
+      });
+      const FRESH = path.resolve(".scratch/v14d-agx-byte-capture/g0-reference/blender-v14d-frame120-rerender.png");
+      if (uvCap && fs.existsSync(FRESH)) {
+        const freshRaw = await sharp(FRESH).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+        const N = 640 * 640;
+        const blenderMask = new Uint8Array(N);
+        for (let i = 0; i < N; i += 1) blenderMask[i] = freshRaw.data[i * 4 + 3] > ALPHA_THRESHOLD ? 1 : 0;
+        const webFace = Uint8Array.from(uvCap.faceMask);
+        let covered = 0, blendCnt = 0, webCnt = 0, wCx = 0, wCy = 0, iCx = 0, iCy = 0;
+        for (let i = 0; i < N; i += 1) {
+          const b = blenderMask[i] === 1, w = webFace[i] === 1;
+          const px = i % 640, py = (i / 640) | 0;
+          if (b) blendCnt += 1;
+          if (w) { webCnt += 1; wCx += px; wCy += py; if (b) { covered += 1; iCx += px; iCy += py; } }
+        }
+        const coverage = webCnt ? covered / webCnt : 0;
+        // Face-specific 质心：webMask 质心 vs 交集质心。交集即 webMask 落在 Blender
+        // 剪影内的部分；若 Web faceMask 相对 Blender 模型平移/缩放错位，交集缩小且
+        // 两质心分离。配准良好时 webMask≈交集，质心偏移≈0。
+        const wCentroid = webCnt ? [wCx / webCnt, wCy / webCnt] : null;
+        const iCentroid = covered ? [iCx / covered, iCy / covered] : null;
+        const centroidShift = (wCentroid && iCentroid)
+          ? Math.hypot(wCentroid[0] - iCentroid[0], wCentroid[1] - iCentroid[1]) : Infinity;
+        const aligned = coverage >= FACE_COVERAGE_MIN && centroidShift <= CENTROID_MAX_PX && webCnt >= 1000;
+        summary.alignment = {
+          blenderMaskCount: blendCnt, webFaceMaskCount: webCnt,
+          coveredInSilhouette: covered, faceCoverage: +coverage.toFixed(4), faceCoverageMin: FACE_COVERAGE_MIN,
+          webFaceCentroid: wCentroid, intersectionCentroid: iCentroid,
+          centroidShiftPx: +((centroidShift === Infinity) ? -1 : centroidShift).toFixed(3), centroidMaxPx: CENTROID_MAX_PX,
+          pixelAligned: aligned,
+          status: aligned ? "verified" : "not-verified",
+          webCamera: { fov: Number(state.cameraFov) || null, position: state.cameraPos || null },
+        };
+        console.log(`[align-gate] faceCoverage=${coverage.toFixed(4)} (min ${FACE_COVERAGE_MIN}) centroidShift=${centroidShift.toFixed(2)}px (max ${CENTROID_MAX_PX}) blender=${blendCnt} web=${webCnt} covered=${covered}`);
+      } else {
+        summary.alignment = { status: "not-verified", pixelAligned: false, reason: "uvCap 或 fresh PNG 缺失" };
+      }
+      // 独立对齐证据文件：供 decode-face-roi.mjs（G0）在 manifest.alignment
+      // 为 not-verified 时采信。写到 g0-reference/g0-alignment.json。
+      try {
+        const alignDir = path.resolve(".scratch/v14d-agx-byte-capture/g0-reference");
+        fs.mkdirSync(alignDir, { recursive: true });
+        fs.writeFileSync(path.join(alignDir, "g0-alignment.json"), JSON.stringify(summary.alignment, null, 2));
+        console.log(`[align-gate] 写对齐证据 ${path.join(alignDir, "g0-alignment.json")}`);
+      } catch (e) { console.error(`[align-gate] 对齐证据写入失败: ${e.message}`); }
+    }
     console.log(`[capture] mode=${mode} faceApplied=${state.faceApplied} faceId=${roiCapture?.faceMaterialId} faceSamples=${roiCapture?.roi?.faceSamples} meanLinear=${JSON.stringify(roiCapture?.meanLinear)} err=${roiCapture?.error || ""}`);
   } finally { await context.close(); }
 }

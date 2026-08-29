@@ -107,6 +107,18 @@ declare global {
         rgb: Float32Array;
         faceMask: Uint8Array;
       } | null>;
+      /** 导出当前模式的最终显示字节（canvas sRGB 8-bit，已过 composite 显示变换）
+       *  逐像素 RGB 与 Face mask。display-passthrough 下这些字节应与注入的
+       *  显示域纹理字节一致（G1 色块 / G4 AgX 显示字节闭环的正式输入）。 */
+      exportFaceDisplayCapture: () => Promise<{
+        width: number;
+        height: number;
+        faceMaterialId: number;
+        /** 逐像素最终显示字节 RGB（canvas sRGB 8-bit, length=width*height*3）。 */
+        displayRgb: Uint8Array;
+        /** 逐像素是否命中 Face 材质（0/1，未腐蚀）。 */
+        faceMask: Uint8Array;
+      } | null>;
     };
     /** faceStatic 注入的权威资产集（File 形式，引擎 files 变体局部解析）。 */
     __v14dFaceStaticAssets?: V14dFaceStaticAssetSource;
@@ -1354,6 +1366,48 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     }
   };
 
+  /**
+   * 导出当前 faceStatic 模式 Face 材质的最终显示字节（canvas sRGB 8-bit，已过
+   * composite 显示变换）逐像素 RGB 与 Face mask。display-passthrough 下这些字节
+   * 应与注入的显示域纹理字节一致——这是 G1 色块真绑定与 G4 AgX 显示字节闭环的
+   * 正式输入。与 HDR 导出用同一 Face pick mask（pick pass，逐像素材质 ID）。
+   */
+  const exportV14dFaceDisplayCapture = async (): Promise<{
+    width: number;
+    height: number;
+    faceMaterialId: number;
+    displayRgb: Uint8Array;
+    faceMask: Uint8Array;
+  } | null> => {
+    const canvas = canvasRef.current;
+    const engine = engineRef.current;
+    const model = modelRef.current;
+    if (!canvas || !engine || !model || !v14dFaceStaticRef.current || !v14dFaceStaticGatedRef.current) return null;
+    try {
+      const faceMaterialId = v14dFaceStaticFacePickId(
+        model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount })),
+      );
+      if (faceMaterialId === null) return null;
+      const size = V14D_FACE_STATIC_SIZE;
+      const materialMask = await readV14dColorBaselineMaterialMask(engine, size, size);
+      const display = await readV14dCanvasDisplay(canvas);
+      const displayRgb = new Uint8Array(size * size * 3);
+      const faceMaskArr = new Uint8Array(size * size);
+      for (let i = 0; i < size * size; i += 1) {
+        const off = i * 4;
+        const isFace = materialMask.data[off] !== 0 && materialMask.data[off + 1] === faceMaterialId;
+        faceMaskArr[i] = isFace ? 1 : 0;
+        // readV14dCanvasDisplay 返回 0..1 float；转回 8-bit 显示字节。
+        displayRgb[i * 3] = Math.round(Math.max(0, Math.min(1, display.data[off])) * 255);
+        displayRgb[i * 3 + 1] = Math.round(Math.max(0, Math.min(1, display.data[off + 1])) * 255);
+        displayRgb[i * 3 + 2] = Math.round(Math.max(0, Math.min(1, display.data[off + 2])) * 255);
+      }
+      return { width: size, height: size, faceMaterialId, displayRgb, faceMask: faceMaskArr };
+    } catch {
+      return null;
+    }
+  };
+
   useEffect(() => {
     if (!v14dFaceStatic) return;
     window.__v14dFaceStatic = {
@@ -1361,6 +1415,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       exportFaceMaskPng: () => exportV14dFaceMaskPng(),
       exportFaceUvPng: () => exportV14dFaceUvPng(),
       exportFaceHdrFloat: () => exportV14dFaceHdrFloat(),
+      exportFaceDisplayCapture: () => exportV14dFaceDisplayCapture(),
     };
     return () => {
       if (window.__v14dFaceStatic) delete window.__v14dFaceStatic;
@@ -1776,7 +1831,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           // 其余三模式仍对齐权威 AgX 曝光 -0.56。
           faceEngine.setViewTransformOptions(
             v14dFaceStaticMode === "bakedGolden"
-              ? { exposure: 0, gamma: 1.0 }
+              ? { exposure: 0, gamma: 1.0, displayPassthrough: true }
               : { exposure: -0.56, gamma: 1.0 },
           );
         }
@@ -1901,6 +1956,8 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         canvas.dataset[V14D_FACE_STATIC_DATASET.state] = String(V14D_FACE_STATIC_STATE);
         canvas.dataset[V14D_FACE_STATIC_DATASET.blend] = V14D_FACE_STATIC_BLEND.toFixed(2);
         canvas.dataset[V14D_FACE_STATIC_DATASET.cameraLocked] = "true";
+        canvas.dataset[V14D_FACE_STATIC_DATASET.cameraFov] = String(V14D_FACE_STATIC_CAMERA.fov);
+        canvas.dataset[V14D_FACE_STATIC_DATASET.cameraPos] = V14D_FACE_STATIC_CAMERA.position.join(",");
         canvas.dataset[V14D_FACE_STATIC_DATASET.paused] = "true";
         canvas.dataset[V14D_FACE_STATIC_DATASET.authority] =
           `${V14D_FACE_STATIC_AUTHORITY.pmxFileName}#${V14D_FACE_STATIC_AUTHORITY.vmdFileName}`;

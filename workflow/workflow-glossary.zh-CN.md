@@ -234,3 +234,12 @@
 - 路由影响：只影响 `/mmd-calibration-render?v14dFaceStatic=1&v14dFaceMode=bakedGolden` 诊断渲染层，不影响 PMX/VMD Runtime；默认生产入口与 `finalFaceComposite` 默认模式均不启用。
 - 完整定义：见 `docs/handoff/2026-08-28-v14d-static-golden-frame.md`「修正轮烘焙尝试与阻塞」与本票交付报告（最终着色烘焙）。
 - 完整定义：见 `workflow/concepts/v14d-golden-frame-final-shading-bake.zh-CN.md`、`docs/handoff/2026-08-28-v14d-static-golden-frame.md`「修正轮烘焙尝试与阻塞」与本票交付报告（最终着色烘焙）。
+
+# V14D 显示字节直通捕获（displayPassthrough）
+
+- 英文机器名：`displayPassthrough`（引擎视图变换字段，默认 `false`）；诊断管线「显示字节捕获/反投影」。
+- 含义：一条默认关闭的诊断契约，让 Web 端 Face 材质最终显示字节逐字节等于磁盘权威 AgX PNG 的原始 8-bit 显示字节。链路：fresh EEVEE frame120 AgX PNG 原始字节 → 按屏幕像素→UV 反投影到 Face atlas（G3）→ 经 materialDiffuseOverrides 真绑定注入 → 引擎 composite 的 displayPassthrough 绕过 Filmic/grade/gamma 并做 linear→sRGB 编码 → 最终 canvas 字节等于注入纹理字节。
+- 允许用法：固定黄金帧（frame120/State2/Blend0）下验证显示字节闭环（G1 色块、G4 对照）；`displayPassthrough` 仅在 `v14dFaceMode=bakedGolden` 诊断下置 true。
+- 禁止用法：反投影源不得用 image.pixels 猜颜色空间、不得再过 Filmic、不得手调 RGB、不得改写权威参考；不得作为默认生产路径（默认 finalFaceComposite，displayPassthrough 默认 false）；G4 MAE 未达 ≤20/255 时不得宣称「Face 明显对齐」；Face Gate 未通过前不得扩展其他材质；不得用它闭跨渲染器的像素级几何错位。
+- 路由影响：只影响 `/mmd-calibration-render?v14dFaceStatic=1&v14dFaceMode=bakedGolden` 诊断渲染层与 `patch-reze-engine.mjs` 的引擎补丁；不影响 PMX/VMD Runtime、默认生产入口。
+- 完整定义：见 `workflow/concepts/v14d-display-byte-passthrough-capture.zh-CN.md`。

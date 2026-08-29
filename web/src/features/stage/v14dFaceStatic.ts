@@ -204,6 +204,8 @@ export const V14D_FACE_STATIC_DATASET = {
   state: "v14dFaceStaticState",
   blend: "v14dFaceStaticBlend",
   cameraLocked: "v14dFaceStaticCameraLocked",
+  cameraFov: "v14dFaceStaticCameraFov",
+  cameraPos: "v14dFaceStaticCameraPos",
   paused: "v14dFaceStaticPaused",
   texture: "v14dFaceStaticTexture",
   faceMaterialApplied: "v14dFaceStaticFaceApplied",
