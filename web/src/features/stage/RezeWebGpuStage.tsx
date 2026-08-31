@@ -64,6 +64,7 @@ import {
 } from "@/features/stage/v14dColorBaseline";
 import {
   V14D_FACE_MATERIAL_NAME,
+  V14D_FACE_BASE_TEXTURE_NAME,
   V14D_FACE_STATIC_AUTHORITY,
   V14D_BAKED_BINDINGS,
   V14D_FACE_STATIC_BLEND,
@@ -77,8 +78,11 @@ import {
   V14D_FACE_STATIC_STATE,
   v14dFaceStaticFacePickId,
   v14dFaceStaticTextureName,
+  v14dFaceCameraWithOverride,
+  V14D_STATE2_MASK_LOGICAL_PATH,
   type V14dFaceStaticAssetSource,
   type V14dFaceStaticMode,
+  type V14dFaceCameraOverride,
 } from "@/features/stage/v14dFaceStatic";
 
 declare global {
@@ -119,6 +123,8 @@ declare global {
         /** 逐像素是否命中 Face 材质（0/1，未腐蚀）。 */
         faceMask: Uint8Array;
       } | null>;
+      /** 逐像素导出任一 Face 材质名对应的 pick mask（供 Gate 划分保持性子区）。 */
+      exportMaterialMaskByName: (materialName: string) => Promise<Uint8Array | null>;
     };
     /** faceStatic 注入的权威资产集（File 形式，引擎 files 变体局部解析）。 */
     __v14dFaceStaticAssets?: V14dFaceStaticAssetSource;
@@ -184,6 +190,8 @@ type RezeStageProps = {
   /** 仅用于 V14D Face State 2 静态黄金帧预览；默认关闭，不改变生产渲染路径。 */
   v14dFaceStatic?: boolean;
   v14dFaceStaticMode?: V14dFaceStaticMode;
+  /** 配准负测：shift=相机平移 +X 6 PMX 单位；null=不恢复相机（保持 boot 默认）。 */
+  v14dFaceCameraOverride?: V14dFaceCameraOverride;
   /** 黄金帧诊断 ROI/pick/HDR 取样门控（仅 faceStatic 页面启用；与组件门控分离）。 */
   v14dFaceStaticGated?: boolean;
   /** true 时 WebGPU 画布透明，由页面 MIO CSS 背景透出；false 用场景背景色。 */
@@ -295,6 +303,43 @@ const V14D_FACE_STATIC_DIFFUSE_GRAPH: ShaderGraph = {
   nodes: [{ id: "mat", type: "material_diffuse" }],
   links: [],
   output: { node: "mat", socket: "color" },
+};
+
+/**
+ * V14D State2 实时合成图（Stage 2B-M1）：Face 材质逐像素从「原始 face_d +
+ * State2 packed mask（group(2) binding(5)，rgba8unorm 线性视图）」实时执行
+ * Blender 取证的 warm/art/fringe 合成，不使用整张预烘焙脸图。输出视图为
+ * shadowFactor（乘法阴影因子）；合成图见 V14D_FACE_LIVE_COMPOSITE_GRAPH。
+ * helper 由引擎补丁五在编译 tags 含 v14d-state2-face 的 graph 时注入。
+ */
+const V14D_FACE_LIVE_SHADOW_GRAPH: ShaderGraph = {
+  version: 1,
+  name: "V14D Face State2 Live ShadowFactor",
+  tags: ["diagnostic", "v14d", "face-static", "v14d-state2-face"],
+  nodes: [
+    { id: "warm", type: "rgb", inputs: { color: [1.0, 0.935, 0.89] } },
+  ],
+  links: [],
+  output: { node: "warm", socket: "color" },
+};
+
+// 实时视图 graph 的最终输出由引擎补丁五按 graph.name 精确覆写
+// （v14dState2OverrideFsBody）：ShadowFactor → v14d_state2_view_shadow()，
+// Composite → v14d_state2_view_composite()。warm rgb 节点只是编译占位，
+// 不在最终 WGSL 生效；公式常量由引擎补丁五的 WGSL helper 提供（权威 blend 取证）。
+
+/**
+ * V14D State2 实时 FinalComposite 视图：face_d（线性解码）× warm × shadowFactor。
+ */
+const V14D_FACE_LIVE_COMPOSITE_GRAPH: ShaderGraph = {
+  version: 1,
+  name: "V14D Face State2 Live Composite",
+  tags: ["diagnostic", "v14d", "face-static", "v14d-state2-face"],
+  nodes: [
+    { id: "warm", type: "rgb", inputs: { color: [1.0, 0.935, 0.89] } },
+  ],
+  links: [],
+  output: { node: "warm", socket: "color" },
 };
 
 type RezeStyleGroup = ReturnType<Engine["getStyleGroups"]>[number];
@@ -551,7 +596,7 @@ function createV14dAnimationEvidence(
 }
 
 export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(function RezeWebGpuStage(
-  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, scenePreset = "reze-design", v14dUnlitDiagnostic = false, v14dColorBaseline = false, v14dFaceStatic = false, v14dFaceStaticMode = "normal", v14dFaceStaticGated = false, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
+  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, scenePreset = "reze-design", v14dUnlitDiagnostic = false, v14dColorBaseline = false, v14dFaceStatic = false, v14dFaceStaticMode = "normal", v14dFaceStaticGated = false, v14dFaceCameraOverride = null, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
   ref,
 ) {
   const pipelineDefaultSettings = scenePreset === "reze-k3" ? REZE_K3_SCENE_DEFAULTS : DEFAULT_SETTINGS;
@@ -1215,6 +1260,38 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     }
   };
 
+  /** 读取当前 faceStatic 模式的 pre-tonemap HDR resolve 与同一口径 Face pick mask。
+   *  uvDebug/composite/HDR 导出共享此路径，保证 Gate 用同一线性口径对账。
+   *  hdr 为 scene pass 输出（未过 composite 的 bloom/exposure/LUT/grade/gamma）。 */
+  const readV14dFaceResolveAndMask = async (): Promise<{
+    faceMaterialId: number;
+    hdr: Float32Array;
+    faceMask: Uint8Array;
+    size: number;
+  } | null> => {
+    const engine = engineRef.current;
+    const model = modelRef.current;
+    if (!engine || !model) return null;
+    try {
+      const faceMaterialId = v14dFaceStaticFacePickId(
+        model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount })),
+      );
+      if (faceMaterialId === null) return null;
+      const size = V14D_FACE_STATIC_SIZE;
+      const [resolve, materialMask] = await Promise.all([
+        readV14dColorBaselineResolveTargets(engine, size, size),
+        readV14dColorBaselineMaterialMask(engine, size, size),
+      ]);
+      const faceMask = new Uint8Array(size * size);
+      for (let i = 0; i < size * size; i += 1) {
+        const off = i * 4;
+        faceMask[i] = materialMask.data[off] !== 0 && materialMask.data[off + 1] === faceMaterialId ? 1 : 0;
+      }
+      return { faceMaterialId, hdr: resolve.hdr.data, faceMask, size };
+    } catch {
+      return null;
+    }
+  };
   /** 导出脸部像素 mask（PNG base64）：Face 材质命中像素=白，其余=黑。
    *  供同口径分量 Gate 在 Blender 参考图上复用同一脸部像素定义量化。 */
   const exportV14dFaceMaskPng = async (): Promise<string | null> => {
@@ -1245,46 +1322,35 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     }
   };
 
+  /** 按材质名导出材质 pick mask（逐像素 0/1 Uint8Array，width=height=V14D_FACE_STATIC_SIZE）。
+   *  用于眼/口邻域保持性单列：EyeWhite/Eyes 材质可独立量化，不被并入 Face Gate。
+   *  与 exportV14dFaceMaskPng 同一渲染口径（materialMask readback + pick id）。 */
+  const exportV14dMaterialMaskByName = async (materialName: string): Promise<Uint8Array | null> => {
+    const engine = engineRef.current;
+    const model = modelRef.current;
+    if (!engine || !model) return null;
+    try {
+      const materials = model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount }));
+      const pickId = v14dFaceStaticFacePickId(materials, materialName);
+      if (pickId === null) return null;
+      const size = V14D_FACE_STATIC_SIZE;
+      const materialMask = await readV14dColorBaselineMaterialMask(engine, size, size);
+      const mask = new Uint8Array(size * size);
+      for (let i = 0; i < size * size; i += 1) {
+        const off = i * 4;
+        mask[i] = materialMask.data[off] !== 0 && materialMask.data[off + 1] === pickId ? 1 : 0;
+      }
+      return mask;
+    } catch {
+      return null;
+    }
+  };
   /**
    * 导出 Face 材质逐像素插值 UV（R=u, G=v, B=0）的 PNG base64。
    * 与 exportV14dFaceMaskPng 用同一 Face pick mask 隔离脸部像素；
    * 仅在 faceStatic 模式且 Face 已切到 V14D_FACE_UV_DEBUG_GRAPH 时有意义。
    * 供 UV-direct 对账读取 Web 侧每个脸部像素实际使用的 UV 坐标。
    */
-  /**
-   * 共享辅助：取 Face 材质 pick ID + pre-tonemap HDR resolve + 逐像素 Face mask。
-   * 两个导出函数（UV / HDR 浮点）复用，避免重复 Face ID、resolve/mask 与 mask 构造。
-   * pre-tonemap：源纹理 hdrResolveTexture（格式随硬件 rg11b10ufloat/rgba16float，
-   * 诊断链 blit 到 rgba16float 读回），未过 composite 的 bloom/exposure/tonemap/grade/gamma。
-   */
-  const readV14dFaceResolveAndMask = async (): Promise<{
-    faceMaterialId: number;
-    hdr: Float32Array;
-    faceMask: Uint8Array;
-    size: number;
-  } | null> => {
-    const engine = engineRef.current;
-    const model = modelRef.current;
-    if (!engine || !model || !v14dFaceStaticRef.current || !v14dFaceStaticGatedRef.current) return null;
-    try {
-      const faceMaterialId = v14dFaceStaticFacePickId(
-        model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount })),
-      );
-      if (faceMaterialId === null) return null;
-      const resolve = await readV14dColorBaselineResolveTargets(engine, V14D_FACE_STATIC_SIZE, V14D_FACE_STATIC_SIZE);
-      const materialMask = await readV14dColorBaselineMaterialMask(engine, V14D_FACE_STATIC_SIZE, V14D_FACE_STATIC_SIZE);
-      const size = V14D_FACE_STATIC_SIZE;
-      const faceMaskArr = new Uint8Array(size * size);
-      for (let i = 0; i < size * size; i += 1) {
-        const off = i * 4;
-        faceMaskArr[i] = materialMask.data[off] !== 0 && materialMask.data[off + 1] === faceMaterialId ? 1 : 0;
-      }
-      return { faceMaterialId, hdr: resolve.hdr.data, faceMask: faceMaskArr, size };
-    } catch {
-      return null;
-    }
-  };
-
   const exportV14dFaceUvPng = async (): Promise<{
     png: string;
     width: number;
@@ -1416,6 +1482,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       exportFaceUvPng: () => exportV14dFaceUvPng(),
       exportFaceHdrFloat: () => exportV14dFaceHdrFloat(),
       exportFaceDisplayCapture: () => exportV14dFaceDisplayCapture(),
+      exportMaterialMaskByName: (name: string) => exportV14dMaterialMaskByName(name),
     };
     return () => {
       if (window.__v14dFaceStatic) delete window.__v14dFaceStatic;
@@ -1633,17 +1700,29 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         // 覆盖 face_d 逻辑键后并入模型文件列表。
         // uvDebug 模式不需要纹理（Face 只输出 UV），用原始 face_d 占位即可。
         const isUvDebug = v14dFaceStaticMode === "uvDebug";
-        const faceOverride = isUvDebug
+        // 实时合成模式（Stage 2B-M1）：faceShadowOnly/finalFaceComposite 不再用
+        // 预烘焙整图替换 face_d，而是读原始 face_d + State2 packed mask 实时合成。
+        const isLiveState2 = v14dFaceStaticMode === "faceShadowOnly" || v14dFaceStaticMode === "finalFaceComposite";
+        const faceOverride = isLiveState2
           ? assets.faceTextures?.normal ?? assets.faceOverride ?? null
-          : (assets.faceTextures?.[v14dFaceStaticMode] ?? assets.faceOverride ?? null);
+          : isUvDebug
+            ? assets.faceTextures?.normal ?? assets.faceOverride ?? null
+            : (assets.faceTextures?.[v14dFaceStaticMode] ?? assets.faceOverride ?? null);
         const isBaked = v14dFaceStaticMode === "bakedGolden";
         const bakedFiles = isBaked && assets.bakedTextures
           ? (Object.values(assets.bakedTextures) as File[])
           : [];
+        // 实时合成模式的 State2 mask File 以唯一逻辑键注入（webkitRelativePath），
+        // 由引擎补丁五在 setupMaterialsForInstance 前建立独立纹理（rgba8unorm/禁 mipmap）。
+        const state2MaskFile = isLiveState2 ? assets.state2Mask ?? null : null;
+        if (isLiveState2 && !state2MaskFile) {
+          throw new Error("实时合成模式需要 State2 packed mask（assets.state2Mask）。");
+        }
         const modelFiles = [
           ...assets.modelFiles,
           ...(faceOverride ? [faceOverride] : []),
           ...bakedFiles,
+          ...(state2MaskFile ? [state2MaskFile] : []),
         ];
         // 真实 GPU 绑定：bakedGolden 模式把材质名→唯一 logicalPath 传给引擎，
         // 由 loadModel 在 GPU 材质建立（setupMaterialsForInstance 上传 GPUTexture/建
@@ -1663,6 +1742,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           files: modelFiles,
           pmxFile: assets.pmxFile,
           ...(bakedOverrides ? { materialDiffuseOverrides: bakedOverrides } : {}),
+          ...(isLiveState2 ? { materialAuxTextures: { [V14D_FACE_MATERIAL_NAME]: V14D_STATE2_MASK_LOGICAL_PATH } } : {}),
         } as Parameters<Engine["loadModel"]>[1]);
         // 真实 GPU 绑定证明：loadModel 返回后从引擎读取每个目标材质最终的
         // diffuseTextureIndex 与对应 logicalPath（此时 setupMaterialsForInstance 已用
@@ -1683,6 +1763,24 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           canvasRef.current.dataset.v14dBakedTexStart = range ? String(range.start) : "";
           canvasRef.current.dataset.v14dBakedTexCount = range ? String(range.count) : "";
           canvasRef.current.dataset.v14dBakedTexFinal = String(texs.length);
+        }
+        // 实时合成模式的真实双纹理绑定证据（Stage 2B-M1）：Face diffuse=原始 face_d，
+        // State2 mask=引擎补丁五在 GPU 材质建立前创建的独立纹理（rgba8unorm 线性视图）。
+        if (isLiveState2 && canvasRef.current) {
+          const texs = model.getTextures();
+          const faceMat = model.getMaterials().find((m) => m.name === V14D_FACE_MATERIAL_NAME);
+          const auxIdx = (model as unknown as { __v14dAuxTextureIndex?: Record<string, number> })
+            .__v14dAuxTextureIndex?.[V14D_FACE_MATERIAL_NAME];
+          const diffuseTex = faceMat && faceMat.diffuseTextureIndex >= 0 ? texs[faceMat.diffuseTextureIndex] : null;
+          const maskTex = auxIdx !== undefined && auxIdx >= 0 ? texs[auxIdx] : null;
+          canvasRef.current.dataset.v14dLiveState2 = "true";
+          canvasRef.current.dataset.v14dLiveFaceDiffuse = diffuseTex ? diffuseTex.path : "";
+          canvasRef.current.dataset.v14dLiveMaskPath = maskTex ? maskTex.path : "";
+          canvasRef.current.dataset.v14dLiveMaskIndex = auxIdx !== undefined ? String(auxIdx) : "";
+          canvasRef.current.dataset.v14dLiveBound =
+            diffuseTex?.path.endsWith(V14D_FACE_BASE_TEXTURE_NAME) && maskTex?.path === V14D_STATE2_MASK_LOGICAL_PATH
+              ? "true"
+              : "false";
         }
         if (canvasRef.current) {
           canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.texture] =
@@ -1784,8 +1882,16 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             console.warn("[v14d-face-static] bakedGolden graph 应用失败", bakedResult);
           }
         } else {
+        // 实时合成模式（Stage 2B-M1）：Face 套实时 graph（引擎按 graph.name 覆写输出
+        // 为 mask 公式），normal/uvDebug 保持既有单纹理/UV 输出。
         const faceGraph =
-          v14dFaceStaticMode === "uvDebug" ? V14D_FACE_UV_DEBUG_GRAPH_LEGACY : V14D_FACE_STATIC_GRAPH;
+          v14dFaceStaticMode === "uvDebug"
+            ? V14D_FACE_UV_DEBUG_GRAPH_LEGACY
+            : v14dFaceStaticMode === "faceShadowOnly"
+              ? V14D_FACE_LIVE_SHADOW_GRAPH
+              : v14dFaceStaticMode === "finalFaceComposite"
+                ? V14D_FACE_LIVE_COMPOSITE_GRAPH
+                : V14D_FACE_STATIC_GRAPH;
         const faceGroups = originalStyleGroups.map((group) => ({
           ...group,
           materials: group.materials.filter((name) => name !== V14D_FACE_MATERIAL_NAME),
@@ -1803,10 +1909,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.faceMaterialApplied] = String(faceResult.ok);
         }
         if (!faceResult.ok) {
-          console.warn("[v14d-face-static] Face 材质 graph 应用失败", faceResult);
+          console.warn("[v14d-face-static] Face graph 应用失败: " + JSON.stringify(faceResult.groups));
         }
         }
-        }
+      }
       }
       if (isKoleda) {
         for (const [index, material] of model.getMaterials().entries()) {
@@ -1835,8 +1941,13 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
               : { exposure: -0.56, gamma: 1.0 },
           );
         }
-        restorePersistedCamera(V14D_FACE_STATIC_CAMERA);
-        readRezeCamera(engine)?.setInputLocked(true);
+        // 配准负测（Stage 2B-M1）：v14dFaceCameraOverride=shift 平移相机 +X 6 PMX 单位；
+        // null 强制不恢复相机（保持 boot 默认），使 Gate 读取的实际 fov/position/target 缺失。
+        const camSnapshot = v14dFaceCameraWithOverride(V14D_FACE_STATIC_CAMERA, v14dFaceCameraOverride);
+        if (camSnapshot) {
+          restorePersistedCamera(camSnapshot);
+          readRezeCamera(engine)?.setInputLocked(true);
+        }
       } else if (v14dColorBaseline) {
         restorePersistedCamera(V14D_COLOR_BASELINE_CAMERA);
         readRezeCamera(engine)?.setInputLocked(true);
@@ -1955,9 +2066,13 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         canvas.dataset[V14D_FACE_STATIC_DATASET.frame] = String(V14D_FACE_STATIC_FRAME);
         canvas.dataset[V14D_FACE_STATIC_DATASET.state] = String(V14D_FACE_STATIC_STATE);
         canvas.dataset[V14D_FACE_STATIC_DATASET.blend] = V14D_FACE_STATIC_BLEND.toFixed(2);
-        canvas.dataset[V14D_FACE_STATIC_DATASET.cameraLocked] = "true";
-        canvas.dataset[V14D_FACE_STATIC_DATASET.cameraFov] = String(V14D_FACE_STATIC_CAMERA.fov);
-        canvas.dataset[V14D_FACE_STATIC_DATASET.cameraPos] = V14D_FACE_STATIC_CAMERA.position.join(",");
+        // 采集实际 Web 相机（Stage 2B-M1 配准 Gate 输入）：负测 override 下这些值
+        // 与权威相机不同或缺失，配准 Gate 必须据此失败。cameraLocked 反映实际锁定。
+        const actualCam = captureRezeCameraSnapshot(engine);
+        canvas.dataset[V14D_FACE_STATIC_DATASET.cameraLocked] = actualCam && v14dFaceCameraOverride !== "null" ? "true" : "false";
+        canvas.dataset[V14D_FACE_STATIC_DATASET.cameraFov] = actualCam ? String(actualCam.fov) : "";
+        canvas.dataset[V14D_FACE_STATIC_DATASET.cameraPos] = actualCam ? actualCam.position.join(",") : "";
+        canvas.dataset.v14dFaceCameraTarget = actualCam ? actualCam.target.join(",") : "";
         canvas.dataset[V14D_FACE_STATIC_DATASET.paused] = "true";
         canvas.dataset[V14D_FACE_STATIC_DATASET.authority] =
           `${V14D_FACE_STATIC_AUTHORITY.pmxFileName}#${V14D_FACE_STATIC_AUTHORITY.vmdFileName}`;

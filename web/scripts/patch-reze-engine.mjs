@@ -129,7 +129,7 @@ const overrideTargets = [
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
     anchor: "  pmxFile?: File\n}",
     replacement: "  pmxFile?: File\n  /** Per-material diffuse override (material name -> unique logicalPath). Default off. Applied BEFORE GPU material setup. */\n  materialDiffuseOverrides?: Record<string, string>\n}",
-    doneMarker: "materialDiffuseOverrides?: Record<string, string>\n}",
+    doneMarker: "materialDiffuseOverrides?: Record<string, string>\n",
     label: "src/engine.ts 类型",
   },
 ];
@@ -153,6 +153,37 @@ for (const t of overrideTargets) {
 // ─── 统一严格校验（predev/prebuild 与 --verify 共用）：全部 marker 恰好一次。 ──
 // 不只在 --verify 才计数；普通 predev/prebuild 也必须拦截重复/缺失 marker，
 // 否则生命周期内重复注入或部分注入不会被发现。任一 marker 非恰好一次即 exit 1。
+const STATE2_VERIFY_CHECKS = (() => {
+  const slotsSrc = path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts");
+  const slotsDist = path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js");
+  const compileSrc = path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "compile.ts");
+  const compileDist = path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js");
+  const engineSrc = path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts");
+  const engineDistJs = path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js");
+  return [
+    { label: "src/engine.ts materialAuxTextures 注入", file: engineSrc, marker: "const __aux = pathOrOptions.materialAuxTextures" },
+    { label: "dist/engine.js materialAuxTextures 注入", file: engineDistJs, marker: "const __aux = pathOrOptions.materialAuxTextures;" },
+    { label: "src/engine.ts materialAuxTextures 类型声明", file: engineSrc, marker: "materialAuxTextures?: Record<string, string>" },
+    { label: "dist/engine.d.ts materialAuxTextures 类型声明", file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.d.ts"), marker: "materialAuxTextures?: Record<string, string>;" },
+    { label: "src/engine.ts aux mask 禁 mipmap", file: engineSrc, marker: "__v14dAuxTexturePaths?.has(logicalPath)" },
+    { label: "dist/engine.js aux mask 禁 mipmap", file: engineDistJs, marker: "__v14dAuxTexturePaths?.has(logicalPath)" },
+    { label: "src/engine.ts aux mask 非 sRGB 视图", file: engineSrc, marker: "__isAuxMask ? \"rgba8unorm\" : \"rgba8unorm-srgb\"" },
+    { label: "dist/engine.js aux mask 非 sRGB 视图", file: engineDistJs, marker: "__isAuxMask ? \"rgba8unorm\" : \"rgba8unorm-srgb\"" },
+    { label: "src/engine.ts bind group 布局 binding(5)", file: engineSrc, marker: "// V14D State2 实时合成：extra mask texture" },
+    { label: "dist/engine.js bind group 布局 binding(5)", file: engineDistJs, marker: "// V14D State2 实时合成：extra mask texture" },
+    { label: "src/engine.ts createMaterialBindGroup binding(5)", file: engineSrc, marker: "maskView ?? this.fallbackMaterialTexture.createView()" },
+    { label: "dist/engine.js createMaterialBindGroup binding(5)", file: engineDistJs, marker: "maskView ?? this.fallbackMaterialTexture.createView()" },
+    { label: "src/engine.ts setupMaterialsForInstance mask 加载", file: engineSrc, marker: "const __auxMaskView = __auxTexture ? __auxTexture.createView() : undefined" },
+    { label: "dist/engine.js setupMaterialsForInstance mask 加载", file: engineDistJs, marker: "const __auxMaskView = __auxTexture ? __auxTexture.createView() : undefined;" },
+    { label: "src/graph/slots.ts state2 helper 声明", file: slotsSrc, marker: "const V14D_STATE2_HELPERS_WGSL" },
+    { label: "dist/graph/slots.js state2 helper 声明", file: slotsDist, marker: "const V14D_STATE2_HELPERS_WGSL" },
+    { label: "src/graph/slots.ts assembleModule state2 门控", file: slotsSrc, marker: "includeState2Mask = false" },
+    { label: "dist/graph/slots.js assembleModule state2 门控", file: slotsDist, marker: "includeState2Mask = false" },
+    { label: "src/graph/compile.ts state2 门控", file: compileSrc, marker: "graph.tags?.includes(\"v14d-state2-face\")" },
+    { label: "dist/graph/compile.js state2 门控", file: compileDist, marker: "graph.tags?.includes(\"v14d-state2-face\")" },
+  ];
+})();
+
 function strictVerifyAll() {
   const engineSrc = path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts");
   const engineDistJs = path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js");
@@ -163,7 +194,7 @@ function strictVerifyAll() {
     { label: "src/engine.ts 实现", file: engineSrc, marker: "__mdoStart = texs.length" },
     { label: "dist/engine.js 实现", file: engineDistJs, marker: "__mdoStart = texs.length" },
     { label: "dist/engine.d.ts 类型", file: engineDistDts, marker: "materialDiffuseOverrides?: Record<string, string>;" },
-    { label: "src/engine.ts 类型", file: engineSrc, marker: "materialDiffuseOverrides?: Record<string, string>\n}" },
+    { label: "src/engine.ts 类型", file: engineSrc, marker: "materialDiffuseOverrides?: Record<string, string>\n" },
 
     { label: "src/engine.ts setter", file: engineSrc, marker: "v.displayPassthrough = patch.displayPassthrough" },
     { label: "dist/engine.js setter", file: engineDistJs, marker: "v.displayPassthrough = patch.displayPassthrough" },
@@ -171,7 +202,7 @@ function strictVerifyAll() {
     { label: "dist/engine.js uniform u[2]", file: engineDistJs, marker: "u[2] = v.displayPassthrough ? 1.0 : 0.0" },
     { label: "src merge 默认 false", file: engineSrc, marker: "displayPassthrough: partial?.displayPassthrough" },
     { label: "dist merge 默认 false", file: engineDistJs, marker: "displayPassthrough: partial?.displayPassthrough" },
-    { label: "src ViewTransformOptions 类型", file: engineSrc, marker: "displayPassthrough?: boolean\n}" },
+    { label: "src ViewTransformOptions 类型", file: engineSrc, marker: "displayPassthrough?: boolean\n" },
 
     { label: "dist ViewTransformOptions 类型", file: engineDistDts, marker: "displayPassthrough?: boolean;" },
     { label: "src shader srgb_encode helper", file: compSrc, marker: "fn v14d_srgb_encode" },
@@ -183,11 +214,16 @@ function strictVerifyAll() {
     { label: "src 诊断纹理禁 mipmap", file: engineSrc, marker: "__v14dNoMipmapPaths?.has(logicalPath)" },
     { label: "dist 诊断纹理禁 mipmap", file: engineDistJs, marker: "__v14dNoMipmapPaths?.has(logicalPath)" },
     { label: "override 记录诊断纹理集合", file: engineDistJs, marker: "this.__v14dNoMipmapPaths = new Set(Object.values(__mdo))" },
+    // ─── 补丁五（State2 实时合成）不变量：各恰好一次 ───
+    ...STATE2_VERIFY_CHECKS,
   ];
   let allOk = true;
   for (const c of checks) {
     const content = fs.existsSync(c.file) ? fs.readFileSync(c.file, "utf8") : "";
-    const count = content.split(c.marker).length - 1;
+    // CRLF 文件：marker 末尾换行写成 LF 时 split 不命中。按 "marker 或其 CRLF 形式" 统一计数。
+    const markers = [c.marker, c.marker.replace(/\n$/, "\r\n")].filter((m, i, a) => a.indexOf(m) === i);
+    let count = 0;
+    for (const m of markers) count += content.split(m).length - 1;
     const ok = count === 1;
     if (!ok) allOk = false;
     console.log("[verify] " + c.label + ": marker 出现 " + count + " 次 " + (ok ? "OK" : "FAIL(应恰好1次)"));
@@ -388,6 +424,320 @@ const mipmapTargets = [
   },
 ];
 passthroughTargets.push(...mipmapTargets);
+
+// ─── 补丁五：V14D State2 实时脸部合成（默认关闭，Stage 2B-M1） ────────────────
+// 目标：Face 材质在 Web 线性空间逐像素从「原始 face_d + State2 packed mask +
+// Blender 节点常量」实时执行 warm/art/fringe 合成，不再使用整张预烘焙脸图。
+//
+// 最小注入面：
+//   1) loadModel options.materialAuxTextures（材质名 → 辅助纹理 logicalPath，默认关）：
+//      在 materialDiffuseOverrides 同一点（loadFromReader 之后、addModel 之前）
+//      追加独立 texture entry，记 model.__v14dAuxTexturePaths。不改磁盘 PMX、材质槽、
+//      拓扑或 VMD。
+//   2) createTextureFromLogicalPath：对 __v14dAuxTexturePaths 命中的路径创建
+//      rgba8unorm（无 sRGB 硬件解码，mask 是 Non-Color 线性数据）且禁用 mipmap
+//      （mip0 双线性 = 离线逐纹素口径，避免被 dilation/填充污染的低 mip 级）。
+//   3) mainPerMaterialBindGroupLayout 追加 binding(5) 纹理槽（extra mask texture）；
+//      createMaterialBindGroup 统一绑定（无 mask 的材质回退 fallbackMaterialTexture）。
+//      绑定必须在 GPU 材质建立前闭合并由 Gate 读取 dataset 证据。
+//   4) 编译 graph（graph.tags 含 "v14d-state2-face"）时注入 mask 纹理声明 + 合成
+//      helper（warm/art/fringe/occlusion 常量来自权威 blend 取证，硬编码于 WGSL）。
+//      仅 Face 材质走实时合成 graph；其余材质（EyeWhite/Eyes/Eyes+/Hair/Body/Clothes）
+//      保持 reze-k3 正常路径，不引用新纹理。
+const AUX_HELPER_SRC = [
+  "      const __aux = pathOrOptions.materialAuxTextures",
+  "      if (__aux) {",
+  "        const texs = model.getTextures()",
+  "        for (const m of model.getMaterials()) {",
+  "          const p = __aux[m.name]",
+  "          if (p !== undefined) {",
+  '            texs.push({ path: p, name: p.split("/").pop() || p })',
+  "            model.__v14dAuxTextureIndex = model.__v14dAuxTextureIndex || {}",
+  "            model.__v14dAuxTextureIndex[m.name] = texs.length - 1",
+  "          }",
+  "        }",
+  "        model.__v14dAuxTexturePaths = new Set(Object.values(__aux))",
+  "      }",
+  "",
+].join("\n");
+const AUX_HELPER_DIST = [
+  "            const __aux = pathOrOptions.materialAuxTextures;",
+  "            if (__aux) {",
+  "                const texs = model.getTextures();",
+  "                for (const m of model.getMaterials()) {",
+  "                    const p = __aux[m.name];",
+  "                    if (p !== undefined) {",
+  '                        texs.push({ path: p, name: p.split("/").pop() || p });',
+  "                        model.__v14dAuxTextureIndex = model.__v14dAuxTextureIndex || {};",
+  "                        model.__v14dAuxTextureIndex[m.name] = texs.length - 1;",
+  "                    }",
+  "                }",
+  "                model.__v14dAuxTexturePaths = new Set(Object.values(__aux));",
+  "            }",
+  "",
+].join("\n");
+const AUX_ANCHOR_SRC = OVERRIDE_HELPER_SRC + "      model.setName(name)";
+const AUX_ANCHOR_DIST = OVERRIDE_HELPER_DIST + "            model.setName(name);";
+const AUX_REPLACEMENT_SRC = OVERRIDE_HELPER_SRC + AUX_HELPER_SRC + "      model.setName(name)";
+const AUX_REPLACEMENT_DIST = OVERRIDE_HELPER_DIST + AUX_HELPER_DIST + "            model.setName(name);";
+
+// createTextureFromLogicalPath：aux mask 纹理用 rgba8unorm（非 sRGB）+ 禁 mipmap。
+const AUX_TEX_SRC_ANCHOR = "    const mipLevelCount = this.__v14dNoMipmapPaths?.has(logicalPath) ? 1 : Math.floor(Math.log2(Math.max(width, height))) + 1\n";
+const AUX_TEX_SRC_REPLACEMENT =
+  "    const __isAuxMask = inst.model.__v14dAuxTexturePaths?.has(logicalPath)\n" +
+  "    const mipLevelCount = (__isAuxMask || this.__v14dNoMipmapPaths?.has(logicalPath)) ? 1 : Math.floor(Math.log2(Math.max(width, height))) + 1\n";
+const AUX_TEX_DIST_ANCHOR = "        const mipLevelCount = this.__v14dNoMipmapPaths?.has(logicalPath) ? 1 : Math.floor(Math.log2(Math.max(width, height))) + 1;\n";
+const AUX_TEX_DIST_REPLACEMENT =
+  "        const __isAuxMask = inst.model.__v14dAuxTexturePaths?.has(logicalPath);\n" +
+  "        const mipLevelCount = (__isAuxMask || this.__v14dNoMipmapPaths?.has(logicalPath)) ? 1 : Math.floor(Math.log2(Math.max(width, height))) + 1;\n";
+const TEX_FORMAT_SRC_ANCHOR = "      format: \"rgba8unorm-srgb\",\n";
+const TEX_FORMAT_SRC_REPLACEMENT = '      format: __isAuxMask ? "rgba8unorm" : "rgba8unorm-srgb",\n';
+const TEX_FORMAT_DIST_ANCHOR = "            format: \"rgba8unorm-srgb\",\n";
+const TEX_FORMAT_DIST_REPLACEMENT = '            format: __isAuxMask ? "rgba8unorm" : "rgba8unorm-srgb",\n';
+
+// bind group 布局：binding(5) = extra mask texture（v14d state2）。默认材质回退 fallback。
+const BINDGROUP_LAYOUT_SRC_ANCHOR =
+  '        { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },\n      ],\n    })\n\n    // Shared zero StyleUniforms buffer';
+const BINDGROUP_LAYOUT_SRC_REPLACEMENT =
+  '        { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },\n        // V14D State2 实时合成：extra mask texture（默认回退 fallbackMaterialTexture）。\n        { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {} },\n      ],\n    })\n\n    // Shared zero StyleUniforms buffer';
+const BINDGROUP_LAYOUT_DIST_ANCHOR =
+  '                { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },\n            ],\n        });\n        // Shared zero StyleUniforms buffer';
+const BINDGROUP_LAYOUT_DIST_REPLACEMENT =
+  '                { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },\n                // V14D State2 实时合成：extra mask texture（默认回退 fallbackMaterialTexture）。\n                { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {} },\n            ],\n        });\n        // Shared zero StyleUniforms buffer';
+
+const CREATE_BINDGROUP_SRC_ANCHOR = [
+  "  private createMaterialBindGroup(label: string, baseEntries: GPUBindGroupEntry[], styleBuffer: GPUBuffer): GPUBindGroup {",
+  "    return this.device.createBindGroup({",
+  "      label,",
+  "      layout: this.mainPerMaterialBindGroupLayout,",
+  "      entries: [...baseEntries, { binding: 4, resource: { buffer: styleBuffer } }],",
+  "    })",
+  "  }",
+].join("\n");
+const CREATE_BINDGROUP_SRC_REPLACEMENT = [
+  "  private createMaterialBindGroup(label: string, baseEntries: GPUBindGroupEntry[], styleBuffer: GPUBuffer, maskView?: GPUTextureView): GPUBindGroup {",
+  "    return this.device.createBindGroup({",
+  "      label,",
+  "      layout: this.mainPerMaterialBindGroupLayout,",
+  "      entries: [...baseEntries, { binding: 4, resource: { buffer: styleBuffer } }, { binding: 5, resource: maskView ?? this.fallbackMaterialTexture.createView() }],",
+  "    })",
+  "  }",
+].join("\n");
+const CREATE_BINDGROUP_DIST_ANCHOR = [
+  "    createMaterialBindGroup(label, baseEntries, styleBuffer) {",
+  "        return this.device.createBindGroup({",
+  "            label,",
+  "            layout: this.mainPerMaterialBindGroupLayout,",
+  "            entries: [...baseEntries, { binding: 4, resource: { buffer: styleBuffer } }],",
+  "        });",
+  "    }",
+].join("\n");
+const CREATE_BINDGROUP_DIST_REPLACEMENT = [
+  "    createMaterialBindGroup(label, baseEntries, styleBuffer, maskView) {",
+  "        return this.device.createBindGroup({",
+  "            label,",
+  "            layout: this.mainPerMaterialBindGroupLayout,",
+  "            entries: [...baseEntries, { binding: 4, resource: { buffer: styleBuffer } }, { binding: 5, resource: maskView ?? this.fallbackMaterialTexture.createView() }],",
+  "        });",
+  "    }",
+].join("\n");
+
+const SETUP_MASK_SRC_ANCHOR = "      const textureView = diffuseTexture.createView()\n";
+const SETUP_MASK_SRC_REPLACEMENT = [
+  "      const textureView = diffuseTexture.createView()",
+  "      // V14D State2 实时合成：aux mask 纹理（仅 materialAuxTextures 命中的材质）。",
+  "      const __auxIdx = inst.model.__v14dAuxTextureIndex?.[mat.name]",
+  "      const __auxTexture = __auxIdx !== undefined ? await loadTextureByIndex(__auxIdx) : null",
+  "      const __auxMaskView = __auxTexture ? __auxTexture.createView() : undefined",
+  "",
+].join("\n");
+const SETUP_MASK_DIST_ANCHOR = "            const textureView = diffuseTexture.createView();\n";
+const SETUP_MASK_DIST_REPLACEMENT = [
+  "            const textureView = diffuseTexture.createView();",
+  "            // V14D State2 实时合成：aux mask 纹理（仅 materialAuxTextures 命中的材质）。",
+  "            const __auxIdx = inst.model.__v14dAuxTextureIndex?.[mat.name];",
+  "            const __auxTexture = __auxIdx !== undefined ? await loadTextureByIndex(__auxIdx) : null;",
+  "            const __auxMaskView = __auxTexture ? __auxTexture.createView() : undefined;",
+  "",
+].join("\n");
+const SETUP_BINDGROUP_SRC_ANCHOR = [
+  "      const bindGroup = this.createMaterialBindGroup(",
+  "        `${prefix}material: ${mat.name}`,",
+  "        baseBindGroupEntries,",
+  "        this.zeroStyleBuffer,",
+  "      )",
+].join("\n");
+const SETUP_BINDGROUP_SRC_REPLACEMENT = [
+  "      const bindGroup = this.createMaterialBindGroup(",
+  "        `${prefix}material: ${mat.name}`,",
+  "        baseBindGroupEntries,",
+  "        this.zeroStyleBuffer,",
+  "        __auxMaskView,",
+  "      )",
+].join("\n");
+const SETUP_BINDGROUP_DIST_ANCHOR = "            const bindGroup = this.createMaterialBindGroup(`${prefix}material: ${mat.name}`, baseBindGroupEntries, this.zeroStyleBuffer);";
+const SETUP_BINDGROUP_DIST_REPLACEMENT = "            const bindGroup = this.createMaterialBindGroup(`${prefix}material: ${mat.name}`, baseBindGroupEntries, this.zeroStyleBuffer, __auxMaskView);";
+
+const state2Targets = [
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: AUX_ANCHOR_SRC,
+    replacement: AUX_REPLACEMENT_SRC,
+    doneMarker: "materialAuxTextures",
+    label: "src/engine.ts materialAuxTextures 注入",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: AUX_ANCHOR_DIST,
+    replacement: AUX_REPLACEMENT_DIST,
+    doneMarker: "materialAuxTextures",
+    label: "dist/engine.js materialAuxTextures 注入",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: AUX_TEX_SRC_ANCHOR,
+    replacement: AUX_TEX_SRC_REPLACEMENT,
+    doneMarker: "__v14dAuxTexturePaths?.has(logicalPath)",
+    label: "src/engine.ts aux mask 禁 mipmap",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: AUX_TEX_DIST_ANCHOR,
+    replacement: AUX_TEX_DIST_REPLACEMENT,
+    doneMarker: "__v14dAuxTexturePaths?.has(logicalPath)",
+    label: "dist/engine.js aux mask 禁 mipmap",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: TEX_FORMAT_SRC_ANCHOR,
+    replacement: TEX_FORMAT_SRC_REPLACEMENT,
+    doneMarker: "__isAuxMask ? \"rgba8unorm\" : \"rgba8unorm-srgb\"",
+    label: "src/engine.ts aux mask 非 sRGB 视图",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: TEX_FORMAT_DIST_ANCHOR,
+    replacement: TEX_FORMAT_DIST_REPLACEMENT,
+    doneMarker: "__isAuxMask ? \"rgba8unorm\" : \"rgba8unorm-srgb\"",
+    label: "dist/engine.js aux mask 非 sRGB 视图",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: BINDGROUP_LAYOUT_SRC_ANCHOR,
+    replacement: BINDGROUP_LAYOUT_SRC_REPLACEMENT,
+    doneMarker: "binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {}",
+    label: "src/engine.ts bind group 布局 binding(5)",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: BINDGROUP_LAYOUT_DIST_ANCHOR,
+    replacement: BINDGROUP_LAYOUT_DIST_REPLACEMENT,
+    doneMarker: "binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {}",
+    label: "dist/engine.js bind group 布局 binding(5)",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: CREATE_BINDGROUP_SRC_ANCHOR,
+    replacement: CREATE_BINDGROUP_SRC_REPLACEMENT,
+    doneMarker: "maskView ?? this.fallbackMaterialTexture.createView()",
+    label: "src/engine.ts createMaterialBindGroup binding(5)",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: CREATE_BINDGROUP_DIST_ANCHOR,
+    replacement: CREATE_BINDGROUP_DIST_REPLACEMENT,
+    doneMarker: "maskView ?? this.fallbackMaterialTexture.createView()",
+    label: "dist/engine.js createMaterialBindGroup binding(5)",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: SETUP_MASK_SRC_ANCHOR,
+    replacement: SETUP_MASK_SRC_REPLACEMENT,
+    doneMarker: "__auxMaskView",
+    label: "src/engine.ts setupMaterialsForInstance mask 加载",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: SETUP_MASK_DIST_ANCHOR,
+    replacement: SETUP_MASK_DIST_REPLACEMENT,
+    doneMarker: "__auxMaskView",
+    label: "dist/engine.js setupMaterialsForInstance mask 加载",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: SETUP_BINDGROUP_SRC_ANCHOR,
+    replacement: SETUP_BINDGROUP_SRC_REPLACEMENT,
+    doneMarker: "this.zeroStyleBuffer,\n        __auxMaskView,",
+    label: "src/engine.ts setupMaterialsForInstance bindGroup 传 mask",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: SETUP_BINDGROUP_DIST_ANCHOR,
+    replacement: SETUP_BINDGROUP_DIST_REPLACEMENT,
+    doneMarker: "this.zeroStyleBuffer, __auxMaskView);",
+    label: "dist/engine.js setupMaterialsForInstance bindGroup 传 mask",
+  },
+];
+
+// slots.ts/compile.ts：v14d-state2-face graph 编译时注入 mask 纹理声明 + 合成 helper。
+// 常量来自权威 blend 取证（web/scripts/forensic-v14d-face-state2.py 输出 manifest）。
+const SLOTS_STATE2_ANCHOR = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`\n";
+const SLOTS_STATE2_REPLACEMENT = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`\n\n// V14D State2 实时合成（Stage 2B-M1）：extra mask 纹理声明 + 合成 helper。\n// 常量来自权威 blend 取证（web/scripts/forensic-v14d-face-state2.py 输出 manifest）：\n//   warm=[1,0.935,0.89], shadowTint=[0.66,0.58,0.60], fringeTint=[0.70,0.64,0.69]。\n// mask 纹理为 rgba8unorm（非 sRGB 解码视图），采样即线性值；仅在编译 tags 含\n// \"v14d-state2-face\" 的 graph 时注入，默认关闭。\nconst V14D_STATE2_MASK_DECL = `@group(2) @binding(5) var v14d_state2_mask: texture_2d<f32>;\n\n`;\n\nconst V14D_STATE2_HELPERS_WGSL = `fn v14d_state2_shadow_factor(mask: vec3f) -> vec3f {\n  let inv_b = 1.0 - mask.b;\n  let art = mix(vec3f(1.0, 1.0, 1.0), vec3f(0.66, 0.58, 0.60), mask.r * inv_b);\n  let fringe = mix(vec3f(1.0, 1.0, 1.0), vec3f(0.70, 0.64, 0.69), mask.g * inv_b);\n  return art * fringe;\n}\n\nfn v14d_state2_composite(base: vec3f, mask: vec3f) -> vec3f {\n  let warm = base * vec3f(1.0, 0.935, 0.89);\n  return warm * v14d_state2_shadow_factor(mask);\n}\n\n`;\n";
+const SLOTS_ASSEMBLE_SRC_ANCHOR = "export function assembleModule(\n  renderClass: RenderClass,\n  alphaMode: AlphaMode,\n  fsBody: string,\n  includeStyleUniforms: boolean,\n): string {\n  return (\n    NODES_WGSL +\n    COMMON_MATERIAL_PRELUDE_WGSL +\n    (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n    decls(renderClass, alphaMode) +\n    prelude(renderClass, alphaMode) +\n    fsBody +\n    \"\\n\" +\n    epilogue(renderClass, alphaMode) +\n    \"}\\n\"\n  )\n}";
+const SLOTS_ASSEMBLE_SRC_REPLACEMENT = "export function assembleModule(\n  renderClass: RenderClass,\n  alphaMode: AlphaMode,\n  fsBody: string,\n  includeStyleUniforms: boolean,\n  includeState2Mask = false,\n): string {\n  return (\n    NODES_WGSL +\n    COMMON_MATERIAL_PRELUDE_WGSL +\n    (includeState2Mask ? V14D_STATE2_MASK_DECL : \"\") +\n    (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n    decls(renderClass, alphaMode) +\n    prelude(renderClass, alphaMode) +\n    (includeState2Mask ? V14D_STATE2_HELPERS_WGSL : \"\") +\n    fsBody +\n    \"\\n\" +\n    epilogue(renderClass, alphaMode) +\n    \"}\\n\"\n  )\n}";
+const SLOTS_ASSEMBLE_DIST_ANCHOR = "export function assembleModule(renderClass, alphaMode, fsBody, includeStyleUniforms) {\n    return (NODES_WGSL +\n        COMMON_MATERIAL_PRELUDE_WGSL +\n        (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n        decls(renderClass, alphaMode) +\n        prelude(renderClass, alphaMode) +\n        fsBody +\n        \"\\n\" +\n        epilogue(renderClass, alphaMode) +\n        \"}\\n\");\n}";
+const SLOTS_ASSEMBLE_DIST_REPLACEMENT = "export function assembleModule(renderClass, alphaMode, fsBody, includeStyleUniforms, includeState2Mask = false) {\n    return (NODES_WGSL +\n        COMMON_MATERIAL_PRELUDE_WGSL +\n        (includeState2Mask ? V14D_STATE2_MASK_DECL : \"\") +\n        (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n        decls(renderClass, alphaMode) +\n        prelude(renderClass, alphaMode) +\n        (includeState2Mask ? V14D_STATE2_HELPERS_WGSL : \"\") +\n        fsBody +\n        \"\\n\" +\n        epilogue(renderClass, alphaMode) +\n        \"}\\n\");\n}";
+const COMPILE_ASSEMBLE_SRC_ANCHOR = "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current)";
+const COMPILE_ASSEMBLE_SRC_REPLACEMENT = "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current, graph.tags?.includes(\"v14d-state2-face\") ?? false)";
+const COMPILE_ASSEMBLE_DIST_ANCHOR = "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current);";
+const COMPILE_ASSEMBLE_DIST_REPLACEMENT = "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current, graph.tags?.includes(\"v14d-state2-face\") ?? false);";
+
+const state2SlotTargets = [
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
+    anchor: SLOTS_STATE2_ANCHOR,
+    replacement: SLOTS_STATE2_REPLACEMENT,
+    doneMarker: "v14d_state2_shadow_factor",
+    label: "src/graph/slots.ts state2 helper 声明",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
+    anchor: SLOTS_STATE2_ANCHOR,
+    replacement: SLOTS_STATE2_REPLACEMENT,
+    doneMarker: "v14d_state2_shadow_factor",
+    label: "dist/graph/slots.js state2 helper 声明",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
+    anchor: SLOTS_ASSEMBLE_SRC_ANCHOR,
+    replacement: SLOTS_ASSEMBLE_SRC_REPLACEMENT,
+    doneMarker: "includeState2Mask",
+    label: "src/graph/slots.ts assembleModule state2 门控",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
+    anchor: SLOTS_ASSEMBLE_DIST_ANCHOR,
+    replacement: SLOTS_ASSEMBLE_DIST_REPLACEMENT,
+    doneMarker: "includeState2Mask",
+    label: "dist/graph/slots.js assembleModule state2 门控",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "compile.ts"),
+    anchor: COMPILE_ASSEMBLE_SRC_ANCHOR,
+    replacement: COMPILE_ASSEMBLE_SRC_REPLACEMENT,
+    doneMarker: "graph.tags?.includes(\"v14d-state2-face\")",
+    label: "src/graph/compile.ts state2 门控",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js"),
+    anchor: COMPILE_ASSEMBLE_DIST_ANCHOR,
+    replacement: COMPILE_ASSEMBLE_DIST_REPLACEMENT,
+    doneMarker: "graph.tags?.includes(\"v14d-state2-face\")",
+    label: "dist/graph/compile.js state2 门控",
+  },
+];
+state2Targets.push(...state2SlotTargets);
+passthroughTargets.push(...state2Targets);
 
 for (const t of passthroughTargets) {
   if (!fs.existsSync(t.file)) { patchLog.push({ label: t.label, status: "missing-file" }); continue; }

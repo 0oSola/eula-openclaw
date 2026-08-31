@@ -19,6 +19,7 @@ import {
   V14D_BAKED_BINDINGS,
   V14D_FACE_STATIC_MODES,
   V14D_FACE_MATERIAL_NAME,
+  V14D_STATE2_MASK_LOGICAL_PATH,
   isV14dFaceStaticMode,
   v14dFaceStaticTextureName,
   type V14dFaceStaticMode,
@@ -35,6 +36,8 @@ type CalibrationQuery = {
   v14dColorBaseline: boolean;
   v14dFaceStatic: boolean;
   v14dFaceStaticMode: V14dFaceStaticMode;
+  /** 配准负测相机覆写：shift=故意平移，null=不恢复权威相机（默认关闭）。 */
+  v14dFaceCameraOverride: "shift" | "null" | null;
 };
 
 function readRenderPipeline(value: string | null): RenderPipeline {
@@ -75,6 +78,10 @@ function readCameraSnapshot(value: string | null): MmdCameraSnapshot | null {
   }
 }
 
+function readCameraOverride(value: string | null): "shift" | "null" | null {
+  return value === "shift" || value === "null" ? value : null;
+}
+
 function readCalibrationQuery(): CalibrationQuery {
   if (typeof window === "undefined") {
     return {
@@ -86,6 +93,7 @@ function readCalibrationQuery(): CalibrationQuery {
       v14dColorBaseline: false,
       v14dFaceStatic: false,
       v14dFaceStaticMode: "normal",
+      v14dFaceCameraOverride: null,
     };
   }
   const params = new URLSearchParams(window.location.search);
@@ -111,6 +119,7 @@ function readCalibrationQuery(): CalibrationQuery {
     v14dColorBaseline,
     v14dFaceStatic,
     v14dFaceStaticMode,
+    v14dFaceCameraOverride: readCameraOverride(params.get("v14dFaceCameraOverride")),
   };
 }
 
@@ -128,12 +137,12 @@ function createCalibrationInteraction(vmdUrl: string) {
 
 const MODE_LABEL: Record<V14dFaceStaticMode, string> = {
   normal: "正常基线",
-  faceShadowOnly: "脸部阴影分量",
-  finalFaceComposite: "最终脸部合成",
+  faceShadowOnly: "State2 ShadowFactor（实时）",
+  finalFaceComposite: "State2 Final Composite（实时）",
   uvDebug: "UV 调试",
   worldPos: "世界坐标调试",
   diffuseFlat: "无光照漫反射调试",
-  bakedGolden: "黄金帧最终着色烘焙",
+  bakedGolden: "黄金帧最终着色烘焙（失败实验/内部诊断）",
 };
 
 const FACE_D_KEY = "Textures/c_Koleda_slg_face_d.png";
@@ -151,8 +160,7 @@ function FaceStaticAssetPanel(props: {
   const { assets, onLoaded } = props;
   const [modelDir, setModelDir] = useState<FileList | null>(null);
   const [vmdFile, setVmdFile] = useState<File | null>(null);
-  const [compositeFile, setCompositeFile] = useState<File | null>(null);
-  const [attenuationFile, setAttenuationFile] = useState<File | null>(null);
+  const [state2MaskFile, setState2MaskFile] = useState<File | null>(null);
   const [bakedDir, setBakedDir] = useState<FileList | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -166,9 +174,8 @@ function FaceStaticAssetPanel(props: {
     const faceD = modelFiles.find((f) => /c_Koleda_slg_face_d\.png$/i.test(f.name)) ?? null;
     if (modelFiles.length && !faceD) lack.push("目录内缺少脸部基图：c_Koleda_slg_face_d.png");
     if (!vmdFile) lack.push(`权威 VMD：${V14D_FACE_STATIC_AUTHORITY.vmdFileName}`);
-    if (!compositeFile) lack.push(`派生合成图：${V14D_FACE_STATIC_DERIVED.composite}`);
-    if (!attenuationFile) lack.push(`派生阴影分量图：${V14D_FACE_STATIC_DERIVED.attenuation}`);
-    if (!pmxFile || !faceD || !vmdFile || !compositeFile || !attenuationFile) {
+    if (!state2MaskFile) lack.push("Blender State2 packed mask（v14d-01234-face-shadow-state-2.png，Non-Color 1024x1024）");
+    if (!pmxFile || !faceD || !vmdFile || !state2MaskFile) {
       return { source: null, missing: lack };
     }
     // 以模式无关方式构造：faceOverride 由 RezeWebGpuStage 按当前模式选择；这里把三张脸部纹理都带上，
@@ -186,11 +193,11 @@ function FaceStaticAssetPanel(props: {
       pmxFile,
       vmdFile,
       faceOverride: null,
+      // 实时合成：Face 材质 BaseColor 恒为原始 face_d（sRGB），不再用派生图冒充。
       faceTextures: {
         normal: withRel(faceD, FACE_D_KEY),
-        finalFaceComposite: withRel(compositeFile, FACE_D_KEY),
-        faceShadowOnly: withRel(attenuationFile, FACE_D_KEY),
       },
+      state2Mask: withRel(state2MaskFile, V14D_STATE2_MASK_LOGICAL_PATH),
     };
     // 黄金帧烘焙纹理（可选）：选择包含 baked_*.png 的目录后按唯一逻辑键注入
     // （Textures/v14d-baked/<file>），加载后由 RezeWebGpuStage 按材质名独立绑定。
@@ -257,7 +264,7 @@ function FaceStaticAssetPanel(props: {
       >
         <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>V14D Face State 2 静态预览 · 本地资产</div>
         <div style={{ color: "#aab", marginBottom: 14 }}>
-          请选择本地权威资产（仓库不捆绑第三方 PMX/纹理）。选择后即可在三种模式间切换，无需重选。
+          请选择本地权威资产（仓库不捆绑第三方 PMX/纹理）。State2 合成在 Web 实时执行（face_d + State2 mask + Blender 节点常量），切换模式无需重选。
         </div>
 
         <label style={{ display: "block", marginBottom: 10 }}>
@@ -275,14 +282,13 @@ function FaceStaticAssetPanel(props: {
           <div style={{ marginBottom: 4 }}>2. 权威 VMD（frame120 姿态）</div>
           <input data-testid="v14d-face-vmd-input" type="file" accept=".vmd" onChange={(e) => setVmdFile(e.target.files?.[0] ?? null)} />
         </label>
-        <label style={{ display: "block", marginBottom: 10 }}>
-          <div style={{ marginBottom: 4 }}>3. 派生合成图（{V14D_FACE_STATIC_DERIVED.composite}）</div>
-          <input data-testid="v14d-face-composite-input" type="file" accept="image/png" onChange={(e) => setCompositeFile(e.target.files?.[0] ?? null)} />
-        </label>
         <label style={{ display: "block", marginBottom: 14 }}>
-          <div style={{ marginBottom: 4 }}>4. 派生阴影分量图（{V14D_FACE_STATIC_DERIVED.attenuation}）</div>
-          <input data-testid="v14d-face-attenuation-input" type="file" accept="image/png" onChange={(e) => setAttenuationFile(e.target.files?.[0] ?? null)} />
+          <div style={{ marginBottom: 4 }}>3. Blender State2 packed mask（权威 v14d-01234-face-shadow-state-2.png，实时合成唯一遮罩来源）</div>
+          <input data-testid="v14d-face-state2-mask-input" type="file" accept="image/png" onChange={(e) => setState2MaskFile(e.target.files?.[0] ?? null)} />
         </label>
+        <div style={{ color: "#8a8f9e", marginBottom: 14, fontSize: 12 }}>
+          旧路线「派生合成图/阴影分量图」已废弃：State2 合成现在 Web 实时执行，不再读取预烘焙整图。
+        </div>
         <label style={{ display: "block", marginBottom: 14 }}>
           <div style={{ marginBottom: 4 }}>5. 黄金帧烘焙纹理目录（baked_*.png，可选；选后启用「黄金帧烘焙」模式）</div>
           <input
@@ -441,7 +447,7 @@ export default function MmdCalibrationRenderPage() {
 Frame ${V14D_FACE_STATIC_FRAME} · Face State ${V14D_FACE_STATIC_STATE} · Blend ${V14D_FACE_STATIC_BLEND.toFixed(2)}
 Mode ${faceStaticMode} · tex ${v14dFaceStaticTextureName(faceStaticMode)}
 Camera Locked · Animation Paused
-静态脸部合成分量预览 · 不代表完整 Blender 最终视觉`}
+State2 实时脸部合成预览（face_d + State2 mask 实时公式）· 不代表完整 Blender 最终视觉`}
         </div>
       ) : null}
 
@@ -450,7 +456,7 @@ Camera Locked · Animation Paused
           data-testid="v14d-face-static-mode-bar"
           style={{ position: "fixed", left: 12, bottom: 12, zIndex: 10, display: "flex", gap: 8 }}
         >
-          {[...V14D_FACE_STATIC_MODES, "bakedGolden" as const].map((m) => (
+          {[...V14D_FACE_STATIC_MODES].map((m) => (
             <button
               key={m}
               type="button"
@@ -471,6 +477,27 @@ Camera Locked · Animation Paused
               {MODE_LABEL[m]}
             </button>
           ))}
+          <button
+            key="bakedGolden"
+            type="button"
+            data-testid="v14d-face-mode-bakedGolden"
+            data-active={faceStaticMode === "bakedGolden" ? "true" : "false"}
+            title="失败实验/内部诊断：整图预烘焙，不代表实时生产方案"
+            onClick={() => setFaceStaticMode("bakedGolden")}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px dashed #7a4a4a",
+              background: faceStaticMode === "bakedGolden" ? "#6f2f2f" : "rgba(40,20,20,0.8)",
+              color: "#f2c8c8",
+              cursor: "pointer",
+              font: "12px/1.4 sans-serif",
+              fontWeight: faceStaticMode === "bakedGolden" ? 700 : 500,
+              opacity: 0.85,
+            }}
+          >
+            {MODE_LABEL.bakedGolden}
+          </button>
         </div>
       ) : null}
 
@@ -490,6 +517,7 @@ Camera Locked · Animation Paused
           v14dColorBaseline={query.v14dColorBaseline}
           v14dFaceStatic={query.v14dFaceStatic}
           v14dFaceStaticMode={faceStaticMode}
+          v14dFaceCameraOverride={query.v14dFaceCameraOverride}
           v14dFaceStaticGated={query.v14dFaceStatic}
           rezeBackgroundEffect={query.v14dColorBaseline || query.v14dFaceStatic ? "关闭" : undefined}
           rezeTransparentBackground={query.v14dColorBaseline || query.v14dFaceStatic ? false : undefined}

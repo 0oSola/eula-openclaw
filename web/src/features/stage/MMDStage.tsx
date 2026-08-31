@@ -139,6 +139,8 @@ type MMDStageProps = {
   v14dFaceStaticMode?: "normal" | "faceShadowOnly" | "finalFaceComposite" | "uvDebug" | "worldPos" | "diffuseFlat" | "bakedGolden";
   /** 黄金帧诊断 ROI/pick 门控：仅 finalFaceComposite 模式启用脸部取样口径。 */
   v14dFaceStaticGated?: boolean;
+  /** State2 实时合成配准负测相机覆写（仅 faceStatic 诊断；shift/null，默认关闭）。 */
+  v14dFaceCameraOverride?: "shift" | "null" | null;
   rezeTransparentBackground?: boolean;
 };
 
@@ -169,6 +171,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   v14dFaceStatic = false,
   v14dFaceStaticMode = "normal",
   v14dFaceStaticGated = false,
+  v14dFaceCameraOverride = null,
   rezeTransparentBackground = false,
 }: MMDStageProps, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -503,6 +506,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
             v14dFaceStatic={v14dFaceStatic}
             v14dFaceStaticMode={v14dFaceStaticMode}
             v14dFaceStaticGated={v14dFaceStaticGated}
+            v14dFaceCameraOverride={v14dFaceCameraOverride}
             transparentBackground={rezeTransparentBackground}
             cameraSnapshot={cameraSnapshot}
             onInteractionComplete={onInteractionComplete}

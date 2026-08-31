@@ -1,7 +1,7 @@
 /// <reference types="@webgpu/types" />
 
 /**
- * Koleda V14D Face State 2 静态黄金帧预览（固定初始状态）。
+ * Koleda V14D Face State 2 实时合成预览（固定初始状态，Stage 2B-M1）。
  *
  * 视觉常量全部来自权威 blend 取证，不在 Web 手调：
  *   blend: Koleda_V14D_DiscreteFaceShadow_NarrowBlendHysteresis.blend
@@ -19,10 +19,16 @@
  *   composite  = warm * shadowFactor   // 最终脸部线性色（BaseColor + State2, Blend 0）
  *   attenuation = 1 - shadowFactor     // 纯阴影衰减分量（0=无阴影，黑底）
  *
- * 三模式 diffuse 语义相互独立：
- *   normal            → 原始 face_d（未应用 State2 的现有 Web 脸部基线）
- *   finalFaceComposite→ composite（BaseColor + State2, Blend 0 静态合成）
- *   faceShadowOnly    → attenuation（纯阴影衰减分量，黑底灰阶）
+ * Stage 2B-M1（本票）：finalFaceComposite / faceShadowOnly 升级为**实时合成**——
+ * Face 材质在 Web 线性空间逐像素从「原始 face_d + State2 packed mask + Blender
+ * 节点常量」执行上式，不再使用整张预烘焙脸图。mask 纹理由引擎补丁五在
+ * setupMaterialsForInstance（GPU 材质建立）前按逻辑路径创建，mipmap 禁用且按
+ * 线性（非 sRGB 解码视图）采样，与 Blender Non-Color 语义一致。
+ *
+ * 三模式语义相互独立：
+ *   normal            → 原始 face_d（未应用 State2 的现有 Web 脸部基线，单纹理）
+ *   faceShadowOnly    → 实时 shadowFactor（State2 乘法阴影因子，≈1 处无阴影）
+ *   finalFaceComposite→ 实时 composite（BaseColor + State2, Blend 0 实时合成）
  *
  * 资产政策（README：第三方资产不可再分发，仓库不捆绑）：仓库只保留可发布代码/脚本/文档。
  * 权威 PMX/纹理/VMD 与派生纹理均由用户本地源以 File 形式注入（采集脚本经 Node fs 从
@@ -43,6 +49,46 @@ export const V14D_FACE_STATIC_BLEND = 0;
 export const V14D_FACE_MATERIAL_NAME = "Face";
 /** 权威脸部 diffuse 纹理文件名（原始 BaseColor），normal 模式直接用它。 */
 export const V14D_FACE_BASE_TEXTURE_NAME = "c_Koleda_slg_face_d.png";
+/** State2 packed mask 注入逻辑键（唯一，不顶替原始纹理；引擎补丁五按此前缀建立实时 mask 纹理）。 */
+export const V14D_STATE2_MASK_LOGICAL_PATH = "Textures/v14d-state2-mask/state2.png";
+/** 实时合成模式：faceShadowOnly=ShadowFactor 视图，finalFaceComposite=FinalComposite 视图。 */
+export const V14D_FACE_LIVE_MODES = ["faceShadowOnly", "finalFaceComposite"] as const;
+
+/** Blender 节点取证常量（见 web/scripts/forensic-v14d-face-state2.py 输出 manifest；不得手调）。 */
+export const V14D_STATE2_CONSTANTS = {
+  warm: [1.0, 0.935, 0.89],
+  shadowTint: [0.66, 0.58, 0.60],
+  fringeTint: [0.70, 0.64, 0.69],
+  state: 2,
+  blend: 0,
+  maskImage: "PROTO_V14D_FaceShadow_State2",
+  maskSha256: "42d2f95af877ebfa9d5266195742dca95fe0463a8cb093b24a14717d2c33a103",
+  faceDSha256: "1e963c090272fb1102c4e5248cf98177ac6c7afe57eeff1e370e7b7f954fd44e",
+} as const;
+
+/**
+ * 实时 State2 合成模式：Golden Frame 固定相机叠加。
+ * 配准负测：v14dFaceCameraOverride=shift / null。
+ *   - shift：相机 position/target 沿 +X 平移 6 PMX 单位，必须使配准 Gate 失败；
+ *   - null ：强制不恢复相机（保持 boot 默认相机，fov/position/target 与权威不同）。
+ * 采集脚本读取 canvas dataset 的实际 fov/position/target 上报 Gate；null 相机阻断 Gate。
+ */
+export type V14dFaceCameraOverride = "shift" | "null" | null;
+export function v14dFaceCameraWithOverride(
+  base: MmdCameraSnapshot,
+  override: V14dFaceCameraOverride,
+): MmdCameraSnapshot | null {
+  if (override === "null") return null;
+  if (override === "shift") {
+    const dx = 6;
+    return {
+      ...base,
+      position: [base.position[0] + dx, base.position[1], base.position[2]],
+      target: [base.target[0] + dx, base.target[1], base.target[2]],
+    };
+  }
+  return base;
+}
 
 /** 权威 PMX 与 VMD 的身份（强门控；来自权威 blend / 用户本地包取证）。 */
 export const V14D_FACE_STATIC_AUTHORITY = {
@@ -246,6 +292,8 @@ export type V14dFaceStaticAssetSource = {
   vmdFile: File;
   /** Face diffuse override（单一来源场景：normal=原始 face_d；composite/shadow=派生图，webkitRelativePath=face_d 键）。 */
   faceOverride: File | null;
+  /** State2 packed mask File（实时合成模式注入，webkitRelativePath=V14D_STATE2_MASK_LOGICAL_PATH）。 */
+  state2Mask?: File | null;
   /** 三模式各自的 Face diffuse 纹理（页面 UI 一次提供三张，运行时按模式选用；与 faceOverride 二选一）。 */
   faceTextures?: Partial<Record<V14dFaceStaticMode, File>>;
   /** 黄金帧烘焙纹理（bakedGolden 模式）：逐材质 baked_* File。真实 GPU 绑定由引擎

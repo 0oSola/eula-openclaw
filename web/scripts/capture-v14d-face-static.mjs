@@ -124,6 +124,10 @@ const FACE_D = path.join(KOLEDA_DIR, "Textures", "c_Koleda_slg_face_d.png");
 const FACE_D_REL = "Textures/c_Koleda_slg_face_d.png";
 // 黄金帧最终着色烘焙纹理目录（Cycles COMBINED 逐材质，含光照）。
 const BAKED_DIR = process.env.V14D_BAKED_DIR || "D:\\mmd\\克莱妲原皮\\v14d-baked-final";
+// State2 实时合成：权威 packed mask（Non-Color 1024x1024）注入为唯一逻辑键。
+const STATE2_MASK = process.env.V14D_STATE2_MASK || "C:/w/rk3-face-v14d/experiments/koleda-v14d-face-shadow/assets/textures/v14d-01234-face-shadow-state-2.png";
+const STATE2_MASK_REL = "Textures/v14d-state2-mask/state2.png";
+const CAMERA_OVERRIDE = (() => { const h = process.argv.find((a) => a.startsWith("--camera-override=")); return h ? h.split("=", 2)[1] : null; })();
 // 烘焙绑定（与 v14dFaceStatic.ts V14D_BAKED_BINDINGS 一致）：
 // [key, pmxMaterial, bakedFile]。注入逻辑键一律 Textures/v14d-baked/<bakedFile>（唯一，不覆盖）。
 const BAKED_BINDINGS = [
@@ -197,6 +201,7 @@ for (const mode of MODES) {
     else if (key === "vmd") filePath = VMD;
     else if (key.startsWith("__derived__/")) filePath = path.join(DERIVED_DIR, key.slice("__derived__/".length));
     else if (key.startsWith("__baked__/")) filePath = path.join(BAKED_DIR, key.slice("__baked__/".length));
+    else if (key === "__mask__/state2") filePath = STATE2_MASK;
     else filePath = path.join(KOLEDA_DIR, key);
     if (filePath && fs.existsSync(filePath)) {
       const ext = path.extname(filePath).toLowerCase();
@@ -206,6 +211,7 @@ for (const mode of MODES) {
   });
   const page = context.pages()[0] ?? (await context.newPage());
   page.on("pageerror", (e) => summary.pageErrors.push(String(e?.stack || e)));
+page.on("console", async (m) => { const t = m.text(); const { appendFileSync } = await import("node:fs"); appendFileSync(process.cwd() + "/.scratch/v14d-face-state2-runtime/console-dump.txt", "[" + m.type() + ":" + m.location()?.url + "] " + t.slice(0,300) + "\n"); });
   page.on("requestfailed", (r) => summary.failedRequests.push({ url: r.url(), err: r.failure()?.errorText || "unknown" }));
   page.on("response", (r) => { const s = r.status(); if (s >= 400) summary.httpBadResponses.push({ url: r.url(), status: s }); });
 
@@ -244,13 +250,18 @@ for (const mode of MODES) {
           bakedTextures[key] = await fetchFile(`__baked__/${file}`, relKey);
         }
       }
-      window.__v14dFaceStaticAssets = { modelFiles, pmxFile, vmdFile, faceOverride, bakedTextures };
+      let state2Mask = null;
+      if (payload.state2Mask) { state2Mask = await fetchFile("__mask__/state2", payload.state2MaskRel, "image/png"); }
+      window.__v14dFaceStaticAssets = { modelFiles, pmxFile, vmdFile, faceOverride, bakedTextures, state2Mask };
     }, {
       route: "http://v14d-asset.local/a",
       isBaked: mode === "bakedGolden",
       bakedKeys: mode === "bakedGolden" ? Object.values(BAKED_FILES).map(([, rel]) => rel) : [],
       bakedMap: mode === "bakedGolden" ? BAKED_FILES : null,
-      faceKey: mode === "normal" || mode === "bakedGolden" ? "Textures/c_Koleda_slg_face_d.png" : `__derived__/${DERIVED_FILE[mode]}`,
+      // 实时合成（faceShadowOnly/finalFaceComposite）：Face BaseColor 恒为原始 face_d，mask 独立注入。
+      faceKey: "Textures/c_Koleda_slg_face_d.png",
+      state2Mask: mode === "faceShadowOnly" || mode === "finalFaceComposite",
+      state2MaskRel: "Textures/v14d-state2-mask/state2.png",
       // 烘焙模式下脸部纹理由 bakedTextures.face 提供，跳过 faceOverride。
       faceRel: mode === "bakedGolden" ? null : "Textures/c_Koleda_slg_face_d.png",
     });
@@ -258,6 +269,7 @@ for (const mode of MODES) {
     const modelUrl = `http://v14d-asset.local/a?v14dasset=pmx`;
     const vmdUrl = `http://v14d-asset.local/a?v14dasset=vmd`;
     const query = new URLSearchParams({ modelUrl, vmdUrl, v14dFaceStatic: "1", v14dFaceMode: mode });
+    if (CAMERA_OVERRIDE) query.set("v14dFaceCameraOverride", CAMERA_OVERRIDE);
     if (ALIGN_GATE && mode === "bakedGolden") query.set("v14dAlignGate", "1");
     await page.goto(`${BASE}?${query.toString()}`, { waitUntil: "domcontentloaded", timeout: 60000 });
     await page.waitForSelector("[data-testid='mmd-calibration-render']", { timeout: 60000 });
@@ -274,6 +286,12 @@ for (const mode of MODES) {
         cameraFov: c?.dataset.v14dFaceStaticCameraFov || "", cameraPos: c?.dataset.v14dFaceStaticCameraPos || "",
         texture: c?.dataset.v14dFaceStaticTexture || "", faceApplied: c?.dataset.v14dFaceStaticFaceApplied || "",
         authority: c?.dataset.v14dFaceStaticAuthority || "", width: c?.width || 0, height: c?.height || 0,
+        liveState2: c?.dataset.v14dLiveState2 || "",
+        liveFaceDiffuse: c?.dataset.v14dLiveFaceDiffuse || "",
+        liveMaskPath: c?.dataset.v14dLiveMaskPath || "",
+        liveMaskIndex: c?.dataset.v14dLiveMaskIndex || "",
+        liveBound: c?.dataset.v14dLiveBound || "",
+        cameraTarget: c?.dataset.v14dFaceCameraTarget || "",
         bakedBound: c?.dataset.v14dBakedBound || "",
         bakedActual: c?.dataset.v14dBakedActual || "",
         bakedTexStart: c?.dataset.v14dBakedTexStart || "",
@@ -458,6 +476,17 @@ for (const mode of MODES) {
   if (!m.roi?.meanLinear) fails.push(`${mode}: meanLinear 缺失`);
   // 正式浮点 HDR 证据硬校验：UV-direct Gate 的正式输入，缺任一项即失败。
   validateHdrEvidence(mode, m.hdr, fails);
+  // 实时合成（faceShadowOnly/finalFaceComposite）：真实 GPU 双纹理绑定硬 Gate。
+  if (mode === "faceShadowOnly" || mode === "finalFaceComposite") {
+    if (m.state.liveBound !== "true") fails.push(mode + ": 实时合成双纹理绑定未通过 (liveBound=" + m.state.liveBound + ")");
+    if (!m.state.liveFaceDiffuse || !/c_Koleda_slg_face_d/i.test(m.state.liveFaceDiffuse)) fails.push(mode + ": liveFaceDiffuse 非原始 face_d (" + m.state.liveFaceDiffuse + ")");
+    if (m.state.liveMaskPath !== "Textures/v14d-state2-mask/state2.png") fails.push(mode + ": liveMaskPath 错误 (" + m.state.liveMaskPath + ")");
+    if (!CAMERA_OVERRIDE) {
+      const fov = Number(m.state.cameraFov);
+      if (!Number.isFinite(fov) || fov <= 0) fails.push(mode + ": 相机 fov 非法/null (" + m.state.cameraFov + ")");
+      if (!m.state.cameraPos) fails.push(mode + ": 相机 position 缺失");
+    }
+  }
   // bakedGolden：逐材质独立绑定硬 Gate（faceApplied 不再作为纹理注入通过证据）。
   if (mode === "bakedGolden") validateBakedBinding(m.state, fails);
 }
