@@ -75,6 +75,14 @@ Reze 资产页还支持本地 PMX 目录导入。前端只接受一个目录中�
 | NDJSON logs | `api/data/logs/*.ndjson` | trace 双写日志 | 本地数据 | 直接查日志 |
 | MMD assets | `MMD_ROOT_DIR=./MMD` | PMX/PMD 模型、贴图、VMD 动作资源；开源仓库只保留 `MMD/README.md`，第三方模型、贴图、动作、音频作为本地未跟踪资源放置 | 本地文件 | `GET /assets/mmd/models` |
 
+## 2.0.1 便携 Release 包服务
+
+便携发布由 start-mmd.ps1 统一入口负责。源码根目录的 package 动作先检查 Python/API 入口、Web 和 desktop-pet 的 Node 依赖，默认调用现有 Release build，再在 release/mmd-portable-<version>-<timestamp>/ 生成包目录和同名 ZIP；latest.json 记录最近包目录，便于源码根目录的 status/stop 找回实际运行包。
+
+包内布局只保留运行所需文件：api/app、api/requirements.txt 和 api/.env.example；web/.next-codex-release、web/scripts/run-next.mjs、web/next.config.mjs 与 web/node_modules；desktop-pet/dist、desktop-pet/dist-electron、desktop-pet/package.json 与 desktop-pet/node_modules；以及存在时的 MMD 和 MMD_stage。本地源码 .git、.runtime 历史、api/data 用户数据库、无效 trace.db、测试临时文件和 debug event 历史均不进入包。包内 manifest.json 记录版本、源提交、布局、运行时前置条件、排除项和资源权利提示。
+
+包内 start-mmd.ps1 检测 manifest.json 后只调用包内 scripts/release-stack.ps1；API、Web、Pet 的状态文件、日志、Pet ready marker 和默认回退数据目录都位于包内 .runtime/。显式 ApiDataDir/API_DATA_DIR 严格使用，未显式设置时无效 api/data SQLite 才回退到包内 .runtime/release-stack/data。Python 解释器和 API Python 依赖没有封装，当前发布物是便携源码包/Node 运行时包，不是安装器；MMD 模型、贴图、动作和音频的复制不改变第三方再分发许可。
+
 ## 2.1 Windows release 三端生命周期
 
 仓库根目录的 `start-release.ps1` 是发布栈入口，`start-release.cmd` 仅提供 CMD 包装。`start` 默认先执行 API 入口检查、Web production build 和 desktop-pet build，再按 API → Web → Pet 的顺序启动并等待：

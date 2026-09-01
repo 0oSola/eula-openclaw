@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [ValidateSet("build", "start", "stop", "status")]
   [string]$Action = "start",
@@ -34,7 +34,7 @@ function Resolve-CommandPath([string[]]$Names, [string]$Description) {
     $command = Get-Command $name -ErrorAction SilentlyContinue
     if ($command -and $command.Source) { return $command.Source }
   }
-  throw "$Description was not found on PATH."
+  throw "未找到 $Description。请安装 Node.js（含 npm）并将其加入 PATH，然后重试。"
 }
 
 function Resolve-PythonExe {
@@ -66,7 +66,7 @@ function Resolve-PythonExe {
       Sort-Object FullName -Descending
     if ($candidates) { return $candidates[0].FullName }
   }
-  throw "Python executable was not found. Install Python or add it to PATH."
+  throw "未找到可用 Python。请安装 Python 3.11+ 并将其加入 PATH，然后重试。"
 }
 
 function Resolve-DataDirectory([string]$Candidate) {
@@ -171,7 +171,7 @@ function Resolve-ReleaseApiDataDir(
   return $fallbackDataDir
 }
 
-function Resolve-NpmCommand { return Resolve-CommandPath @('npm.cmd', 'npm') "npm" }
+function Resolve-NpmCommand { return Resolve-CommandPath @('npm.cmd', 'npm') "npm（Node.js 包管理器）" }
 function Resolve-NodeExe { return Resolve-CommandPath @('node.exe', 'node') "Node.js" }
 
 function Invoke-CheckedCommand(
@@ -410,7 +410,7 @@ function Assert-RequiredReleaseArtifacts {
   $missing = @(Get-RequiredReleaseArtifacts | Where-Object { -not (Test-Path -LiteralPath $_.path) })
   if ($missing.Count -gt 0) {
     $details = ($missing | ForEach-Object { "$($_.label): $($_.path)" }) -join "; "
-    throw "Release artifacts are missing. Run start-release.ps1 -Action build first. Missing: $details"
+    throw "Release 产物缺失。请在源码根目录执行 .\\start-mmd.ps1 -Action package，或先完成 Release 构建。缺少：$details"
   }
 }
 
@@ -613,10 +613,14 @@ function Start-ReleaseStack(
   $node = Resolve-NodeExe
   $electron = Join-Path $script:PetRoot "node_modules\electron\dist\electron.exe"
   if (-not (Test-Path -LiteralPath $electron)) {
-    throw "Electron executable is missing: $electron. Install desktop-pet dependencies before starting release."
+    throw "Electron 可执行文件缺失：$electron。请在源码目录执行 npm --prefix desktop-pet ci，或重新生成便携包。"
   }
   $webRunner = Join-Path $script:WebRoot "scripts\run-next.mjs"
-  if (-not (Test-Path -LiteralPath $webRunner)) { throw "Web production runner is missing: $webRunner" }
+  if (-not (Test-Path -LiteralPath $webRunner)) { throw "Web production runner 缺失：$webRunner。请重新生成便携包。" }
+  $null = Resolve-NpmCommand
+  if ($SkipBuild) {
+    Assert-ApiEntry $python $ResolvedApiDataDir
+  }
 
   try {
     Write-Info "Starting API on $ApiServerUrl ..."

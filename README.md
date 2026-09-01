@@ -185,6 +185,23 @@ pip3 install -r api/requirements.txt
 # 确保 WSL 内有 npm（通过 nvm 或系统包安装）
 ```
 
+## Portable Release Package / 便携 Release 包
+
+仓库根目录的 start-mmd.ps1 是便携发布的唯一入口。默认 start 会先构建并组装 release/ 下带版本和时间戳的 ZIP 便携包，再从包内启动 API、Web production 和 Electron desktop-pet；这样启动路径与发布给其他机器的包内路径保持一致。
+
+PowerShell 常用命令：
+
+    .\start-mmd.ps1 -Action package
+    .\start-mmd.ps1 -Action start
+    .\start-mmd.ps1 -Action status
+    .\start-mmd.ps1 -Action stop
+
+package 会生成 release/mmd-portable-<version>-<timestamp>/ 和同名 ZIP；start 会生成/刷新包后启动三端，默认 API 端口为 8200、Web 端口为 3200。进入已解压的包目录后，也可以直接执行包内的 .\start-mmd.ps1 -Action start|status|stop；包内入口优先使用包内 manifest.json 和 scripts\release-stack.ps1，不会回到源码路径。
+
+每个包包含 API 源码和 requirements.txt、Web production 产物及 Node 依赖、desktop-pet production renderer/Electron 产物及 Node 依赖、README-release.md 和可用的 MMD/MMD_stage 本地资源。当前不打包 Python 解释器或 API Python 依赖，因此目标机仍需已有 Python、Node.js/npm、Windows 图形环境，并按包内说明安装 API 依赖；这不是安装器，也不实现 NSIS。
+
+打包器会排除 .git、源码 .runtime 历史、api/data 用户数据、无效 trace.db、测试临时文件和 desktop-pet-debug-events.ndjson。未显式设置 -ApiDataDir 或 API_DATA_DIR 时，包内无效/缺失的 api/data/sqlite/trace.db 会安全回退到包内 .runtime/release-stack/data；显式数据目录无效则严格失败。MMD 模型、贴图、动作和音频可能属于第三方，包中复制这些本地资源不代表取得再分发许可。
+
 ## Release Stack / 发布栈
 
 发布栈通过仓库根目录的统一入口构建并启动 API、Web production server 和 Electron desktop-pet。默认使用 API `8200`、Web `3200`，与开发栈的 `8100`/`3100` 分离；Pet 不启动 Vite dev server，而是从 `desktop-pet/dist` 加载本地 renderer。
