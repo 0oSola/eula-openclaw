@@ -686,10 +686,13 @@ const AUX_TEX_DIST_ANCHOR = "        const mipLevelCount = this.__v14dNoMipmapPa
 const AUX_TEX_DIST_REPLACEMENT =
   "        const __isAuxMask = inst.model.__v14dAuxTexturePaths?.has(logicalPath);\n" +
   "        const mipLevelCount = (__isAuxMask || this.__v14dNoMipmapPaths?.has(logicalPath)) ? 1 : Math.floor(Math.log2(Math.max(width, height))) + 1;\n";
-const TEX_FORMAT_SRC_ANCHOR = "      format: \"rgba8unorm-srgb\",\n";
-const TEX_FORMAT_SRC_REPLACEMENT = '      format: __isAuxMask ? "rgba8unorm" : "rgba8unorm-srgb",\n';
-const TEX_FORMAT_DIST_ANCHOR = "            format: \"rgba8unorm-srgb\",\n";
-const TEX_FORMAT_DIST_REPLACEMENT = '            format: __isAuxMask ? "rgba8unorm" : "rgba8unorm-srgb",\n';
+// 必须锁定真实纹理创建点（label 为 `texture: ${cacheKey}` 的那一处）。
+// 宽松锚点会把 createPipelines 的 fallback 1x1 白纹理（无 logicalPath 上下文）
+// 错误覆写，浏览器运行时报 `__isAuxMask is not defined`；fallback 保持固定 srgb。
+const TEX_FORMAT_SRC_ANCHOR = "      label: `texture: ${cacheKey}`,\n      size: [width, height],\n      format: \"rgba8unorm-srgb\",\n";
+const TEX_FORMAT_SRC_REPLACEMENT = "      label: `texture: ${cacheKey}`,\n      size: [width, height],\n      format: __isAuxMask ? \"rgba8unorm\" : \"rgba8unorm-srgb\",\n";
+const TEX_FORMAT_DIST_ANCHOR = "            label: `texture: ${cacheKey}`,\n            size: [width, height],\n            format: \"rgba8unorm-srgb\",\n";
+const TEX_FORMAT_DIST_REPLACEMENT = "            label: `texture: ${cacheKey}`,\n            size: [width, height],\n            format: __isAuxMask ? \"rgba8unorm\" : \"rgba8unorm-srgb\",\n";
 
 // bind group 布局：binding(5) = extra mask texture（v14d state2）。默认材质回退 fallback。
 const BINDGROUP_LAYOUT_SRC_ANCHOR =

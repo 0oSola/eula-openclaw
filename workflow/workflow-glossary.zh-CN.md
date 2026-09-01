@@ -1,5 +1,13 @@
 # 工作流术语表
 
+## V14D Face UV/可见性同口径对账
+
+- 英文机器名：`v14d-face-uv-visibility`
+- 含义：固定 frame120/State2/Blend0 下，Blender 与 Web 脸部渲染的「同 UV、同三角形、同可见性」三层离线对账；正式样本为 Web UV 前景 pass 与 HDR 材质 pick 双方都判 Face 且 UV 落在同一 Blender Face 三角形内的像素，参考色由同一 UV 直采 face_d 与 State2 mask 合成。
+- 允许用法：描述 Stage 2B-M2 的三层（BaseColor/ShadowFactor/FinalComposite）对账口径与其 Gate。
+- 禁止用法：不得把刘海/发绺等使用独立发色纹理的 Face 材质几何纳入 face_d 直采对账；不得手调 RGB 或放宽 MAE 宣称通过。
+- 路由影响：对应 `web/scripts/gate-v14d-face-uv-visibility.mjs`；完整定义见 `workflow/concepts/v14d-face-uv-visibility-gate.zh-CN.md`。
+
 # 项目级 Blender MCP 接入
 
 - 英文机器名：`ProjectLocalBlenderMcp`

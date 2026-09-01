@@ -796,6 +796,255 @@ export async function readV14dColorBaselineMaterialMask(
   }
 }
 
+/**
+ * 诊断专用的 Face 三角形 ID + UV pass（Stage 2B-M2，默认关闭，仅 faceStatic 采集调用）。
+ *
+ * 复用 pick pass 的逐材质 draw call 与深度语义，但 fragment 输出改为
+ * (Face 局部三角形 ID 的 16bit 编码, u, v)，仅 Face 材质输出非零；其余材质
+ * 输出 (1,1,1,1) 哨兵。UV 与生产同顶点属性（PMX 原始 UV），与 Blender loop UV 同口径。
+ * 深度用 less-equal 保留前景，与 readV14dColorBaselineMaterialMask 完全一致。
+ */
+// Depth-only WGSL（pass1：全部材质写深度，颜色丢弃）
+const FACE_TRI_DEPTH_WGSL = /* wgsl */ `
+struct CameraUniforms {
+  view: mat4x4f,
+  projection: mat4x4f,
+  viewPos: vec3f,
+  _padding: f32,
+};
+@group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
+
+@vertex fn vs(
+  @location(0) position: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) uv: vec2f,
+  @location(3) joints0: vec4<u32>,
+  @location(4) weights0: vec4<f32>,
+) -> @builtin(position) vec4f {
+  let pos4 = vec4f(position, 1.0);
+  let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
+  let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
+  let nw = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
+  var sp = vec4f(0.0);
+  for (var i = 0u; i < 4u; i++) { sp += (skinMats[joints0[i]] * pos4) * nw[i]; }
+  return camera.projection * camera.view * vec4f(sp.xyz, 1.0);
+}
+`;
+
+// Face UV WGSL（pass2：仅 Face 材质输出插值 UV，深度 equal 测试保留前景 Face 像素）
+const FACE_UV_ONLY_WGSL = /* wgsl */ `
+struct CameraUniforms {
+  view: mat4x4f,
+  projection: mat4x4f,
+  viewPos: vec3f,
+  _padding: f32,
+};
+@group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
+
+struct VSOut {
+  @builtin(position) pos: vec4f,
+  @location(0) uv: vec2f,
+};
+
+@vertex fn vs(
+  @location(0) position: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) uv: vec2f,
+  @location(3) joints0: vec4<u32>,
+  @location(4) weights0: vec4<f32>,
+) -> VSOut {
+  let pos4 = vec4f(position, 1.0);
+  let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
+  let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
+  let nw = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
+  var sp = vec4f(0.0);
+  for (var i = 0u; i < 4u; i++) { sp += (skinMats[joints0[i]] * pos4) * nw[i]; }
+  var out: VSOut;
+  out.pos = camera.projection * camera.view * vec4f(sp.xyz, 1.0);
+  out.uv = uv;
+  return out;
+}
+
+@fragment fn fs(in: VSOut) -> @location(0) vec4f {
+  return vec4f(in.uv.x, in.uv.y, 0.0, 1.0);
+}
+`;
+
+export type V14dFaceTriUvReadback = {
+  /** 逐像素 Face 局部三角形 ID（本实现不输出三角形 ID，固定 -1；保留字段兼容）。 */
+  triId: Int32Array;
+  /** 逐像素插值 UV（Float32, length = width*height*2）；非 Face 前景像素为 0。 */
+  uv: Float32Array;
+  /** 逐像素是否 Face 且为前景（深度 equal 通过）。 */
+  faceMask: Uint8Array;
+  width: number;
+  height: number;
+};
+
+/**
+ * 诊断专用的 Face 前景 UV pass（Stage 2B-M2，默认关闭）。
+ *
+ * 两段式：
+ *   pass1 全部材质 depth-only（less 写深度）→ 得到场景前景深度；
+ *   pass2 仅 Face 材质（equal 测试，不写深度）→ 输出插值 UV；
+ *   被头发/身体遮挡的 Face 像素在 pass2 因深度不等被剔除，保证 faceMask 只含
+ *   真实可见的 Face 像素。UV 与生产同顶点属性（PMX 原始 UV），与 Blender loop UV 同口径。
+ *
+ * 注意：本 pass 不输出三角形 ID（WebGPU 无无状态三角形序号）；同三角形约束由
+ * 离线 Gate 用「Web 像素 UV 必须落在该像素 Blender raycast 三角形的 UV 范围内」判定。
+ */
+export async function readV14dFaceTriUvMask(
+  engine: unknown,
+  width: number,
+  height: number,
+  faceMaterialIndex: number,
+  faceMaterialFirstIndex: number,
+): Promise<V14dFaceTriUvReadback> {
+  const fields = readEnginePrivateFields(engine);
+  if (!fields.device || !fields.pickPerFrameBindGroup || !fields.modelInstances) {
+    throw new Error("reze-engine 未暴露诊断所需的 Face 前景 UV 管线字段。");
+  }
+  const device = fields.device;
+  const perFrameLayout = (fields as unknown as { pickPerFrameBindGroupLayout?: GPUBindGroupLayout }).pickPerFrameBindGroupLayout!;
+  const perInstanceLayout = (fields as unknown as { pickPerInstanceBindGroupLayout?: GPUBindGroupLayout }).pickPerInstanceBindGroupLayout!;
+  const depthLayout = device.createPipelineLayout({ bindGroupLayouts: [perFrameLayout, perInstanceLayout] });
+  const uvLayout = device.createPipelineLayout({ bindGroupLayouts: [perFrameLayout, perInstanceLayout] });
+  const depthModule = device.createShaderModule({ label: "V14D face depth shader", code: FACE_TRI_DEPTH_WGSL });
+  const uvModule = device.createShaderModule({ label: "V14D face uv shader", code: FACE_UV_ONLY_WGSL });
+  const buffers: GPUVertexBufferLayout[] = [
+    { arrayStride: 32, attributes: [
+      { shaderLocation: 0, offset: 0, format: "float32x3" },
+      { shaderLocation: 1, offset: 12, format: "float32x3" },
+      { shaderLocation: 2, offset: 24, format: "float32x2" },
+    ] },
+    { arrayStride: 16, attributes: [{ shaderLocation: 3, offset: 0, format: "uint32x4" }] },
+    { arrayStride: 16, attributes: [{ shaderLocation: 4, offset: 0, format: "float32x4" }] },
+  ];
+  const depthPipeline = device.createRenderPipeline({
+    label: "V14D face depth pipeline",
+    layout: depthLayout,
+    vertex: { module: depthModule, buffers },
+    primitive: { cullMode: "none" },
+    depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" },
+  });
+  const uvPipeline = device.createRenderPipeline({
+    label: "V14D face uv pipeline",
+    layout: uvLayout,
+    vertex: { module: uvModule, buffers },
+    fragment: { module: uvModule, targets: [{ format: "rgba16float" }] },
+    primitive: { cullMode: "none" },
+    depthStencil: { format: "depth24plus", depthWriteEnabled: false, depthCompare: "equal" },
+  });
+
+  const depth = device.createTexture({
+    label: "V14D face depth",
+    size: [width, height],
+    format: "depth24plus",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  const target = device.createTexture({
+    label: "V14D face uv target",
+    size: [width, height],
+    format: "rgba16float",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
+  const rowPitch = alignTo(width * 8, 256);
+  const buffer = device.createBuffer({
+    label: "V14D face uv readback",
+    size: rowPitch * height,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+
+  try {
+    const encoder = device.createCommandEncoder({ label: "V14D face uv encoder" });
+    // pass1: 全部材质 depth-only
+    const p1 = encoder.beginRenderPass({
+      label: "V14D face depth prepass",
+      colorAttachments: [],
+      depthStencilAttachment: {
+        view: depth.createView(),
+        depthClearValue: 1.0,
+        depthLoadOp: "clear",
+        depthStoreOp: "store",
+      },
+    });
+    p1.setPipeline(depthPipeline);
+    p1.setBindGroup(0, fields.pickPerFrameBindGroup);
+    for (const instance of fields.modelInstances.values()) {
+      if (!instance.model.visible) continue;
+      p1.setVertexBuffer(0, instance.vertexBuffer);
+      p1.setVertexBuffer(1, instance.jointsBuffer);
+      p1.setVertexBuffer(2, instance.weightsBuffer);
+      p1.setIndexBuffer(instance.indexBuffer, "uint32");
+      p1.setBindGroup(1, instance.pickPerInstanceBindGroup);
+      for (const draw of instance.pickDrawCalls) {
+        p1.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0);
+      }
+    }
+    p1.end();
+    // pass2: 仅 Face 材质输出 UV，深度 equal 剔除被遮挡的 Face 像素
+    const p2 = encoder.beginRenderPass({
+      label: "V14D face uv pass",
+      colorAttachments: [
+        { view: target.createView(), clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: "clear", storeOp: "store" },
+      ],
+      depthStencilAttachment: {
+        view: depth.createView(),
+        depthLoadOp: "load",
+        depthStoreOp: "store",
+      },
+    });
+    p2.setPipeline(uvPipeline);
+    p2.setBindGroup(0, fields.pickPerFrameBindGroup);
+    for (const instance of fields.modelInstances.values()) {
+      if (!instance.model.visible) continue;
+      p2.setVertexBuffer(0, instance.vertexBuffer);
+      p2.setVertexBuffer(1, instance.jointsBuffer);
+      p2.setVertexBuffer(2, instance.weightsBuffer);
+      p2.setIndexBuffer(instance.indexBuffer, "uint32");
+      p2.setBindGroup(1, instance.pickPerInstanceBindGroup);
+      let matIndex = 0;
+      for (const draw of instance.pickDrawCalls) {
+        if (matIndex === faceMaterialIndex) {
+          p2.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0);
+        }
+        matIndex += 1;
+      }
+    }
+    p2.end();
+    encoder.copyTextureToBuffer(
+      { texture: target },
+      { buffer, bytesPerRow: rowPitch, rowsPerImage: height },
+      { width, height, depthOrArrayLayers: 1 },
+    );
+    device.queue.submit([encoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    await buffer.mapAsync(GPUMapMode.READ);
+    const mapped = buffer.getMappedRange();
+    const hdr = decodeHdrReadback(mapped.slice(0), rowPitch, width, height);
+    const triId = new Int32Array(width * height).fill(-1);
+    const uv = new Float32Array(width * height * 2);
+    const faceMask = new Uint8Array(width * height);
+    for (let i = 0; i < width * height; i += 1) {
+      const off = i * 4;
+      const a = hdr.data[off + 3];
+      if (a > 0.5) {
+        uv[i * 2] = hdr.data[off];
+        uv[i * 2 + 1] = hdr.data[off + 1];
+        faceMask[i] = 1;
+      }
+    }
+    return { triId, uv, faceMask, width, height };
+  } finally {
+    if (buffer.mapState === "mapped") buffer.unmap();
+    buffer.destroy();
+    target.destroy();
+    depth.destroy();
+  }
+}
+
 export async function readV14dCanvasDisplay(canvas: HTMLCanvasElement): Promise<V14dNormalizedImage> {
   const width = canvas.width || V14D_COLOR_BASELINE_WIDTH;
   const height = canvas.height || V14D_COLOR_BASELINE_HEIGHT;

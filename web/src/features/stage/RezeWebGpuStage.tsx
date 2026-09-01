@@ -46,6 +46,7 @@ import {
   measureV14dRoiActualMeans,
   readV14dCanvasDisplay,
   readV14dColorBaselineMaterialMask,
+  readV14dFaceTriUvMask,
   readV14dColorBaselineResolveTargets,
   srgbToLinear,
   validateV14dColorBaselineScene,
@@ -125,6 +126,19 @@ declare global {
       } | null>;
       /** 逐像素导出任一 Face 材质名对应的 pick mask（供 Gate 划分保持性子区）。 */
       exportMaterialMaskByName: (materialName: string) => Promise<Uint8Array | null>;
+      /** 逐像素导出 Face 三角形 ID + 插值 UV（Stage 2B-M2 同口径对账，诊断专用）。 */
+      exportFaceTriUv: () => Promise<{
+        width: number;
+        height: number;
+        faceMaterialId: number;
+        faceMaterialIndex: number;
+        faceMaterialFirstIndex: number;
+        faceTriangleCount: number;
+        camera: { view: number[]; projection: number[] } | null;
+        triId: Int32Array;
+        uv: Float32Array;
+        faceMask: Uint8Array;
+      } | null>;
     };
     /** faceStatic 注入的权威资产集（File 形式，引擎 files 变体局部解析）。 */
     __v14dFaceStaticAssets?: V14dFaceStaticAssetSource;
@@ -1474,6 +1488,61 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     }
   };
 
+  /**
+   * 逐像素导出 Face 三角形 ID + 插值 UV（Stage 2B-M2 诊断专用，默认关闭路径）。
+   * 复用 pick pass 深度语义的专用 GPU pass，输出 (triId, u, v)；附相机 view/proj
+   * 矩阵（左手系、列主序），供离线 Gate 把 Blender raycast 采样映射到 Web 屏幕像素。
+   */
+  const exportV14dFaceTriUv = async (): Promise<{
+    width: number;
+    height: number;
+    faceMaterialId: number;
+    faceMaterialIndex: number;
+    faceMaterialFirstIndex: number;
+    faceTriangleCount: number;
+    camera: { view: number[]; projection: number[] } | null;
+    triId: Int32Array;
+    uv: Float32Array;
+    faceMask: Uint8Array;
+  } | null> => {
+    const engine = engineRef.current;
+    const model = modelRef.current;
+    if (!engine || !model || !v14dFaceStaticRef.current || !v14dFaceStaticGatedRef.current) return null;
+    try {
+      const materials = model.getMaterials();
+      const faceMaterialIndex = materials.findIndex((m) => m.name === V14D_FACE_MATERIAL_NAME);
+      if (faceMaterialIndex < 0) return null;
+      const faceMaterialId = v14dFaceStaticFacePickId(
+        materials.map((m) => ({ name: m.name, vertexCount: m.vertexCount })),
+      );
+      if (faceMaterialId === null) return null;
+      const faceFirstIndex = materials
+        .slice(0, faceMaterialIndex)
+        .reduce((acc, m) => acc + m.vertexCount, 0);
+      const faceTriangleCount = Math.floor(materials[faceMaterialIndex].vertexCount / 3);
+      const size = V14D_FACE_STATIC_SIZE;
+      const rb = await readV14dFaceTriUvMask(engine, size, size, faceMaterialIndex, faceFirstIndex);
+      const camera = engine as unknown as { camera?: { getViewMatrix(): { values: Float32Array }; getProjectionMatrix(): { values: Float32Array } } };
+      const cam = camera.camera
+        ? { view: Array.from(camera.camera.getViewMatrix().values), projection: Array.from(camera.camera.getProjectionMatrix().values) }
+        : null;
+      return {
+        width: rb.width,
+        height: rb.height,
+        faceMaterialId,
+        faceMaterialIndex,
+        faceMaterialFirstIndex: faceFirstIndex,
+        faceTriangleCount,
+        camera: cam,
+        triId: rb.triId,
+        uv: rb.uv,
+        faceMask: rb.faceMask,
+      };
+    } catch {
+      return null;
+    }
+  };
+
   useEffect(() => {
     if (!v14dFaceStatic) return;
     window.__v14dFaceStatic = {
@@ -1483,6 +1552,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       exportFaceHdrFloat: () => exportV14dFaceHdrFloat(),
       exportFaceDisplayCapture: () => exportV14dFaceDisplayCapture(),
       exportMaterialMaskByName: (name: string) => exportV14dMaterialMaskByName(name),
+      exportFaceTriUv: () => exportV14dFaceTriUv(),
     };
     return () => {
       if (window.__v14dFaceStatic) delete window.__v14dFaceStatic;
