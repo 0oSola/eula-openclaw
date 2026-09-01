@@ -203,9 +203,9 @@ powershell -File .\start-release.ps1 -Action status
 powershell -File .\start-release.ps1 -Action stop
 ```
 
-也可以使用 `start-release.cmd`。常用参数包括 `-ApiPort`、`-WebPort`、`-ApiHost`、`-WebHost`、`-ApiBaseUrl`、`-ApiDataDir`、`-UserId`、`-WorkspacePath`、`-SkipBuild` 和 `-PetReadyTimeoutSeconds`。省略 `-ApiBaseUrl` 时，Web/Pet 使用 API 端口生成的地址，也可继承已有 `MMD_PET_API_BASE_URL`。省略 `-ApiDataDir` 时使用 `API_DATA_DIR`，再回退到 `api/data`。
+也可以使用 `start-release.cmd`。常用参数包括 `-ApiPort`、`-WebPort`、`-ApiHost`、`-WebHost`、`-ApiBaseUrl`、`-ApiDataDir`、`-UserId`、`-WorkspacePath`、`-SkipBuild` 和 `-PetReadyTimeoutSeconds`。省略 `-ApiBaseUrl` 时，Web/Pet 使用 API 端口生成的地址，也可继承已有 `MMD_PET_API_BASE_URL`。API 数据目录按以下规则解析：显式传入 `-ApiDataDir` 时严格使用该路径；未传入参数但存在非空 `API_DATA_DIR` 时严格使用环境变量路径；两者都未指定时，先检查 `api/data/sqlite/trace.db`，若文件缺失、是 Git LFS pointer 或不是可连接的 SQLite，则创建并使用 `.runtime/release-stack/data`，不会修改原文件。
 
-Web 产物位于 `web/.next-codex-release`，Pet 产物至少包含 `desktop-pet/dist/index.html`、`menu.html`、`notification.html` 和 `dist-electron/main.js`。状态文件是 `.runtime/release-stack.json`，每次启动的 stdout/stderr 和 Pet ready marker 位于 `.runtime/release-stack/<批次>/`。如果 `API_DATA_DIR` 指向尚未由 Git LFS 还原的 `trace.db` 指针，API 会拒绝启动；请先还原真实数据库，或通过 `-ApiDataDir` 指向可写且有效的 SQLite 数据目录。
+Web 产物位于 `web/.next-codex-release`，Pet 产物至少包含 `desktop-pet/dist/index.html`、`menu.html`、`notification.html` 和 `dist-electron/main.js`。状态文件是 `.runtime/release-stack.json`，每次启动的 stdout/stderr 和 Pet ready marker 位于 `.runtime/release-stack/<批次>/`。只有显式的 `API_DATA_DIR` 或 `-ApiDataDir` 会严格拒绝无效数据库；省略两者时，默认 `api/data` 的 Git LFS pointer 会触发安全回退到 `.runtime/release-stack/data`。脚本不会覆盖、删除或修复原始 `api/data` 文件。
 
 ## API Endpoints (MVP) / API 接口（MVP）
 

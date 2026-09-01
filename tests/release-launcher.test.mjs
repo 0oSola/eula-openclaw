@@ -27,6 +27,21 @@ test("release build injects the configured API URL into Web and Pet", () => {
   assert.ok(script.includes('MMD_PET_RELEASE = "1"'));
 });
 
+test("default API data resolution recognizes invalid SQLite and preserves explicit configuration", () => {
+  const script = read("scripts/release-stack.ps1");
+
+  assert.match(script, /function Test-GitLfsPointer/);
+  assert.match(script, /function Test-SqliteDatabaseFile/);
+  assert.match(script, /function Resolve-ReleaseApiDataDir/);
+  assert.match(script, /PSBoundParameters\.ContainsKey\("ApiDataDir"\)/);
+  assert.match(script, /ConfiguredEnvironment/);
+  assert.match(script, /\.runtime\\release-stack\\data/);
+  assert.match(script, /Default API data directory is unusable/);
+  assert.match(script, /if \(\$Action -in @\("build", "start"\)\)/);
+  assert.match(script, /& \$python -c \$probe \$DatabasePath/);
+  assert.doesNotMatch(script, /& \$python -c \$probe -- \$DatabasePath/);
+});
+
 test("release lifecycle tracks logs, PID identity, and Pet readiness", () => {
   const script = read("scripts/release-stack.ps1");
 

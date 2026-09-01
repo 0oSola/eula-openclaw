@@ -94,7 +94,7 @@ Pet production runtime 的路径由 `desktop-pet/electron/rendererPaths.ts` 统�
 
 主 Pet 窗口 renderer shell 挂载后写入 `pet-ready.json`，其中包含 PID、`file://` URL、本地 renderer 文件和 shell ready 状态；Electron GUI 不可观察时，状态仍区分进程、文件证据和 renderer window 未验证。
 
-默认 API 数据目录仍遵循 `API_DATA_DIR`，回退到 `api/data`；发布入口支持 `-ApiDataDir` 覆盖，并不会替换或修复 Git LFS 数据库。`api/data/sqlite/trace.db` 若仍是 LFS pointer，API 启动会因 SQLite 无法打开而失败，需先提供有效数据目录。
+发布入口的数据目录解析保留显式配置优先级：显式 `-ApiDataDir` 优先，其次是非空 `API_DATA_DIR`，两者均未指定时才检查默认 `api/data/sqlite/trace.db`。默认文件缺失、被识别为 Git LFS pointer 或无法通过 SQLite 连接检查时，release build/start 创建并使用 `.runtime/release-stack/data` 及其 `sqlite`、`logs` 子目录；原始 `api/data` 不会被覆盖或修复。显式数据目录若无效则严格失败，不会静默回退。状态文件记录最终实际使用的 `api_data_dir`。
 
 ## 3. 当前关键配置
 

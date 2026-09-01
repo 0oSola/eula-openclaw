@@ -69,6 +69,108 @@ function Resolve-PythonExe {
   throw "Python executable was not found. Install Python or add it to PATH."
 }
 
+function Resolve-DataDirectory([string]$Candidate) {
+  if ([string]::IsNullOrWhiteSpace($Candidate)) {
+    throw "API data directory cannot be empty when explicitly configured."
+  }
+  if ([System.IO.Path]::IsPathRooted($Candidate)) {
+    return [System.IO.Path]::GetFullPath($Candidate)
+  }
+  return [System.IO.Path]::GetFullPath((Join-Path $script:ProjectRoot $Candidate))
+}
+
+function Test-GitLfsPointer([string]$DatabasePath) {
+  if (-not (Test-Path -LiteralPath $DatabasePath -PathType Leaf)) { return $false }
+  $reader = $null
+  try {
+    $reader = [System.IO.StreamReader]::new(
+      $DatabasePath,
+      [System.Text.Encoding]::UTF8,
+      $true,
+      256
+    )
+    $prefix = $reader.ReadToEnd()
+    return $prefix -match '(?m)^version https://git-lfs\.github\.com/spec/v1\s*$'
+  } catch {
+    return $false
+  } finally {
+    if ($reader) { $reader.Dispose() }
+  }
+}
+
+function Test-SqliteDatabaseFile([string]$DatabasePath) {
+  if (-not (Test-Path -LiteralPath $DatabasePath -PathType Leaf)) { return $false }
+  $stream = $null
+  try {
+    $stream = [System.IO.File]::OpenRead($DatabasePath)
+    $header = [byte[]]::new(16)
+    $read = $stream.Read($header, 0, $header.Length)
+    if ($read -ne 16 -or [System.Text.Encoding]::ASCII.GetString($header) -ne ("SQLite format 3" + [char]0)) {
+      return $false
+    }
+  } catch {
+    return $false
+  } finally {
+    if ($stream) { $stream.Dispose() }
+  }
+
+  try {
+    $python = Resolve-PythonExe
+    $probe = @'
+import sqlite3
+import sys
+
+try:
+    connection = sqlite3.connect(sys.argv[1])
+    connection.execute("PRAGMA schema_version").fetchone()
+    connection.close()
+except (OSError, sqlite3.Error):
+    raise SystemExit(1)
+raise SystemExit(0)
+'@
+    & $python -c $probe $DatabasePath *> $null
+    $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+    return $exitCode -eq 0
+  } catch {
+    return $false
+  }
+}
+
+function Resolve-ReleaseApiDataDir(
+  [string]$ConfiguredParameter,
+  [bool]$ParameterWasProvided,
+  [string]$ConfiguredEnvironment
+) {
+  if ($ParameterWasProvided) {
+    return Resolve-DataDirectory $ConfiguredParameter
+  }
+  if (-not [string]::IsNullOrWhiteSpace($ConfiguredEnvironment)) {
+    return Resolve-DataDirectory $ConfiguredEnvironment
+  }
+
+  $defaultDataDir = Resolve-DataDirectory "api/data"
+  $defaultDatabasePath = Join-Path $defaultDataDir "sqlite\trace.db"
+  if (Test-SqliteDatabaseFile $defaultDatabasePath) {
+    return $defaultDataDir
+  }
+
+  $fallbackDataDir = Resolve-DataDirectory ".runtime\release-stack\data"
+  New-Item -ItemType Directory -Force -Path @(
+    $fallbackDataDir,
+    (Join-Path $fallbackDataDir "sqlite"),
+    (Join-Path $fallbackDataDir "logs")
+  ) | Out-Null
+  $reason = if (Test-GitLfsPointer $defaultDatabasePath) {
+    "the default trace.db is a Git LFS pointer"
+  } elseif (-not (Test-Path -LiteralPath $defaultDatabasePath -PathType Leaf)) {
+    "the default trace.db is missing"
+  } else {
+    "the default trace.db is not a valid SQLite database"
+  }
+  Write-WarnLine "Default API data directory is unusable because $reason; using fallback $fallbackDataDir."
+  return $fallbackDataDir
+}
+
 function Resolve-NpmCommand { return Resolve-CommandPath @('npm.cmd', 'npm') "npm" }
 function Resolve-NodeExe { return Resolve-CommandPath @('node.exe', 'node') "Node.js" }
 
@@ -683,11 +785,9 @@ function Stop-ReleaseStack {
 
 $apiBaseFallback = if ($env:MMD_PET_API_BASE_URL) { $env:MMD_PET_API_BASE_URL } else { New-LocalBaseUrl $ApiHost $ApiPort }
 $resolvedApiBaseUrl = Normalize-BaseUrl $ApiBaseUrl $apiBaseFallback
-$apiDataCandidate = if ($ApiDataDir) { $ApiDataDir } elseif ($env:API_DATA_DIR) { $env:API_DATA_DIR } else { "api/data" }
-$resolvedApiDataDir = if ([System.IO.Path]::IsPathRooted($apiDataCandidate)) {
-  [System.IO.Path]::GetFullPath($apiDataCandidate)
-} else {
-  [System.IO.Path]::GetFullPath((Join-Path $script:ProjectRoot $apiDataCandidate))
+$resolvedApiDataDir = $null
+if ($Action -in @("build", "start")) {
+  $resolvedApiDataDir = Resolve-ReleaseApiDataDir $ApiDataDir $PSBoundParameters.ContainsKey("ApiDataDir") ([string]$env:API_DATA_DIR)
 }
 $apiServerUrl = New-LocalBaseUrl $ApiHost $ApiPort
 $webUrl = New-LocalBaseUrl $WebHost $WebPort
