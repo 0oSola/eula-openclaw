@@ -60,9 +60,9 @@ if (fenceBody.length > 0) {
 // 断点 B1：setup 把 __auxMaskView 写入 baseBindGroupEntries (binding 5)
 const bIdx = engine.indexOf("baseBindGroupEntries = [");
 const bSeg = bIdx >= 0 ? engine.slice(bIdx, bIdx + 700) : "";
-ok(bSeg.indexOf("binding: 5, resource: __auxMaskView") >= 0, "断点B1 setup 把 __auxMaskView 写入 baseBindGroupEntries (binding 5)");
-// 断点 B2：createMaterialBindGroup 仅在 baseEntries 无 binding5 时补 fallback
-ok(engine.indexOf("!baseEntries.some((e) => e.binding === 5)") >= 0, "断点B2 createMaterialBindGroup 缺失 binding5 才补 fallback");
+ok(bSeg.indexOf("binding: 5, resource: __binding5View") >= 0, "断点B1 setup 把有效 __binding5View 写入 baseBindGroupEntries (binding 5)");
+// 断点 B2：createMaterialBindGroup 统一归一化已有/缺失 binding5 的 resource
+ok(engine.indexOf("const hasBinding5 = baseEntries.some((e) => e.binding === 5);") >= 0, "断点B2 createMaterialBindGroup 归一化 binding5 fallback");
 // 断点 B3：assignDrawCallGroups 重绑展开 dc.baseBindGroupEntries（自动携带 mask）
 const aIdx = engine.indexOf("assignDrawCallGroups(inst, claimed) {");
 const aSeg = aIdx >= 0 ? engine.slice(aIdx, aIdx + 1400) : "";

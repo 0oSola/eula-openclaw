@@ -37,13 +37,24 @@ if (process.argv.includes("--self-test")) {
   const fails = [];
   const ok = (c, m) => { if (c) console.log("[self-test ok] " + m); else { fails.push(m); console.error("[self-test FAIL] " + m); } };
   // 真实 node_modules 关键文件前后 SHA256（证明本自测不触碰真实依赖）。
-  const realKeyFiles = ["src/graph/slots.ts", "dist/graph/slots.js", "src/graph/compile.ts", "dist/graph/compile.js", "src/engine.ts", "dist/engine.js"].map((r) => path.join(realRoot, "node_modules", "reze-engine", r));
-  const realShaBefore = realKeyFiles.map((f) => (fs.existsSync(f) ? sha(f) : "missing"));
+  const FRESH_HASH_RELATIVE_FILES = [
+    "src/pmx-loader.ts", "dist/pmx-loader.js",
+    "src/engine.ts", "dist/engine.js", "dist/engine.d.ts",
+    "src/graph/slots.ts", "dist/graph/slots.js",
+    "src/graph/compile.ts", "dist/graph/compile.js",
+    "src/shaders/passes/composite.ts", "dist/shaders/passes/composite.js",
+  ];
+  const hashTargetSet = (baseRoot) => Object.fromEntries(FRESH_HASH_RELATIVE_FILES.map((relative) => {
+    const file = path.join(baseRoot, "node_modules", "reze-engine", relative);
+    return [relative, fs.existsSync(file) ? sha(file) : "missing"];
+  }));
+  const realShaBefore = hashTargetSet(realRoot);
   // 1) 构造干净隔离 fixture：需要一份未打本票补丁的 reze-engine 0.26.0。
   //    从 npm registry tarball 解出（registry.npmjs.org/reze-engine/-/reze-engine-0.26.0.tgz）。
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "state2-fresh-root-"));
-  const fixtureRoot = path.join(tmp, "web"); // patch 脚本 rootDir = <fixture>/web，其下需 node_modules/reze-engine
-  fs.mkdirSync(path.join(fixtureRoot, "node_modules"), { recursive: true });
+  const cleanRoot = path.join(tmp, "clean-web");
+  const fixtureRoot = path.join(tmp, "patched-web");
+  fs.mkdirSync(path.join(cleanRoot, "node_modules"), { recursive: true });
   const tgz = path.join(tmp, "reze.tgz");
   const { get } = await import("node:https");
   await new Promise((resolve, reject) => {
@@ -56,11 +67,13 @@ if (process.argv.includes("--self-test")) {
   const { execSync } = await import("node:child_process");
   const unpack = path.join(tmp, "unpack"); fs.mkdirSync(unpack, { recursive: true });
   execSync("tar -xzf " + JSON.stringify(tgz) + " -C " + JSON.stringify(unpack), { stdio: "pipe" });
-  fs.cpSync(path.join(unpack, "package"), path.join(fixtureRoot, "node_modules", "reze-engine"), { recursive: true });
+  fs.cpSync(path.join(unpack, "package"), path.join(cleanRoot, "node_modules", "reze-engine"), { recursive: true });
+  fs.cpSync(cleanRoot, fixtureRoot, { recursive: true });
   // fixture 初始必须未打 State2 补丁（helper 不存在 / 走旧路径）。
+  const cleanSlotsSrc = path.join(cleanRoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
   const fixSlotsSrc = path.join(fixtureRoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
   const fixSlotsDist = path.join(fixtureRoot, "node_modules", "reze-engine", "dist", "graph", "slots.js");
-  const fixSrc0 = fs.readFileSync(fixSlotsSrc, "utf8");
+  const fixSrc0 = fs.readFileSync(cleanSlotsSrc, "utf8");
   ok(fixSrc0.indexOf("V14D_STATE2_HELPERS_WGSL") < 0 && fixSrc0.indexOf("includeState2Mask") < 0, "断点C fixture 初始未打 State2 补丁（helper 不存在，走旧路径）");
   // 2) 子进程调用同一脚本生产控制流：重写 rootDir 指向 fixture。
   const fakeScript = path.join(tmp, "patch-run.mjs");
@@ -92,6 +105,49 @@ if (process.argv.includes("--self-test")) {
       .filter((line) => /(?:FAIL|missing-file|anchor-miss|PATCH-VERIFY|patch-reze-engine|锚点)/.test(line));
     for (const line of lines) console.error("[self-test detail] " + label + ": " + line);
   };
+  const expectRejected = (label, runner) => {
+    const result = runner();
+    if (result.exit === 0) reportPatchFailure(label, result);
+    ok(result.exit !== 0, label + " 非0退出（得到 " + result.exit + "）");
+  };
+  const copyCleanFixture = (label) => {
+    const targetRoot = path.join(tmp, label + "-web");
+    fs.cpSync(cleanRoot, targetRoot, { recursive: true });
+    return targetRoot;
+  };
+
+  // 所有负测都从同一个干净 tarball seed 构造，不能先让生产补丁通过再破坏完成态。
+  const anchorRoot = copyCleanFixture("anchor-miss");
+  const anchorSlots = path.join(anchorRoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
+  let anchorContent = fs.readFileSync(anchorSlots, "utf8");
+  anchorContent = anchorContent.split("export function assembleModule").join("export function assembleModule_BROKEN");
+  anchorContent = anchorContent.split("includeState2Mask = false").join("includeStyleUniformsOnly = false");
+  fs.writeFileSync(anchorSlots, anchorContent, "utf8");
+
+  const missingRoot = copyCleanFixture("missing-file");
+  fs.rmSync(path.join(missingRoot, "node_modules", "reze-engine", "dist", "graph", "compile.js"), { force: true });
+
+  const duplicateRoot = copyCleanFixture("duplicate-marker");
+  const duplicateSlots = path.join(duplicateRoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
+  fs.appendFileSync(duplicateSlots, String.fromCharCode(10) + "// duplicate const V14D_STATE2_HELPERS_WGSL marker" + String.fromCharCode(10), "utf8");
+
+  const missingARoot = copyCleanFixture("missing-a");
+  const missingASlots = path.join(missingARoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
+  let missingAContent = fs.readFileSync(missingASlots, "utf8");
+  missingAContent = missingAContent.split("const HASHED_ALPHA_DECLS").join("const HASHED_ALPHA_DECLS_BROKEN");
+  fs.writeFileSync(missingASlots, missingAContent, "utf8");
+
+  const missingBRoot = copyCleanFixture("missing-b");
+  const missingBEngine = path.join(missingBRoot, "node_modules", "reze-engine", "src", "engine.ts");
+  let missingBContent = fs.readFileSync(missingBEngine, "utf8");
+  missingBContent = missingBContent.split("const baseBindGroupEntries").join("const baseBindGroupEntries_BROKEN");
+  fs.writeFileSync(missingBEngine, missingBContent, "utf8");
+
+  const pmxAnchorRoot = copyCleanFixture("pmx-anchor-miss");
+  const pmxAnchorFile = path.join(pmxAnchorRoot, "node_modules", "reze-engine", "src", "pmx-loader.ts");
+  const pmxAnchorContent = fs.readFileSync(pmxAnchorFile, "utf8").split("// Debug: log problematic string lengths").join("// Debug: log problematic string lengths BROKEN");
+  fs.writeFileSync(pmxAnchorFile, pmxAnchorContent, "utf8");
+
   // 首次运行必须真正 exit 0；fixture 内任一严格校验失败都让 self-test 变红。
   const first = runPatch();
   const firstExit = first.exit;
@@ -101,67 +157,26 @@ if (process.argv.includes("--self-test")) {
   ok(orderOk(fixSlotsSrc), "断点C 首次注入后 src assembleModule 内 helperIndex < preludeIndex");
   ok(orderOk(fixSlotsDist), "断点C 首次注入后 dist assembleModule 内 helperIndex < preludeIndex");
   // 二次运行必须 exit 0 且文件 hash 不变（幂等）。
-  const hashAfterFirst = sha(fixSlotsSrc) + "|" + sha(fixSlotsDist);
+  const hashAfterFirst = hashTargetSet(fixtureRoot);
   const second = runPatch();
   const secondExit = second.exit;
   if (secondExit !== 0) reportPatchFailure("二次运行", second);
-  const hashAfterSecond = sha(fixSlotsSrc) + "|" + sha(fixSlotsDist);
+  const hashAfterSecond = hashTargetSet(fixtureRoot);
   ok(secondExit === 0, "二次完整 fixture 生产补丁 exit=0（实际得到 " + secondExit + "）");
-  ok(hashAfterFirst === hashAfterSecond, "断点C 二次运行文件 hash 不变（幂等，无重复注入）");
-  const expectRejected = (label, runner) => {
-    const result = runner();
-    if (result.exit === 0) reportPatchFailure(label, result);
-    ok(result.exit !== 0, label + " 非0退出（得到 " + result.exit + "）");
-  };
-  const copyFixture = (label) => {
-    const targetRoot = path.join(tmp, label + "-web");
-    fs.cpSync(fixtureRoot, targetRoot, { recursive: true });
-    return targetRoot;
-  };
-  // anchor-miss 负测：破坏 assembleModule anchor，patch 必须拒绝继续。
-  const anchorRoot = copyFixture("anchor-miss");
-  const anchorSlots = path.join(anchorRoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
-  let anchorContent = fs.readFileSync(anchorSlots, "utf8");
-  anchorContent = anchorContent.split("export function assembleModule").join("export function assembleModule_BROKEN");
-  anchorContent = anchorContent.split("includeState2Mask = false").join("includeStyleUniformsOnly = false");
-  fs.writeFileSync(anchorSlots, anchorContent, "utf8");
-  expectRejected("断点C anchor-miss fixture", makeRunner("anchor-miss", anchorRoot));
-
-  // missing-file 负测：删除一个声明目标文件，严格校验必须非0。
-  const missingRoot = copyFixture("missing-file");
-  fs.rmSync(path.join(missingRoot, "node_modules", "reze-engine", "dist", "graph", "compile.js"), { force: true });
-  expectRejected("missing-file fixture", makeRunner("missing-file", missingRoot));
-
-  // 重复 marker 负测：已有完成态再追加同一机器 marker，必须被恰好一次校验拒绝。
-  const duplicateRoot = copyFixture("duplicate-marker");
-  const duplicateSlots = path.join(duplicateRoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
-  fs.appendFileSync(duplicateSlots, String.fromCharCode(10) + "// duplicate const V14D_STATE2_HELPERS_WGSL marker" + String.fromCharCode(10), "utf8");
-  expectRejected("重复 marker fixture", makeRunner("duplicate-marker", duplicateRoot));
-
-  // 断点 A 缺失负测：同时破坏函数锚点与已注入函数，不能被静默当作已完成。
-  const missingARoot = copyFixture("missing-a");
-  const missingASlots = path.join(missingARoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
-  let missingAContent = fs.readFileSync(missingASlots, "utf8");
-  missingAContent = missingAContent.split("v14dState2OverrideFsBodyFixed").join("v14dState2OverrideFsBodyFixed_BROKEN");
-  missingAContent = missingAContent.split("const HASHED_ALPHA_DECLS").join("const HASHED_ALPHA_DECLS_BROKEN");
-  fs.writeFileSync(missingASlots, missingAContent, "utf8");
-  expectRejected("断点A 缺失 fixture", makeRunner("missing-a", missingARoot));
-
-  // 断点 B 缺失负测：移除 binding(5) 与 baseEntries anchor，必须非0。
-  const missingBRoot = copyFixture("missing-b");
-  const missingBEngine = path.join(missingBRoot, "node_modules", "reze-engine", "src", "engine.ts");
-  let missingBContent = fs.readFileSync(missingBEngine, "utf8");
-  missingBContent = missingBContent.split("        { binding: 5, resource: __auxMaskView }," + String.fromCharCode(10)).join("");
-  missingBContent = missingBContent.split("const baseBindGroupEntries").join("const baseBindGroupEntries_BROKEN");
-  fs.writeFileSync(missingBEngine, missingBContent, "utf8");
-  expectRejected("断点B 缺失 fixture", makeRunner("missing-b", missingBRoot));
+  ok(JSON.stringify(hashAfterFirst) === JSON.stringify(hashAfterSecond), "全部生产 target 二次文件 hash 不变（逐项幂等，无重复注入）");
+  expectRejected("断点C anchor-miss fixture（clean seed）", makeRunner("anchor-miss", anchorRoot));
+  expectRejected("missing-file fixture（clean seed）", makeRunner("missing-file", missingRoot));
+  expectRejected("重复 marker fixture（clean seed）", makeRunner("duplicate-marker", duplicateRoot));
+  expectRejected("断点A 缺失 fixture（clean seed）", makeRunner("missing-a", missingARoot));
+  expectRejected("断点B 缺失 fixture（clean seed）", makeRunner("missing-b", missingBRoot));
+  expectRejected("PMX 长度补丁 anchor-miss fixture（clean seed）", makeRunner("pmx-anchor-miss", pmxAnchorRoot));
   fs.rmSync(tmp, { recursive: true, force: true });
   // 3) 真实 node_modules 前后 SHA256 不变。
-  const realShaAfter = realKeyFiles.map((f) => (fs.existsSync(f) ? sha(f) : "missing"));
-  const shaSame = realShaBefore.every((h, i) => h === realShaAfter[i]);
-  ok(shaSame, "self-test 不触碰真实 web/node_modules（关键文件 SHA256 前后一致）");
+  const realShaAfter = hashTargetSet(realRoot);
+  const shaSame = JSON.stringify(realShaBefore) === JSON.stringify(realShaAfter);
+  ok(shaSame, "self-test 不触碰真实 web/node_modules（全部生产 target SHA256 前后一致）");
   if (fails.length) { console.error("===PATCH-SELF-TEST-FAIL===" + String.fromCharCode(10) + fails.join(String.fromCharCode(10))); process.exit(1); }
-  console.log("===PATCH-SELF-TEST-OK=== 真实隔离 fixture fresh-patch 首次/二次幂等通过；anchor-miss、missing-file、重复 marker、断点A缺失、断点B缺失负测全部拒绝；真实 node_modules SHA256 不变");
+  console.log("===PATCH-SELF-TEST-OK=== 真实隔离 fixture fresh-patch 首次/二次全 target 幂等通过；anchor-miss、missing-file、重复 marker、断点A缺失、断点B缺失、PMX anchor-miss 负测全部拒绝；真实 node_modules 全 target SHA256 不变");
   process.exit(0);
 }
 
@@ -177,27 +192,47 @@ const OLD_DIST = `        // Debug: log problematic string lengths
         }
 `;
 
-const targets = [
-  { file: path.join(rootDir, "node_modules", "reze-engine", "src", "pmx-loader.ts"), marker: OLD_SRC },
-  { file: path.join(rootDir, "node_modules", "reze-engine", "dist", "pmx-loader.js"), marker: OLD_DIST },
+const pmxTargets = [
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "pmx-loader.ts"),
+    anchor: OLD_SRC,
+    replacement: "",
+    isDone: (content) => !content.includes("Suspicious string length"),
+    label: "src/pmx-loader.ts 文本长度上限",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "pmx-loader.js"),
+    anchor: OLD_DIST,
+    replacement: "",
+    isDone: (content) => !content.includes("Suspicious string length"),
+    label: "dist/pmx-loader.js 文本长度上限",
+  },
 ];
 
-let patched = 0;
-for (const { file, marker } of targets) {
-  if (!fs.existsSync(file)) continue;
-  const content = fs.readFileSync(file, "utf8");
-  if (!content.includes("Suspicious string length")) continue; // 已打过
-  if (!content.includes(marker)) {
-    console.warn(`[patch-reze-engine] 未匹配预期片段，跳过（上游可能已变更）: ${path.basename(file)}`);
-    continue;
+// 所有生产注入（包括旧 PMX 长度修补）统一走同一 manifest；target 缺失、锚点 0/多匹配
+// 都记录为硬失败，不允许某一条历史路径静默成功而绕过严格校验。
+const patchLog = [];
+function applyPatchManifest(targets, phase) {
+  for (const t of targets) {
+    if (!fs.existsSync(t.file)) { patchLog.push({ label: t.label, status: "missing-file" }); continue; }
+    const content = fs.readFileSync(t.file, "utf8");
+    const done = t.isDone ? t.isDone(content) : content.includes(t.doneMarker);
+    if (done) { patchLog.push({ label: t.label, status: "already" }); continue; }
+    const anchors = t.anchors ?? [t.anchor];
+    const matches = anchors.filter((anchor) => content.includes(anchor));
+    if (matches.length !== 1) {
+      const status = matches.length === 0 ? "anchor-miss" : "ambiguous-anchor";
+      console.warn("[patch-reze-engine] " + phase + " 锚点" + (status === "anchor-miss" ? "未匹配" : "不唯一") + "，拒绝继续: " + t.label);
+      patchLog.push({ label: t.label, status });
+      continue;
+    }
+    fs.writeFileSync(t.file, content.replace(matches[0], t.replacement), "utf8");
+    patchLog.push({ label: t.label, status: "injected" });
+    console.log("[patch-reze-engine] 已注入 " + phase + ": " + t.label);
   }
-  fs.writeFileSync(file, content.replace(marker, ""), "utf8");
-  patched += 1;
-  console.log(`[patch-reze-engine] 已移除 PMX 文本长度上限: ${path.basename(file)}`);
 }
-if (patched === 0) {
-  console.log("[patch-reze-engine] 已是修补后状态，无需处理");
-}
+
+applyPatchManifest(pmxTargets, "pmx-text-length");
 
 // ─── 补丁二：materialDiffuseOverrides（真实 GPU 绑定，默认关闭） ─────────────
 // 注入点：files 版 loadModel 中 loadFromReader 之后、addModel 之前。
@@ -281,33 +316,9 @@ const overrideTargets = [
   },
 ];
 
-// 每个 target 独立 marker（实现用 __mdo、类型用完整字段声明），避免同文件内实现/类型互相跳过。
-// 所有生产注入均通过这一份 manifest 执行。一个 target 可以声明互斥 anchors，
-// 用于把 fresh/部分已修补状态收敛到同一最终文本；若出现 0 个或多个匹配，
-// 都必须硬失败，不能依赖数组顺序“碰巧”完成。
-const patchLog = [];
-function applyPatchManifest(targets, phase) {
-  for (const t of targets) {
-    if (!fs.existsSync(t.file)) { patchLog.push({ label: t.label, status: "missing-file" }); continue; }
-    const content = fs.readFileSync(t.file, "utf8");
-    if (content.includes(t.doneMarker)) { patchLog.push({ label: t.label, status: "already" }); continue; }
-    const anchors = t.anchors ?? [t.anchor];
-    const matches = anchors.filter((anchor) => content.includes(anchor));
-    if (matches.length !== 1) {
-      const status = matches.length === 0 ? "anchor-miss" : "ambiguous-anchor";
-      console.warn("[patch-reze-engine] " + phase + " 锚点" + (status === "anchor-miss" ? "未匹配" : "不唯一") + "，拒绝继续: " + t.label);
-      patchLog.push({ label: t.label, status });
-      continue;
-    }
-    fs.writeFileSync(t.file, content.replace(matches[0], t.replacement), "utf8");
-    patchLog.push({ label: t.label, status: "injected" });
-    console.log("[patch-reze-engine] 已注入 " + phase + ": " + t.label);
-  }
-}
-
 applyPatchManifest(overrideTargets, "materialDiffuseOverrides");
 // 上方注入循环后立即进行统一严格校验定义；predev/prebuild 与 --verify 共用。
-// ─── 统一严格校验（predev/prebuild 与 --verify 共用）：全部 marker 恰好一次。 ──
+// ─── 统一严格校验（predev/prebuild 与 --verify 共用）：全部 marker 满足预期计数。 ──
 // 不只在 --verify 才计数；普通 predev/prebuild 也必须拦截重复/缺失 marker，
 // 否则生命周期内重复注入或部分注入不会被发现。任一 marker 非恰好一次即 exit 1。
 const STATE2_VERIFY_CHECKS = (() => {
@@ -317,7 +328,11 @@ const STATE2_VERIFY_CHECKS = (() => {
   const compileDist = path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js");
   const engineSrc = path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts");
   const engineDistJs = path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js");
+  const pmxSrc = path.join(rootDir, "node_modules", "reze-engine", "src", "pmx-loader.ts");
+  const pmxDist = path.join(rootDir, "node_modules", "reze-engine", "dist", "pmx-loader.js");
   return [
+    { label: "src/pmx-loader.ts 文本长度上限已移除", file: pmxSrc, marker: "Suspicious string length", expectedCount: 0 },
+    { label: "dist/pmx-loader.js 文本长度上限已移除", file: pmxDist, marker: "Suspicious string length", expectedCount: 0 },
     { label: "src/engine.ts materialAuxTextures 注入", file: engineSrc, marker: "const __aux = pathOrOptions.materialAuxTextures" },
     { label: "dist/engine.js materialAuxTextures 注入", file: engineDistJs, marker: "const __aux = pathOrOptions.materialAuxTextures;" },
     { label: "src/engine.ts materialAuxTextures 类型声明", file: engineSrc, marker: "materialAuxTextures?: Record<string, string>" },
@@ -344,10 +359,10 @@ const STATE2_VERIFY_CHECKS = (() => {
   { label: "src/graph/compile.ts state2 override 修正接线", file: compileSrc, marker: "const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)" },
   { label: "dist/graph/compile.js state2 override 修正接线", file: compileDist, marker: "const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody);" },
   // 断点 B 修正轮：aux mask view 并入 baseEntries (binding 5) 且重绑展开不丢失。
-  { label: "src/engine.ts binding5 baseEntries", file: engineSrc, marker: "binding: 5, resource: __auxMaskView" },
-  { label: "dist/engine.js binding5 baseEntries", file: engineDistJs, marker: "binding: 5, resource: __auxMaskView" },
-  { label: "src/engine.ts createMaterialBindGroup binding5 门控 fallback", file: engineSrc, marker: "baseEntries.some((e) => e.binding === 5)" },
-  { label: "dist/engine.js createMaterialBindGroup binding5 门控 fallback", file: engineDistJs, marker: "baseEntries.some((e) => e.binding === 5)" },
+    { label: "src/engine.ts binding5 baseEntries", file: engineSrc, marker: "binding: 5, resource: __binding5View" },
+    { label: "dist/engine.js binding5 baseEntries", file: engineDistJs, marker: "binding: 5, resource: __binding5View" },
+    { label: "src/engine.ts createMaterialBindGroup binding5 门控 fallback", file: engineSrc, marker: "const hasBinding5 = baseEntries.some((e) => e.binding === 5)" },
+    { label: "dist/engine.js createMaterialBindGroup binding5 门控 fallback", file: engineDistJs, marker: "const hasBinding5 = baseEntries.some((e) => e.binding === 5);" },
   { label: "src/engine.ts assignDrawCallGroups 展开 baseEntries", file: engineSrc, marker: "...dc.baseBindGroupEntries" },
   { label: "dist/engine.js assignDrawCallGroups 展开 baseEntries", file: engineDistJs, marker: "...dc.baseBindGroupEntries" },
   // 断点 A 生效性（换行语义）：override 必须以真实换行拆分 fsBody 行；
@@ -404,12 +419,13 @@ function strictVerifyAll() {
     const markers = [c.marker, c.marker.replace(/\n$/, "\r\n")].filter((m, i, a) => a.indexOf(m) === i);
     let count = 0;
     for (const m of markers) count += content.split(m).length - 1;
-    const ok = count === 1;
+    const expectedCount = c.expectedCount ?? 1;
+    const ok = count === expectedCount;
     if (!ok) allOk = false;
-    console.log("[verify] " + c.label + ": marker 出现 " + count + " 次 " + (ok ? "OK" : "FAIL(应恰好1次)"));
+    console.log("[verify] " + c.label + ": marker 出现 " + count + " 次 " + (ok ? "OK" : "FAIL(应为" + expectedCount + "次)"));
   }
   if (!allOk) { console.error("===PATCH-VERIFY-FAIL=== 存在非恰好一次的 marker"); return false; }
-  console.log("===PATCH-VERIFY-OK=== 全部 " + checks.length + " 项不变量恰好一次");
+  console.log("===PATCH-VERIFY-OK=== 全部 " + checks.length + " 项严格不变量满足预期计数");
   return true;
 }
 if (process.argv.includes("--verify")) { if (!strictVerifyAll()) process.exit(1); else process.exit(0); }
@@ -750,10 +766,14 @@ const BINDGROUP_LAYOUT_DIST_REPLACEMENT_FIXED = [
 
 const CREATE_BINDGROUP_SRC_REPLACEMENT_FIXED = [
   "  private createMaterialBindGroup(label: string, baseEntries: GPUBindGroupEntry[], styleBuffer: GPUBuffer, maskView?: GPUTextureView): GPUBindGroup {",
-  "    const entries: GPUBindGroupEntry[] = [...baseEntries, { binding: 4, resource: { buffer: styleBuffer } }]",
-  "    if (!baseEntries.some((e) => e.binding === 5)) {",
-  "      entries.push({ binding: 5, resource: maskView ?? this.fallbackMaterialTexture.createView() })",
-  "    }",
+  "    const hasBinding5 = baseEntries.some((e) => e.binding === 5)",
+  "    const maskEntry = hasBinding5 ? baseEntries.find((e) => e.binding === 5) : undefined",
+  "    const effectiveMaskView = maskEntry?.resource ?? maskView ?? this.fallbackMaterialTexture.createView()",
+  "    const entries: GPUBindGroupEntry[] = [",
+  "      ...baseEntries.filter((e) => e.binding !== 5),",
+  "      { binding: 4, resource: { buffer: styleBuffer } },",
+  "      { binding: 5, resource: effectiveMaskView },",
+  "    ]",
   "    return this.device.createBindGroup({",
   "      label,",
   "      layout: this.mainPerMaterialBindGroupLayout,",
@@ -763,10 +783,14 @@ const CREATE_BINDGROUP_SRC_REPLACEMENT_FIXED = [
 ].join("\n");
 const CREATE_BINDGROUP_DIST_REPLACEMENT_FIXED = [
   "    createMaterialBindGroup(label, baseEntries, styleBuffer, maskView) {",
-  "        const entries = [...baseEntries, { binding: 4, resource: { buffer: styleBuffer } }];",
-  "        if (!baseEntries.some((e) => e.binding === 5)) {",
-  "            entries.push({ binding: 5, resource: maskView ?? this.fallbackMaterialTexture.createView() });",
-  "        }",
+  "        const hasBinding5 = baseEntries.some((e) => e.binding === 5);",
+  "        const maskEntry = hasBinding5 ? baseEntries.find((e) => e.binding === 5) : undefined;",
+  "        const effectiveMaskView = maskEntry?.resource ?? maskView ?? this.fallbackMaterialTexture.createView();",
+  "        const entries = [",
+  "            ...baseEntries.filter((e) => e.binding !== 5),",
+  "            { binding: 4, resource: { buffer: styleBuffer } },",
+  "            { binding: 5, resource: effectiveMaskView },",
+  "        ];",
   "        return this.device.createBindGroup({",
   "            label,",
   "            layout: this.mainPerMaterialBindGroupLayout,",
@@ -933,14 +957,14 @@ const state2Targets = [
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
     anchor: CREATE_BINDGROUP_SRC_ANCHOR,
     replacement: CREATE_BINDGROUP_SRC_REPLACEMENT_FIXED,
-    doneMarker: "baseEntries.some((e) => e.binding === 5)",
+    doneMarker: "effectiveMaskView = ",
     label: "src/engine.ts createMaterialBindGroup binding(5)",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
     anchor: CREATE_BINDGROUP_DIST_ANCHOR,
     replacement: CREATE_BINDGROUP_DIST_REPLACEMENT_FIXED,
-    doneMarker: "baseEntries.some((e) => e.binding === 5)",
+    doneMarker: "effectiveMaskView = ",
     label: "dist/engine.js createMaterialBindGroup binding(5)",
   },
   {
@@ -1074,12 +1098,13 @@ const BASE_BIND_ENTRIES_SRC_ANCHOR = [
   "      ]",
 ].join("\n");
 const BASE_BIND_ENTRIES_SRC_REPLACEMENT = [
+  "      const __binding5View = __auxMaskView ?? this.fallbackMaterialTexture.createView()",
   "      const baseBindGroupEntries: GPUBindGroupEntry[] = [",
   "        { binding: 0, resource: textureView },",
   "        { binding: 1, resource: { buffer: materialUniformBuffer } },",
   "        { binding: 2, resource: (toonTexture ?? this.fallbackMaterialTexture).createView() },",
   "        { binding: 3, resource: (sphereTexture ?? this.fallbackMaterialTexture).createView() },",
-  "        { binding: 5, resource: __auxMaskView },",
+  "        { binding: 5, resource: __binding5View },",
   "      ]",
 ].join("\n");
 const BASE_BIND_ENTRIES_DIST_ANCHOR = [
@@ -1091,12 +1116,13 @@ const BASE_BIND_ENTRIES_DIST_ANCHOR = [
   "            ];",
 ].join("\n");
 const BASE_BIND_ENTRIES_DIST_REPLACEMENT = [
+  "            const __binding5View = __auxMaskView ?? this.fallbackMaterialTexture.createView();",
   "            const baseBindGroupEntries = [",
   "                { binding: 0, resource: textureView },",
   "                { binding: 1, resource: { buffer: materialUniformBuffer } },",
   "                { binding: 2, resource: (toonTexture ?? this.fallbackMaterialTexture).createView() },",
   "                { binding: 3, resource: (sphereTexture ?? this.fallbackMaterialTexture).createView() },",
-  "                { binding: 5, resource: __auxMaskView },",
+  "                { binding: 5, resource: __binding5View },",
   "            ];",
 ].join("\n");
 
@@ -1166,14 +1192,14 @@ const state2CompletenessTargets = [
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
     anchor: BASE_BIND_ENTRIES_SRC_ANCHOR,
     replacement: BASE_BIND_ENTRIES_SRC_REPLACEMENT,
-    doneMarker: "binding: 5, resource: __auxMaskView",
+    doneMarker: "binding: 5, resource: __binding5View",
     label: "src/engine.ts binding5 baseEntries",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
     anchor: BASE_BIND_ENTRIES_DIST_ANCHOR,
     replacement: BASE_BIND_ENTRIES_DIST_REPLACEMENT,
-    doneMarker: "binding: 5, resource: __auxMaskView",
+    doneMarker: "binding: 5, resource: __binding5View",
     label: "dist/engine.js binding5 baseEntries",
   },
   {
@@ -1197,14 +1223,14 @@ const state2SlotTargets = [
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
     anchor: SLOTS_STATE2_ANCHOR,
     replacement: SLOTS_STATE2_REPLACEMENT,
-    doneMarker: "const V14D_STATE2_HELPERS_WGSL",
+    doneMarker: "const V14D_STATE2_HELPERS_WGSL = `fn v14d_state2_shadow_factor",
     label: "src/graph/slots.ts state2 helper 声明",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
     anchor: SLOTS_STATE2_DIST_ANCHOR,
     replacement: SLOTS_STATE2_DIST_REPLACEMENT,
-    doneMarker: "const V14D_STATE2_HELPERS_WGSL",
+    doneMarker: "const V14D_STATE2_HELPERS_WGSL = `fn v14d_state2_shadow_factor",
     label: "dist/graph/slots.js state2 helper 声明",
   },
   {
