@@ -4,9 +4,12 @@ import { defineConfig } from "vitest/config";
 
 const configuredDevPort = Number.parseInt(process.env.MMD_PET_DEV_PORT ?? "5174", 10);
 const devPort = Number.isFinite(configuredDevPort) ? configuredDevPort : 5174;
+const configuredApiBaseUrl =
+  process.env.MMD_PET_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 export default defineConfig({
   plugins: [react()],
+  base: "./",
   build: {
     rollupOptions: {
       input: {
@@ -27,7 +30,7 @@ export default defineConfig({
     },
   },
   define: {
-    "process.env.NEXT_PUBLIC_API_BASE_URL": JSON.stringify("http://127.0.0.1:8000"),
+    "process.env.NEXT_PUBLIC_API_BASE_URL": JSON.stringify(configuredApiBaseUrl),
   },
   test: {
     exclude: ["**/node_modules/**", "**/dist/**", "**/dist-electron/**"],

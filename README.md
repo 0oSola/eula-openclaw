@@ -185,6 +185,28 @@ pip3 install -r api/requirements.txt
 # 确保 WSL 内有 npm（通过 nvm 或系统包安装）
 ```
 
+## Release Stack / 发布栈
+
+发布栈通过仓库根目录的统一入口构建并启动 API、Web production server 和 Electron desktop-pet。默认使用 API `8200`、Web `3200`，与开发栈的 `8100`/`3100` 分离；Pet 不启动 Vite dev server，而是从 `desktop-pet/dist` 加载本地 renderer。
+
+```powershell
+# 构建 Web production bundle、Pet renderer/Electron，并检查 API 入口
+powershell -File .\start-release.ps1 -Action build
+
+# 构建后启动三端；省略 -SkipBuild 时 start 会先构建
+powershell -File .\start-release.ps1 -Action start
+
+# 查看 API/Web/Pet 进程、HTTP、renderer 文件和窗口 ready 状态
+powershell -File .\start-release.ps1 -Action status
+
+# 只停止本入口启动且身份匹配的进程；批次日志保留
+powershell -File .\start-release.ps1 -Action stop
+```
+
+也可以使用 `start-release.cmd`。常用参数包括 `-ApiPort`、`-WebPort`、`-ApiHost`、`-WebHost`、`-ApiBaseUrl`、`-ApiDataDir`、`-UserId`、`-WorkspacePath`、`-SkipBuild` 和 `-PetReadyTimeoutSeconds`。省略 `-ApiBaseUrl` 时，Web/Pet 使用 API 端口生成的地址，也可继承已有 `MMD_PET_API_BASE_URL`。省略 `-ApiDataDir` 时使用 `API_DATA_DIR`，再回退到 `api/data`。
+
+Web 产物位于 `web/.next-codex-release`，Pet 产物至少包含 `desktop-pet/dist/index.html`、`menu.html`、`notification.html` 和 `dist-electron/main.js`。状态文件是 `.runtime/release-stack.json`，每次启动的 stdout/stderr 和 Pet ready marker 位于 `.runtime/release-stack/<批次>/`。如果 `API_DATA_DIR` 指向尚未由 Git LFS 还原的 `trace.db` 指针，API 会拒绝启动；请先还原真实数据库，或通过 `-ApiDataDir` 指向可写且有效的 SQLite 数据目录。
+
 ## API Endpoints (MVP) / API 接口（MVP）
 
 - `POST /chat`

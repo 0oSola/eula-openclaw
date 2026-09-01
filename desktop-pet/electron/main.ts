@@ -173,11 +173,21 @@ import {
   writeSelectedWorkspacePath,
 } from "./petSettingsStore.js";
 import { indexPetMenuSessions } from "./petMenuSessionIndex.js";
+import {
+  resolveProductionRendererPage,
+  resolveProductionRendererRoot,
+  type ProductionRendererPage,
+} from "./rendererPaths.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const isDev = !app.isPackaged;
+const releaseMode = app.isPackaged || process.env.MMD_PET_RELEASE === "1";
+const isDev = !releaseMode;
 const devRendererUrl =
   process.env.MMD_PET_RENDERER_URL ?? `http://127.0.0.1:${process.env.MMD_PET_DEV_PORT ?? "5174"}`;
+const productionRendererRoot = resolveProductionRendererRoot(
+  __dirname,
+  process.env.MMD_PET_RENDERER_DIST_DIR,
+);
 const remoteDebuggingPort = process.env.MMD_PET_REMOTE_DEBUGGING_PORT?.trim();
 if (isDev && remoteDebuggingPort) {
   app.commandLine.appendSwitch("remote-debugging-port", remoteDebuggingPort);
@@ -189,6 +199,9 @@ const contextMenuBlankDiagnosticEnabled = process.env.MMD_PET_CONTEXT_MENU_DIAGN
 const knowledgeHandoffTransportEnabled = process.env.MMD_PET_KNOWLEDGE_HANDOFF_TRANSPORT_ENABLED === "1";
 const completionNoticeDemoEnabled = isDev && process.env.MMD_PET_COMPLETION_NOTICE_DEMO === "1";
 const debugEventsLogPath = process.env.MMD_PET_DEBUG_EVENTS_LOG ?? path.join(process.cwd(), "desktop-pet-debug-events.ndjson");
+const petReadyFilePath = process.env.MMD_PET_READY_FILE?.trim()
+  ? path.resolve(process.env.MMD_PET_READY_FILE.trim())
+  : null;
 const crashDiagnosticsPaths = resolveCrashDiagnosticsPaths({ cwd: process.cwd(), env: process.env });
 const CODEX_SESSION_WATCH_INTERVAL_MS = 2500;
 const CODEX_SESSION_WATCH_MAX_DURATION_MS = 60 * 60 * 1000;
@@ -297,6 +310,90 @@ type ActiveCodexSessionContext = {
   workspacePath: string;
   agent: PetAgent;
 };
+
+function writePetReadyMarker(payload: Record<string, unknown>) {
+  if (!petReadyFilePath) return;
+  try {
+    fs.mkdirSync(path.dirname(petReadyFilePath), { recursive: true });
+    fs.writeFileSync(
+      petReadyFilePath,
+      `${JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        mode: isDev ? "dev" : "release",
+        checkedAt: new Date().toISOString(),
+        ...payload,
+      }, null, 2)}\n`,
+      "utf8",
+    );
+  } catch (error) {
+    logPetDebugEvent("pet-ready-marker:write-error", {
+      path: petReadyFilePath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function removePetReadyMarker() {
+  if (!petReadyFilePath || !fs.existsSync(petReadyFilePath)) return;
+  try {
+    const current = JSON.parse(fs.readFileSync(petReadyFilePath, "utf8")) as { pid?: unknown };
+    if (Number(current.pid) !== process.pid) return;
+    fs.rmSync(petReadyFilePath, { force: true });
+  } catch (error) {
+    logPetDebugEvent("pet-ready-marker:remove-error", {
+      path: petReadyFilePath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function writePetReadyMarkerForWindow(window: BrowserWindow) {
+  let rendererShellReady = false;
+  try {
+    rendererShellReady = Boolean(
+      await window.webContents.executeJavaScript(
+        "document.readyState === 'complete' && Boolean(document.querySelector('#root')?.firstElementChild)",
+        true,
+      ),
+    );
+  } catch (error) {
+    logPetDebugEvent("pet-ready-marker:renderer-check-error", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const rendererUrl = window.webContents.getURL();
+  writePetReadyMarker({
+    rendererPage: "index",
+    rendererRoot: productionRendererRoot,
+    rendererFile: isDev
+      ? null
+      : resolveProductionRendererPage(productionRendererRoot, "index"),
+    rendererUrl,
+    rendererShellReady,
+  });
+}
+
+async function loadRendererPage(window: BrowserWindow, page: ProductionRendererPage) {
+  if (isDev) {
+    if (page === "menu") {
+      await window.loadURL(`${devRendererUrl}/menu.html`);
+      return;
+    }
+    if (page === "notification") {
+      await window.loadURL(`${devRendererUrl}/notification.html`);
+      return;
+    }
+    await window.loadURL(devRendererUrl);
+    return;
+  }
+  const rendererFile = resolveProductionRendererPage(productionRendererRoot, page);
+  if (page === "menu" && !process.env.MMD_PET_RENDERER_DIST_DIR) {
+    await window.loadFile(path.join(__dirname, "../dist/menu.html"));
+    return;
+  }
+  await window.loadFile(rendererFile);
+}
 
 function logPetDebugEvent(type: string, payload: Record<string, unknown> = {}) {
   if (!debugEventsEnabled) return;
@@ -667,11 +764,7 @@ async function ensureCompletionNoticeWindow(): Promise<void> {
   });
 
   try {
-    if (isDev) {
-      await window.loadURL(`${devRendererUrl}/notification.html`);
-    } else {
-      await window.loadFile(path.join(__dirname, "../dist/notification.html"));
-    }
+    await loadRendererPage(window, "notification");
   } catch (error) {
     logPetDebugEvent("completion-notice:load-error", {
       error: error instanceof Error ? error.message : String(error),
@@ -2734,11 +2827,7 @@ async function createContextMenuWindow(bounds: Rectangle, openedAtMs: number): P
   menuWindow.on("closed", () => {
     if (contextMenuWindow === menuWindow) contextMenuWindow = null;
   });
-  if (isDev) {
-    await menuWindow.loadURL(`${devRendererUrl}/menu.html`);
-  } else {
-    await menuWindow.loadFile(path.join(__dirname, "../dist/menu.html"));
-  }
+  await loadRendererPage(menuWindow, "menu");
   logPetDebugEvent("context-menu-window:renderer-ready", {
     processId: menuWindow.webContents.getOSProcessId(),
     url: menuWindow.webContents.getURL(),
@@ -2850,7 +2939,14 @@ async function scanAndUpsertRecentCodexSessions(
 }
 
 async function createPetWindow() {
-  logPetDebugEvent("app:start", { isDev, devRendererUrl, debugEventsLogPath });
+  logPetDebugEvent("app:start", {
+    isDev,
+    releaseMode,
+    devRendererUrl,
+    productionRendererRoot,
+    petReadyFilePath,
+    debugEventsLogPath,
+  });
   completionNoticePersistencePath = path.join(app.getPath("userData"), "dismissed-completion-notice.json");
   completionNoticeState = createCompletionNoticeReducerState(readPersistedCompletionNoticeKeys());
   startKnowledgeHandoffTransport();
@@ -2940,6 +3036,7 @@ async function createPetWindow() {
       processId: window.webContents.getOSProcessId(),
       url: window.webContents.getURL(),
     });
+    void writePetReadyMarkerForWindow(window);
     logRendererDomState(window, "did-finish-load");
     setTimeout(() => logRendererDomState(window, "after-1500ms"), 1500);
     void refreshRecentSessionsInBackground(window);
@@ -2955,11 +3052,7 @@ async function createPetWindow() {
     completionNoticeDisplayMetricsListenerInstalled = true;
   }
 
-  if (isDev) {
-    await window.loadURL(devRendererUrl);
-  } else {
-    await window.loadFile(path.join(__dirname, "../dist/index.html"));
-  }
+  await loadRendererPage(window, "index");
   seedCompletionNoticeDemo();
 }
 
@@ -3431,6 +3524,7 @@ app.on("before-quit", () => {
 app.on("will-quit", () => {
   destroyCompletionNoticeWindow();
   stopKnowledgeHandoffTransport();
+  removePetReadyMarker();
   logPetDebugEvent("app:will-quit", {
     windows: BrowserWindow.getAllWindows().length,
   });
