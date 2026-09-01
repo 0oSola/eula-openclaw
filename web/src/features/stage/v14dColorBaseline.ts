@@ -1289,7 +1289,7 @@ export async function readV14dFaceExpandedTriUv(
         }
       }
     }
-    return { triId, uv, faceMask, width, height };
+  return { triId, uv, faceMask, width, height };
   } finally {
       if (buffer.mapState === "mapped") buffer.unmap();
       buffer.destroy();
@@ -1297,6 +1297,85 @@ export async function readV14dFaceExpandedTriUv(
       expandedBuffer.destroy();
     }
   }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stage 2B-M3 修正轮：任意材质的三角形语义区域（世界坐标分区）。
+
+export type V14dMaterialRegionDef = {
+  /** 区域机器名（如 "neck"/"waist"/"leftHand"/"rightHand"）。 */
+  id: string;
+  /** 世界坐标 y 下限（含），PMX 单位。 */
+  yMin: number;
+  /** 世界坐标 y 上限（不含），PMX 单位。 */
+  yMax: number;
+  /**
+   * 世界坐标 x 符号约束："any" 不限 / "pos" 仅 x>0（PMX 左手侧）/ "neg" 仅 x<0（PMX 右手侧）。
+   * 用于把左右手分开（叉腰姿势下两手 y 带重叠，必须按 x 符号区分）。
+   */
+  xSide: "any" | "pos" | "neg";
+};
+
+/**
+ * 计算某材质每个三角形蒙皮后的世界质心（CPU 侧，与 readV14dFaceExpandedTriUv
+ * 同一蒙皮公式）。返回逐三角形 [x, y, z]（PMX 单位），供语义区域划分。
+ * 三角形顺序 = 该材质 vertexCount/3 的局部序号（与 PMX/Blender polygon 顺序一致）。
+ */
+export function computeV14dMaterialWorldTriCentroids(src: V14dFaceExpandedSource): Float32Array {
+  const triCount = Math.floor(src.faceIndexCount / 3);
+  const centroids = new Float32Array(triCount * 3);
+  const sm = src.skinMatrices;
+  for (let t = 0; t < triCount; t += 1) {
+    let cx = 0, cy = 0, cz = 0;
+    for (let k = 0; k < 3; k += 1) {
+      const vi = src.indices[src.faceFirstIndex + t * 3 + k];
+      const bx = src.vertices[vi * 8], by = src.vertices[vi * 8 + 1], bz = src.vertices[vi * 8 + 2];
+      let wx = bx, wy = by, wz = bz;
+      if (sm) {
+        wx = 0; wy = 0; wz = 0;
+        for (let j = 0; j < 4; j += 1) {
+          const bi = src.joints[vi * 4 + j];
+          const w = src.weights[vi * 4 + j] / 255;
+          if (w <= 0) continue;
+          const o = bi * 16;
+          wx += w * (sm[o] * bx + sm[o + 4] * by + sm[o + 8] * bz + sm[o + 12]);
+          wy += w * (sm[o + 1] * bx + sm[o + 5] * by + sm[o + 9] * bz + sm[o + 13]);
+          wz += w * (sm[o + 2] * bx + sm[o + 6] * by + sm[o + 10] * bz + sm[o + 14]);
+        }
+      }
+      cx += wx; cy += wy; cz += wz;
+    }
+    centroids[t * 3] = cx / 3;
+    centroids[t * 3 + 1] = cy / 3;
+    centroids[t * 3 + 2] = cz / 3;
+  }
+  return centroids;
+}
+
+/**
+ * 按世界坐标分区规则把逐三角形质心映射为区域标签。
+ * 返回与三角形同长的 Int32Array：-1=不属于任何区域，否则 = regionDefs 下标。
+ * 区域定义按数组顺序优先匹配（先命中先得），调用方需保证区域不重叠。
+ */
+export function classifyV14dMaterialRegions(
+  centroids: Float32Array,
+  regionDefs: readonly V14dMaterialRegionDef[],
+): Int32Array {
+  const triCount = centroids.length / 3;
+  const labels = new Int32Array(triCount).fill(-1);
+  for (let t = 0; t < triCount; t += 1) {
+    const x = centroids[t * 3], y = centroids[t * 3 + 1];
+    for (let r = 0; r < regionDefs.length; r += 1) {
+      const d = regionDefs[r];
+      if (y < d.yMin || y >= d.yMax) continue;
+      if (d.xSide === "pos" && x <= 0) continue;
+      if (d.xSide === "neg" && x >= 0) continue;
+      labels[t] = r;
+      break;
+    }
+  }
+  return labels;
+}
 
 
 export async function readV14dCanvasDisplay(canvas: HTMLCanvasElement): Promise<V14dNormalizedImage> {

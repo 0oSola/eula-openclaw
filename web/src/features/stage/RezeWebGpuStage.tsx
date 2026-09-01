@@ -43,6 +43,8 @@ import {
   analyzeV14dColorBaselineRois,
   createV14dColorBaselineResult,
   flushV14dDiagnosticBarrier,
+  computeV14dMaterialWorldTriCentroids,
+  classifyV14dMaterialRegions,
   makeV14dLinearImage,
   measureV14dRoiActualMeans,
   readV14dCanvasDisplay,
@@ -85,6 +87,7 @@ import {
   v14dFaceStaticMaterialPickId,
   V14D_BODY_MATERIAL_NAME,
   V14D_BODY_WARM,
+  V14D_BODY_SKIN_REGIONS,
   V14D_STATE2_MASK_LOGICAL_PATH,
   type V14dFaceStaticAssetSource,
   type V14dFaceStaticMode,
@@ -140,6 +143,19 @@ declare global {
         rgb: Float32Array;
         mask: Uint8Array;
       } | null>;
+      /** Stage 2B-M3 修正轮：三角形语义区域（triId+uv per pixel、世界质心、区域标签）。 */
+      exportMaterialTriRegions: (materialName: string) => Promise<{
+        width: number;
+        height: number;
+        materialName: string;
+        triCount: number;
+        triId: Int32Array;
+        uv: Float32Array;
+        faceMask: Uint8Array;
+        centroids: Float32Array;
+        regionLabels: Int32Array;
+        regionDefs: { id: string; yMin: number; yMax: number; xSide: string }[];
+      } | null>;
       /** 逐像素导出 Face 三角形 ID + 插值 UV（Stage 2B-M2 同口径对账，诊断专用）。 */
       exportFaceTriUv: () => Promise<{
         width: number;
@@ -189,6 +205,26 @@ export type V14dFaceStaticCapture = {
     meanSrgb: [number, number, number];
     meanLinear: [number, number, number];
     /** 该材质可见像素的归一化 bbox [x,y,w,h]（0..1）。 */
+    bboxNorm: [number, number, number, number];
+  }>;
+  /**
+   * Stage 2B-M3 修正轮：BodySkin 四区域语义统计（脖子/腰/左手/右手）。
+   * 区域由三角形蒙皮后世界质心按 V14D_BODY_SKIN_REGIONS 划分（世界 y 带 + x 符号），
+   * 再映射回屏幕像素 mask（可见三角形覆盖的像素）。每个区域独立给出样本数、
+   * 覆盖率（区域像素/区域三角形可见像素）、显示 sRGB 与线性均值、屏幕 bbox。
+   * 不是整块 BodySkin 均值；样本不足的区域如实缺失，不软通过。
+   */
+  bodySkinRegions?: Record<string, {
+    /** 该区域的语义定义（世界坐标带 + x 符号）。 */
+    def: { id: string; yMin: number; yMax: number; xSide: string };
+    /** 该区域覆盖的三角形数（世界坐标分区命中）。 */
+    triangles: number;
+    /** 该区域三角形覆盖的屏幕像素数。 */
+    samples: number;
+    /** 覆盖率 = 区域可见像素 / 该材质总可见像素。 */
+    coverage: number;
+    meanSrgb: [number, number, number];
+    meanLinear: [number, number, number];
     bboxNorm: [number, number, number, number];
   }>;
   error?: string;
@@ -1363,6 +1399,93 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           }
         }
         if (Object.keys(skinRoi).length > 0) base.skinRoi = skinRoi;
+
+        // Stage 2B-M3 修正轮：BodySkin 四区域语义统计。
+        // 用 BodySkin 三角形展开 pass（triId per pixel）+ CPU 蒙皮世界质心分区，
+        // 把每个可见像素归属到 neck/waist/leftHand/rightHand 四区域之一。
+        // 区域定义见 V14D_BODY_SKIN_REGIONS（世界 y 带 + x 符号，叉腰下左右手按 x 区分）。
+        try {
+          const bodyMatIndex = model.getMaterials().findIndex((m) => m.name === V14D_BODY_MATERIAL_NAME);
+          if (bodyMatIndex >= 0) {
+            const mats = model.getMaterials();
+            const bodyFirstIndex = mats.slice(0, bodyMatIndex).reduce((acc, m) => acc + m.vertexCount, 0);
+            const bodyIndexCount = mats[bodyMatIndex].vertexCount;
+            const skinning = model.getSkinning();
+            const bodySrc = {
+              vertices: model.getVertices(),
+              indices: model.getIndices(),
+              joints: skinning.joints,
+              weights: skinning.weights,
+              faceFirstIndex: bodyFirstIndex,
+              faceIndexCount: bodyIndexCount,
+              skinMatrices: model.getSkinMatrices(),
+            };
+            const centroids = computeV14dMaterialWorldTriCentroids(bodySrc);
+            const labels = classifyV14dMaterialRegions(centroids, V14D_BODY_SKIN_REGIONS);
+            const triUv = await readV14dFaceExpandedTriUv(engineRef.current, V14D_FACE_STATIC_SIZE, V14D_FACE_STATIC_SIZE, bodySrc);
+            const bodyPickId = v14dFaceStaticMaterialPickId(
+              model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount })),
+              V14D_BODY_MATERIAL_NAME,
+            );
+          if (bodyPickId !== null && triUv) {
+            // 诊断 pass 相机修正：capture 可能在自由相机/全身视角下调用，
+            // 先渲染一帧使 triUv/pick 与当前视角一致。
+            try { engine.renderFrame(0); } catch { /* 保持既有状态 */ }
+            const totalVisible = skinRoi[V14D_BODY_MATERIAL_NAME]?.samples ?? 0;
+              const regionStats: Record<string, {
+                tris: number; samples: number; sSum: number[]; lSum: number[];
+                minX: number; minY: number; maxX: number; maxY: number;
+              }> = {};
+              for (let r = 0; r < V14D_BODY_SKIN_REGIONS.length; r += 1) {
+                regionStats[V14D_BODY_SKIN_REGIONS[r].id] = {
+                  tris: 0, samples: 0, sSum: [0, 0, 0], lSum: [0, 0, 0],
+                  minX: V14D_FACE_STATIC_SIZE, minY: V14D_FACE_STATIC_SIZE, maxX: -1, maxY: -1,
+                };
+              }
+              // 三角形数（世界分区命中，与屏幕可见性无关）。
+              for (let t = 0; t < labels.length; t += 1) {
+                const r = labels[t];
+                if (r >= 0) regionStats[V14D_BODY_SKIN_REGIONS[r].id].tris += 1;
+              }
+              // 像素归属：triId per pixel → 区域标签 → 统计。
+              for (let y = 0; y < V14D_FACE_STATIC_SIZE; y += 1) {
+                for (let x = 0; x < V14D_FACE_STATIC_SIZE; x += 1) {
+                  const i = y * V14D_FACE_STATIC_SIZE + x;
+                  const off = i * 4;
+                  // 只统计同时被 BodySkin pick 命中且 triUv pass 覆盖的像素（前景）。
+                  if (materialMask.data[off] === 0 || materialMask.data[off + 1] !== bodyPickId) continue;
+                  const triId = triUv.triId[i];
+                  if (triId < 0 || triId >= labels.length) continue;
+                  const r = labels[triId];
+                  if (r < 0) continue;
+                  const st = regionStats[V14D_BODY_SKIN_REGIONS[r].id];
+                  st.samples += 1;
+                  const rr = display.data[off], gg = display.data[off + 1], bb = display.data[off + 2];
+                  st.sSum[0] += rr; st.sSum[1] += gg; st.sSum[2] += bb;
+                  st.lSum[0] += srgbToLinear(rr); st.lSum[1] += srgbToLinear(gg); st.lSum[2] += srgbToLinear(bb);
+                  if (x < st.minX) st.minX = x; if (x > st.maxX) st.maxX = x;
+                  if (y < st.minY) st.minY = y; if (y > st.maxY) st.maxY = y;
+                }
+              }
+              const out: NonNullable<V14dFaceStaticCapture["bodySkinRegions"]> = {};
+              for (const def of V14D_BODY_SKIN_REGIONS) {
+                const st = regionStats[def.id];
+                if (st.samples <= 0) continue;
+                out[def.id] = {
+                  def: { id: def.id, yMin: def.yMin, yMax: def.yMax, xSide: def.xSide },
+                  triangles: st.tris,
+                  samples: st.samples,
+                  coverage: totalVisible > 0 ? st.samples / totalVisible : 0,
+                  meanSrgb: [st.sSum[0] / st.samples, st.sSum[1] / st.samples, st.sSum[2] / st.samples],
+                  meanLinear: [st.lSum[0] / st.samples, st.lSum[1] / st.samples, st.lSum[2] / st.samples],
+                  bboxNorm: [st.minX / V14D_FACE_STATIC_SIZE, st.minY / V14D_FACE_STATIC_SIZE,
+                    (st.maxX - st.minX + 1) / V14D_FACE_STATIC_SIZE, (st.maxY - st.minY + 1) / V14D_FACE_STATIC_SIZE],
+                };
+              }
+              if (Object.keys(out).length > 0) base.bodySkinRegions = out;
+            }
+          }
+        } catch { /* 区域统计失败不阻塞主 capture，Gate 会按缺失区域如实失败 */ }
       }
       return base;
     } catch (error) {
@@ -1567,6 +1690,15 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       const pickId = v14dFaceStaticMaterialPickId(materials, materialName);
       if (pickId === null) return null;
       const size = V14D_FACE_STATIC_SIZE;
+      // Stage 2B-M3 修正轮（P0-2 修复）：HDR/mask readback 的 per-frame 相机矩阵
+      // 可能是启动时脸部相机的旧值；自由相机/近景视角下先用当前实际相机渲染一帧，
+      // 使 HDR/pick 与当前屏幕视角一致（否则四区域近景视角下颜色/pick 错位）。
+      // 停 render loop 再用当前相机渲染一帧，避免被循环下一帧覆盖。
+      try {
+        engine.stopRenderLoop();
+        model.pause();
+        engine.renderFrame(0);
+      } catch { /* 保持既有状态 */ }
       const [resolve, materialMask] = await Promise.all([
         readV14dColorBaselineResolveTargets(engine, size, size),
         readV14dColorBaselineMaterialMask(engine, size, size),
@@ -1712,6 +1844,65 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       exportMaterialMaskByName: (name: string) => exportV14dMaterialMaskByName(name),
       exportFaceTriUv: () => exportV14dFaceTriUv(),
       exportMaterialHdrFloat: (name: string) => exportV14dMaterialHdrFloat(name),
+      /**
+       * Stage 2B-M3 修正轮：导出任意材质的三角形展开 pass（triId + uv per pixel，
+       * 当前相机视角）+ 该材质逐三角形蒙皮世界质心 + 按 V14D_BODY_SKIN_REGIONS 的
+       * 区域标签。供 Gate 用「三角形语义区域」而非整块材质均值做四区域对账。
+       * 区域标签为 Int32Array（-1=未分区，否则=V14D_BODY_SKIN_REGIONS 下标）。
+       */
+      exportMaterialTriRegions: async (materialName: string) => {
+        const engine = engineRef.current;
+        const model = modelRef.current;
+        if (!engine || !model) return null;
+        try {
+          const mats = model.getMaterials();
+          const matIndex = mats.findIndex((m) => m.name === materialName);
+          if (matIndex < 0) return null;
+          await flushV14dDiagnosticBarrier(engine);
+          const firstIndex = mats.slice(0, matIndex).reduce((acc, m) => acc + m.vertexCount, 0);
+          const indexCount = mats[matIndex].vertexCount;
+          const skinning = model.getSkinning();
+          const src = {
+            vertices: model.getVertices(),
+            indices: model.getIndices(),
+            joints: skinning.joints,
+            weights: skinning.weights,
+            faceFirstIndex: firstIndex,
+            faceIndexCount: indexCount,
+            skinMatrices: model.getSkinMatrices(),
+          };
+          const centroids = computeV14dMaterialWorldTriCentroids(src);
+          const labels = classifyV14dMaterialRegions(centroids, V14D_BODY_SKIN_REGIONS);
+          const size = V14D_FACE_STATIC_SIZE;
+          // Stage 2B-M3 修正轮（P0-2 修复）：自由相机/近景视角下，诊断 pass 的
+          // pickPerFrameBindGroup 可能是启动时脸部相机的旧矩阵。导出前先用当前实际
+          // 相机强制渲染一帧，使 pick/triUv pass 与当前屏幕视角一致（否则全身/近景
+          // 视角下 BodySkin 区域像素全部错位到脸部相机的屏幕投影，neck/waist 无命中）。
+          // 关键：render loop 运行中 renderFrame(0) 可能被下一帧循环覆盖，先停循环
+          // 再用当前相机渲染一帧，保证诊断 pass 读到的是当前实际相机的投影。
+          try {
+            engine.stopRenderLoop();
+            model.pause();
+            engine.renderFrame(0);
+          } catch { /* 保持既有状态 */ }
+          const triUv = await readV14dFaceExpandedTriUv(engine, size, size, src);
+          if (!triUv) return null;
+          return {
+            width: size,
+            height: size,
+            materialName,
+            triCount: Math.floor(indexCount / 3),
+            triId: triUv.triId,
+            uv: triUv.uv,
+            faceMask: triUv.faceMask,
+            centroids,
+            regionLabels: labels,
+            regionDefs: V14D_BODY_SKIN_REGIONS.map((d) => ({ id: d.id, yMin: d.yMin, yMax: d.yMax, xSide: d.xSide })),
+          };
+        } catch {
+          return null;
+        }
+      },
     };
     // Stage 2B-M3 近景截图：允许采集脚本直接设相机（freeCamera 模式，保持 paused）。
     (window as unknown as { __v14dSetCamera?: (s: MmdCameraSnapshot) => void }).__v14dSetCamera = (s) => {
@@ -2215,8 +2406,26 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         if (canvasRef.current) {
           canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.faceMaterialApplied] = String(faceResult.ok);
           if (applyBodySkin) {
-            const bodyOk = faceResult.ok && model.getMaterials().some((m) => m.name === V14D_BODY_MATERIAL_NAME);
+            // Stage 2B-M3 修正轮（P0-3）：bodyApplied 必须来自引擎真实 draw-call/graph 状态，
+            // 不再是「faceResult.ok && 材质存在」的自证。三层核对：
+            //  (1) applyStyleGroups 的分组诊断里 body 组（id=v14d-body-skin-composite）编译+安装 ok；
+            //  (2) 引擎 getStyleGroups 里 BodySkin 当前归属的组 graph.name 恰为
+            //      "V14D Body Skin Composite"（证明它实际绑定的是身体暖肤合成 graph，
+            //      而非漏绑/错绑到别的 graph）；
+            //  (3) 该组确实声明了 BodySkin 材质。
+            const bodyGroupResult = faceResult.groups.find((g) => g.groupId === "v14d-body-skin-composite");
+            const installedGroups = engine.getStyleGroups("companion");
+            const bodyInstall = installedGroups.find(
+              (g) => Array.isArray(g.materials) && g.materials.includes(V14D_BODY_MATERIAL_NAME),
+            );
+            const bodyGraphName = bodyInstall?.graph?.name ?? null;
+            const bodyOk =
+              !!bodyGroupResult?.ok &&
+              bodyGraphName === "V14D Body Skin Composite";
             canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.bodyMaterialApplied] = String(bodyOk);
+            // 供 Gate 读取真实绑定证据（不是自证）：实际 graph 名 + 组诊断 ok。
+            canvasRef.current.dataset.v14dBodySkinGraph = bodyGraphName ?? "";
+            canvasRef.current.dataset.v14dBodySkinGroupOk = String(!!bodyGroupResult?.ok);
           }
         }
         if (!faceResult.ok) {

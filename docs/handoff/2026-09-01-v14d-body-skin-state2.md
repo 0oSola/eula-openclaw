@@ -1,7 +1,9 @@
 # Stage 2B-M3｜全身皮肤材质统一（BodySkin 接入 V14D State2 实时合成）
 
 - 日期：2026-09-02
-- 状态：完成（BodySkin 实时合成 + ROI 对账通过，候选阈值）
+- 状态：**视觉预览范围扩展（checkpoint）**——修正轮后 BodySkin 实时合成已接线、脖子/双手
+  区域独立数值 Gate 通过（候选阈值），腰部在 frame120 叉腰姿势下被长袖/手臂全角度遮挡
+  （真实几何）无可视样本，诚实标记 occluded。**不是**完整 V14D/Face Gate 已通过。
 - 来源主会话：01a036ca-f4cc-7b22-8482-b4e72b231053，hostId=local
 - 分支：codex/v14d-body-skin-state2
 - 冻结基线：base_commit=653c6d99c9a77f9bcda07eab4b0870054e73ae00
@@ -40,6 +42,60 @@ Gate（gate-v14d-body-skin-state2.mjs）：绑定（faceApplied + bodyApplied）
 | probe-v14d-face-default | exit 0（DEFAULT-GATING-OK） |
 | probe-v14d-vmd-runtime | exit 0（VMD-RUNTIME-PROBE-OK） |
 | npm run build | exit 0 |
+
+## 修正轮（主会话验收修正，同 failure family 第一次修正）
+
+初版被主会话验收驳回，修正以下 P0：
+
+### P0-1 四区域独立数值 Gate
+
+初版只算整块 BodySkin aggregate（~862 样本单组均值），不满足 neck/waist/leftHand/rightHand
+分别对齐。修正后用 BodySkin 三角形展开 pass（`exportMaterialTriRegions`，复用
+readV14dFaceExpandedTriUv 的 CPU 蒙皮 + 逐三角形 triId）得到每个 BodySkin 三角形的世界质心，
+按 `V14D_BODY_SKIN_REGIONS`（世界 y 带 + x 符号，叉腰下左右手按 x 区分）把屏幕像素归属到
+四区域，每区域独立输出：区域定义、有效 mask（triId 覆盖 + pick 前景）、样本数、覆盖率、
+Web HDR 线性 RGB、Blender 同区域参考（body_d×warm 线性）、逐通道 MAE、通过状态。
+不再用整块 BodySkin 均值替代各区域。
+
+### P0-2 四区域截图命中
+
+初版 neck 拍到胸口/腰带、左右手用同一 target。修正后每个区域用它自己世界质心自动定位相机
+（不再手调屏幕坐标）：脖子从下方仰视（下巴与衣领间窄带），腰从侧腰看（前腹被裙覆盖），
+手从正前方看（叉腰外露）。全身图叠加四区域轮廓 bbox（fullbody-finalFaceComposite-annotated.png）。
+补真实侧面全身 side-{normal,finalFaceComposite}.png。
+
+### P0-3 bodyApplied 真实 graph 绑定证据
+
+初版 `bodyOk = faceResult.ok && 材质存在` 是自证。修正后三层核对：applyStyleGroups 组诊断
+（groupId=v14d-body-skin-composite）ok 且引擎 getStyleGroups 中 BodySkin 实际绑定
+graph.name === "V14D Body Skin Composite"。dataset 暴露 `v14dBodySkinGraph`/`v14dBodySkinGroupOk`
+供 Gate 读取真实状态。负测 `web/scripts/gate-v14d-body-graph-negative.mjs` 覆盖漏绑 BodySkin、
+BodySkin 错绑 Face graph、错材质（graph 绑到 HairA）、body 组编译失败，全部判 false。
+
+### P0-4 验证承诺与概念登记
+
+本概念登记为「视觉预览范围扩展」，不写成完整 V14D/Face Gate 已通过。新增概念文档
+`workflow/concepts/v14d-body-skin-state2.zh-CN.md`，同步 `workflow/workflow-glossary.zh-CN.md`
+与 `docs/architecture/current-system-topology.md`。
+
+### 修正轮验收结果
+
+| 验收项 | 结果 |
+| --- | --- |
+| 区域 neck（近景仰视，1853 样本） | MAE=[0.110,0.104,0.089] 通过（候选阈值 0.20） |
+| 区域 leftHand（全身视角，374 样本） | MAE=[0.017,0.015,0.011] 通过 |
+| 区域 rightHand（全身视角，198 样本） | MAE=[0.015,0.017,0.016] 通过 |
+| 区域 waist | **occluded**（frame120 叉腰姿势被长袖/手臂全角度遮挡，无可视样本，诚实 checkpoint） |
+| Face（593 样本） | 线性均值 [0.816,0.514,0.462] |
+| bodyApplied 真实 graph 核对 | v14dBodySkinGraph="V14D Body Skin Composite"，组诊断 ok |
+| 负测（不存在材质/HairA 不冒充/漏绑/错 graph/错材质） | 全部通过 |
+| patch-reze-engine --verify | exit 0（62 项） |
+| gate-v14d-state2-override-regression | exit 0（30 断言） |
+| probe-v14d-face-default / probe-v14d-vmd-runtime | exit 0 / exit 0 |
+| pageError / failedRequests / 4xx-5xx | 0 / 0 / 0 |
+
+Gate 退出码：可见区域全过 + 无遮挡 = 0（OK）；有区域被诚实标记 occluded = 3（checkpoint）；
+任一可见区域失败或 graph 证据不符 = 1（fail）。
 
 ## 视觉证据
 

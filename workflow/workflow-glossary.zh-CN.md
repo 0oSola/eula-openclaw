@@ -260,3 +260,12 @@
 - 禁止用法：不用屏幕像素→UV 反投影 atlas 作运行时材质；不用 bakedGolden 烘焙冒充生产方案；不把灯光/阴影/高光/AgX 固化进 BaseColor；不手调 RGB；不实现五档动态/Narrow Blend/Hysteresis（范围外）；完整 Face Gate MAE 未达 ≤20/255 时不得宣称完成。
 - 路由影响：只影响 `/mmd-calibration-render` faceStatic 的 faceShadowOnly/finalFaceComposite 实时合成模式与 `patch-reze-engine.mjs`；不影响 PMX/VMD Runtime、默认生产入口（诊断开关默认关闭）。当前 Gate 未达标阻塞。
 - 完整定义：见 `workflow/concepts/v14d-face-state2-live-composite.zh-CN.md`、`docs/handoff/2026-08-31-v14d-face-state2-runtime.md`。
+
+# V14D 全身皮肤 State 2 实时合成（固定帧）
+
+- 英文机器名：`v14d-body-skin-state2`（契约 / contract id）；Web 全身皮肤（BodySkin）实时合成。
+- 含义：在 `v14dFaceStatic=1&v14dFaceMode=finalFaceComposite` 诊断入口下，把「只接入 Face」扩展为「Face + BodySkin 同一 V14D skin family」。BodySkin 用「body_d 线性 × 身体 warm=[1,0.945,0.905]」直出（不套脸部专用 State2 packed mask），与 Face 共享线性色彩处理与显示变换。四区域（neck/waist/leftHand/rightHand）按 BodySkin 三角形蒙皮世界质心（V14D_BODY_SKIN_REGIONS，世界 y 带 + x 符号）独立对账。
+- 允许用法：固定 frame120 全身皮肤预览；bodyApplied 必须来自真实 graph 状态（组诊断 ok 且实际绑定 graph.name === "V14D Body Skin Composite"）；区域样本不足时诚实标记 occluded/checkpoint（exit 3），不软通过。
+- 禁止用法：不把脸部 State2 mask 套到 BodySkin UV；不用 faceResult.ok && 材质存在自证 bodyApplied；不把白衣/头发/眼睛归入皮肤；不在 loadModel 后伪改 path；不写成「完整 V14D/Face Gate 已通过」（本概念是视觉预览范围扩展）。
+- 路由影响：只影响 v14dFaceStatic=1&v14dFaceMode=finalFaceComposite 诊断渲染层与 patch-reze-engine.mjs（WGSL v14d_skin_body_composite helper）；不影响 PMX/VMD Runtime、默认生产入口（诊断开关默认关闭）。
+- 完整定义：见 workflow/concepts/v14d-body-skin-state2.zh-CN.md、docs/handoff/2026-09-01-v14d-body-skin-state2.md。

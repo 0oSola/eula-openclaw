@@ -75,6 +75,28 @@ export const V14D_BODY_MATERIAL_NAME = "BodySkin";
 export const V14D_BODY_BASE_TEXTURE_NAME = "body_d.png";
 /** Blender 取证：BodySkin PROTO_FaceWarm Color2（暖肤 tint，线性乘法）。 */
 export const V14D_BODY_WARM = [1.0, 0.945, 0.905] as const;
+
+/**
+ * Stage 2B-M3 修正轮：BodySkin 四区域语义分区（世界坐标，PMX 单位，frame120 姿态）。
+ *
+ * 分区依据：Blender 权威 blend frame120 下 PROTO_GF2_BodySkin 三角形质心实测
+ * （probe/blender-body-tris.json，3671 三角形，Blender 米制高度 z∈[0.96,1.47]，
+ *  x∈[-0.578,0.578]；PMX 单位 = 米 / 0.08，故高度 y∈[12.0,18.3]，x∈[-7.2,7.2]）。
+ *
+ * 叉腰姿势下两手/手腕位于腰两侧（y≈12.0..13.6），与腰部露肤 y 带重叠，
+ * 必须按世界 x 符号区分左右手：PMX 左手在世界 x>0 侧，右手在 x<0 侧。
+ * 区域不重叠，classifyV14dMaterialRegions 按数组顺序先命中先得。
+ */
+export const V14D_BODY_SKIN_REGIONS = [
+  // 修正轮实测（gate diag）：脖子可见皮肤 = 下巴与衣领之间颈侧窄带（y≈15.7..16.2；
+  // 头前倾+衣领遮挡 y<15.7 的颈部三角形，正面全身视角下它们被 Face/衣领深度遮挡）。
+  { id: "neck", yMin: 15.7, yMax: 16.2, xSide: "any" },
+  // 腰部露肤 = 腰带上方可见带（y≈13.4..13.9；叉腰的手与腰带覆盖 y<13.4）。
+  { id: "waist", yMin: 13.4, yMax: 13.9, xSide: "any" },
+  // 左手/右手：叉腰姿势下两手在腰两侧（y≈12.0..13.6），按世界 x 符号区分。
+  { id: "leftHand", yMin: 11.5, yMax: 13.9, xSide: "pos" },
+  { id: "rightHand", yMin: 11.5, yMax: 13.9, xSide: "neg" },
+] as const;
 /** State2 packed mask 注入逻辑键（唯一，不顶替原始纹理；引擎补丁五按此前缀建立实时 mask 纹理）。 */
 export const V14D_STATE2_MASK_LOGICAL_PATH = "Textures/v14d-state2-mask/state2.png";
 /** 实时合成模式：faceShadowOnly=ShadowFactor 视图，finalFaceComposite=FinalComposite 视图。 */
