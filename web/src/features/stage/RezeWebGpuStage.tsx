@@ -635,6 +635,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   const vmdIkPolicyCacheRef = useRef(new Map<string, ReturnType<typeof fetchRezeVmdIkPolicy>>());
   const v14dColorBaselineRef = useRef(v14dColorBaseline);
   const v14dFaceStaticRef = useRef(v14dFaceStatic);
+  const v14dFaceCameraFreeRef = useRef(false);
   // 黄金帧组件/材质门控（Face unlit graph、暗背景等）与诊断 ROI 门控分离：
   // 画面始终按票据纵切渲染；pick/HDR 诊断只在显式诊断模式下启用，避免
   // 远景可见构图的取样口径被锁定在近景脸部 ROI 上。
@@ -884,6 +885,17 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       cameraTargetZ: snapshot.target[2],
     };
     return captureRezeCameraSnapshot(engine);
+  };
+
+  const updateV14dFaceCameraDataset = (locked: boolean) => {
+    const canvas = canvasRef.current;
+    const snapshot = captureRezeCameraSnapshot(engineRef.current);
+    if (!canvas || !snapshot) return snapshot;
+    canvas.dataset[V14D_FACE_STATIC_DATASET.cameraLocked] = String(locked);
+    canvas.dataset[V14D_FACE_STATIC_DATASET.cameraFov] = String(snapshot.fov);
+    canvas.dataset[V14D_FACE_STATIC_DATASET.cameraPos] = snapshot.position.join(",");
+    canvas.dataset.v14dFaceCameraTarget = snapshot.target.join(",");
+    return snapshot;
   };
 
   const updateV14dColorBaselineDataset = (result: V14dColorBaselineResult) => {
@@ -1582,15 +1594,60 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
 
   useImperativeHandle(ref, () => ({
     unlockCamera: () => {
-      readRezeCamera(engineRef.current)?.setInputLocked(false);
-      return captureRezeCameraSnapshot(engineRef.current);
+      const engine = engineRef.current;
+      readRezeCamera(engine)?.setInputLocked(false);
+      if (v14dFaceStaticRef.current && engine) {
+        v14dFaceCameraFreeRef.current = true;
+        modelRef.current?.pause();
+        engine.runRenderLoop();
+        return updateV14dFaceCameraDataset(false);
+      }
+      return captureRezeCameraSnapshot(engine);
     },
     lockCamera: () => {
-      readRezeCamera(engineRef.current)?.setInputLocked(true);
-      return captureRezeCameraSnapshot(engineRef.current);
+      const engine = engineRef.current;
+      readRezeCamera(engine)?.setInputLocked(true);
+      if (v14dFaceStaticRef.current && engine) {
+        v14dFaceCameraFreeRef.current = false;
+        engine.stopRenderLoop();
+        modelRef.current?.pause();
+        engine.renderFrame(0);
+        return updateV14dFaceCameraDataset(true);
+      }
+      return captureRezeCameraSnapshot(engine);
     },
     captureCamera: () => captureRezeCameraSnapshot(engineRef.current),
+    setCameraSnapshot: (snapshot) => {
+      const applied = restorePersistedCamera(snapshot);
+      const engine = engineRef.current;
+      if (v14dFaceStaticRef.current && engine) {
+        readRezeCamera(engine)?.setInputLocked(!v14dFaceCameraFreeRef.current);
+        if (v14dFaceCameraFreeRef.current) engine.runRenderLoop();
+        else {
+          engine.stopRenderLoop();
+          modelRef.current?.pause();
+          engine.renderFrame(0);
+        }
+        return updateV14dFaceCameraDataset(!v14dFaceCameraFreeRef.current);
+      }
+      return applied;
+    },
     resetCamera: () => {
+      if (v14dFaceStaticRef.current) {
+        const snapshot = restorePersistedCamera(V14D_FACE_STATIC_CAMERA);
+        const engine = engineRef.current;
+        if (engine) {
+          readRezeCamera(engine)?.setInputLocked(!v14dFaceCameraFreeRef.current);
+          if (v14dFaceCameraFreeRef.current) engine.runRenderLoop();
+          else {
+            engine.stopRenderLoop();
+            modelRef.current?.pause();
+            engine.renderFrame(0);
+          }
+          updateV14dFaceCameraDataset(!v14dFaceCameraFreeRef.current);
+        }
+        return snapshot;
+      }
       applySceneSettings(DEFAULT_SETTINGS);
       return captureRezeCameraSnapshot(engineRef.current);
     },
@@ -1602,6 +1659,12 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         engine.setCameraDistance(cameraDistance);
       }
       settingsRef.current = { ...settingsRef.current, cameraDistance };
+      if (v14dFaceStaticRef.current && engine && !v14dFaceCameraFreeRef.current) {
+        engine.stopRenderLoop();
+        modelRef.current?.pause();
+        engine.renderFrame(0);
+        updateV14dFaceCameraDataset(true);
+      }
       return cameraDistance;
     },
     hitTestCharacterAtClientPoint: (clientX, clientY) => {
@@ -2092,6 +2155,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         engine.runRenderLoop();
       }
       if (v14dFaceStatic && canvasRef.current) {
+        v14dFaceCameraFreeRef.current = false;
         // 黄金帧诊断探针：暴露引擎相机实际值与模型世界包围盒，供采集脚本核对构图。
         const gfEngine = engineRef.current;
         const gfModel = modelRef.current;
@@ -2178,6 +2242,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     return () => {
       disposed = true;
       engineReadyRef.current = false;
+      v14dFaceCameraFreeRef.current = false;
       modelRef.current = null;
       // 黄金帧诊断探针：页面卸载/默认入口时清除，避免残留到生产路径。
       delete (window as unknown as { __rezeEngineProbe?: unknown }).__rezeEngineProbe;

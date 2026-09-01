@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { MMDStage } from "@/features/stage/MMDStage";
+import { MMDStage, type MMDStageHandle } from "@/features/stage/MMDStage";
 import {
   V14D_COLOR_BASELINE_CAMERA,
   V14D_COLOR_BASELINE_HEIGHT,
@@ -10,6 +10,7 @@ import {
 } from "@/features/stage/v14dColorBaseline";
 import {
   V14D_FACE_STATIC_CAMERA,
+  V14D_FACE_STATIC_FULL_BODY_CAMERA,
   V14D_FACE_STATIC_MODE_TEXTURE,
   V14D_FACE_STATIC_STATE,
   V14D_FACE_STATIC_BLEND,
@@ -336,9 +337,11 @@ function FaceStaticAssetPanel(props: {
 }
 
 export default function MmdCalibrationRenderPage() {
+  const stageRef = useRef<MMDStageHandle | null>(null);
   const [query, setQuery] = useState<CalibrationQuery | null>(null);
   const [faceStaticAssets, setFaceStaticAssets] = useState<FaceStaticAssetsState>({ status: "idle" });
   const [faceStaticMode, setFaceStaticMode] = useState<V14dFaceStaticMode>("finalFaceComposite");
+  const [faceCameraFree, setFaceCameraFree] = useState(false);
 
   useEffect(() => {
     const q = readCalibrationQuery();
@@ -367,8 +370,16 @@ export default function MmdCalibrationRenderPage() {
   }, []);
 
   useEffect(() => {
-    if (query) setFaceStaticMode(query.v14dFaceStaticMode);
+    if (query) {
+      setFaceStaticMode(query.v14dFaceStaticMode);
+      setFaceCameraFree(false);
+    }
   }, [query]);
+
+  useEffect(() => {
+    // 切换材质模式会重挂载固定帧舞台；新实例始终从权威截图机位锁定启动。
+    setFaceCameraFree(false);
+  }, [faceStaticMode]);
 
   useEffect(() => {
     const marker = { route: "mmd-calibration-render" };
@@ -446,8 +457,99 @@ export default function MmdCalibrationRenderPage() {
           {`V14D Static Golden Frame
 Frame ${V14D_FACE_STATIC_FRAME} · Face State ${V14D_FACE_STATIC_STATE} · Blend ${V14D_FACE_STATIC_BLEND.toFixed(2)}
 Mode ${faceStaticMode} · tex ${v14dFaceStaticTextureName(faceStaticMode)}
-Camera Locked · Animation Paused
+Camera ${faceCameraFree ? "Free" : "Locked"} · Animation Paused
 State2 实时脸部合成预览（face_d + State2 mask 实时公式）· 不代表完整 Blender 最终视觉`}
+        </div>
+      ) : null}
+
+      {query.v14dFaceStatic && faceStaticAssets.status === "ready" ? (
+        <div
+          data-testid="v14d-face-camera-controls"
+          style={{
+            position: "fixed",
+            right: 12,
+            top: 12,
+            zIndex: 11,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            width: 168,
+            maxWidth: "calc(100vw - 24px)",
+            padding: 8,
+            borderRadius: 10,
+            background: "rgba(0,0,0,0.68)",
+            color: "#fff",
+            font: "12px/1.4 sans-serif",
+          }}
+        >
+          <button
+            type="button"
+            data-testid="v14d-camera-free"
+            data-active={faceCameraFree ? "true" : "false"}
+            onClick={() => {
+              if (stageRef.current?.unlockCamera()) setFaceCameraFree(true);
+            }}
+            style={{
+              padding: "7px 11px",
+              borderRadius: 7,
+              border: "1px solid #536a96",
+              background: faceCameraFree ? "#2f6fed" : "#20242d",
+              color: "#fff",
+              cursor: "pointer",
+              width: "100%",
+            }}
+          >
+            自由相机
+          </button>
+          <button
+            type="button"
+            data-testid="v14d-camera-lock"
+            onClick={() => {
+              if (stageRef.current?.lockCamera()) setFaceCameraFree(false);
+            }}
+            style={{ padding: "7px 11px", borderRadius: 7, border: "1px solid #4a4d5c", background: "#20242d", color: "#fff", cursor: "pointer", width: "100%" }}
+          >
+            锁定相机
+          </button>
+          <button
+            type="button"
+            data-testid="v14d-camera-near"
+            onClick={() => stageRef.current?.adjustCameraDistance?.(-1.5)}
+            style={{ padding: "7px 11px", borderRadius: 7, border: "1px solid #4a4d5c", background: "#20242d", color: "#fff", cursor: "pointer", width: "100%" }}
+          >
+            拉近
+          </button>
+          <button
+            type="button"
+            data-testid="v14d-camera-far"
+            onClick={() => stageRef.current?.adjustCameraDistance?.(1.5)}
+            style={{ padding: "7px 11px", borderRadius: 7, border: "1px solid #4a4d5c", background: "#20242d", color: "#fff", cursor: "pointer", width: "100%" }}
+          >
+            拉远
+          </button>
+          <button
+            type="button"
+            data-testid="v14d-camera-full-body"
+            onClick={() => stageRef.current?.setCameraSnapshot?.(V14D_FACE_STATIC_FULL_BODY_CAMERA)}
+            style={{ padding: "7px 11px", borderRadius: 7, border: "1px solid #6280b8", background: "#26334a", color: "#fff", cursor: "pointer", width: "100%" }}
+          >
+            全身视角
+          </button>
+          <button
+            type="button"
+            data-testid="v14d-camera-reset"
+            onClick={() => {
+              stageRef.current?.resetCamera();
+              stageRef.current?.lockCamera();
+              setFaceCameraFree(false);
+            }}
+            style={{ padding: "7px 11px", borderRadius: 7, border: "1px solid #4a4d5c", background: "#20242d", color: "#fff", cursor: "pointer", width: "100%" }}
+          >
+            重置截图机位
+          </button>
+          <span style={{ color: "#c8ccd8", padding: "0 4px", textAlign: "center" }}>
+            自由相机后：拖动旋转 · 滚轮缩放
+          </span>
         </div>
       ) : null}
 
@@ -503,6 +605,7 @@ State2 实时脸部合成预览（face_d + State2 mask 实时公式）· 不代�
 
       {faceStaticReady ? (
         <MMDStage
+          ref={stageRef}
           key={query.v14dFaceStatic ? `face-static-${faceStaticMode}` : "calibration"}
           interaction={interaction}
           speaking={false}

@@ -78,6 +78,7 @@ export type MMDStageHandle = {
   unlockCamera: () => MmdCameraSnapshot | null;
   lockCamera: () => MmdCameraSnapshot | null;
   captureCamera: () => MmdCameraSnapshot | null;
+  setCameraSnapshot?: (snapshot: MmdCameraSnapshot) => MmdCameraSnapshot | null;
   resetCamera: () => MmdCameraSnapshot | null;
   adjustCameraDistance?: (delta: number) => MmdCameraSnapshot | number | null;
   hitTestCharacterAtClientPoint: (clientX: number, clientY: number) => boolean;
@@ -202,6 +203,9 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       },
       captureCamera() {
         return webGpuStageRef.current?.captureCamera?.() ?? runtimeRef.current?.getCameraSnapshot?.() ?? null;
+      },
+      setCameraSnapshot(snapshot: MmdCameraSnapshot) {
+        return webGpuStageRef.current?.setCameraSnapshot?.(snapshot) ?? runtimeRef.current?.setCameraSnapshot?.(snapshot) ?? null;
       },
       resetCamera() {
         return webGpuStageRef.current?.resetCamera?.() ?? runtimeRef.current?.resetCameraToDefault?.() ?? null;

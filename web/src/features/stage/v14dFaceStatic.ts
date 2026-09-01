@@ -242,6 +242,18 @@ export const V14D_FACE_STATIC_CAMERA: MmdCameraSnapshot = {
   locked: true,
 };
 
+/**
+ * 固定帧全身检查机位：保持权威相机的正面方向和垂直 FOV，把轨道中心下移到
+ * 角色中段并把距离扩到 38 PMX 单位，使约 y=0..18.5 的全身进入画面。
+ * 仅供 v14dFaceStatic 交互预览，不参与任何像素 Gate 或生产默认相机。
+ */
+export const V14D_FACE_STATIC_FULL_BODY_CAMERA: MmdCameraSnapshot = {
+  fov: V14D_FACE_STATIC_CAMERA.fov,
+  position: [0.564, 15.8, -38.66],
+  target: [0.564, 9.0, -1.26],
+  locked: true,
+};
+
 /** 画布 dataset 标记键名（供 capture 脚本与报告读取）。 */
 export const V14D_FACE_STATIC_DATASET = {
   enabled: "v14dFaceStatic",
