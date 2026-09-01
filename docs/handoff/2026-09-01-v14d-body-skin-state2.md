@@ -97,6 +97,64 @@ BodySkin 错绑 Face graph、错材质（graph 绑到 HairA）、body 组编译�
 Gate 退出码：可见区域全过 + 无遮挡 = 0（OK）；有区域被诚实标记 occluded = 3（checkpoint）；
 任一可见区域失败或 graph 证据不符 = 1（fail）。
 
+## 二次修正（同 failure family 最后一次修正，2026-09-02）
+
+主会话第二次验收仍驳回，修正以下四点。
+
+### P0-1 同 UV 逐像素区域参考（替代整图均值）
+
+初修四区域（neck/waist/leftHand/rightHand）共用一个整块 body_d×warm 全材质均值
+`bodyDMeanLinear` 冒充各区域参考，`blenderTris` 只加载未参与颜色参考。本修正改为
+每个正式 Web 像素带 triId+UV，在 body_d 同 UV 采样 × 身体 warm=[1,0.945,0.905] 得逐像素
+参考，逐区域聚合出 refLinear/refSamples/逐像素 MAE/P95。同 UV 参考后四区域 MAE 显著下降：
+neck 0.110→0.025，leftHand 0.017→0.042（绝对值仍低），rightHand 0.015→0.009。
+
+### P0-2 Face 五区域统一 schema
+
+Face 由「只有 samples/meanLinear」补齐为区域定义/有效 mask/coverage/同 UV 参考
+refLinear/refSamples/逐通道 MAE/P95/状态，参考口径为 face_d×Face warm=[1,0.935,0.89]
+基色×warm（不含脸部专用 State2 art/fringe）。
+
+### P0-3 标注图证据修正
+
+初修把 neck 近景 bbox 错叠到全身图（青色框落在大腿）。本修正全身图只对全身可见的左右手
+用 triId+pick 重建真实 mask 提轮廓绘制；neck/waist 在全身图不可见，改为文字标注
+"fullbody occluded / see closeup"。每张 closeup 在自身坐标系叠加真实 mask 轮廓+区域名+
+样本数+状态，新增 closeup-*-finalFaceComposite-annotated.png。补侧面全身 side-normal/
+side-finalFaceComposite.png。
+
+### P0-4 draw-call 级绑定证据与真实运行时负测
+
+`bodyApplied` 不再只读 getStyleGroups 配置。引擎新增 `exportBodySkinDrawBinding()`
+（读 modelInstances→drawCalls→styleGroups→graph.name/pipeline），dataset 暴露
+`v14dBodySkinDrawCalls`/`v14dBodySkinDrawOnComposite`；Gate 核对每个 BodySkin draw call
+实际 graph.name 与 pipeline 命中 "V14D Body Skin Composite"。负测改为真实浏览器运行时
+fault injection（URL 参数 `v14dBodyFault`=missing/wrongGraph/wrongMaterial，默认关闭），
+见 `web/scripts/gate-v14d-body-graph-runtime-negative.mjs`：漏绑/错 graph/错材质 HairA
+三种场景 Gate 均 exit 1，正确绑定 exit 0 且 drawOnComposite=1/1。
+`web/scripts/gate-v14d-body-graph-negative.mjs` 保留为静态辅助核对（不再作为正式负测），
+并改为基于 import.meta.url 解析路径（仓库根与 web/ 两种 cwd 均可运行）。
+
+### 二次修正验收结果
+
+| 验收项 | 结果 |
+| --- | --- |
+| 区域 neck（近景仰视，1853 样本，同 UV 参考） | MAE=[0.025,0.012,0.011] P95=0.096 通过（候选阈值 0.20） |
+| 区域 leftHand（全身视角，374 样本，同 UV 参考） | MAE=[0.042,0.023,0.018] P95=0.354 通过 |
+| 区域 rightHand（全身视角，191 样本，同 UV 参考） | MAE=[0.009,0.014,0.008] P95=0.386 通过 |
+| 区域 waist | **occluded**（frame120 叉腰姿势被长袖/手臂全角度遮挡，无可视样本，诚实 checkpoint） |
+| Face（551 样本，同 UV 参考） | meanLinear=[0.812,0.514,0.463] refLinear=[0.881,0.556,0.491] MAE=[0.069,0.042,0.028] P95=0.321 |
+| bodyApplied draw-call 核对 | v14dBodySkinGraph="V14D Body Skin Composite"，drawOnComposite=1/1 |
+| 真实运行时负测（missing/wrongGraph/wrongMaterial/none） | exit 1 / 1 / 1 / 0 |
+| gate-v14d-body-graph-negative.mjs（仓库根与 web/ 两种 cwd） | exit 0 / 0 |
+| patch-reze-engine --verify | exit 0（62 项） |
+| gate-v14d-state2-override-regression | exit 0（30 断言） |
+| probe-v14d-face-default / probe-v14d-vmd-runtime | exit 0 / 0 |
+| npm run build | exit 0 |
+| git diff --check | exit 0 |
+
+Gate 产物目录：.scratch/v14d-body-skin-state2/gate/（gate-report.json + shots/ 含 annotated、side、closeup 全套，本轮重新生成）。
+
 ## 视觉证据
 
 全身并排 .scratch/v14d-body-skin-state2/gate/shots/fullbody-side-by-side.png；近景并排 face-neck-closeup.png；四区域近景 closeup-{neck,waist,leftHand,rightHand}-{normal,composite}.png；Blender 身体参考 .scratch/v14d-body-skin-state2/ref/blender-ref-bodyskin-composite.png。

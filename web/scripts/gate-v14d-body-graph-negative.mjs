@@ -3,8 +3,11 @@
 // 直接核对 RezeWebGpuStage 的 bodyApplied 三层判定逻辑（编译期逻辑断言）。
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const SRC = path.resolve("src/features/stage/RezeWebGpuStage.tsx");
+// 基于脚本位置解析（仓库根/web 两种 cwd 均可运行）。
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SRC = path.resolve(HERE, "../src/features/stage/RezeWebGpuStage.tsx");
 const src = fs.readFileSync(SRC, "utf8");
 const fails = [];
 const ok = (cond, msg) => { if (cond) console.log("[ok] " + msg); else { fails.push(msg); console.error("[FAIL] " + msg); } };
@@ -34,4 +37,3 @@ ok(computeBodyApplied(true, [{ groupId: "v14d-body-skin-composite", ok: true }],
 
 if (fails.length) { console.error("===BODY-GRAPH-NEG-FAIL=== " + fails.length); process.exit(1); }
 console.log("===BODY-GRAPH-NEG-OK=== 真实 graph 绑定证据负测全部通过");
-

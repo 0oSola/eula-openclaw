@@ -143,6 +143,17 @@ declare global {
         rgb: Float32Array;
         mask: Uint8Array;
       } | null>;
+      /**
+       * Stage 2B-M3 修正轮（P0-4）：BodySkin 实际 draw-call 绑定证据（非 style-group 配置自证）。
+       * 从引擎 modelInstances 读 BodySkin 材质的每个 draw call 的 groupId、该组的 compiled
+       * pipeline 标识与 graph.name，证明 BodySkin 实际 draw call 走的是 V14D Body Skin Composite
+       * pipeline（不是仅配置了 style-group）。漏绑/错 graph/错材质时 groupId/pipeline/graphName 不符。
+       */
+      exportBodySkinDrawBinding: () => {
+        drawCalls: { materialName: string; groupId: string | null; hasPipeline: boolean; graphName: string | null }[];
+        /** BodySkin 全部 draw call 都绑定到 V14D Body Skin Composite graph 且有 compiled pipeline。 */
+        allBodySkinOnComposite: boolean;
+      } | null;
       /** Stage 2B-M3 修正轮：三角形语义区域（triId+uv per pixel、世界质心、区域标签）。 */
       exportMaterialTriRegions: (materialName: string) => Promise<{
         width: number;
@@ -1903,6 +1914,39 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           return null;
         }
       },
+      exportBodySkinDrawBinding: () => {
+        const engine = engineRef.current;
+        if (!engine) return null;
+        try {
+          // 引擎私有 draw-call 表（诊断只读）：modelInstances → drawCalls[] → groupId，
+          // groupId → styleGroups install → { pipeline, group.graph.name }。
+          const insts = (engine as unknown as { modelInstances?: Map<string, unknown> }).modelInstances;
+          if (!insts) return null;
+          const out: { materialName: string; groupId: string | null; hasPipeline: boolean; graphName: string | null }[] = [];
+          for (const inst of insts.values()) {
+            const drawCalls = (inst as { drawCalls?: { materialName: string; groupId: string | null; baseBindGroupEntries?: unknown }[] }).drawCalls;
+            const styleGroups = (inst as { styleGroups?: Map<string, { pipeline?: unknown; group?: { graph?: { name?: string } } }> }).styleGroups;
+            if (!drawCalls) continue;
+            for (const dc of drawCalls) {
+              if (!dc.baseBindGroupEntries) continue; // 跳过 outline/ground
+              const install = dc.groupId && styleGroups ? styleGroups.get(dc.groupId) : undefined;
+              out.push({
+                materialName: dc.materialName,
+                groupId: dc.groupId ?? null,
+                hasPipeline: !!(install && install.pipeline),
+                graphName: install?.group?.graph?.name ?? null,
+              });
+            }
+          }
+          const bodyCalls = out.filter((d) => d.materialName === V14D_BODY_MATERIAL_NAME);
+          const allBodySkinOnComposite =
+            bodyCalls.length > 0 &&
+            bodyCalls.every((d) => d.groupId === "v14d-body-skin-composite" && d.hasPipeline && d.graphName === "V14D Body Skin Composite");
+          return { drawCalls: out, allBodySkinOnComposite };
+        } catch {
+          return null;
+        }
+      },
     };
     // Stage 2B-M3 近景截图：允许采集脚本直接设相机（freeCamera 模式，保持 paused）。
     (window as unknown as { __v14dSetCamera?: (s: MmdCameraSnapshot) => void }).__v14dSetCamera = (s) => {
@@ -2395,12 +2439,34 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           },
         ];
         if (applyBodySkin) {
+          // P0-4 诊断 fault injection（默认关闭，仅 v14dBodyFault 查询参数显式开启）：
+          //  missing=漏绑 BodySkin 组；wrongGraph=BodySkin 绑到错误 graph 名；
+          //  wrongMaterial=把 BodySkin graph 绑到 HairA（错材质）。供运行时负测验证 Gate 检出。
+          const fault = new URLSearchParams(window.location.search).get("v14dBodyFault");
+          if (fault === "missing") {
+            // 漏绑：不 push BodySkin 组，BodySkin 保持原分组（已被 excluded 移除，进入 retained）。
+          } else if (fault === "wrongGraph") {
+            skinGroups.push({
+              id: "v14d-body-skin-composite",
+              label: "V14D Body Skin Composite",
+              materials: [V14D_BODY_MATERIAL_NAME],
+              graph: { ...V14D_BODY_LIVE_COMPOSITE_GRAPH, name: "V14D Face Live Composite" },
+            });
+          } else if (fault === "wrongMaterial") {
+            skinGroups.push({
+              id: "v14d-body-skin-composite",
+              label: "V14D Body Skin Composite",
+              materials: ["HairA"],
+              graph: V14D_BODY_LIVE_COMPOSITE_GRAPH,
+            });
+          } else {
           skinGroups.push({
             id: "v14d-body-skin-composite",
             label: "V14D Body Skin Composite",
             materials: [V14D_BODY_MATERIAL_NAME],
             graph: V14D_BODY_LIVE_COMPOSITE_GRAPH,
           });
+          }
         }
         const faceResult = await engine.applyStyleGroups("companion", skinGroups);
         if (canvasRef.current) {
@@ -2426,6 +2492,26 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             // 供 Gate 读取真实绑定证据（不是自证）：实际 graph 名 + 组诊断 ok。
             canvasRef.current.dataset.v14dBodySkinGraph = bodyGraphName ?? "";
             canvasRef.current.dataset.v14dBodySkinGroupOk = String(!!bodyGroupResult?.ok);
+            // P0-4：draw-call 级证据——BodySkin 的每个 draw call 实际 groupId/pipeline/graph。
+            try {
+              const insts = (engine as unknown as { modelInstances?: Map<string, unknown> }).modelInstances;
+              let bodyCalls = 0; let bodyOnComposite = 0;
+              if (insts) {
+                for (const inst of insts.values()) {
+                  const drawCalls = (inst as { drawCalls?: { materialName: string; groupId: string | null; baseBindGroupEntries?: unknown }[] }).drawCalls;
+                  const styleGroups = (inst as { styleGroups?: Map<string, { pipeline?: unknown; group?: { graph?: { name?: string } } }> }).styleGroups;
+                  if (!drawCalls) continue;
+                  for (const dc of drawCalls) {
+                    if (!dc.baseBindGroupEntries || dc.materialName !== V14D_BODY_MATERIAL_NAME) continue;
+                    bodyCalls += 1;
+                    const install = dc.groupId && styleGroups ? styleGroups.get(dc.groupId) : undefined;
+                    if (dc.groupId === "v14d-body-skin-composite" && install?.pipeline && install?.group?.graph?.name === "V14D Body Skin Composite") bodyOnComposite += 1;
+                  }
+                }
+              }
+              canvasRef.current.dataset.v14dBodySkinDrawCalls = String(bodyCalls);
+              canvasRef.current.dataset.v14dBodySkinDrawOnComposite = String(bodyOnComposite);
+            } catch { /* 保持既有状态 */ }
           }
         }
         if (!faceResult.ok) {

@@ -73,3 +73,24 @@ BodySkin UV）；按 Blender 权威取证，BodySkin 无离散阴影 mask，身�
 - 失败路线：某区域样本不足 → 诚实标记 occluded 并 exit 3（checkpoint），不得软通过；
   graph 绑定证据不符 → exit 1（fail）。
 
+## 二次修正（同 failure family 最后一次修正）
+
+### 同 UV 逐像素区域参考（替代整图均值）
+
+初修四区域参考曾用整块 body_d×warm 全材质均值 `bodyDMeanLinear` 冒充区域参考（违反
+验证承诺边界）。本修正改为每个正式 Web 像素带 triId+UV，在 body_d 同 UV 采样 × 身体
+warm=[1,0.945,0.905] 得到逐像素参考，逐区域聚合出 refLinear/refSamples/逐像素 MAE/P95；
+blenderTris 仅用于分区与质心定位，不再作为颜色参考。Face 补齐五区域统一 schema（区域定义/
+有效 mask/coverage/同 UV 参考 refLinear/refSamples/逐通道 MAE/P95/状态），参考口径为
+face_d×Face warm=[1,0.935,0.89] 基色×warm（不含脸部专用 State2 art/fringe）。waist 被遮挡时
+保持 samples=0/status=occluded/checkpoint，不软通过。
+
+### draw-call 级绑定证据与真实运行时负测
+
+`bodyApplied` 不再只读 getStyleGroups 配置。引擎新增
+`exportBodySkinDrawBinding()`（读 modelInstances→drawCalls→styleGroups→graph.name/pipeline），
+dataset 暴露 `v14dBodySkinDrawCalls`/`v14dBodySkinDrawOnComposite`；Gate 核对每个 BodySkin
+draw call 的实际 graph.name 与 pipeline 命中 "V14D Body Skin Composite"。负测改为真实浏览器
+运行时 fault injection（URL 参数 `v14dBodyFault`=missing/wrongGraph/wrongMaterial，默认关闭）：
+漏绑/错 graph/错材质 HairA 三种场景 Gate 均非零，正确绑定才为零。
+`web/scripts/gate-v14d-body-graph-negative.mjs` 保留为静态辅助核对（不再作为正式负测）。
