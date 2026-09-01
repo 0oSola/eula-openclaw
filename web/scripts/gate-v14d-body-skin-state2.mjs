@@ -606,8 +606,8 @@ try {
     overlays.push({ input: outlineSvg(pts, REGION_COLORS[id], id + " " + status, W, H), left: 0, top: 0 });
   }
   const noteSvg = Buffer.from("<svg width=\"640\" height=\"640\" xmlns=\"http://www.w3.org/2000/svg\">"
-    + "<text x=\"6\" y=\"600\" font-family=\"monospace\" font-size=\"13\" fill=\"#00e5ff\" stroke=\"#000\" stroke-width=\"0.5\">neck: fullbody occluded / see closeup</text>"
-    + "<text x=\"6\" y=\"618\" font-family=\"monospace\" font-size=\"13\" fill=\"#ffea00\" stroke=\"#000\" stroke-width=\"0.5\">waist: fullbody occluded / see closeup</text>"
+    + "<text x=\"6\" y=\"570\" font-family=\"monospace\" font-size=\"13\" fill=\"#00e5ff\" stroke=\"#000\" stroke-width=\"0.5\">neck: fullbody occluded / see closeup</text>"
+    + "<text x=\"6\" y=\"588\" font-family=\"monospace\" font-size=\"13\" fill=\"#ffea00\" stroke=\"#000\" stroke-width=\"0.5\">waist: fullbody occluded / see closeup</text>"
     + "</svg>");
   overlays.push({ input: noteSvg, left: 0, top: 0 });
   const annotated = await base.composite(overlays).png().toBuffer();
