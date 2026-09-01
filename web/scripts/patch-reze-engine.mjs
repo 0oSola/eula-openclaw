@@ -376,6 +376,11 @@ const STATE2_VERIFY_CHECKS = (() => {
   // 否则 WGSL 函数嵌套 → expected '}' for function body，Face graph 应用失败静默回退。
   { label: "src/graph/slots.ts helper 在 prelude 前注入", file: slotsSrc, marker: 'V14D_STATE2_HELPERS_WGSL : "") +' + "\n" + "    prelude(renderClass, alphaMode)" },
   { label: "dist/graph/slots.js helper 在 prelude 前注入", file: slotsDist, marker: 'V14D_STATE2_HELPERS_WGSL : "") +' + "\n" + "        prelude(renderClass, alphaMode)" },
+  // Stage 2B-M3 全身皮肤统一：身体合成 helper + BodySkin graph.name 覆写分支（src/dist 各自恰好一次）。
+  { label: "src/graph/slots.ts body skin helper", file: slotsSrc, marker: "fn v14d_skin_body_composite(base: vec3f)" },
+  { label: "dist/graph/slots.js body skin helper", file: slotsDist, marker: "fn v14d_skin_body_composite(base: vec3f)" },
+  { label: "src/graph/slots.ts body skin override 分支", file: slotsSrc, marker: 'graphName === "V14D Body Skin Composite"' },
+  { label: "dist/graph/slots.js body skin override 分支", file: slotsDist, marker: 'graphName === "V14D Body Skin Composite"' },
   ];
 })();
 
@@ -1003,9 +1008,9 @@ const state2Targets = [
 // slots.ts/compile.ts：v14d-state2-face graph 编译时注入 mask 纹理声明 + 合成 helper。
 // 常量来自权威 blend 取证（web/scripts/forensic-v14d-face-state2.py 输出 manifest）。
 const SLOTS_STATE2_ANCHOR = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`\n";
-const SLOTS_STATE2_REPLACEMENT = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`\n\n// V14D State2 实时合成（Stage 2B-M1）：extra mask 纹理声明 + 合成 helper。\n// 常量来自权威 blend 取证（web/scripts/forensic-v14d-face-state2.py 输出 manifest）：\n//   warm=[1,0.935,0.89], shadowTint=[0.66,0.58,0.60], fringeTint=[0.70,0.64,0.69]。\n// mask 纹理为 rgba8unorm（非 sRGB 解码视图），采样即线性值；仅在编译 tags 含\n// \"v14d-state2-face\" 的 graph 时注入，默认关闭。\nconst V14D_STATE2_MASK_DECL = `@group(2) @binding(5) var v14d_state2_mask: texture_2d<f32>;\n\n`;\n\nconst V14D_STATE2_HELPERS_WGSL = `fn v14d_state2_shadow_factor(mask: vec3f) -> vec3f {\n  let inv_b = 1.0 - mask.b;\n  let art = mix(vec3f(1.0, 1.0, 1.0), vec3f(0.66, 0.58, 0.60), mask.r * inv_b);\n  let fringe = mix(vec3f(1.0, 1.0, 1.0), vec3f(0.70, 0.64, 0.69), mask.g * inv_b);\n  return art * fringe;\n}\n\nfn v14d_state2_composite(base: vec3f, mask: vec3f) -> vec3f {\n  let warm = base * vec3f(1.0, 0.935, 0.89);\n  return warm * v14d_state2_shadow_factor(mask);\n}\n\n`;\n";
 const SLOTS_STATE2_DIST_ANCHOR = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`;\n";
-const SLOTS_STATE2_DIST_REPLACEMENT = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`;\n// V14D State2 实时合成（Stage 2B-M1）：extra mask 纹理声明 + 合成 helper。\n// 常量来自权威 blend 取证（web/scripts/forensic-v14d-face-state2.py 输出 manifest）：\n//   warm=[1,0.935,0.89], shadowTint=[0.66,0.58,0.60], fringeTint=[0.70,0.64,0.69]。\n// mask 纹理为 rgba8unorm（非 sRGB 解码视图），采样即线性值；仅在编译 tags 含\n// \"v14d-state2-face\" 的 graph 时注入，默认关闭。\nconst V14D_STATE2_MASK_DECL = `@group(2) @binding(5) var v14d_state2_mask: texture_2d<f32>;\n\n`;\n\nconst V14D_STATE2_HELPERS_WGSL = `fn v14d_state2_shadow_factor(mask: vec3f) -> vec3f {\n  let inv_b = 1.0 - mask.b;\n  let art = mix(vec3f(1.0, 1.0, 1.0), vec3f(0.66, 0.58, 0.60), mask.r * inv_b);\n  let fringe = mix(vec3f(1.0, 1.0, 1.0), vec3f(0.70, 0.64, 0.69), mask.g * inv_b);\n  return art * fringe;\n}\n\nfn v14d_state2_composite(base: vec3f, mask: vec3f) -> vec3f {\n  let warm = base * vec3f(1.0, 0.935, 0.89);\n  return warm * v14d_state2_shadow_factor(mask);\n}\n\n`;\n";
+const SLOTS_STATE2_REPLACEMENT = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`\n\n// V14D State2 实时合成（Stage 2B-M1）：extra mask 纹理声明 + 合成 helper。\n// 常量来自权威 blend 取证（web/scripts/forensic-v14d-face-state2.py 输出 manifest）：\n//   warm=[1,0.935,0.89], shadowTint=[0.66,0.58,0.60], fringeTint=[0.70,0.64,0.69]。\n// mask 纹理为 rgba8unorm（非 sRGB 解码视图），采样即线性值；仅在编译 tags 含\n// \"v14d-state2-face\" 的 graph 时注入，默认关闭；Stage 2B-M3 起 body graph 也按 graph.name 注入。\nconst V14D_STATE2_MASK_DECL = `@group(2) @binding(5) var v14d_state2_mask: texture_2d<f32>;\n\n`;\n\nconst V14D_STATE2_HELPERS_WGSL = `fn v14d_state2_shadow_factor(mask: vec3f) -> vec3f {\n  let inv_b = 1.0 - mask.b;\n  let art = mix(vec3f(1.0, 1.0, 1.0), vec3f(0.66, 0.58, 0.60), mask.r * inv_b);\n  let fringe = mix(vec3f(1.0, 1.0, 1.0), vec3f(0.70, 0.64, 0.69), mask.g * inv_b);\n  return art * fringe;\n}\n\nfn v14d_state2_composite(base: vec3f, mask: vec3f) -> vec3f {\n  let warm = base * vec3f(1.0, 0.935, 0.89);\n  return warm * v14d_state2_shadow_factor(mask);\n}\n\nfn v14d_skin_body_composite(base: vec3f) -> vec3f {\n  return base * vec3f(1.0, 0.945, 0.905);\n}\n\n\n\n`;\n";
+const SLOTS_STATE2_DIST_REPLACEMENT = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`;\n// V14D State2 实时合成（Stage 2B-M1）：extra mask 纹理声明 + 合成 helper。\n// 常量来自权威 blend 取证（web/scripts/forensic-v14d-face-state2.py 输出 manifest）：\n//   warm=[1,0.935,0.89], shadowTint=[0.66,0.58,0.60], fringeTint=[0.70,0.64,0.69]。\n// mask 纹理为 rgba8unorm（非 sRGB 解码视图），采样即线性值；仅在编译 tags 含\n// \"v14d-state2-face\" 的 graph 时注入，默认关闭；Stage 2B-M3 起 body graph 也按 graph.name 注入。\nconst V14D_STATE2_MASK_DECL = `@group(2) @binding(5) var v14d_state2_mask: texture_2d<f32>;\n\n`;\n\nconst V14D_STATE2_HELPERS_WGSL = `fn v14d_state2_shadow_factor(mask: vec3f) -> vec3f {\n  let inv_b = 1.0 - mask.b;\n  let art = mix(vec3f(1.0, 1.0, 1.0), vec3f(0.66, 0.58, 0.60), mask.r * inv_b);\n  let fringe = mix(vec3f(1.0, 1.0, 1.0), vec3f(0.70, 0.64, 0.69), mask.g * inv_b);\n  return art * fringe;\n}\n\nfn v14d_state2_composite(base: vec3f, mask: vec3f) -> vec3f {\n  let warm = base * vec3f(1.0, 0.935, 0.89);\n  return warm * v14d_state2_shadow_factor(mask);\n}\n\nfn v14d_skin_body_composite(base: vec3f) -> vec3f {\n  return base * vec3f(1.0, 0.945, 0.905);\n}\n\n\n\n`;\n";
 const SLOTS_ASSEMBLE_SRC_ANCHOR = "export function assembleModule(\n  renderClass: RenderClass,\n  alphaMode: AlphaMode,\n  fsBody: string,\n  includeStyleUniforms: boolean,\n): string {\n  return (\n    NODES_WGSL +\n    COMMON_MATERIAL_PRELUDE_WGSL +\n    (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n    decls(renderClass, alphaMode) +\n    prelude(renderClass, alphaMode) +\n    fsBody +\n    \"\\n\" +\n    epilogue(renderClass, alphaMode) +\n    \"}\\n\"\n  )\n}";
 const SLOTS_ASSEMBLE_SRC_REPLACEMENT = "export function assembleModule(\n  renderClass: RenderClass,\n  alphaMode: AlphaMode,\n  fsBody: string,\n  includeStyleUniforms: boolean,\n  includeState2Mask = false,\n): string {\n  return (\n    NODES_WGSL +\n    COMMON_MATERIAL_PRELUDE_WGSL +\n    (includeState2Mask ? V14D_STATE2_MASK_DECL : \"\") +\n    (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n    decls(renderClass, alphaMode) +\n    (includeState2Mask ? V14D_STATE2_HELPERS_WGSL : \"\") +\n    prelude(renderClass, alphaMode) +\n    fsBody +\n    \"\\n\" +\n    epilogue(renderClass, alphaMode) +\n    \"}\\n\"\n  )\n}";
 const SLOTS_ASSEMBLE_DIST_ANCHOR = "export function assembleModule(renderClass, alphaMode, fsBody, includeStyleUniforms) {\n    return (NODES_WGSL +\n        COMMON_MATERIAL_PRELUDE_WGSL +\n        (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n        decls(renderClass, alphaMode) +\n        prelude(renderClass, alphaMode) +\n        fsBody +\n        \"\\n\" +\n        epilogue(renderClass, alphaMode) +\n        \"}\\n\");\n}";
@@ -1020,13 +1025,15 @@ const COMPILE_ASSEMBLE_DIST_REPLACEMENT = "    const wgsl = assembleModule(opts.
 const STATE2_OVERRIDE_SRC = [
   "// V14D_STATE2_OVERRIDE_FIX_BEGIN",
   "export function v14dState2OverrideFsBodyFixed(graphName: string, fsBody: string): string {",
-  "  if (graphName !== \"V14D Face State2 Live ShadowFactor\" && graphName !== \"V14D Face State2 Live Composite\") return fsBody",
+  "  const isFaceLive = graphName === \"V14D Face State2 Live ShadowFactor\" || graphName === \"V14D Face State2 Live Composite\"",
+  "  const isBodySkin = graphName === \"V14D Body Skin Composite\"",
+  "  if (!isFaceLive && !isBodySkin) return fsBody",
   "  const lines = fsBody.split(\"\\n\")",
   "  const finalIndex = lines.findIndex((line) => /\\blet final_color\\s*=/.test(line))",
   "  if (finalIndex < 0) return fsBody",
   "  const tag = lines[finalIndex].match(/\\s+(\\/\\/.*)$/)?.[1] ?? \"\"",
   "  const mask = \"textureSample(v14d_state2_mask, diffuseSampler, input.uv).rgb\"",
-  "  const expr = graphName === \"V14D Face State2 Live ShadowFactor\" ? \"v14d_state2_shadow_factor(\" + mask + \")\" : \"v14d_state2_composite(tex_color, \" + mask + \")\"",
+  "  const expr = isBodySkin ? \"v14d_skin_body_composite(tex_color)\" : (graphName === \"V14D Face State2 Live ShadowFactor\" ? \"v14d_state2_shadow_factor(\" + mask + \")\" : \"v14d_state2_composite(tex_color, \" + mask + \")\")",
   "  lines[finalIndex] = \"  let final_color = \" + expr + \";\" + tag",
   "  return lines.join(\"\\n\")",
   "}",
@@ -1035,13 +1042,15 @@ const STATE2_OVERRIDE_SRC = [
 const STATE2_OVERRIDE_DIST = [
   "// V14D_STATE2_OVERRIDE_FIX_BEGIN",
   "export function v14dState2OverrideFsBodyFixed(graphName, fsBody) {",
-  "    if (graphName !== \"V14D Face State2 Live ShadowFactor\" && graphName !== \"V14D Face State2 Live Composite\") return fsBody;",
+  "    const isFaceLive = graphName === \"V14D Face State2 Live ShadowFactor\" || graphName === \"V14D Face State2 Live Composite\";",
+  "    const isBodySkin = graphName === \"V14D Body Skin Composite\";",
+  "    if (!isFaceLive && !isBodySkin) return fsBody;",
   "    const lines = fsBody.split(String.fromCharCode(10));",
   "    const finalIndex = lines.findIndex((line) => /\\blet final_color\\s*=/.test(line));",
   "    if (finalIndex < 0) return fsBody;",
   "    const tag = lines[finalIndex].match(/\\s+(\\/\\/.*)$/)?.[1] ?? \"\";",
   "    const mask = \"textureSample(v14d_state2_mask, diffuseSampler, input.uv).rgb\";",
-  "    const expr = graphName === \"V14D Face State2 Live ShadowFactor\" ? \"v14d_state2_shadow_factor(\" + mask + \")\" : \"v14d_state2_composite(tex_color, \" + mask + \")\";",
+  "    const expr = isBodySkin ? \"v14d_skin_body_composite(tex_color)\" : (graphName === \"V14D Face State2 Live ShadowFactor\" ? \"v14d_state2_shadow_factor(\" + mask + \")\" : \"v14d_state2_composite(tex_color, \" + mask + \")\");",
   "    lines[finalIndex] = \"  let final_color = \" + expr + \";\" + tag;",
   "    return lines.join(String.fromCharCode(10));",
   "}",
@@ -1068,10 +1077,15 @@ const COMPILE_STATE2_SRC_A_ANCHOR = [
   "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)",
   "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current)",
 ].join("\n");
-const COMPILE_STATE2_SRC_FINAL = [
+const COMPILE_STATE2_SRC_A_STATE2_ANCHOR = [
   "  const fsBody = lines.join(\"\\n\")",
   "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)",
   "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, graph.tags?.includes(\"v14d-state2-face\") ?? false)",
+].join("\n");
+const COMPILE_STATE2_SRC_FINAL = [
+  "  const fsBody = lines.join(\"\\n\")",
+  "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)",
+  "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\")"
 ].join("\n");
 const COMPILE_STATE2_DIST_FRESH_ANCHOR = [
   "    const fsBody = lines.join(\"\\n\");",
@@ -1086,10 +1100,15 @@ const COMPILE_STATE2_DIST_A_ANCHOR = [
   "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody);",
   "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current);",
 ].join("\n");
-const COMPILE_STATE2_DIST_FINAL = [
+const COMPILE_STATE2_DIST_A_STATE2_ANCHOR = [
   "    const fsBody = lines.join(\"\\n\");",
   "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody);",
   "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, graph.tags?.includes(\"v14d-state2-face\") ?? false);",
+].join("\n");
+const COMPILE_STATE2_DIST_FINAL = [
+  "    const fsBody = lines.join(\"\\n\");",
+  "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody);",
+  "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\");"
 ].join("\n");
 
 const BASE_BIND_ENTRIES_SRC_ANCHOR = [
@@ -1179,14 +1198,14 @@ const state2CompletenessTargets = [
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "compile.ts"),
-    anchors: [COMPILE_STATE2_SRC_FRESH_ANCHOR, COMPILE_STATE2_SRC_STATE2_ANCHOR, COMPILE_STATE2_SRC_A_ANCHOR],
+    anchors: [COMPILE_STATE2_SRC_FRESH_ANCHOR, COMPILE_STATE2_SRC_STATE2_ANCHOR, COMPILE_STATE2_SRC_A_ANCHOR, COMPILE_STATE2_SRC_A_STATE2_ANCHOR],
     replacement: COMPILE_STATE2_SRC_FINAL,
     doneMarker: COMPILE_STATE2_SRC_FINAL,
     label: "src/graph/compile.ts state2 override + tag 门控接线",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js"),
-    anchors: [COMPILE_STATE2_DIST_FRESH_ANCHOR, COMPILE_STATE2_DIST_STATE2_ANCHOR, COMPILE_STATE2_DIST_A_ANCHOR],
+    anchors: [COMPILE_STATE2_DIST_FRESH_ANCHOR, COMPILE_STATE2_DIST_STATE2_ANCHOR, COMPILE_STATE2_DIST_A_ANCHOR, COMPILE_STATE2_DIST_A_STATE2_ANCHOR],
     replacement: COMPILE_STATE2_DIST_FINAL,
     doneMarker: COMPILE_STATE2_DIST_FINAL,
     label: "dist/graph/compile.js state2 override + tag 门控接线",

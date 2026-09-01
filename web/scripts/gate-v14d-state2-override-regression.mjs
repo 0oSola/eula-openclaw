@@ -55,7 +55,15 @@ if (fenceBody.length > 0) {
   const noTag = "  let final_color = n_warm;";
   const shadow2 = impl("V14D Face State2 Live ShadowFactor", noTag);
   ok(shadow2.indexOf("let final_color = v14d_state2_shadow_factor(") >= 0, "断点A3 边界：无 @node 注释行也能覆写");
+  // Stage 2B-M3：BodySkin 合成分支（按 graph.name 精确覆写为 v14d_skin_body_composite）。
+  const body = impl("V14D Body Skin Composite", realFsBody);
+  ok(body.indexOf("let final_color = v14d_skin_body_composite(") >= 0, "断点A4 BodySkin final_color 调 v14d_skin_body_composite；末行=" + JSON.stringify(body.split(String.fromCharCode(10)).pop()));
 }
+
+// 断点 A5：src/dist slots 均含 BodySkin 合成 helper（Blender 取证 warm=[1,0.945,0.905]）。
+ok(slots.indexOf("fn v14d_skin_body_composite(base: vec3f)") >= 0, "断点A5 dist slots.js 含 v14d_skin_body_composite helper");
+ok(slotsSrc.indexOf("fn v14d_skin_body_composite(base: vec3f)") >= 0, "断点A5 src slots.ts 含 v14d_skin_body_composite helper");
+ok(slots.indexOf("vec3f(1.0, 0.945, 0.905)") >= 0 && slotsSrc.indexOf("vec3f(1.0, 0.945, 0.905)") >= 0, "断点A5 body warm=[1,0.945,0.905] 与 Blender 取证一致");
 
 // 断点 B1：setup 把 __auxMaskView 写入 baseBindGroupEntries (binding 5)
 const bIdx = engine.indexOf("baseBindGroupEntries = [");

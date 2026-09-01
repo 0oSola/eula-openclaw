@@ -49,6 +49,32 @@ export const V14D_FACE_STATIC_BLEND = 0;
 export const V14D_FACE_MATERIAL_NAME = "Face";
 /** 权威脸部 diffuse 纹理文件名（原始 BaseColor），normal 模式直接用它。 */
 export const V14D_FACE_BASE_TEXTURE_NAME = "c_Koleda_slg_face_d.png";
+/**
+ * Stage 2B-M3 全身皮肤统一：Blender 权威 blend 取证的 BodySkin 材质事实
+ * （web/scripts/forensic-v14d-bodyskin-state2.py 输出 manifest，sha 见交付报告）。
+ *
+ * BodySkin 在 Blender 的 Surface 链（唯一扩散纹理 = body_d.png，sRGB，无离散阴影 mask）：
+ *   body_d(sRGB→linear) ──► PROTO_FaceWarm(MULTIPLY × warm=[1,0.945,0.905])
+ *       ──► 原理化 BSDF BaseColor + Emission(strength 0.04)
+ *   Toon 分支（PROTO_ToonMix，Factor=1.0 恒取 emission 输入）：
+ *       warm × ToonRamp(ShaderToRGB(Diffuse)) ──► Emission ──► AlphaMix
+ * 关键取证结论：
+ *   - BodySkin 的 warm 常量 = [1, 0.945, 0.905]，与 Face 的 [1, 0.935, 0.89] **不同**，
+ *     禁止复用 Face 常量；两者属同一 V14D skin material family（同节点名/同乘法结构）。
+ *   - BodySkin **没有**任何离散阴影 mask（hasDiscreteShadowMask=false），
+ *     脸部专用 State2 packed mask 禁止按票据直接套到 BodySkin UV。
+ *   - 本票身体分支按真实证据实现为「body_d 线性 × 身体 warm」直出，
+ *     与脸部 finalFaceComposite（face_d × warm × shadowFactor(mask)）同族同口径：
+ *     一致的线性色彩处理、暖肤 tint 乘法结构与显示变换；mask 项仅脸部专用。
+ *   - 手指/手背皮肤、脖子、腰/腹部露肤均由同一 BodySkin 材质承载
+ *     （材质 manifest 中仅 BodySkin 与 FingerNails 使用 body 纹理族；FingerNails
+ *     用独立 body_zhijia01_da.png 美甲纹理，不属于皮肤，不纳入）。
+ */
+export const V14D_BODY_MATERIAL_NAME = "BodySkin";
+/** 权威身体皮肤 diffuse 纹理文件名（原始 BaseColor，body_d.png）。 */
+export const V14D_BODY_BASE_TEXTURE_NAME = "body_d.png";
+/** Blender 取证：BodySkin PROTO_FaceWarm Color2（暖肤 tint，线性乘法）。 */
+export const V14D_BODY_WARM = [1.0, 0.945, 0.905] as const;
 /** State2 packed mask 注入逻辑键（唯一，不顶替原始纹理；引擎补丁五按此前缀建立实时 mask 纹理）。 */
 export const V14D_STATE2_MASK_LOGICAL_PATH = "Textures/v14d-state2-mask/state2.png";
 /** 实时合成模式：faceShadowOnly=ShadowFactor 视图，finalFaceComposite=FinalComposite 视图。 */
@@ -268,6 +294,8 @@ export const V14D_FACE_STATIC_DATASET = {
   texture: "v14dFaceStaticTexture",
   faceMaterialApplied: "v14dFaceStaticFaceApplied",
   faceMaterialIndex: "v14dFaceStaticFaceIndex",
+  /** Stage 2B-M3：BodySkin 是否绑定身体暖肤合成 graph（"true"/"false"）。 */
+  bodyMaterialApplied: "v14dBodySkinApplied",
   authority: "v14dFaceStaticAuthority",
 } as const;
 
@@ -288,6 +316,9 @@ export function v14dFaceStaticFacePickId(
   }
   return null;
 }
+
+/** 按材质名推导 pick ID（同 v14dFaceStaticFacePickId 口径；用于 BodySkin 等非 Face 材质）。 */
+export const v14dFaceStaticMaterialPickId = v14dFaceStaticFacePickId;
 
 /**
  * faceStatic 资产注入（引擎 files 变体完全局部解析，不全局包装 fetch、无网络 404）。

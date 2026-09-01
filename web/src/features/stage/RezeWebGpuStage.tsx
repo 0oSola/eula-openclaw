@@ -82,6 +82,9 @@ import {
   v14dFaceStaticFacePickId,
   v14dFaceStaticTextureName,
   v14dFaceCameraWithOverride,
+  v14dFaceStaticMaterialPickId,
+  V14D_BODY_MATERIAL_NAME,
+  V14D_BODY_WARM,
   V14D_STATE2_MASK_LOGICAL_PATH,
   type V14dFaceStaticAssetSource,
   type V14dFaceStaticMode,
@@ -128,6 +131,15 @@ declare global {
       } | null>;
       /** 逐像素导出任一 Face 材质名对应的 pick mask（供 Gate 划分保持性子区）。 */
       exportMaterialMaskByName: (materialName: string) => Promise<Uint8Array | null>;
+      /** Stage 2B-M3：按材质名导出 pre-tonemap HDR 线性 RGB + 材质 pick mask（BodySkin ROI 对账）。 */
+      exportMaterialHdrFloat: (materialName: string) => Promise<{
+        width: number;
+        height: number;
+        materialName: string;
+        pickId: number;
+        rgb: Float32Array;
+        mask: Uint8Array;
+      } | null>;
       /** 逐像素导出 Face 三角形 ID + 插值 UV（Stage 2B-M2 同口径对账，诊断专用）。 */
       exportFaceTriUv: () => Promise<{
         width: number;
@@ -166,6 +178,19 @@ export type V14dFaceStaticCapture = {
   /** 脸部 ROI (Face 材质 ID + 模型覆盖 + 深度前景) 的显示 sRGB 与线性均值。 */
   meanSrgb: [number, number, number] | null;
   meanLinear: [number, number, number] | null;
+  /**
+   * Stage 2B-M3：全身皮肤 ROI（Face + BodySkin）逐材质线性均值。
+   * 每个 key=PMX 材质名（"Face"/"BodySkin"），值含 pickId/样本数/显示 sRGB 均值/
+   * 线性均值与归一化屏幕 bbox（供身体四个近景 ROI 定位）。
+   */
+  skinRoi?: Record<string, {
+    pickId: number;
+    samples: number;
+    meanSrgb: [number, number, number];
+    meanLinear: [number, number, number];
+    /** 该材质可见像素的归一化 bbox [x,y,w,h]（0..1）。 */
+    bboxNorm: [number, number, number, number];
+  }>;
   error?: string;
 };
 
@@ -353,6 +378,25 @@ const V14D_FACE_LIVE_COMPOSITE_GRAPH: ShaderGraph = {
   tags: ["diagnostic", "v14d", "face-static", "v14d-state2-face"],
   nodes: [
     { id: "warm", type: "rgb", inputs: { color: [1.0, 0.935, 0.89] } },
+  ],
+  links: [],
+  output: { node: "warm", socket: "color" },
+};
+
+/**
+ * Stage 2B-M3 全身皮肤统一：BodySkin 实时合成图。
+ *
+ * Blender 权威取证（forensic-v14d-bodyskin-state2.py）：BodySkin 无离散阴影 mask，
+ * 身体是「body_d 线性 × warm=[1,0.945,0.905]」直出（与 Face 同 skin family、
+ * 同乘法暖肤结构、同线性口径，但不套脸部 State2 mask）。最终输出由引擎补丁按
+ * graph.name 覆写为 v14d_skin_body_composite(tex_color)。warm rgb 节点仅编译占位。
+ */
+const V14D_BODY_LIVE_COMPOSITE_GRAPH: ShaderGraph = {
+  version: 1,
+  name: "V14D Body Skin Composite",
+  tags: ["diagnostic", "v14d", "face-static"],
+  nodes: [
+    { id: "warm", type: "rgb", inputs: { color: [V14D_BODY_WARM[0], V14D_BODY_WARM[1], V14D_BODY_WARM[2]] } },
   ],
   links: [],
   output: { node: "warm", socket: "color" },
@@ -1282,6 +1326,44 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         base.meanLinear = [linearSum[0] / faceSamples, linearSum[1] / faceSamples, linearSum[2] / faceSamples];
       }
       base.roi = { px: [x0, y0, x1 - x0 + 1, y1 - y0 + 1], samples, faceSamples };
+      // Stage 2B-M3：全身皮肤 ROI（Face + BodySkin）逐材质统计，含 bbox 供近景定位。
+      // 与上方 Face ROI 同一 materialMask/display 口径，只按材质 pick id 分组。
+      {
+        const materials = model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount }));
+        const skinTargets = [V14D_FACE_MATERIAL_NAME, V14D_BODY_MATERIAL_NAME];
+        const skinRoi: NonNullable<V14dFaceStaticCapture["skinRoi"]> = {};
+        for (const name of skinTargets) {
+          const pickId = v14dFaceStaticMaterialPickId(materials, name);
+          if (pickId === null) continue;
+          let n = 0;
+          const sSum = [0, 0, 0];
+          const lSum = [0, 0, 0];
+          let minX = V14D_FACE_STATIC_SIZE, minY = V14D_FACE_STATIC_SIZE, maxX = -1, maxY = -1;
+          for (let y = 0; y < V14D_FACE_STATIC_SIZE; y += 1) {
+            for (let x = 0; x < V14D_FACE_STATIC_SIZE; x += 1) {
+              const off = (y * V14D_FACE_STATIC_SIZE + x) * 4;
+              if (materialMask.data[off] === 0 || materialMask.data[off + 1] !== pickId) continue;
+              n += 1;
+              const r = display.data[off], g = display.data[off + 1], b = display.data[off + 2];
+              sSum[0] += r; sSum[1] += g; sSum[2] += b;
+              lSum[0] += srgbToLinear(r); lSum[1] += srgbToLinear(g); lSum[2] += srgbToLinear(b);
+              if (x < minX) minX = x; if (x > maxX) maxX = x;
+              if (y < minY) minY = y; if (y > maxY) maxY = y;
+            }
+          }
+          if (n > 0) {
+            skinRoi[name] = {
+              pickId,
+              samples: n,
+              meanSrgb: [sSum[0] / n, sSum[1] / n, sSum[2] / n],
+              meanLinear: [lSum[0] / n, lSum[1] / n, lSum[2] / n],
+              bboxNorm: [minX / V14D_FACE_STATIC_SIZE, minY / V14D_FACE_STATIC_SIZE,
+                (maxX - minX + 1) / V14D_FACE_STATIC_SIZE, (maxY - minY + 1) / V14D_FACE_STATIC_SIZE],
+            };
+          }
+        }
+        if (Object.keys(skinRoi).length > 0) base.skinRoi = skinRoi;
+      }
       return base;
     } catch (error) {
       return { ...base, error: error instanceof Error ? error.message : String(error) };
@@ -1464,6 +1546,51 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   };
 
   /**
+   * Stage 2B-M3：按材质名导出该材质的 pre-tonemap HDR 线性 RGB（Float32Array）+ 材质 pick mask。
+   * 与 exportV14dFaceHdrFloat 同一 HDR resolve 口径，只把 Face pick 换成任意材质 pick，
+   * 供 BodySkin ROI Gate 用「同一线性口径」与 Blender 身体参考对账。
+   */
+  const exportV14dMaterialHdrFloat = async (materialName: string): Promise<{
+    width: number;
+    height: number;
+    materialName: string;
+    pickId: number;
+    rgb: Float32Array;
+    mask: Uint8Array;
+  } | null> => {
+    try {
+      const engine = engineRef.current;
+      const model = modelRef.current;
+      if (!engine || !model) return null;
+      if (engine) await flushV14dDiagnosticBarrier(engine);
+      const materials = model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount }));
+      const pickId = v14dFaceStaticMaterialPickId(materials, materialName);
+      if (pickId === null) return null;
+      const size = V14D_FACE_STATIC_SIZE;
+      const [resolve, materialMask] = await Promise.all([
+        readV14dColorBaselineResolveTargets(engine, size, size),
+        readV14dColorBaselineMaterialMask(engine, size, size),
+      ]);
+      const hdr = resolve.hdr.data;
+      const rgb = new Float32Array(size * size * 3);
+      const mask = new Uint8Array(size * size);
+      for (let i = 0; i < size * size; i += 1) {
+        const off = i * 4;
+        const hit = materialMask.data[off] !== 0 && materialMask.data[off + 1] === pickId;
+        mask[i] = hit ? 1 : 0;
+        if (hit) {
+          rgb[i * 3] = hdr[off];
+          rgb[i * 3 + 1] = hdr[off + 1];
+          rgb[i * 3 + 2] = hdr[off + 2];
+        }
+      }
+      return { width: size, height: size, materialName, pickId, rgb, mask };
+    } catch {
+      return null;
+    }
+  };
+
+  /**
    * 导出当前 faceStatic 模式 Face 材质的最终显示字节（canvas sRGB 8-bit，已过
    * composite 显示变换）逐像素 RGB 与 Face mask。display-passthrough 下这些字节
    * 应与注入的显示域纹理字节一致——这是 G1 色块真绑定与 G4 AgX 显示字节闭环的
@@ -1584,9 +1711,22 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       exportFaceDisplayCapture: () => exportV14dFaceDisplayCapture(),
       exportMaterialMaskByName: (name: string) => exportV14dMaterialMaskByName(name),
       exportFaceTriUv: () => exportV14dFaceTriUv(),
+      exportMaterialHdrFloat: (name: string) => exportV14dMaterialHdrFloat(name),
+    };
+    // Stage 2B-M3 近景截图：允许采集脚本直接设相机（freeCamera 模式，保持 paused）。
+    (window as unknown as { __v14dSetCamera?: (s: MmdCameraSnapshot) => void }).__v14dSetCamera = (s) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      v14dFaceCameraFreeRef.current = true;
+      restorePersistedCamera(s);
+      readRezeCamera(engine)?.setInputLocked(false);
+      modelRef.current?.pause();
+      engine.runRenderLoop();
+      updateV14dFaceCameraDataset(false);
     };
     return () => {
       if (window.__v14dFaceStatic) delete window.__v14dFaceStatic;
+      delete (window as unknown as { __v14dSetCamera?: unknown }).__v14dSetCamera;
     };
     // captureV14dFaceStatic 读取最新 ref/mode，稳定引用即可。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2035,8 +2175,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             console.warn("[v14d-face-static] bakedGolden graph 应用失败", bakedResult);
           }
         } else {
-        // 实时合成模式（Stage 2B-M1）：Face 套实时 graph（引擎按 graph.name 覆写输出
-        // 为 mask 公式），normal/uvDebug 保持既有单纹理/UV 输出。
+        // 实时合成模式（Stage 2B-M1/M3）：Face 套实时 graph（引擎按 graph.name 覆写输出
+        // 为 mask 公式）；finalFaceComposite 额外把 BodySkin 切到身体暖肤合成 graph
+        // （Stage 2B-M3 全身皮肤统一：脖子/腰/双手与脸同一 V14D skin family 口径）。
+        // normal/uvDebug 保持既有单纹理/UV 输出（normal 是 A/B 基线，BodySkin 不动）。
         const faceGraph =
           v14dFaceStaticMode === "uvDebug"
             ? V14D_FACE_UV_DEBUG_GRAPH_LEGACY
@@ -2045,11 +2187,14 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
               : v14dFaceStaticMode === "finalFaceComposite"
                 ? V14D_FACE_LIVE_COMPOSITE_GRAPH
                 : V14D_FACE_STATIC_GRAPH;
+        const applyBodySkin = v14dFaceStaticMode === "finalFaceComposite";
+        const excluded = new Set<string>([V14D_FACE_MATERIAL_NAME]);
+        if (applyBodySkin) excluded.add(V14D_BODY_MATERIAL_NAME);
         const faceGroups = originalStyleGroups.map((group) => ({
           ...group,
-          materials: group.materials.filter((name) => name !== V14D_FACE_MATERIAL_NAME),
+          materials: group.materials.filter((name) => !excluded.has(name)),
         })).filter((group) => group.materials.length > 0);
-        const faceResult = await engine.applyStyleGroups("companion", [
+        const skinGroups: Parameters<Engine["applyStyleGroups"]>[1] = [
           ...faceGroups,
           {
             id: "v14d-face-static",
@@ -2057,9 +2202,22 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             materials: [V14D_FACE_MATERIAL_NAME],
             graph: faceGraph,
           },
-        ]);
+        ];
+        if (applyBodySkin) {
+          skinGroups.push({
+            id: "v14d-body-skin-composite",
+            label: "V14D Body Skin Composite",
+            materials: [V14D_BODY_MATERIAL_NAME],
+            graph: V14D_BODY_LIVE_COMPOSITE_GRAPH,
+          });
+        }
+        const faceResult = await engine.applyStyleGroups("companion", skinGroups);
         if (canvasRef.current) {
           canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.faceMaterialApplied] = String(faceResult.ok);
+          if (applyBodySkin) {
+            const bodyOk = faceResult.ok && model.getMaterials().some((m) => m.name === V14D_BODY_MATERIAL_NAME);
+            canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.bodyMaterialApplied] = String(bodyOk);
+          }
         }
         if (!faceResult.ok) {
           console.warn("[v14d-face-static] Face graph 应用失败: " + JSON.stringify(faceResult.groups));
