@@ -63,7 +63,7 @@
 - Blender 参考图：`blender-ref-state2-final-composite.png` / `blender-ref-state2-shadow-factor.png`（`web/scripts/blender-ref-v14d-face-state2.py`，直接 warm×shadowTint×fringeTint 重建，与 NarrowFinalFaceColor 链数学等价）。
 
 ## 3. Web Shader / 引擎补丁
-- 补丁：`web/scripts/patch-reze-engine.mjs`（默认关闭、严格 verify，`--verify` 41 项不变量恰好一次，exit 0）。注入：materialAuxTextures、bind group binding(5) mask（rgba8unorm、禁 mipmap、非 sRGB 视图）、`V14D_STATE2_HELPERS_WGSL`、`v14dState2OverrideFsBody`（按 graph.name 精确覆写 final_color）。
+- 补丁：`web/scripts/patch-reze-engine.mjs`（默认关闭、严格 verify，`--verify` 41 项不变量恰好一次，exit 0）。注入：materialAuxTextures、bind group binding(5) mask（rgba8unorm、禁 mipmap、非 sRGB 视图）、`V14D_STATE2_HELPERS_WGSL`、`v14dState2OverrideFsBodyFixed`（按 graph.name 精确覆写 final_color）。
 - Web 接线：`RezeWebGpuStage.tsx`（`V14D_FACE_LIVE_SHADOW_GRAPH` / `V14D_FACE_LIVE_COMPOSITE_GRAPH`、live dataset）、page.tsx、MMDStage.tsx、capture/gate 脚本。
 - 只对 PMX 材质名 Face 生效；EyeWhite/Eyes/Eyes+/Hair/Body/Clothes 保持正常 reze-k3。不在 loadModel 后伪改 path；GPU 双纹理绑定在材质建立前闭合并有绑定证据。
 
@@ -89,7 +89,7 @@
   - `--camera-override=null --negative`：相机解锁退回默认 fov=45，registration=override-active，faceSamples=830 但 MAE 全部 80-137（错位导致大误差被捕获）。
 
 ## 6. 阻塞根因分析（未解决，候选）
-- 关键新证据：三模式 pre-tonemap HDR 读回 face 均值**完全相同** = [0.8852, 0.5981, 0.5556]（n=4639）。实时 override 生效时三模式应给出不同 face 值，故 strong 提示 `v14dState2OverrideFsBody` **未对 Face 生效**，输出落到同一原始 BaseColor。
+- 关键新证据：三模式 pre-tonemap HDR 读回 face 均值**完全相同** = [0.8852, 0.5981, 0.5556]（n=4639）。实时 override 生效时三模式应给出不同 face 值，故 strong 提示 `v14dState2OverrideFsBodyFixed` **未对 Face 生效**，输出落到同一原始 BaseColor。
 - 色彩空间佐证：face_d 原始线性均值约 [0.509,0.232,0.197]；当前 Web face 输出 G/B 高于 face_d 线性值，而公式所有乘数 ≤1，数学上不可能，进一步提示 tex_color 实际并非线性解码值或 override 未接管。
 - 未决矛盾：引擎 dist 中加入的 console 调试标记未出现在 Playwright console（其他 [reze] 日志正常），但 faceApplied=true（来自 faceResult.ok）。怀疑 applyStyleGroups 走 signature 缓存分支跳过 compileGraph，或运行时执行的不是含覆写注入的 bundle。
 - 修正路线（下一票据）：核验引擎 compileAndInstallGroup 缓存是否跳过 compileGraph；确认 Next/webpack bundle 是否加载 slots/compile 注入；在 GPU 层对 Face 单独断言 override 后的 final_color 与公式预测一致。
