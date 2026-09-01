@@ -39,9 +39,21 @@
 
 ## 证据口径
 
-- 正式样本数、覆盖率、rejectedNoTri / rejectedMaskMismatch 记录于 gate-report.json。
+- 正式样本数、覆盖率、rejectedNoTri / rejectedMissingTri / rejectedVisOther 记录于 gate-report.json。
 - 三层分别输出每通道 MAE / P95；通过标准 FinalComposite 每通道 MAE ≤ 20/255。
-- 本票实测：UV 交集样本 938 像素三层 MAE ≤20/255（同 UV 层证据）；但同三角形/同可见性逐像素 Gate 在验收修正轮被判未通过（详见交付报告第九节），不得表述为 Gate 已通过。
+- 覆盖率门槛（冻结，不按结果调整）：formal/webEligible ≥ 0.80 且 formalSamples ≥ 1000，否则只能交付 partial-coverage checkpoint。
+
+## 最终验收结论（2026-09-01，路线 B+ 最后一次重试）
+
+采用「三角形层级对账 + 真实三角形身份」（路线 B，以路线 C 真实三角形身份为前置）：
+
+- **Web 真实 triId**：`readV14dFaceExpandedTriUv` 把 Face 索引按 PMX 顺序展开为非索引缓冲并附 flat triId（= PMX/Blender Face 局部序号，2738/2738 sortedVerts 同序已验证），vertex_index/3 语义可靠；triUv pass 与 HDR pick 在同一 page.evaluate 原子采集（消除分次 evaluate 的约 32px 位移，overlap 4092/4639）。
+- **三模式 HDR 采集修复**：运行时点击 setFaceStaticMode 切模式不会重建 Face graph（faceShadowOnly 与 finalFaceComposite HDR 逐像素相同 maxd=0），改为逐模式 page.goto。
+- **同 UV/同三角形材质公式已通过**：triIdResolved∩barycentricValid=4092 样本（formal/webEligible=0.882，覆盖 517 个 Face 三角形）三层每通道 MAE 全部 ≤20/255——BaseColor [12.69,10.75,10.89]、ShadowFactor [6.44,6.97,6.93]、FinalComposite [11.94,9.23,9.12]。
+- **同表面点可见性判据失败**（blenderSamePointVisible=0/4092）：根因是 Web 与 Blender 在 frame120 存在系统性姿态差（Web 头前倾更大，同一 PMX 三角形 3D 位置差约 0.16m），同一重心在 Blender world triangle 上的「同表面点」数学上就不是 Web 的同一表面点。这属独立的 VMD/姿态同步 failure family，超出本票材质公式范围。
+- **负测判别力已验证**：tri-permute 使 barycentricValid 4092→1、vis-occlude 改可见性，两负测均 exit 1。
+
+结论：本票按 partial-coverage checkpoint 诚实交付（正式 Gate exit 1），材质公式（同 UV/同三角形层）验证通过，但完整「同可见性」Gate 需先解决 VMD/姿态同步。
 
 ## 相关脚本与 Gate
 
@@ -53,7 +65,9 @@
 
 - Gate MAE 超标 → 先定位第一处分歧层（BaseColor/ShadowFactor/FinalComposite），不得手调颜色掩盖。
 - 负测判别力不足（<1.5×）→ 检查负测变换是否真正改变了采样语义（单 texel 偏移在平滑肤色区无效）。
-- 两 mask 重叠率异常低 → 区分「采集状态漂移」（可平移消除）与「可见性语义差异」（本票实测为后者）。
+- 两 mask 重叠率异常低 → 区分「采集状态漂移」（可平移消除）与「可见性语义差异」。
+- 三模式 HDR 逐像素相同 → 运行时模式切换未重建 graph，改用逐模式 page.goto。
+- blenderSamePointVisible=0 → 检查 Web/Blender frame120 姿态是否同步（本票实测为姿态差 failure family，需独立 VMD 同步票修复）。
 
 ## 与现有概念的关系
 

@@ -35,13 +35,17 @@ function collectModelFiles(dir) {
 function f32(arr) { return Array.from(arr, (v) => +v.toFixed(8)); }
 
 async function main() {
+  console.log("[export] start outdir=" + OUT);
   fs.mkdirSync(OUT, { recursive: true });
   const modelPaths = collectModelFiles(KOLEDA_DIR).filter((p) => path.resolve(p) !== path.resolve(FACE_D));
+  console.log("[export] model files=" + modelPaths.length);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "v14d-triuv-chrome-"));
+  console.log("[export] launching chrome profile=" + profile);
   const context = await chromium.launchPersistentContext(profile, {
     executablePath: CHROME_EXE, headless: false, viewport: { width: 640, height: 640 },
     deviceScaleFactor: 1, args: ["--window-position=-2000,-2000", "--enable-unsafe-webgpu"],
   });
+  console.log("[export] chrome launched");
   try {
     await context.route("**/*", (route) => {
       const url = route.request().url();
@@ -68,6 +72,7 @@ async function main() {
     const page = context.pages()[0] ?? (await context.newPage());
     const pageErrors = [];
     page.on("pageerror", (e) => pageErrors.push(String(e?.stack || e)));
+    console.log("[export] injecting assets");
     await page.addInitScript(async (payload) => {
       const fetchFile = async (key, rel, mime) => {
         const resp = await fetch(payload.route + "?v14dasset=" + encodeURIComponent(key));
@@ -90,6 +95,9 @@ async function main() {
       const state2Mask = await fetchFile("__mask__/state2", payload.state2MaskRel, "image/png");
       window.__v14dFaceStaticAssets = { modelFiles, pmxFile, vmdFile, faceOverride, bakedTextures: null, state2Mask };
     }, { route: "http://v14d-asset.local/a", state2MaskRel: STATE2_MASK_REL });
+    console.log("[export] assets injected");
+    // 把页面 console 转发到 Node 侧（诊断探针的 console.log 输出）。
+    page.on("console", (msg) => { if (msg.text().startsWith("[expanded]")) console.log(msg.text()); });
 
     const modelUrl = "http://v14d-asset.local/a?v14dasset=pmx";
     const vmdUrl = "http://v14d-asset.local/a?v14dasset=vmd";
@@ -98,40 +106,57 @@ async function main() {
     async function load(mode) {
       const q = new URLSearchParams({ ...base, v14dFaceMode: mode });
       await page.goto(BASE + "?" + q.toString(), { waitUntil: "domcontentloaded", timeout: 60000 });
-      await page.waitForSelector("canvas[data-webgpu-status='ready']", { timeout: 120000 });
+      console.log("[export] page loaded mode=" + mode);
+      await page.waitForSelector("canvas[data-webgpu-status='ready']", { timeout: 240000 });
+      await page.waitForTimeout(3000); // reze fresh-patch 纹理异步绑定稳定化（已知时序敏感）
+      console.log("[export] webgpu ready mode=" + mode);
       await page.waitForSelector("canvas[data-v14d-face-static='true']", { timeout: 120000 });
       await page.waitForTimeout(1200);
     }
 
-    // ── 1+2) 同一次加载内采集 triUv 与三模式 HDR（Stage 2B-M2 同口径根因修复）──
-    // 历史缺陷：triUv 用 load("uvDebug")、HDR 用 load("normal") 等分别 page.goto，
-    // 每次加载后 VMD seek/相机时序不同步，导致两通道屏幕空间存在约 (32,50)px 位移、
-    // HDR pick ∩ UV pass 重叠率仅 20%。修复：所有导出合并到同一渲染状态，消除位移。
-    // UV pass 与 HDR resolve 都是独立于当前渲染模式的诊断 pass，模式切换只影响显示
-    // 合成路径，不影响几何/相机，故同一帧内采集三者同口径。
+    // ── Stage 2B-M2 同口径采集（路线 B+ 根因修复）──
+    // 历史缺陷：triUv 与 HDR pick 分属两个独立 page.evaluate，两者之间引擎内部
+    // 蒙皮/相机时序存在 ~32px 位移，hdrFace ∩ triId 仅 226/4639。
+    // 根因验证（.scratch/diag-pose-cmp.mjs）：在同一 page.evaluate 原子调用内
+    // 先 HDR pick 后 triUv，两 pass 共享同一帧 CPU 蒙皮与相机状态，同像素 overlap
+    // 达 4092/4639，且这 4092 个 pick 像素全部获得合法 triId。
     //
-    // 注意：normal/faceShadowOnly/finalFaceComposite 三种模式会影响 HDR resolve 的
-    // 内容（不同合成路径），因此 HDR 仍需按模式分别导出；但 triUv（几何/UV/可见性）
-    // 与模式无关，与 normal 模式 HDR 同帧采集即可。为保证三模式 HDR 与 triUv 也同帧，
-    // 改为：同一页面内先用 query 切模式，但不重新 goto——通过评估内 setV14dFaceMode
-    // 或重复加载。鉴于 faceStatic 模式经 query 注入且无运行时切换 API，采用折衷：
-    // 在 normal 加载内同时导出 triUv + normal HDR，另外两模式各自加载（接受其 HDR
-    // 与 triUv 可能存在微小位移，但几何/可见性以 normal 同帧的 triUv 为准）。
-    await load("normal");
-    const tri = await page.evaluate(async () => {
+    // 新流程（不再逐模式 goto）：
+    //   1) 单次加载 finalFaceComposite 模式，固定 VMD f120 + 权威相机。
+    //   2) 在同一 page.evaluate 原子调用内先 HDR pick（webEligible 分母）
+    //      再展开 triUv pass（真实 triId + UV + 相机矩阵），两者同帧同口径。
+    //   3) 用页面内置的模式切换按钮（FaceStaticAssetPanel 的 setFaceStaticMode）
+    //      依次切到 normal / faceShadowOnly，各做一次 exportFaceHdrFloat。
+    //      三模式 HDR 与步骤 2 共享同一 VMD 姿势与权威相机（模式切换只改 Face 显示
+    //      合成路径，不改几何/骨骼/VMD），Gate 用 UV/重心做同表面点对账，坐标系与
+    //      相机一致，故三模式逐像素 RGB 可直接用于正式样本。
+    await load("finalFaceComposite");
+
+    // 步骤 2：HDR pick 与 triUv 在同一原子 evaluate 内（关键）。
+    const atomic = await page.evaluate(async () => {
       const api = window.__v14dFaceStatic;
-      if (!api || !api.exportFaceTriUv) return null;
-      const r = await api.exportFaceTriUv();
-      if (!r) return null;
+      if (!api || !api.exportFaceHdrFloat || !api.exportFaceTriUv) return null;
+      const pick = await api.exportFaceHdrFloat();
+      if (!pick) return null;
+      const tri = await api.exportFaceTriUv();
+      if (!tri) return null;
       return {
-        width: r.width, height: r.height,
-        faceMaterialId: r.faceMaterialId, faceMaterialIndex: r.faceMaterialIndex,
-        faceMaterialFirstIndex: r.faceMaterialFirstIndex, faceTriangleCount: r.faceTriangleCount,
-        camera: r.camera ? { view: Array.from(r.camera.view), projection: Array.from(r.camera.projection) } : null,
-        triId: Array.from(r.triId), uv: Array.from(r.uv), faceMask: Array.from(r.faceMask),
+        pick: { width: pick.width, height: pick.height, faceMaterialId: pick.faceMaterialId, faceMask: Array.from(pick.faceMask) },
+        tri: {
+          width: tri.width, height: tri.height,
+          faceMaterialId: tri.faceMaterialId, faceMaterialIndex: tri.faceMaterialIndex,
+          faceMaterialFirstIndex: tri.faceMaterialFirstIndex, faceTriangleCount: tri.faceTriangleCount,
+          camera: tri.camera ? { view: Array.from(tri.camera.view), projection: Array.from(tri.camera.projection) } : null,
+          triId: Array.from(tri.triId), uv: Array.from(tri.uv), faceMask: Array.from(tri.faceMask),
+        },
       };
     });
-    if (!tri) throw new Error("exportFaceTriUv 返回 null（诊断 pass 失败）");
+    if (!atomic) throw new Error("原子 HDR pick + triUv 采集失败");
+    const hdrPickMask = atomic.pick;
+    fs.writeFileSync(path.join(OUT, "web-hdr-pick-mask.json"), JSON.stringify(hdrPickMask));
+    const pickPx = hdrPickMask.faceMask.reduce((a, b) => a + b, 0);
+    console.log("[hdr-pick] facePixels=" + pickPx);
+    const tri = atomic.tri;
     fs.writeFileSync(path.join(OUT, "web-face-tri-uv.json"), JSON.stringify(tri));
     const triSummary = {
       faceTriangleCount: tri.faceTriangleCount,
@@ -140,8 +165,24 @@ async function main() {
       cameraOk: !!tri.camera,
     };
     console.log("[tri/uv] " + JSON.stringify(triSummary));
+    let bothPx = 0, resolvedPx = 0;
+    for (let i = 0; i < hdrPickMask.faceMask.length; i += 1) {
+      if (hdrPickMask.faceMask[i] && tri.faceMask[i]) bothPx += 1;
+      if (hdrPickMask.faceMask[i] && tri.triId[i] >= 0) resolvedPx += 1;
+    }
+    console.log("[hdr-pick] overlapWithTriUv=" + bothPx + " triIdResolved=" + resolvedPx);
 
-    // ── 2) 三模式 pre-tonemap HDR ──
+    // ── 步骤 3：三模式 HDR 逐模式 page.goto 重建（根因修复）──
+    // 实测：运行时点击 setFaceStaticMode 切换模式后，faceShadowOnly 与
+    // finalFaceComposite 读出的 HDR 逐像素完全相同（maxd=0）——运行时切换并未
+    // 真正重建 Face graph，HDR resolve 读到的是残留内容。唯一可靠的切换是
+    // page.goto 重建整个 stage（query.v14dFaceStaticMode 驱动 graph 选择）。
+    //
+    // 姿势同口径保证：VMD f120 + 权威相机在每次加载都是确定性的（同 VMD 文件、
+    // 同 seek、同相机常量），三模式 HDR 与步骤 2 的 triUv 共享同一几何/可见性；
+    // 差别仅在 Face 材质的 fragment 输出（公式视图），几何不变，故逐像素 RGB 有效。
+    // 步骤 2 的 triUv/pick mask 仍以 finalFaceComposite 加载内的原子采集为准
+    //（webEligible 分母与 triId 来源）；此处仅取三模式各自的逐像素 HDR RGB。
     const hdrOut = {};
     for (const mode of ["normal", "faceShadowOnly", "finalFaceComposite"]) {
       await load(mode);
@@ -155,10 +196,11 @@ async function main() {
       if (!hdr) throw new Error(mode + " HDR 导出失败");
       fs.writeFileSync(path.join(OUT, "web-" + mode + ".hdr.json"), JSON.stringify({ ...hdr, rgb: f32(hdr.rgb) }));
       hdrOut[mode] = "web-" + mode + ".hdr.json";
-      console.log("[hdr] " + mode + " ok");
+      const n = hdr.faceMask.reduce((a, b) => a + b, 0);
+      console.log("[hdr] " + mode + " ok facePixels=" + n);
     }
 
-    // ── 3) Face pick mask（与 HDR 同一语义，作为交叉核对）──
+    // ── 3b) Face pick mask PNG（交叉核对，与 HDR 同一语义；normal 模式）──
     await load("normal");
     const maskB64 = await page.evaluate(async () => {
       const api = window.__v14dFaceStatic;

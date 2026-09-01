@@ -42,10 +42,12 @@ import {
 import {
   analyzeV14dColorBaselineRois,
   createV14dColorBaselineResult,
+  flushV14dDiagnosticBarrier,
   makeV14dLinearImage,
   measureV14dRoiActualMeans,
   readV14dCanvasDisplay,
   readV14dColorBaselineMaterialMask,
+  readV14dFaceExpandedTriUv,
   readV14dFaceTriUvMask,
   readV14dColorBaselineResolveTargets,
   srgbToLinear,
@@ -1428,6 +1430,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     faceMask: Uint8Array;
   } | null> => {
     try {
+      // 诊断同步屏障（默认关闭）：HDR pick/resolve 读回前，把当前 CPU 蒙皮矩阵
+      // 写回 GPU 并排空队列，与 triUv pass 保持同一皮肤状态。
+      if (engineRef.current) await flushV14dDiagnosticBarrier(engineRef.current);
       const fr = await readV14dFaceResolveAndMask();
       if (!fr) return null;
       const { faceMaterialId, hdr, faceMask: faceMaskArr, size } = fr;
@@ -1509,6 +1514,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     const model = modelRef.current;
     if (!engine || !model || !v14dFaceStaticRef.current || !v14dFaceStaticGatedRef.current) return null;
     try {
+      // 诊断同步屏障（默认关闭）：把当前 CPU 蒙皮矩阵写回 GPU 并排空队列，
+      // 确保本次 triUv pass 与随后同帧 HDR pick 读到同一皮肤状态。
+      await flushV14dDiagnosticBarrier(engine);
       const materials = model.getMaterials();
       const faceMaterialIndex = materials.findIndex((m) => m.name === V14D_FACE_MATERIAL_NAME);
       if (faceMaterialIndex < 0) return null;
@@ -1521,7 +1529,18 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         .reduce((acc, m) => acc + m.vertexCount, 0);
       const faceTriangleCount = Math.floor(materials[faceMaterialIndex].vertexCount / 3);
       const size = V14D_FACE_STATIC_SIZE;
-      const rb = await readV14dFaceTriUvMask(engine, size, size, faceMaterialIndex, faceFirstIndex);
+      // 路线 B+：Face 非索引展开 pass，triId 可靠（= PMX/Blender Face 局部序号）。
+      const faceIndexCount = materials[faceMaterialIndex].vertexCount;
+      const skinning = model.getSkinning();
+      const rb = await readV14dFaceExpandedTriUv(engine, size, size, {
+        vertices: model.getVertices(),
+        indices: model.getIndices(),
+        joints: skinning.joints,
+        weights: skinning.weights,
+        faceFirstIndex,
+        faceIndexCount,
+        skinMatrices: model.getSkinMatrices(),
+      });
       const camera = engine as unknown as { camera?: { getViewMatrix(): { values: Float32Array }; getProjectionMatrix(): { values: Float32Array } } };
       const cam = camera.camera
         ? { view: Array.from(camera.camera.getViewMatrix().values), projection: Array.from(camera.camera.getProjectionMatrix().values) }

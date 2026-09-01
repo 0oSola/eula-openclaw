@@ -1058,6 +1058,247 @@ export async function readV14dFaceTriUvMask(
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Stage 2B-M2 路线 B+：Face 非索引展开三角形 pass（真实三角形身份）
+//
+// 背景：@builtin(primitive_index) 在 Chrome WebGPU 不受支持（实测致 pass 静默失败）；
+// @builtin(vertex_index)/3 在 indexed draw 下编号与 Blender triIndex 不对应（多三角共享 ID）。
+// 本 pass 改为：CPU 侧按 PMX Face 索引范围把每个三角形展开为 3 份顶点（position/normal/uv/
+// joints/weights），并把同一个 Face 局部 triId 作为 flat 顶点属性写入每个展开顶点；GPU 用
+// 非索引 draw(vertexCount=faceIndexCount)。triId 由此具有可靠语义（= PMX/Blender Face 局部
+// 三角形序号，已验证 sortedVerts 2738/2738 同序一致）。
+//
+    // 可见性口径（修正版）：原 pass1 全模型 depth-only + equal 剔除的口径仍依赖
+    // face_d alpha cutout 与生产 HDR pick 区域不一致（展开 pass 不做 cutout）。
+    // 改为：pass2 直接以生产 HDR pick faceMask 作为 Web eligible 分母，
+    // 展开 triId/UV 仅负责给这些像素补充三角形身份与 UV；不再做独立深度剔除。
+    // 这样 Web 可见性语义与生产 pick 完全一致（含 alpha/cutout）。
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FACE_EXPANDED_WGSL = /* wgsl */ `
+struct CameraUniforms {
+  view: mat4x4f,
+  projection: mat4x4f,
+  viewPos: vec3f,
+  _padding: f32,
+};
+@group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
+
+struct VSOut {
+  @builtin(position) pos: vec4f,
+  @location(0) uv: vec2f,
+  @interpolate(flat) @location(1) triId: u32,
+};
+
+@vertex fn vs(
+  @location(0) position: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) uv: vec2f,
+  @location(3) joints0: vec4<u32>,
+  @location(4) weights0: vec4<f32>,
+  @location(5) triId: u32,
+) -> VSOut {
+  let pos4 = vec4f(position, 1.0);
+  var out: VSOut;
+  // 顶点已在 CPU 侧蒙皮展开为世界坐标（见 readV14dFaceExpandedTriUv 注释），
+  // 此处只做 MVP 变换；joints0/weights0 不再使用（保留属性槽兼容管线布局）。
+  out.pos = camera.projection * camera.view * pos4;
+  out.uv = uv;
+  out.triId = triId;
+  return out;
+}
+
+@fragment fn fs(in: VSOut) -> @location(0) vec4f {
+  return vec4f(in.uv.x, in.uv.y, f32(in.triId), 1.0);
+}
+`;
+
+export type V14dFaceExpandedSource = {
+  vertices: Float32Array;
+  indices: Uint32Array;
+  joints: Uint16Array;
+  weights: Uint8Array;
+  faceFirstIndex: number;
+  faceIndexCount: number;
+  /** 蒙皮矩阵（getSkinMatrices()，列主序 16 浮点/骨骼）；提供时 CPU 侧展开为世界坐标。 */
+  skinMatrices?: Float32Array;
+};
+
+/**
+ * 诊断专用的同步屏障（默认关闭路径专用，仅 Stage 2B-M2 faceStatic 采集调用）：
+ * 在调用方执行任何诊断 GPU pass 前，强制把当前 CPU 侧蒙皮矩阵写回 GPU，
+ * 并用 onSubmittedWorkDone 排空已排队命令，确保随后的诊断 pass 读到与最近一次
+ * 生产渲染完全相同的皮肤/相机状态（消除诊断 pass 间的时钟漂移）。
+ *
+ * 背景：faceStatic 模式 engine.stopRenderLoop() + model.pause() 后，
+ * 诊断 pass（triUv / HDR pick / HDR resolve）各自直接读 GPU 缓冲；若某次渲染循环
+ * 已把下一帧的皮肤矩阵排入 queue 但尚未执行，后续诊断 pass 会读到不一致的中间态。
+ * 本函数把当前 getSkinMatrices() 结果写入 skinMatrixBuffer 并等待队列排空，
+ * 把诊断读回锚定到调用时刻的 CPU 状态。
+ */
+export async function flushV14dDiagnosticBarrier(engine: unknown): Promise<void> {
+  const fields = readEnginePrivateFields(engine);
+  if (!fields.device || !fields.modelInstances) return;
+  for (const instance of fields.modelInstances.values()) {
+    const inst = instance as unknown as {
+      model?: { getSkinMatrices?: () => Float32Array };
+      skinMatrixBuffer?: GPUBuffer;
+    };
+    if (!inst.model?.getSkinMatrices || !inst.skinMatrixBuffer) continue;
+    const mats = inst.model.getSkinMatrices();
+    fields.device.queue.writeBuffer(inst.skinMatrixBuffer, 0, mats.buffer, mats.byteOffset, mats.byteLength);
+  }
+  await fields.device.queue.onSubmittedWorkDone();
+}
+
+
+export async function readV14dFaceExpandedTriUv(
+  engine: unknown,
+  width: number,
+  height: number,
+  src: V14dFaceExpandedSource,
+): Promise<V14dFaceTriUvReadback> {
+  const fields = readEnginePrivateFields(engine);
+  if (!fields.device || !fields.pickPerFrameBindGroup || !fields.modelInstances) {
+    throw new Error("reze-engine 未暴露诊断所需的展开 Face 管线字段。");
+  }
+  const device = fields.device;
+  const perFrameLayout = (fields as unknown as { pickPerFrameBindGroupLayout?: GPUBindGroupLayout }).pickPerFrameBindGroupLayout!;
+  const perInstanceLayout = (fields as unknown as { pickPerInstanceBindGroupLayout?: GPUBindGroupLayout }).pickPerInstanceBindGroupLayout!;
+
+  const faceTriCount = Math.floor(src.faceIndexCount / 3);
+  const expandedVertCount = faceTriCount * 3;
+  const stride32 = 8 + 4 + 4 + 1;
+  const interleaved = new ArrayBuffer(expandedVertCount * stride32 * 4);
+  const f32 = new Float32Array(interleaved);
+  const u32 = new Uint32Array(interleaved);
+  for (let t = 0; t < faceTriCount; t += 1) {
+    for (let k = 0; k < 3; k += 1) {
+      const vi = src.indices[src.faceFirstIndex + t * 3 + k];
+      const dst = (t * 3 + k) * stride32;
+      for (let c = 0; c < 8; c += 1) f32[dst + c] = src.vertices[vi * 8 + c];
+      for (let c = 0; c < 4; c += 1) u32[dst + 8 + c] = src.joints[vi * 4 + c];
+      for (let c = 0; c < 4; c += 1) f32[dst + 12 + c] = src.weights[vi * 4 + c] / 255;
+      u32[dst + 16] = t;
+    }
+  }
+
+  // CPU 侧蒙皮展开（关键修复）：展开缓冲必须携带蒙皮后的世界坐标，
+  // 不能依赖 skinMats uniform。诊断 pass 与生产 pick 之间可能存在引擎内部
+  // 状态差（相机 VMD pose、resize 后的投影矩阵），导致同一 CPU 姿态在
+  // 两个 pass 中被 GPU 渲染到不同屏幕位置（实测位移 (-24,-39)px）。
+  // 改为：调用方先 flushV14dDiagnosticBarrier 把当前 CPU 蒙皮矩阵写回 GPU，
+  // 然后本函数在 CPU 侧用同一蒙皮矩阵展开 position（normal/uv/joints/weights
+  // 保持原始），GPU 侧只做 MVP 变换（不再做蒙皮），两个诊断 pass 共享同一
+  // 已展开的静态几何，彻底消除时序漂移。
+  // 说明：调用方必须保证 src.skinMatrices 与当前 GPU skinMatrixBuffer 一致
+  //（flushV14dDiagnosticBarrier 已把 getSkinMatrices() 写回 GPU）。
+  if (src.skinMatrices) {
+    const sm = src.skinMatrices;
+    for (let t = 0; t < faceTriCount; t += 1) {
+      for (let k = 0; k < 3; k += 1) {
+        const vi = src.indices[src.faceFirstIndex + t * 3 + k];
+        const dst = (t * 3 + k) * stride32;
+        const bx = src.vertices[vi * 8], by = src.vertices[vi * 8 + 1], bz = src.vertices[vi * 8 + 2];
+        let wx = 0, wy = 0, wz = 0;
+        for (let j = 0; j < 4; j += 1) {
+          const bi = u32[dst + 8 + j];
+          const w = f32[dst + 12 + j];
+          if (w <= 0) continue;
+          const o = bi * 16;
+          wx += w * (sm[o] * bx + sm[o + 4] * by + sm[o + 8] * bz + sm[o + 12]);
+          wy += w * (sm[o + 1] * bx + sm[o + 5] * by + sm[o + 9] * bz + sm[o + 13]);
+          wz += w * (sm[o + 2] * bx + sm[o + 6] * by + sm[o + 10] * bz + sm[o + 14]);
+        }
+        f32[dst] = wx; f32[dst + 1] = wy; f32[dst + 2] = wz;
+      }
+    }
+  }
+
+  const expandedBuffer = device.createBuffer({
+    label: "V14D face expanded vertex buffer",
+    size: interleaved.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(expandedBuffer, 0, interleaved);
+
+  const expandedLayout = device.createPipelineLayout({ bindGroupLayouts: [perFrameLayout, perInstanceLayout] });
+  const expandedModule = device.createShaderModule({ label: "V14D face expanded shader", code: FACE_EXPANDED_WGSL });
+  const expandedBuffers: GPUVertexBufferLayout[] = [
+    {
+      arrayStride: stride32 * 4,
+      attributes: [
+        { shaderLocation: 0, offset: 0, format: "float32x3" },
+        { shaderLocation: 1, offset: 12, format: "float32x3" },
+        { shaderLocation: 2, offset: 24, format: "float32x2" },
+        { shaderLocation: 3, offset: 32, format: "uint32x4" },
+        { shaderLocation: 4, offset: 48, format: "float32x4" },
+        { shaderLocation: 5, offset: 64, format: "uint32" },
+      ],
+    },
+  ];
+
+  const expandedPipeline = device.createRenderPipeline({
+    label: "V14D face expanded pipeline",
+    layout: expandedLayout,
+    vertex: { module: expandedModule, buffers: expandedBuffers },
+    fragment: { module: expandedModule, targets: [{ format: "rgba32float" }] },
+    primitive: { cullMode: "none" },
+  });
+
+  const target = device.createTexture({ label: "V14D face expanded target", size: [width, height], format: "rgba32float", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+    const rowPitch = alignTo(width * 16, 256);
+    const buffer = device.createBuffer({ label: "V14D face expanded readback", size: rowPitch * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+
+    try {
+      const encoder = device.createCommandEncoder({ label: "V14D face expanded encoder" });
+      const p2 = encoder.beginRenderPass({
+        label: "V14D face expanded pass",
+        colorAttachments: [{ view: target.createView(), clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: "clear", storeOp: "store" }],
+      });
+      p2.setPipeline(expandedPipeline);
+      p2.setBindGroup(0, fields.pickPerFrameBindGroup);
+    for (const instance of fields.modelInstances.values()) {
+      if (!instance.model.visible) continue;
+      p2.setVertexBuffer(0, expandedBuffer);
+      p2.setBindGroup(1, instance.pickPerInstanceBindGroup);
+      p2.draw(expandedVertCount, 1, 0, 0);
+    }
+    p2.end();
+    encoder.copyTextureToBuffer({ texture: target }, { buffer, bytesPerRow: rowPitch, rowsPerImage: height }, { width, height, depthOrArrayLayers: 1 });
+    device.queue.submit([encoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    await buffer.mapAsync(GPUMapMode.READ);
+    const mapped = buffer.getMappedRange();
+    const mapped32 = new Float32Array(mapped.slice(0));
+    const rowFloats = rowPitch / 4;
+    const triId = new Int32Array(width * height).fill(-1);
+    const uv = new Float32Array(width * height * 2);
+    const faceMask = new Uint8Array(width * height);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const i = y * width + x;
+        const off = y * rowFloats + x * 4;
+        const a = mapped32[off + 3];
+        if (a > 0.5) {
+          uv[i * 2] = mapped32[off];
+          uv[i * 2 + 1] = mapped32[off + 1];
+          triId[i] = Math.round(mapped32[off + 2]);
+          faceMask[i] = 1;
+        }
+      }
+    }
+    return { triId, uv, faceMask, width, height };
+  } finally {
+      if (buffer.mapState === "mapped") buffer.unmap();
+      buffer.destroy();
+      target.destroy();
+      expandedBuffer.destroy();
+    }
+  }
+
+
 export async function readV14dCanvasDisplay(canvas: HTMLCanvasElement): Promise<V14dNormalizedImage> {
   const width = canvas.width || V14D_COLOR_BASELINE_WIDTH;
   const height = canvas.height || V14D_COLOR_BASELINE_HEIGHT;
