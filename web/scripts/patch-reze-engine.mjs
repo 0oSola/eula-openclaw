@@ -67,42 +67,101 @@ if (process.argv.includes("--self-test")) {
   const redirected = selfSrc.replace('const rootDir = path.resolve(__dirname, "..");', 'const rootDir = ' + JSON.stringify(fixtureRoot) + ';');
   ok(redirected !== selfSrc, "self-test rootDir 重定向成功（子进程跑真实生产控制流，非 replace 仿真）");
   fs.writeFileSync(fakeScript, redirected, "utf8");
-  // 首次运行：exit 0，src/dist helper 在 prelude 前。
-  let firstExit = 0;
-  try { execFileSync(process.execPath, [fakeScript], { stdio: "pipe" }); } catch (e) { firstExit = e.status == null ? 1 : e.status; }
-  // 断点 C（本 P0 核心）在真实隔离 fixture 已可重复注入且顺序正确（见下方 orderOk 断言）。
-  // 但首次整体 exit!=0：断点 A/B 与 materialAuxTextures 类型声明等 17 个 verify marker
-  // 在 patch 脚本中只有 verify、无对应 fresh 注入 target（它们是修正轮手工写入 node_modules 的），
-  // fresh install 后这些 marker 为 0 → strict verify 判 FAIL。这是已验证的 fresh-install 注入完整性缺口，
-  // 属独立 failure family，超出本 P0（断点 C 模板顺序）范围，如实暴露不掩盖。
-  console.log("[self-test info] 首次运行 exit=" + firstExit + "（断点C 顺序已注入为绿；exit!=0 源于断点A/B 等 17 项 fresh 注入 target 缺失）");
+  const runScript = (script) => {
+    try {
+      const stdout = execFileSync(process.execPath, [script], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      return { exit: 0, stdout, stderr: "" };
+    } catch (e) {
+      return {
+        exit: e.status == null ? 1 : e.status,
+        stdout: String(e.stdout ?? ""),
+        stderr: String(e.stderr ?? ""),
+      };
+    }
+  };
+  const runPatch = () => runScript(fakeScript);
+  const makeRunner = (label, sourceRoot) => {
+    const script = path.join(tmp, label + "-patch-run.mjs");
+    const source = selfSrc.replace('const rootDir = path.resolve(__dirname, "..");', 'const rootDir = ' + JSON.stringify(sourceRoot) + ';');
+    fs.writeFileSync(script, source, "utf8");
+    return () => runScript(script);
+  };
+  const reportPatchFailure = (label, result) => {
+    const lines = (result.stdout + "\n" + result.stderr)
+      .split(/\r?\n/)
+      .filter((line) => /(?:FAIL|missing-file|anchor-miss|PATCH-VERIFY|patch-reze-engine|锚点)/.test(line));
+    for (const line of lines) console.error("[self-test detail] " + label + ": " + line);
+  };
+  // 首次运行必须真正 exit 0；fixture 内任一严格校验失败都让 self-test 变红。
+  const first = runPatch();
+  const firstExit = first.exit;
+  if (firstExit !== 0) reportPatchFailure("首次运行", first);
+  ok(firstExit === 0, "首次完整 fixture 生产补丁 exit=0（实际得到 " + firstExit + "）");
   const orderOk = (fp) => { const c = fs.readFileSync(fp, "utf8"); const ai = c.indexOf("export function assembleModule"); const seg = ai >= 0 ? c.slice(ai, ai + 900) : ""; const hi = seg.indexOf("V14D_STATE2_HELPERS_WGSL : "); const pi = seg.indexOf("prelude(renderClass, alphaMode)"); return hi >= 0 && pi >= 0 && hi < pi; };
   ok(orderOk(fixSlotsSrc), "断点C 首次注入后 src assembleModule 内 helperIndex < preludeIndex");
   ok(orderOk(fixSlotsDist), "断点C 首次注入后 dist assembleModule 内 helperIndex < preludeIndex");
-  // 二次运行：exit 0 且文件 hash 不变（幂等）。
+  // 二次运行必须 exit 0 且文件 hash 不变（幂等）。
   const hashAfterFirst = sha(fixSlotsSrc) + "|" + sha(fixSlotsDist);
-  let secondExit = 0;
-  try { execFileSync(process.execPath, [fakeScript], { stdio: "pipe" }); } catch (e) { secondExit = e.status == null ? 1 : e.status; }
+  const second = runPatch();
+  const secondExit = second.exit;
+  if (secondExit !== 0) reportPatchFailure("二次运行", second);
   const hashAfterSecond = sha(fixSlotsSrc) + "|" + sha(fixSlotsDist);
-  console.log("[self-test info] 二次运行 exit=" + secondExit + "（同上缺口；文件 hash 不变已证幂等）");
+  ok(secondExit === 0, "二次完整 fixture 生产补丁 exit=0（实际得到 " + secondExit + "）");
   ok(hashAfterFirst === hashAfterSecond, "断点C 二次运行文件 hash 不变（幂等，无重复注入）");
-  // anchor-miss 负测：破坏一个 anchor，patch 应非 0 退出。
-  const cSlots = fs.readFileSync(fixSlotsSrc, "utf8");
-  fs.writeFileSync(fixSlotsSrc, cSlots.split("export function assembleModule").join("export function assembleModule_BROKEN"), "utf8");
-  // 恢复 includeState2Mask 让 assembleModule target 重新进入 anchor 检查（移除 doneMarker）。
-  let broke = fs.readFileSync(fixSlotsSrc, "utf8");
-  broke = broke.split("includeState2Mask = false").join("includeStyleUniformsOnly = false");
-  fs.writeFileSync(fixSlotsSrc, broke, "utf8");
-  let anchorMissExit = 0;
-  try { execFileSync(process.execPath, [fakeScript], { stdio: "pipe" }); } catch (e) { anchorMissExit = e.status == null ? 1 : e.status; }
-  ok(anchorMissExit !== 0, "断点C anchor-miss fixture 非0退出（得到 " + anchorMissExit + "）");
+  const expectRejected = (label, runner) => {
+    const result = runner();
+    if (result.exit === 0) reportPatchFailure(label, result);
+    ok(result.exit !== 0, label + " 非0退出（得到 " + result.exit + "）");
+  };
+  const copyFixture = (label) => {
+    const targetRoot = path.join(tmp, label + "-web");
+    fs.cpSync(fixtureRoot, targetRoot, { recursive: true });
+    return targetRoot;
+  };
+  // anchor-miss 负测：破坏 assembleModule anchor，patch 必须拒绝继续。
+  const anchorRoot = copyFixture("anchor-miss");
+  const anchorSlots = path.join(anchorRoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
+  let anchorContent = fs.readFileSync(anchorSlots, "utf8");
+  anchorContent = anchorContent.split("export function assembleModule").join("export function assembleModule_BROKEN");
+  anchorContent = anchorContent.split("includeState2Mask = false").join("includeStyleUniformsOnly = false");
+  fs.writeFileSync(anchorSlots, anchorContent, "utf8");
+  expectRejected("断点C anchor-miss fixture", makeRunner("anchor-miss", anchorRoot));
+
+  // missing-file 负测：删除一个声明目标文件，严格校验必须非0。
+  const missingRoot = copyFixture("missing-file");
+  fs.rmSync(path.join(missingRoot, "node_modules", "reze-engine", "dist", "graph", "compile.js"), { force: true });
+  expectRejected("missing-file fixture", makeRunner("missing-file", missingRoot));
+
+  // 重复 marker 负测：已有完成态再追加同一机器 marker，必须被恰好一次校验拒绝。
+  const duplicateRoot = copyFixture("duplicate-marker");
+  const duplicateSlots = path.join(duplicateRoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
+  fs.appendFileSync(duplicateSlots, String.fromCharCode(10) + "// duplicate const V14D_STATE2_HELPERS_WGSL marker" + String.fromCharCode(10), "utf8");
+  expectRejected("重复 marker fixture", makeRunner("duplicate-marker", duplicateRoot));
+
+  // 断点 A 缺失负测：同时破坏函数锚点与已注入函数，不能被静默当作已完成。
+  const missingARoot = copyFixture("missing-a");
+  const missingASlots = path.join(missingARoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
+  let missingAContent = fs.readFileSync(missingASlots, "utf8");
+  missingAContent = missingAContent.split("v14dState2OverrideFsBodyFixed").join("v14dState2OverrideFsBodyFixed_BROKEN");
+  missingAContent = missingAContent.split("const HASHED_ALPHA_DECLS").join("const HASHED_ALPHA_DECLS_BROKEN");
+  fs.writeFileSync(missingASlots, missingAContent, "utf8");
+  expectRejected("断点A 缺失 fixture", makeRunner("missing-a", missingARoot));
+
+  // 断点 B 缺失负测：移除 binding(5) 与 baseEntries anchor，必须非0。
+  const missingBRoot = copyFixture("missing-b");
+  const missingBEngine = path.join(missingBRoot, "node_modules", "reze-engine", "src", "engine.ts");
+  let missingBContent = fs.readFileSync(missingBEngine, "utf8");
+  missingBContent = missingBContent.split("        { binding: 5, resource: __auxMaskView }," + String.fromCharCode(10)).join("");
+  missingBContent = missingBContent.split("const baseBindGroupEntries").join("const baseBindGroupEntries_BROKEN");
+  fs.writeFileSync(missingBEngine, missingBContent, "utf8");
+  expectRejected("断点B 缺失 fixture", makeRunner("missing-b", missingBRoot));
   fs.rmSync(tmp, { recursive: true, force: true });
   // 3) 真实 node_modules 前后 SHA256 不变。
   const realShaAfter = realKeyFiles.map((f) => (fs.existsSync(f) ? sha(f) : "missing"));
   const shaSame = realShaBefore.every((h, i) => h === realShaAfter[i]);
   ok(shaSame, "self-test 不触碰真实 web/node_modules（关键文件 SHA256 前后一致）");
   if (fails.length) { console.error("===PATCH-SELF-TEST-FAIL===" + String.fromCharCode(10) + fails.join(String.fromCharCode(10))); process.exit(1); }
-  console.log("===PATCH-SELF-TEST-OK=== 真实隔离 fixture fresh-patch 首次/二次幂等/anchor-miss 负测全部通过，真实 node_modules SHA256 不变");
+  console.log("===PATCH-SELF-TEST-OK=== 真实隔离 fixture fresh-patch 首次/二次幂等通过；anchor-miss、missing-file、重复 marker、断点A缺失、断点B缺失负测全部拒绝；真实 node_modules SHA256 不变");
   process.exit(0);
 }
 
@@ -202,35 +261,51 @@ const overrideTargets = [
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.d.ts"),
-    anchor: "    pmxFile?: File;\n};",
-    replacement: "    pmxFile?: File;\n    /** Per-material diffuse override (material name -> unique logicalPath). Default off. Applied BEFORE GPU material setup. */\n    materialDiffuseOverrides?: Record<string, string>;\n};",
-    doneMarker: "materialDiffuseOverrides?: Record<string, string>;",
+    anchors: [
+      "    pmxFile?: File;\n};",
+      "    pmxFile?: File;\n    /** Per-material diffuse override (material name -> unique logicalPath). Default off. Applied BEFORE GPU material setup. */\n    materialDiffuseOverrides?: Record<string, string>;\n};",
+    ],
+    replacement: "    pmxFile?: File;\n    /** Per-material diffuse override (material name -> unique logicalPath). Default off. Applied BEFORE GPU material setup. */\n    materialDiffuseOverrides?: Record<string, string>;\n    /** Per-material auxiliary texture override (material name -> unique logicalPath). Default off. */\n    materialAuxTextures?: Record<string, string>;\n};",
+    doneMarker: "materialAuxTextures?: Record<string, string>;",
     label: "dist/engine.d.ts 类型",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
-    anchor: "  pmxFile?: File\n}",
-    replacement: "  pmxFile?: File\n  /** Per-material diffuse override (material name -> unique logicalPath). Default off. Applied BEFORE GPU material setup. */\n  materialDiffuseOverrides?: Record<string, string>\n}",
-    doneMarker: "materialDiffuseOverrides?: Record<string, string>\n",
+    anchors: [
+      "  pmxFile?: File\n}",
+      "  pmxFile?: File\n  /** Per-material diffuse override (material name -> unique logicalPath). Default off. Applied BEFORE GPU material setup. */\n  materialDiffuseOverrides?: Record<string, string>\n}",
+    ],
+    replacement: "  pmxFile?: File\n  /** Per-material diffuse override (material name -> unique logicalPath). Default off. Applied BEFORE GPU material setup. */\n  materialDiffuseOverrides?: Record<string, string>\n  /** Per-material auxiliary texture override (material name -> unique logicalPath). Default off. */\n  materialAuxTextures?: Record<string, string>\n}",
+    doneMarker: "materialAuxTextures?: Record<string, string>\n",
     label: "src/engine.ts 类型",
   },
 ];
 
 // 每个 target 独立 marker（实现用 __mdo、类型用完整字段声明），避免同文件内实现/类型互相跳过。
+// 所有生产注入均通过这一份 manifest 执行。一个 target 可以声明互斥 anchors，
+// 用于把 fresh/部分已修补状态收敛到同一最终文本；若出现 0 个或多个匹配，
+// 都必须硬失败，不能依赖数组顺序“碰巧”完成。
 const patchLog = [];
-for (const t of overrideTargets) {
-  if (!fs.existsSync(t.file)) { patchLog.push({ label: t.label, status: "missing-file" }); continue; }
-  const content = fs.readFileSync(t.file, "utf8");
-  if (content.includes(t.doneMarker)) { patchLog.push({ label: t.label, status: "already" }); continue; }
-  if (!content.includes(t.anchor)) {
-    console.warn(`[patch-reze-engine] materialDiffuseOverrides 锚点未匹配，跳过: ${t.label}`);
-    patchLog.push({ label: t.label, status: "anchor-miss" });
-    continue;
+function applyPatchManifest(targets, phase) {
+  for (const t of targets) {
+    if (!fs.existsSync(t.file)) { patchLog.push({ label: t.label, status: "missing-file" }); continue; }
+    const content = fs.readFileSync(t.file, "utf8");
+    if (content.includes(t.doneMarker)) { patchLog.push({ label: t.label, status: "already" }); continue; }
+    const anchors = t.anchors ?? [t.anchor];
+    const matches = anchors.filter((anchor) => content.includes(anchor));
+    if (matches.length !== 1) {
+      const status = matches.length === 0 ? "anchor-miss" : "ambiguous-anchor";
+      console.warn("[patch-reze-engine] " + phase + " 锚点" + (status === "anchor-miss" ? "未匹配" : "不唯一") + "，拒绝继续: " + t.label);
+      patchLog.push({ label: t.label, status });
+      continue;
+    }
+    fs.writeFileSync(t.file, content.replace(matches[0], t.replacement), "utf8");
+    patchLog.push({ label: t.label, status: "injected" });
+    console.log("[patch-reze-engine] 已注入 " + phase + ": " + t.label);
   }
-  fs.writeFileSync(t.file, content.replace(t.anchor, t.replacement), "utf8");
-  patchLog.push({ label: t.label, status: "injected" });
-  console.log(`[patch-reze-engine] 已注入 materialDiffuseOverrides: ${t.label}`);
 }
+
+applyPatchManifest(overrideTargets, "materialDiffuseOverrides");
 // 上方注入循环后立即进行统一严格校验定义；predev/prebuild 与 --verify 共用。
 // ─── 统一严格校验（predev/prebuild 与 --verify 共用）：全部 marker 恰好一次。 ──
 // 不只在 --verify 才计数；普通 predev/prebuild 也必须拦截重复/缺失 marker，
@@ -647,6 +722,120 @@ const CREATE_BINDGROUP_DIST_REPLACEMENT = [
   "    }",
 ].join("\n");
 
+// Fresh 0.26.0 上游布局的后续说明文字可能变化，target 只锁定结构闭合行。
+const BINDGROUP_LAYOUT_SRC_ANCHOR_FIXED = [
+  "        { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: \"uniform\" } },",
+  "      ],",
+  "    })",
+].join("\n");
+const BINDGROUP_LAYOUT_SRC_REPLACEMENT_FIXED = [
+  "        { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: \"uniform\" } },",
+  "        // V14D State2 实时合成：extra mask 纹理（默认回退 fallbackMaterialTexture）。",
+  "        { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "      ],",
+  "    })",
+].join("\n");
+const BINDGROUP_LAYOUT_DIST_ANCHOR_FIXED = [
+  "                { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: \"uniform\" } },",
+  "            ],",
+  "        });",
+].join("\n");
+const BINDGROUP_LAYOUT_DIST_REPLACEMENT_FIXED = [
+  "                { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: \"uniform\" } },",
+  "                // V14D State2 实时合成：extra mask 纹理（默认回退 fallbackMaterialTexture）。",
+  "                { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "            ],",
+  "        });",
+].join("\n");
+
+const CREATE_BINDGROUP_SRC_REPLACEMENT_FIXED = [
+  "  private createMaterialBindGroup(label: string, baseEntries: GPUBindGroupEntry[], styleBuffer: GPUBuffer, maskView?: GPUTextureView): GPUBindGroup {",
+  "    const entries: GPUBindGroupEntry[] = [...baseEntries, { binding: 4, resource: { buffer: styleBuffer } }]",
+  "    if (!baseEntries.some((e) => e.binding === 5)) {",
+  "      entries.push({ binding: 5, resource: maskView ?? this.fallbackMaterialTexture.createView() })",
+  "    }",
+  "    return this.device.createBindGroup({",
+  "      label,",
+  "      layout: this.mainPerMaterialBindGroupLayout,",
+  "      entries,",
+  "    })",
+  "  }",
+].join("\n");
+const CREATE_BINDGROUP_DIST_REPLACEMENT_FIXED = [
+  "    createMaterialBindGroup(label, baseEntries, styleBuffer, maskView) {",
+  "        const entries = [...baseEntries, { binding: 4, resource: { buffer: styleBuffer } }];",
+  "        if (!baseEntries.some((e) => e.binding === 5)) {",
+  "            entries.push({ binding: 5, resource: maskView ?? this.fallbackMaterialTexture.createView() });",
+  "        }",
+  "        return this.device.createBindGroup({",
+  "            label,",
+  "            layout: this.mainPerMaterialBindGroupLayout,",
+  "            entries,",
+  "        });",
+  "    }",
+].join("\n");
+
+const BINDGROUP_LAYOUT_SRC_ANCHOR_STRUCTURED = [
+  "    this.mainPerMaterialBindGroupLayout = this.device.createBindGroupLayout({",
+  "      label: \"main per-material bind group layout\",",
+  "      entries: [",
+  "        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: \"uniform\" } },",
+  "        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "        // StyleUniforms for compiled graph shaders (adjust-tier sliders). Hand-written",
+  "        // presets simply don't declare it — a layout may carry bindings a shader ignores.",
+  "        { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: \"uniform\" } },",
+  "      ],",
+  "    })",
+].join("\n");
+const BINDGROUP_LAYOUT_SRC_REPLACEMENT_STRUCTURED = [
+  "    this.mainPerMaterialBindGroupLayout = this.device.createBindGroupLayout({",
+  "      label: \"main per-material bind group layout\",",
+  "      entries: [",
+  "        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: \"uniform\" } },",
+  "        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "        // StyleUniforms for compiled graph shaders (adjust-tier sliders). Hand-written",
+  "        // presets simply don't declare it — a layout may carry bindings a shader ignores.",
+  "        { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: \"uniform\" } },",
+  "        // V14D State2 实时合成：extra mask texture（默认回退 fallbackMaterialTexture）。",
+  "        { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "      ],",
+  "    })",
+].join("\n");
+const BINDGROUP_LAYOUT_DIST_ANCHOR_STRUCTURED = [
+  "        this.mainPerMaterialBindGroupLayout = this.device.createBindGroupLayout({",
+  "            label: \"main per-material bind group layout\",",
+  "            entries: [",
+  "                { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "                { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: \"uniform\" } },",
+  "                { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "                { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "                // StyleUniforms for compiled graph shaders (adjust-tier sliders). Hand-written",
+  "                // presets simply don't declare it — a layout may carry bindings a shader ignores.",
+  "                { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: \"uniform\" } },",
+  "            ],",
+  "        });",
+].join("\n");
+const BINDGROUP_LAYOUT_DIST_REPLACEMENT_STRUCTURED = [
+  "        this.mainPerMaterialBindGroupLayout = this.device.createBindGroupLayout({",
+  "            label: \"main per-material bind group layout\",",
+  "            entries: [",
+  "                { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "                { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: \"uniform\" } },",
+  "                { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "                { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "                // StyleUniforms for compiled graph shaders (adjust-tier sliders). Hand-written",
+  "                // presets simply don't declare it — a layout may carry bindings a shader ignores.",
+  "                { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: \"uniform\" } },",
+  "                // V14D State2 实时合成：extra mask texture（默认回退 fallbackMaterialTexture）。",
+  "                { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {} },",
+  "            ],",
+  "        });",
+].join("\n");
+
 const SETUP_MASK_SRC_ANCHOR = "      const textureView = diffuseTexture.createView()\n";
 const SETUP_MASK_SRC_REPLACEMENT = [
   "      const textureView = diffuseTexture.createView()",
@@ -688,14 +877,14 @@ const state2Targets = [
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
     anchor: AUX_ANCHOR_SRC,
     replacement: AUX_REPLACEMENT_SRC,
-    doneMarker: "materialAuxTextures",
+    doneMarker: "const __aux = pathOrOptions.materialAuxTextures",
     label: "src/engine.ts materialAuxTextures 注入",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
     anchor: AUX_ANCHOR_DIST,
     replacement: AUX_REPLACEMENT_DIST,
-    doneMarker: "materialAuxTextures",
+    doneMarker: "const __aux = pathOrOptions.materialAuxTextures;",
     label: "dist/engine.js materialAuxTextures 注入",
   },
   {
@@ -728,30 +917,30 @@ const state2Targets = [
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
-    anchor: BINDGROUP_LAYOUT_SRC_ANCHOR,
-    replacement: BINDGROUP_LAYOUT_SRC_REPLACEMENT,
-    doneMarker: "binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {}",
+    anchor: BINDGROUP_LAYOUT_SRC_ANCHOR_STRUCTURED,
+    replacement: BINDGROUP_LAYOUT_SRC_REPLACEMENT_STRUCTURED,
+    doneMarker: "// V14D State2 实时合成：extra mask texture",
     label: "src/engine.ts bind group 布局 binding(5)",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
-    anchor: BINDGROUP_LAYOUT_DIST_ANCHOR,
-    replacement: BINDGROUP_LAYOUT_DIST_REPLACEMENT,
-    doneMarker: "binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: {}",
+    anchor: BINDGROUP_LAYOUT_DIST_ANCHOR_STRUCTURED,
+    replacement: BINDGROUP_LAYOUT_DIST_REPLACEMENT_STRUCTURED,
+    doneMarker: "// V14D State2 实时合成：extra mask texture",
     label: "dist/engine.js bind group 布局 binding(5)",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
     anchor: CREATE_BINDGROUP_SRC_ANCHOR,
-    replacement: CREATE_BINDGROUP_SRC_REPLACEMENT,
-    doneMarker: "maskView ?? this.fallbackMaterialTexture.createView()",
+    replacement: CREATE_BINDGROUP_SRC_REPLACEMENT_FIXED,
+    doneMarker: "baseEntries.some((e) => e.binding === 5)",
     label: "src/engine.ts createMaterialBindGroup binding(5)",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
     anchor: CREATE_BINDGROUP_DIST_ANCHOR,
-    replacement: CREATE_BINDGROUP_DIST_REPLACEMENT,
-    doneMarker: "maskView ?? this.fallbackMaterialTexture.createView()",
+    replacement: CREATE_BINDGROUP_DIST_REPLACEMENT_FIXED,
+    doneMarker: "baseEntries.some((e) => e.binding === 5)",
     label: "dist/engine.js createMaterialBindGroup binding(5)",
   },
   {
@@ -799,19 +988,223 @@ const COMPILE_ASSEMBLE_SRC_REPLACEMENT = "  const wgsl = assembleModule(opts.ren
 const COMPILE_ASSEMBLE_DIST_ANCHOR = "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current);";
 const COMPILE_ASSEMBLE_DIST_REPLACEMENT = "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current, graph.tags?.includes(\"v14d-state2-face\") ?? false);";
 
+// 断点 A：以 graph.name 精确覆写编译器生成的 final_color 行。函数使用真实换行
+// 拆分，并保留 node 注释；非 State2 graph 原样返回。src/dist 的表达式保持同构。
+const STATE2_OVERRIDE_SRC = [
+  "// V14D_STATE2_OVERRIDE_FIX_BEGIN",
+  "export function v14dState2OverrideFsBodyFixed(graphName: string, fsBody: string): string {",
+  "  if (graphName !== \"V14D Face State2 Live ShadowFactor\" && graphName !== \"V14D Face State2 Live Composite\") return fsBody",
+  "  const lines = fsBody.split(\"\\n\")",
+  "  const finalIndex = lines.findIndex((line) => /\\blet final_color\\s*=/.test(line))",
+  "  if (finalIndex < 0) return fsBody",
+  "  const tag = lines[finalIndex].match(/\\s+(\\/\\/.*)$/)?.[1] ?? \"\"",
+  "  const mask = \"textureSample(v14d_state2_mask, diffuseSampler, input.uv).rgb\"",
+  "  const expr = graphName === \"V14D Face State2 Live ShadowFactor\" ? \"v14d_state2_shadow_factor(\" + mask + \")\" : \"v14d_state2_composite(tex_color, \" + mask + \")\"",
+  "  lines[finalIndex] = \"  let final_color = \" + expr + \";\" + tag",
+  "  return lines.join(\"\\n\")",
+  "}",
+  "// V14D_STATE2_OVERRIDE_FIX_END",
+].join("\n");
+const STATE2_OVERRIDE_DIST = [
+  "// V14D_STATE2_OVERRIDE_FIX_BEGIN",
+  "export function v14dState2OverrideFsBodyFixed(graphName, fsBody) {",
+  "    if (graphName !== \"V14D Face State2 Live ShadowFactor\" && graphName !== \"V14D Face State2 Live Composite\") return fsBody;",
+  "    const lines = fsBody.split(String.fromCharCode(10));",
+  "    const finalIndex = lines.findIndex((line) => /\\blet final_color\\s*=/.test(line));",
+  "    if (finalIndex < 0) return fsBody;",
+  "    const tag = lines[finalIndex].match(/\\s+(\\/\\/.*)$/)?.[1] ?? \"\";",
+  "    const mask = \"textureSample(v14d_state2_mask, diffuseSampler, input.uv).rgb\";",
+  "    const expr = graphName === \"V14D Face State2 Live ShadowFactor\" ? \"v14d_state2_shadow_factor(\" + mask + \")\" : \"v14d_state2_composite(tex_color, \" + mask + \")\";",
+  "    lines[finalIndex] = \"  let final_color = \" + expr + \";\" + tag;",
+  "    return lines.join(String.fromCharCode(10));",
+  "}",
+  "// V14D_STATE2_OVERRIDE_FIX_END",
+].join("\n");
+const HASHED_ALPHA_ANCHOR = "const HASHED_ALPHA_DECLS = " + String.fromCharCode(96);
+
+// compile/assembleModule 的同一调用行必须由一个 manifest target 一次性收敛，
+// 同时完成 A 的 fsBody 覆写接线与 State2 tag 门控，避免多个 replace 依赖先后顺序。
+const COMPILE_STATE2_IMPORT_SRC_ANCHOR = "import { assembleModule } from \"./slots\"\n";
+const COMPILE_STATE2_IMPORT_SRC_REPLACEMENT = "import { assembleModule, v14dState2OverrideFsBodyFixed } from \"./slots\"\n";
+const COMPILE_STATE2_IMPORT_DIST_ANCHOR = "import { assembleModule } from \"./slots\";\n";
+const COMPILE_STATE2_IMPORT_DIST_REPLACEMENT = "import { assembleModule, v14dState2OverrideFsBodyFixed } from \"./slots\";\n";
+const COMPILE_STATE2_SRC_FRESH_ANCHOR = [
+  "  const fsBody = lines.join(\"\\n\")",
+  "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current)",
+].join("\n");
+const COMPILE_STATE2_SRC_STATE2_ANCHOR = [
+  "  const fsBody = lines.join(\"\\n\")",
+  "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current, graph.tags?.includes(\"v14d-state2-face\") ?? false)",
+].join("\n");
+const COMPILE_STATE2_SRC_A_ANCHOR = [
+  "  const fsBody = lines.join(\"\\n\")",
+  "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)",
+  "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current)",
+].join("\n");
+const COMPILE_STATE2_SRC_FINAL = [
+  "  const fsBody = lines.join(\"\\n\")",
+  "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)",
+  "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, graph.tags?.includes(\"v14d-state2-face\") ?? false)",
+].join("\n");
+const COMPILE_STATE2_DIST_FRESH_ANCHOR = [
+  "    const fsBody = lines.join(\"\\n\");",
+  "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current);",
+].join("\n");
+const COMPILE_STATE2_DIST_STATE2_ANCHOR = [
+  "    const fsBody = lines.join(\"\\n\");",
+  "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current, graph.tags?.includes(\"v14d-state2-face\") ?? false);",
+].join("\n");
+const COMPILE_STATE2_DIST_A_ANCHOR = [
+  "    const fsBody = lines.join(\"\\n\");",
+  "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody);",
+  "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current);",
+].join("\n");
+const COMPILE_STATE2_DIST_FINAL = [
+  "    const fsBody = lines.join(\"\\n\");",
+  "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody);",
+  "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, graph.tags?.includes(\"v14d-state2-face\") ?? false);",
+].join("\n");
+
+const BASE_BIND_ENTRIES_SRC_ANCHOR = [
+  "      const baseBindGroupEntries: GPUBindGroupEntry[] = [",
+  "        { binding: 0, resource: textureView },",
+  "        { binding: 1, resource: { buffer: materialUniformBuffer } },",
+  "        { binding: 2, resource: (toonTexture ?? this.fallbackMaterialTexture).createView() },",
+  "        { binding: 3, resource: (sphereTexture ?? this.fallbackMaterialTexture).createView() },",
+  "      ]",
+].join("\n");
+const BASE_BIND_ENTRIES_SRC_REPLACEMENT = [
+  "      const baseBindGroupEntries: GPUBindGroupEntry[] = [",
+  "        { binding: 0, resource: textureView },",
+  "        { binding: 1, resource: { buffer: materialUniformBuffer } },",
+  "        { binding: 2, resource: (toonTexture ?? this.fallbackMaterialTexture).createView() },",
+  "        { binding: 3, resource: (sphereTexture ?? this.fallbackMaterialTexture).createView() },",
+  "        { binding: 5, resource: __auxMaskView },",
+  "      ]",
+].join("\n");
+const BASE_BIND_ENTRIES_DIST_ANCHOR = [
+  "            const baseBindGroupEntries = [",
+  "                { binding: 0, resource: textureView },",
+  "                { binding: 1, resource: { buffer: materialUniformBuffer } },",
+  "                { binding: 2, resource: (toonTexture ?? this.fallbackMaterialTexture).createView() },",
+  "                { binding: 3, resource: (sphereTexture ?? this.fallbackMaterialTexture).createView() },",
+  "            ];",
+].join("\n");
+const BASE_BIND_ENTRIES_DIST_REPLACEMENT = [
+  "            const baseBindGroupEntries = [",
+  "                { binding: 0, resource: textureView },",
+  "                { binding: 1, resource: { buffer: materialUniformBuffer } },",
+  "                { binding: 2, resource: (toonTexture ?? this.fallbackMaterialTexture).createView() },",
+  "                { binding: 3, resource: (sphereTexture ?? this.fallbackMaterialTexture).createView() },",
+  "                { binding: 5, resource: __auxMaskView },",
+  "            ];",
+].join("\n");
+
+const ASSIGN_GROUP_SRC_ANCHOR = [
+  "      dc.bindGroup = this.createMaterialBindGroup(",
+  "        " + String.fromCharCode(96) + "material: \${dc.materialName}" + String.fromCharCode(96) + ",",
+  "        dc.baseBindGroupEntries,",
+  "        install ? install.uniformBuffer : this.zeroStyleBuffer,",
+  "      )",
+].join("\n");
+const ASSIGN_GROUP_SRC_REPLACEMENT = [
+  "      dc.bindGroup = this.createMaterialBindGroup(",
+  "        " + String.fromCharCode(96) + "material: \${dc.materialName}" + String.fromCharCode(96) + ",",
+  "        [...dc.baseBindGroupEntries],",
+  "        install ? install.uniformBuffer : this.zeroStyleBuffer,",
+  "      )",
+].join("\n");
+const ASSIGN_GROUP_DIST_ANCHOR =
+  "            dc.bindGroup = this.createMaterialBindGroup(" + String.fromCharCode(96) + "material: \${dc.materialName}" + String.fromCharCode(96) + ", dc.baseBindGroupEntries, install ? install.uniformBuffer : this.zeroStyleBuffer);";
+const ASSIGN_GROUP_DIST_REPLACEMENT =
+  "            dc.bindGroup = this.createMaterialBindGroup(" + String.fromCharCode(96) + "material: \${dc.materialName}" + String.fromCharCode(96) + ", [...dc.baseBindGroupEntries], install ? install.uniformBuffer : this.zeroStyleBuffer);";
+
+const state2CompletenessTargets = [
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
+    anchor: HASHED_ALPHA_ANCHOR,
+    replacement: STATE2_OVERRIDE_SRC + "\n" + HASHED_ALPHA_ANCHOR,
+    doneMarker: "export function v14dState2OverrideFsBodyFixed(graphName: string, fsBody: string): string",
+    label: "src/graph/slots.ts state2 override 修正函数",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
+    anchor: HASHED_ALPHA_ANCHOR,
+    replacement: STATE2_OVERRIDE_DIST + "\n" + HASHED_ALPHA_ANCHOR,
+    doneMarker: "export function v14dState2OverrideFsBodyFixed(graphName, fsBody)",
+    label: "dist/graph/slots.js state2 override 修正函数",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "compile.ts"),
+    anchor: COMPILE_STATE2_IMPORT_SRC_ANCHOR,
+    replacement: COMPILE_STATE2_IMPORT_SRC_REPLACEMENT,
+    doneMarker: "import { assembleModule, v14dState2OverrideFsBodyFixed } from \"./slots\"",
+    label: "src/graph/compile.ts state2 override import 接线",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js"),
+    anchor: COMPILE_STATE2_IMPORT_DIST_ANCHOR,
+    replacement: COMPILE_STATE2_IMPORT_DIST_REPLACEMENT,
+    doneMarker: "import { assembleModule, v14dState2OverrideFsBodyFixed } from \"./slots\"",
+    label: "dist/graph/compile.js state2 override import 接线",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "compile.ts"),
+    anchors: [COMPILE_STATE2_SRC_FRESH_ANCHOR, COMPILE_STATE2_SRC_STATE2_ANCHOR, COMPILE_STATE2_SRC_A_ANCHOR],
+    replacement: COMPILE_STATE2_SRC_FINAL,
+    doneMarker: COMPILE_STATE2_SRC_FINAL,
+    label: "src/graph/compile.ts state2 override + tag 门控接线",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js"),
+    anchors: [COMPILE_STATE2_DIST_FRESH_ANCHOR, COMPILE_STATE2_DIST_STATE2_ANCHOR, COMPILE_STATE2_DIST_A_ANCHOR],
+    replacement: COMPILE_STATE2_DIST_FINAL,
+    doneMarker: COMPILE_STATE2_DIST_FINAL,
+    label: "dist/graph/compile.js state2 override + tag 门控接线",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: BASE_BIND_ENTRIES_SRC_ANCHOR,
+    replacement: BASE_BIND_ENTRIES_SRC_REPLACEMENT,
+    doneMarker: "binding: 5, resource: __auxMaskView",
+    label: "src/engine.ts binding5 baseEntries",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: BASE_BIND_ENTRIES_DIST_ANCHOR,
+    replacement: BASE_BIND_ENTRIES_DIST_REPLACEMENT,
+    doneMarker: "binding: 5, resource: __auxMaskView",
+    label: "dist/engine.js binding5 baseEntries",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: ASSIGN_GROUP_SRC_ANCHOR,
+    replacement: ASSIGN_GROUP_SRC_REPLACEMENT,
+    doneMarker: "...dc.baseBindGroupEntries",
+    label: "src/engine.ts assignDrawCallGroups 展开 baseEntries",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: ASSIGN_GROUP_DIST_ANCHOR,
+    replacement: ASSIGN_GROUP_DIST_REPLACEMENT,
+    doneMarker: "...dc.baseBindGroupEntries",
+    label: "dist/engine.js assignDrawCallGroups 展开 baseEntries",
+  },
+];
+
 const state2SlotTargets = [
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
     anchor: SLOTS_STATE2_ANCHOR,
     replacement: SLOTS_STATE2_REPLACEMENT,
-    doneMarker: "v14d_state2_shadow_factor",
+    doneMarker: "const V14D_STATE2_HELPERS_WGSL",
     label: "src/graph/slots.ts state2 helper 声明",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
     anchor: SLOTS_STATE2_DIST_ANCHOR,
     replacement: SLOTS_STATE2_DIST_REPLACEMENT,
-    doneMarker: "v14d_state2_shadow_factor",
+    doneMarker: "const V14D_STATE2_HELPERS_WGSL",
     label: "dist/graph/slots.js state2 helper 声明",
   },
   {
@@ -828,37 +1221,11 @@ const state2SlotTargets = [
     doneMarker: "includeState2Mask",
     label: "dist/graph/slots.js assembleModule state2 门控",
   },
-  {
-    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "compile.ts"),
-    anchor: COMPILE_ASSEMBLE_SRC_ANCHOR,
-    replacement: COMPILE_ASSEMBLE_SRC_REPLACEMENT,
-    doneMarker: "graph.tags?.includes(\"v14d-state2-face\")",
-    label: "src/graph/compile.ts state2 门控",
-  },
-  {
-    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js"),
-    anchor: COMPILE_ASSEMBLE_DIST_ANCHOR,
-    replacement: COMPILE_ASSEMBLE_DIST_REPLACEMENT,
-    doneMarker: "graph.tags?.includes(\"v14d-state2-face\")",
-    label: "dist/graph/compile.js state2 门控",
-  },
 ];
-state2Targets.push(...state2SlotTargets);
+state2Targets.push(...state2CompletenessTargets, ...state2SlotTargets);
 passthroughTargets.push(...state2Targets);
 
-for (const t of passthroughTargets) {
-  if (!fs.existsSync(t.file)) { patchLog.push({ label: t.label, status: "missing-file" }); continue; }
-  const content = fs.readFileSync(t.file, "utf8");
-  if (content.includes(t.doneMarker)) { patchLog.push({ label: t.label, status: "already" }); continue; }
-  if (!content.includes(t.anchor)) {
-    console.warn(`[patch-reze-engine] display-passthrough 锚点未匹配，跳过: ${t.label}`);
-    patchLog.push({ label: t.label, status: "anchor-miss" });
-    continue;
-  }
-  fs.writeFileSync(t.file, content.replace(t.anchor, t.replacement), "utf8");
-  patchLog.push({ label: t.label, status: "injected" });
-  console.log(`[patch-reze-engine] 已注入 display-passthrough: ${t.label}`);
-}
+applyPatchManifest(passthroughTargets, "display-passthrough");
 
 // ─── 断点 C 幂等顺序修正:fresh install 后 dist slots.js 可能是旧顺序(helper 嵌套在 prelude/fn fs 内)。
 // doneMarker=includeState2Mask 会让上面的 assembleModule target 跳过,掩盖模板旧顺序。
@@ -889,9 +1256,9 @@ for (const t of passthroughTargets) {
 // 静默跳过的补丁会让引擎行为与代码假设不一致（生产 Filmic/诊断 passthrough 错乱），
 // 必须在普通 predev/prebuild 路径失败，而不是仅 warn 继续。
 {
-  const bad = patchLog.filter((e) => e.status === "anchor-miss" || e.status === "missing-file");
+  const bad = patchLog.filter((e) => e.status === "anchor-miss" || e.status === "ambiguous-anchor" || e.status === "missing-file");
   if (bad.length) {
-    console.error("===PATCH-APPLY-FAIL=== 以下补丁目标异常（anchor-miss/missing-file）：");
+    console.error("===PATCH-APPLY-FAIL=== 以下补丁目标异常（anchor-miss/ambiguous-anchor/missing-file）：");
     for (const e of bad) console.error("  [" + e.status + "] " + e.label);
     process.exit(1);
   }
