@@ -1,4 +1,4 @@
-// Stage 2B-M1 修正轮：断点 A（fsBody 覆写）+ 断点 B（binding(5) 重绑）红灯回归。
+// Stage 2B-M1 修正轮：断点 A（fsBody 覆写）+ 断点 B（binding(5) 重绑）+ 断点 C（fresh-patch WGSL helper 函数嵌套）红灯回归。
 // 从仓库根运行。引擎 dist 为 ESM 且内部无扩展名 import，改为读取 dist 源文本做静态断言，
 // 并用 new Function 执行 dist 实际接线的 override 函数、以编译器真实 fsBody 行格式做行为断言。
 // 修复前必须 FAIL（红灯），修复后 PASS（转绿）。任一断言失败 exit 1。
@@ -11,7 +11,8 @@ const compileSrc = fs.readFileSync(path.join(root, "web", "node_modules", "reze-
 const engine = fs.readFileSync(path.join(root, "web", "node_modules", "reze-engine", "dist", "engine.js"), "utf8");
 const compile = fs.readFileSync(path.join(root, "web", "node_modules", "reze-engine", "dist", "graph", "compile.js"), "utf8");
 const fails = [];
-const ok = (cond, msg) => { if (cond) console.log("[ok] " + msg); else { fails.push(msg); console.error("[FAIL] " + msg); } };
+let assertCount = 0;
+const ok = (cond, msg) => { assertCount += 1; if (cond) console.log("[ok] " + msg); else { fails.push(msg); console.error("[FAIL] " + msg); } };
 
 // 断点 A0：fence 修正函数存在且被 compile 接线（运行时实际调用它）
 const FIXED = "v14dState2OverrideFsBodyFixed";
@@ -67,5 +68,57 @@ const aIdx = engine.indexOf("assignDrawCallGroups(inst, claimed) {");
 const aSeg = aIdx >= 0 ? engine.slice(aIdx, aIdx + 1400) : "";
 ok(aSeg.indexOf("...dc.baseBindGroupEntries") >= 0, "断点B3 assignDrawCallGroups 重绑展开 dc.baseBindGroupEntries");
 
-if (fails.length) { console.error("===OVERRIDE-REGRESSION-FAIL===" + String.fromCharCode(10) + fails.join(String.fromCharCode(10))); process.exit(1); }
-console.log("===OVERRIDE-REGRESSION-OK=== 断点A/B 全部通过");
+
+// 断点 C:fresh-patch WGSL helper 函数嵌套(module-scope 顺序)。
+// 在临时 fixture(未打补丁的真实 anchor)应用当前 patch 模板,断言 helper 在 prelude 之前。
+// 修复前(模板 helper 在 prelude 后)必须红,修复后绿;不触碰真实 node_modules。
+{
+  const QUOTE = String.fromCharCode(34);
+  const patchSrc = fs.readFileSync(path.join(root, "web", "scripts", "patch-reze-engine.mjs"), "utf8");
+  const extractConst = (name) => {
+    const start = patchSrc.indexOf("const " + name + " = " + QUOTE);
+    if (start < 0) return null;
+    let i = patchSrc.indexOf(QUOTE, start) + 1;
+    let out = "";
+    while (i < patchSrc.length) {
+      const ch = patchSrc[i];
+      if (ch === String.fromCharCode(92)) {
+        const nx = patchSrc[i + 1];
+        if (nx === "n") out += String.fromCharCode(10);
+        else if (nx === QUOTE) out += QUOTE;
+        else if (nx === String.fromCharCode(92)) out += String.fromCharCode(92);
+        else out += nx;
+        i += 2; continue;
+      }
+      if (ch === QUOTE) break;
+      out += ch; i++;
+    }
+    return out;
+  };
+  const SRC_ANCHOR = extractConst("SLOTS_ASSEMBLE_SRC_ANCHOR");
+  const SRC_REPL = extractConst("SLOTS_ASSEMBLE_SRC_REPLACEMENT");
+  const DIST_ANCHOR = extractConst("SLOTS_ASSEMBLE_DIST_ANCHOR");
+  const DIST_REPL = extractConst("SLOTS_ASSEMBLE_DIST_REPLACEMENT");
+  ok(SRC_ANCHOR && SRC_REPL && DIST_ANCHOR && DIST_REPL, "断点C0 四个模板常量可从 patch 脚本提取");
+  const srcPatched = SRC_ANCHOR ? SRC_ANCHOR.replace(SRC_ANCHOR, SRC_REPL) : "";
+  const distPatched = DIST_ANCHOR ? DIST_ANCHOR.replace(DIST_ANCHOR, DIST_REPL) : "";
+  for (const [label, content] of [["src", srcPatched], ["dist", distPatched]]) {
+    const hi = content.indexOf("V14D_STATE2_HELPERS_WGSL : ");
+    const pi = content.indexOf("prelude(renderClass, alphaMode)");
+    ok(hi >= 0 && pi >= 0, "断点C1 " + label + " fresh fixture 含 helper 与 prelude 引用");
+    ok(hi >= 0 && pi >= 0 && hi < pi, "断点C2 " + label + " fresh-patch 后 helperIndex(" + hi + ") < preludeIndex(" + pi + ") (module-scope,helper 在 prelude 前)");
+  }
+  // 运行时当前 node_modules 文件也必须是 module-scope 顺序(防回退)。
+  // 注意: 必须在 assembleModule 函数体内比较——文件前面 decls 段也引用 prelude,全文 indexOf 会误判。
+  for (const [label, content] of [["src", slotsSrc], ["dist", slots]]) {
+    const ai = content.indexOf("export function assembleModule");
+    const seg = ai >= 0 ? content.slice(ai, ai + 900) : "";
+    const hi = seg.indexOf("V14D_STATE2_HELPERS_WGSL : ");
+    const pi = seg.indexOf("prelude(renderClass, alphaMode)");
+    ok(ai >= 0, "断点C3 " + label + " 运行时 node_modules 存在 assembleModule");
+    ok(hi >= 0 && pi >= 0 && hi < pi, "断点C3 " + label + " 运行时 assembleModule 内 helperIndex(" + hi + ") < preludeIndex(" + pi + ")");
+  }
+}
+
+if (fails.length) { console.error("===OVERRIDE-REGRESSION-FAIL=== 断言数=" + assertCount + String.fromCharCode(10) + fails.join(String.fromCharCode(10))); process.exit(1); }
+console.log("===OVERRIDE-REGRESSION-OK=== 断点A/B/C 全部通过,实际断言数=" + assertCount);

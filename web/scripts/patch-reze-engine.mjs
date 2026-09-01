@@ -707,9 +707,9 @@ const state2Targets = [
 const SLOTS_STATE2_ANCHOR = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`\n";
 const SLOTS_STATE2_REPLACEMENT = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`\n\n// V14D State2 实时合成（Stage 2B-M1）：extra mask 纹理声明 + 合成 helper。\n// 常量来自权威 blend 取证（web/scripts/forensic-v14d-face-state2.py 输出 manifest）：\n//   warm=[1,0.935,0.89], shadowTint=[0.66,0.58,0.60], fringeTint=[0.70,0.64,0.69]。\n// mask 纹理为 rgba8unorm（非 sRGB 解码视图），采样即线性值；仅在编译 tags 含\n// \"v14d-state2-face\" 的 graph 时注入，默认关闭。\nconst V14D_STATE2_MASK_DECL = `@group(2) @binding(5) var v14d_state2_mask: texture_2d<f32>;\n\n`;\n\nconst V14D_STATE2_HELPERS_WGSL = `fn v14d_state2_shadow_factor(mask: vec3f) -> vec3f {\n  let inv_b = 1.0 - mask.b;\n  let art = mix(vec3f(1.0, 1.0, 1.0), vec3f(0.66, 0.58, 0.60), mask.r * inv_b);\n  let fringe = mix(vec3f(1.0, 1.0, 1.0), vec3f(0.70, 0.64, 0.69), mask.g * inv_b);\n  return art * fringe;\n}\n\nfn v14d_state2_composite(base: vec3f, mask: vec3f) -> vec3f {\n  let warm = base * vec3f(1.0, 0.935, 0.89);\n  return warm * v14d_state2_shadow_factor(mask);\n}\n\n`;\n";
 const SLOTS_ASSEMBLE_SRC_ANCHOR = "export function assembleModule(\n  renderClass: RenderClass,\n  alphaMode: AlphaMode,\n  fsBody: string,\n  includeStyleUniforms: boolean,\n): string {\n  return (\n    NODES_WGSL +\n    COMMON_MATERIAL_PRELUDE_WGSL +\n    (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n    decls(renderClass, alphaMode) +\n    prelude(renderClass, alphaMode) +\n    fsBody +\n    \"\\n\" +\n    epilogue(renderClass, alphaMode) +\n    \"}\\n\"\n  )\n}";
-const SLOTS_ASSEMBLE_SRC_REPLACEMENT = "export function assembleModule(\n  renderClass: RenderClass,\n  alphaMode: AlphaMode,\n  fsBody: string,\n  includeStyleUniforms: boolean,\n  includeState2Mask = false,\n): string {\n  return (\n    NODES_WGSL +\n    COMMON_MATERIAL_PRELUDE_WGSL +\n    (includeState2Mask ? V14D_STATE2_MASK_DECL : \"\") +\n    (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n    decls(renderClass, alphaMode) +\n    prelude(renderClass, alphaMode) +\n    (includeState2Mask ? V14D_STATE2_HELPERS_WGSL : \"\") +\n    fsBody +\n    \"\\n\" +\n    epilogue(renderClass, alphaMode) +\n    \"}\\n\"\n  )\n}";
+const SLOTS_ASSEMBLE_SRC_REPLACEMENT = "export function assembleModule(\n  renderClass: RenderClass,\n  alphaMode: AlphaMode,\n  fsBody: string,\n  includeStyleUniforms: boolean,\n  includeState2Mask = false,\n): string {\n  return (\n    NODES_WGSL +\n    COMMON_MATERIAL_PRELUDE_WGSL +\n    (includeState2Mask ? V14D_STATE2_MASK_DECL : \"\") +\n    (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n    decls(renderClass, alphaMode) +\n    (includeState2Mask ? V14D_STATE2_HELPERS_WGSL : \"\") +\n    prelude(renderClass, alphaMode) +\n    fsBody +\n    \"\\n\" +\n    epilogue(renderClass, alphaMode) +\n    \"}\\n\"\n  )\n}";
 const SLOTS_ASSEMBLE_DIST_ANCHOR = "export function assembleModule(renderClass, alphaMode, fsBody, includeStyleUniforms) {\n    return (NODES_WGSL +\n        COMMON_MATERIAL_PRELUDE_WGSL +\n        (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n        decls(renderClass, alphaMode) +\n        prelude(renderClass, alphaMode) +\n        fsBody +\n        \"\\n\" +\n        epilogue(renderClass, alphaMode) +\n        \"}\\n\");\n}";
-const SLOTS_ASSEMBLE_DIST_REPLACEMENT = "export function assembleModule(renderClass, alphaMode, fsBody, includeStyleUniforms, includeState2Mask = false) {\n    return (NODES_WGSL +\n        COMMON_MATERIAL_PRELUDE_WGSL +\n        (includeState2Mask ? V14D_STATE2_MASK_DECL : \"\") +\n        (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n        decls(renderClass, alphaMode) +\n        prelude(renderClass, alphaMode) +\n        (includeState2Mask ? V14D_STATE2_HELPERS_WGSL : \"\") +\n        fsBody +\n        \"\\n\" +\n        epilogue(renderClass, alphaMode) +\n        \"}\\n\");\n}";
+const SLOTS_ASSEMBLE_DIST_REPLACEMENT = "export function assembleModule(renderClass, alphaMode, fsBody, includeStyleUniforms, includeState2Mask = false) {\n    return (NODES_WGSL +\n        COMMON_MATERIAL_PRELUDE_WGSL +\n        (includeState2Mask ? V14D_STATE2_MASK_DECL : \"\") +\n        (includeStyleUniforms ? STYLE_UNIFORMS_WGSL : \"\") +\n        decls(renderClass, alphaMode) +\n        (includeState2Mask ? V14D_STATE2_HELPERS_WGSL : \"\") +\n        prelude(renderClass, alphaMode) +\n        fsBody +\n        \"\\n\" +\n        epilogue(renderClass, alphaMode) +\n        \"}\\n\");\n}";
 const COMPILE_ASSEMBLE_SRC_ANCHOR = "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current)";
 const COMPILE_ASSEMBLE_SRC_REPLACEMENT = "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current, graph.tags?.includes(\"v14d-state2-face\") ?? false)";
 const COMPILE_ASSEMBLE_DIST_ANCHOR = "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBody, usesStyle.current);";
@@ -776,6 +776,31 @@ for (const t of passthroughTargets) {
   console.log(`[patch-reze-engine] 已注入 display-passthrough: ${t.label}`);
 }
 
+// ─── 断点 C 幂等顺序修正:fresh install 后 dist slots.js 可能是旧顺序(helper 嵌套在 prelude/fn fs 内)。
+// doneMarker=includeState2Mask 会让上面的 assembleModule target 跳过,掩盖模板旧顺序。
+// 这里直接检测 dist slots.js 真实文本的 helper/prelude 先后,旧顺序则幂等替换为新顺序。
+{
+  const distSlots = path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js");
+  if (fs.existsSync(distSlots)) {
+    const NL = String.fromCharCode(10);
+    const Q = String.fromCharCode(34);
+    const helperRef = "(includeState2Mask ? V14D_STATE2_HELPERS_WGSL : " + Q + Q + ") +";
+    const preludeRef = "prelude(renderClass, alphaMode) +";
+    const oldOrder = "decls(renderClass, alphaMode) +" + NL + "        " + preludeRef + NL + "        " + helperRef;
+    const newOrder = "decls(renderClass, alphaMode) +" + NL + "        " + helperRef + NL + "        " + preludeRef;
+    let content = fs.readFileSync(distSlots, "utf8");
+    if (content.includes(oldOrder)) {
+      content = content.replace(oldOrder, newOrder);
+      fs.writeFileSync(distSlots, content, "utf8");
+      console.log("[patch-reze-engine] 断点C 顺序修正: dist slots.js helper 移到 prelude 之前");
+      patchLog.push({ label: "dist slots.js 断点C 顺序修正", status: "injected" });
+    } else if (content.includes(newOrder)) {
+      patchLog.push({ label: "dist slots.js 断点C 顺序修正", status: "already" });
+    }
+  }
+}
+
+
 // ─── prebuild/predev 硬性失败：anchor miss / 目标文件缺失 / 注入计数异常非零退出 ──
 // 静默跳过的补丁会让引擎行为与代码假设不一致（生产 Filmic/诊断 passthrough 错乱），
 // 必须在普通 predev/prebuild 路径失败，而不是仅 warn 继续。
@@ -809,6 +834,43 @@ if (process.argv.includes("--self-test")) {
   const dupContent = "x __mdoStart = texs.length y __mdoStart = texs.length z";
   const dupCount = dupContent.split("__mdoStart = texs.length").length - 1;
   if (dupCount !== 2) { console.error("SELF-TEST-FAIL: 重复 marker 计数逻辑错误"); process.exit(1); }
-  console.log("===PATCH-SELF-TEST-OK=== missing-file 非零退出(exit=" + missingExit + "); 重复 marker 计数自证(count=" + dupCount + " 非 1 即 FAIL)");
+  // 断点 C fresh template 自证: 模板常量必须是 module-scope 顺序(helper 在 prelude 前)。
+  // 直接在内存模板字符串上断言先后,不依赖已安装 node_modules 状态(防 doneMarker 掩盖)。
+  {
+    const selfSrc = fs.readFileSync(fileURLToPath(import.meta.url), "utf8");
+    const QUOTE = String.fromCharCode(34);
+    const extractConst = (name) => {
+      const start = selfSrc.indexOf("const " + name + " = " + QUOTE);
+      if (start < 0) return null;
+      let i = selfSrc.indexOf(QUOTE, start) + 1;
+      let out = "";
+      while (i < selfSrc.length) {
+        const ch = selfSrc[i];
+        if (ch === String.fromCharCode(92)) {
+          const nx = selfSrc[i + 1];
+          if (nx === "n") out += String.fromCharCode(10);
+          else if (nx === QUOTE) out += QUOTE;
+          else if (nx === String.fromCharCode(92)) out += String.fromCharCode(92);
+          else out += nx;
+          i += 2; continue;
+        }
+        if (ch === QUOTE) break;
+        out += ch; i++;
+      }
+      return out;
+    };
+    const srcRepl = extractConst("SLOTS_ASSEMBLE_SRC_REPLACEMENT");
+    const distRepl = extractConst("SLOTS_ASSEMBLE_DIST_REPLACEMENT");
+    let cOk = true;
+    for (const [label, tpl] of [["src", srcRepl], ["dist", distRepl]]) {
+      if (!tpl) { console.error("SELF-TEST-FAIL: 断点C 模板缺失 " + label); cOk = false; continue; }
+      const hi = tpl.indexOf("V14D_STATE2_HELPERS_WGSL : ");
+      const pi = tpl.indexOf("prelude(renderClass, alphaMode)");
+      if (!(hi >= 0 && pi >= 0 && hi < pi)) { console.error("SELF-TEST-FAIL: 断点C " + label + " 模板 helper(" + hi + ") 未在 prelude(" + pi + ") 前（fresh install 会重现 WGSL 函数嵌套）"); cOk = false; }
+      else console.log("[self-test] 断点C " + label + " 模板 helperIndex(" + hi + ") < preludeIndex(" + pi + ") OK");
+    }
+    if (!cOk) process.exit(1);
+  }
+  console.log("===PATCH-SELF-TEST-OK=== missing-file 非零退出(exit=" + missingExit + "); 重复 marker 计数自证(count=" + dupCount + " 非 1 即 FAIL); 断点C fresh template module-scope 顺序 OK");
   process.exit(0);
 }

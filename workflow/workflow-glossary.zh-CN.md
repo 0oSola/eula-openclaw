@@ -248,7 +248,7 @@
 
 - 英文机器名：`v14d-face-state2-live-composite`（契约 / contract id）；Web 实时 State 2 脸部合成。
 - 含义：对 PMX 材质名 `Face` 每像素从原始 BaseColor（`face_d`）+ Blender State2 packed mask + 节点常量，在 Web 线性空间实时执行 warm/art/fringe 合成（State=2/Blend=0 恒等）。公式：`warm=faceD_linear*warmColor`、`art=mix(white,artShadowTint,R*(1-B))`、`fringe=mix(white,fringeTint,G*(1-B))`、`shadowFactor=art*fringe`、`composite=warm*shadowFactor`。
-- 允许用法：固定帧（frame120/State2/Blend0）实时合成预览与三诊断视图（BaseColor/ShadowFactor/FinalComposite）；经 reze-engine 补丁 materialAuxTextures + binding(5) mask + `v14dState2OverrideFsBody` 注入。
+- 允许用法：固定帧（frame120/State2/Blend0）实时合成预览与三诊断视图（BaseColor/ShadowFactor/FinalComposite）；经 reze-engine 补丁 materialAuxTextures + binding(5) mask + `v14dState2OverrideFsBodyFixed` 注入。
 - 禁止用法：不用屏幕像素→UV 反投影 atlas 作运行时材质；不用 bakedGolden 烘焙冒充生产方案；不把灯光/阴影/高光/AgX 固化进 BaseColor；不手调 RGB；不实现五档动态/Narrow Blend/Hysteresis（范围外）；完整 Face Gate MAE 未达 ≤20/255 时不得宣称完成。
 - 路由影响：只影响 `/mmd-calibration-render` faceStatic 的 faceShadowOnly/finalFaceComposite 实时合成模式与 `patch-reze-engine.mjs`；不影响 PMX/VMD Runtime、默认生产入口（诊断开关默认关闭）。当前 Gate 未达标阻塞。
 - 完整定义：见 `workflow/concepts/v14d-face-state2-live-composite.zh-CN.md`、`docs/handoff/2026-08-31-v14d-face-state2-runtime.md`。
