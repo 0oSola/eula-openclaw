@@ -62,15 +62,12 @@ FinalMixAlphaFaceValid 为恒等，occlusion 链对本票退化为 shadowFactor�
 
 ## 相关 contract / gate
 
-- reze-engine 补丁 `web/scripts/patch-reze-engine.mjs`：materialAuxTextures + binding(5) mask + `V14D_STATE2_HELPERS_WGSL` + `v14dState2OverrideFsBody`（`--verify` 41 项不变量恰好一次）。
+- reze-engine 补丁 `web/scripts/patch-reze-engine.mjs`：materialAuxTextures + binding(5) mask + `V14D_STATE2_HELPERS_WGSL` + `v14dState2OverrideFsBodyFixed`（`--verify` 56 项不变量恰好一次）。
 - 完整 Face Gate 阈值：full Face 覆盖率 ≥95%，每通道 MAE ≤20/255，不放宽。
 
 ## 失败后的修正路线
 
-当前 Gate MAE 未达标。证据显示三个模式 pre-tonemap HDR face 均值完全相同（0.8852,0.5981,0.5556），
-强烈提示 `v14dState2OverrideFsBody` 未对 Face 生效、输出落到原始 BaseColor。后续修正应优先核验引擎
-applyStyleGroups 的 signature 缓存分支是否跳过 compileGraph、确认运行时执行的 bundle 是否加载了覆写注入。
-见 `docs/handoff/2026-08-31-v14d-face-state2-runtime.md` 阻塞分析。
+（2026-09-01 修正轮）已定位并修复三个断点：断点 A（旧 override 分号在注释后的切片标记与真实编译器行格式不匹配，原样返回）、断点 B（applyStyleGroups 重绑丢失 binding(5) aux mask）、断点 C（assembleModule 把 state2 helper 插在 prelude 的 fn fs 开头之后，WGSL 函数嵌套导致 Face graph 应用失败静默回退到原管线）。修复后实时管线结构生效已证实（faceApplied=true、三模式 HDR 互异、用户路径 USER-PATH-OK）。完整 Face Gate MAE 仍未达标；剩余根因候选：face_d/mask 的 UV 采样坐标与 Blender 参考像素坐标的配准（翻转/偏移）、mask 采样同源、或 mask 通道在 Blender 侧的 faceValid 调制口径。下一张票据优先用 exportFaceUvPng 做 UV-direct 逐纹素对账。见 `docs/handoff/2026-08-31-v14d-face-state2-runtime.md` 修正轮。
 
 ## 与现有概念的关系
 

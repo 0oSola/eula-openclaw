@@ -10,6 +10,8 @@ const VMD = process.env.V14D_VMD || "C:\\w\\rk3-face-v14d\\web\\public\\assets\\
 const DERIVED_DIR = process.env.V14D_DERIVED_DIR || "C:\\w\\rk3-face-v14d\\.scratch\\v14d-face-static-derived";
 const COMPOSITE = path.join(DERIVED_DIR, "v14d-face-composite-state2.png");
 const ATTEN = path.join(DERIVED_DIR, "v14d-face-shadow-attenuation-state2.png");
+// State2 实时合成的权威 mask（Node 常量公式所需的 packed mask）。
+const STATE2_MASK = process.env.V14D_STATE2_MASK || "C:/w/rk3-face-v14d/experiments/koleda-v14d-face-shadow/assets/textures/v14d-01234-face-shadow-state-2.png";
 fs.mkdirSync(OUT, { recursive: true });
 const MIN_FACE_SAMPLES = 1000;
 const fail = (msg) => { console.error("ASSERT-FAIL: " + msg); process.exitCode = 1; };
@@ -28,8 +30,7 @@ try {
   // 真实文件选择
   await page.setInputFiles("[data-testid='v14d-face-dir-input']", KOLEDA_DIR);
   await page.setInputFiles("[data-testid='v14d-face-vmd-input']", VMD);
-  await page.setInputFiles("[data-testid='v14d-face-composite-input']", COMPOSITE);
-  await page.setInputFiles("[data-testid='v14d-face-attenuation-input']", ATTEN);
+  await page.setInputFiles("[data-testid='v14d-face-state2-mask-input']", STATE2_MASK);
   await page.click("[data-testid='v14d-face-load']");
   // 加载后面板消失，canvas ready
   await page.waitForSelector("canvas[data-webgpu-status='ready']", { timeout: 120000 });

@@ -17,12 +17,15 @@ const CHROME_EXE = process.env.CHROME_EXE || "C:/Program Files/Google/Chrome/App
 const BASE = process.env.V14D_CAPTURE_BASE || "http://127.0.0.1:3100/mmd-calibration-render";
 const OUT = path.resolve(process.argv[2] || ".scratch/v14d-face-state2-runtime/gate");
 const REF_DIR = path.resolve(process.env.V14D_STATE2_REF_DIR || ".scratch/v14d-face-state2-runtime");
-const KOLEDA_DIR = process.env.V14D_KOLEDA_DIR || "D:\mmd\克莱妲原皮";
+const KOLEDA_DIR = process.env.V14D_KOLEDA_DIR || "D:/mmd/\u514b\u83b1\u59b2\u539f\u76ae";
 const PMX = process.env.V14D_PMX || path.join(KOLEDA_DIR, "GirlsFrontline KoledaDefault.pmx");
-const VMD = process.env.V14D_VMD || "C:\w\rk3-face-v14d\web\public\assets\mmd\calibration\koleda-v14d\koleda-v14d-authoritative-pose-f120.vmd";
+const VMD = process.env.V14D_VMD || "C:/w/rk3-face-v14d/web/public/assets/mmd/calibration/koleda-v14d/koleda-v14d-authoritative-pose-f120.vmd";
 const STATE2_MASK = process.env.V14D_STATE2_MASK || "C:/w/rk3-face-v14d/experiments/koleda-v14d-face-shadow/assets/textures/v14d-01234-face-shadow-state-2.png";
 const STATE2_MASK_REL = "Textures/v14d-state2-mask/state2.png";
 const FACE_D = path.join(KOLEDA_DIR, "Textures", "c_Koleda_slg_face_d.png");
+for (const [label, fp, envUsed] of [["PMX", PMX, !!process.env.V14D_PMX], ["VMD", VMD, !!process.env.V14D_VMD], ["State2 mask", STATE2_MASK, !!process.env.V14D_STATE2_MASK]]) {
+  if (!envUsed && !fs.existsSync(fp)) { console.error("GATE-CONFIG-FAIL: 默认 " + label + " 路径不存在 " + fp + "（请用环境变量覆盖）"); process.exit(2); }
+}
 const FIXED = 640;
 const CAMERA_OVERRIDE = (() => { const h = process.argv.find((a) => a.startsWith("--camera-override=")); return h ? h.split("=", 2)[1] : null; })();
 const MODE_ARG = (() => { const h = process.argv.find((a) => a.startsWith("--mode=")); return h ? h.split("=", 2)[1] : null; })();
@@ -221,9 +224,10 @@ function computeRegionMetrics(webRgb, refLin, mask, w, h) {
 
 async function run() {
   fs.mkdirSync(OUT, { recursive: true });
-  const modes = MODE_ARG ? [MODE_ARG] : ["faceShadowOnly", "finalFaceComposite"];
-  const refName = { faceShadowOnly: "blender-ref-state2-shadow-factor.png", finalFaceComposite: "blender-ref-state2-final-composite.png" };
+  const modes = MODE_ARG ? [MODE_ARG] : ["normal", "faceShadowOnly", "finalFaceComposite"];
+  const refName = { faceShadowOnly: "blender-ref-state2-shadow-factor.png", finalFaceComposite: "blender-ref-state2-final-composite.png" }; // normal 无 Blender 参考，仅作对照基线
   const fails = [];
+  const modeHdrs = {};
   const report = { modes: {}, cameraOverride: CAMERA_OVERRIDE, negative: NEGATIVE };
 
   for (const mode of modes) {
@@ -235,10 +239,14 @@ async function run() {
     else if (!cap.state.cameraPos || !cap.state.cameraTarget) { fails.push(mode + ": 相机 position/target 缺失"); m.registration = "null-pos"; }
     else if (!CAMERA_OVERRIDE && Math.abs(fov - AUTH_CAM.fov) > 0.5) { fails.push(mode + ": 相机 fov " + fov + " != 权威 " + AUTH_CAM.fov); m.registration = "fov-mismatch"; }
     else m.registration = CAMERA_OVERRIDE ? "override-active" : "ok";
-    // ── 双纹理绑定 Gate ──
-    if (cap.state.liveBound !== "true") fails.push(mode + ": 实时双纹理绑定未通过 (liveBound=" + cap.state.liveBound + ")");
-    if (cap.state.liveMaskPath !== STATE2_MASK_REL) fails.push(mode + ": mask 路径错误 " + cap.state.liveMaskPath);
+    // ── 双纹理绑定 Gate（normal 为原始 face_d 对照基线，不挂 State2 live graph，跳过绑定断言）──
+    if (mode !== "normal") {
+      if (cap.state.liveBound !== "true") fails.push(mode + ": 实时双纹理绑定未通过 (liveBound=" + cap.state.liveBound + ")");
+      if (cap.state.liveMaskPath !== STATE2_MASK_REL) fails.push(mode + ": mask 路径错误 " + cap.state.liveMaskPath);
+    }
     if (!cap.hdr) { fails.push(mode + ": HDR 证据缺失"); report.modes[mode] = m; continue; }
+    modeHdrs[mode] = cap.hdr;
+    if (mode === "normal") { report.modes[mode] = m; continue; } // normal 仅对照，不做 Blender 参考 MAE
     const w = cap.hdr.width, h = cap.hdr.height;
     const faceMask = Uint8Array.from(cap.hdr.faceMask);
     const faceCount = faceMask.reduce((a, b) => a + b, 0);
@@ -281,6 +289,22 @@ async function run() {
     report.modes[mode] = m;
   }
 
+  // 三模式 pre-tonemap HDR 互异（实时合成生效证据）：normal/faceShadowOnly/finalFaceComposite 的 Face HDR 均值必须互不相同。
+  if (!NEGATIVE && !MODE_ARG) {
+    const faceMean = (hdr) => {
+      if (!hdr) return null;
+      let n = 0; const acc = [0, 0, 0];
+      for (let i = 0; i < hdr.faceMask.length; i += 1) { if (!hdr.faceMask[i]) continue; n += 1; acc[0] += hdr.rgb[i*3]; acc[1] += hdr.rgb[i*3+1]; acc[2] += hdr.rgb[i*3+2]; }
+      return n ? acc.map((v) => +(v / n).toFixed(5)) : null;
+    };
+    const means = { normal: faceMean(modeHdrs.normal), faceShadowOnly: faceMean(modeHdrs.faceShadowOnly), finalFaceComposite: faceMean(modeHdrs.finalFaceComposite) };
+    report.modeHdrFaceMean = means;
+    const same = (a, b) => a && b && a.every((v, i) => Math.abs(v - b[i]) < 1e-4);
+    if (same(means.normal, means.faceShadowOnly)) fails.push("HDR 互异失败: normal 与 faceShadowOnly 均值相同 " + JSON.stringify(means.normal) + "（实时 shadow 覆写未生效）");
+    if (same(means.normal, means.finalFaceComposite)) fails.push("HDR 互异失败: normal 与 finalFaceComposite 均值相同 " + JSON.stringify(means.normal) + "（实时 composite 覆写未生效）");
+    if (same(means.faceShadowOnly, means.finalFaceComposite)) fails.push("HDR 互异失败: faceShadowOnly 与 finalFaceComposite 均值相同 " + JSON.stringify(means.faceShadowOnly));
+    console.log("[HDR-distinct] " + JSON.stringify(means));
+  }
   fs.writeFileSync(path.join(OUT, "gate-report.json"), JSON.stringify(report, null, 2));
   console.log("===STATE2-LIVE-GATE-REPORT=== " + path.join(OUT, "gate-report.json"));
   console.log(JSON.stringify(report, null, 2));

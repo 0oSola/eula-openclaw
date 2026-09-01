@@ -1843,10 +1843,11 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             canvasRef.current.dataset[V14D_FACE_STATIC_DATASET.faceMaterialApplied] = String(worldPosResult.ok);
           }
         }
-        // 三个模式（normal/faceShadowOnly/finalFaceComposite）都只把 Face 材质切到
-        // 纯纹理 unlit graph，仅纹理不同（原始 face_d / 衰减图 / 合成图），
-        // 保证「只有 Face 纹理变化」的严格 A/B；其余材质保持 reze-k3 正常分组，
-        // 不套全局 unlit。Face 不再随 v14dUnlitDiagnostic 的全局 graph 走。
+        // Stage 2B-M1 实时合成（修正轮）：normal 用原始 face_d（纯纹理 unlit 基线）；
+        // faceShadowOnly/finalFaceComposite 把 Face 切到实时合成 graph，引擎补丁五
+        // 按 graph.name 精确覆写 final_color，从原始 face_d + State2 packed mask + 取证常量
+        // 在线性空间实时计算 warm/art/fringe（不再是整张预烘焙脸图或纯纹理替换）。
+        // 保证「只有 Face 材质输出变化」的严格 A/B；其余材质保持 reze-k3 正常分组。
         // uvDebug 模式只输出 Face 的插值 UV（几何节点），供 UV-direct 对账。
         if (v14dFaceStaticMode !== "worldPos" && v14dFaceStaticMode !== "diffuseFlat") {
         if (v14dFaceStaticMode === "bakedGolden") {

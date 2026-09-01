@@ -5,6 +5,45 @@
 - 工作目录：`E:\codexWorktree\710d\MMD project`
 - **最终状态：阻塞（Gate MAE 未达标，阈值未放宽）**。实时合成链已完整接线并通过配准与双纹理绑定 Gate，但完整 Face Gate 每通道 MAE 远超 ≤20/255，按票据规则不放宽阈值、交付阻塞证据。
 
+---
+
+## 修正轮（2026-09-01）：断点 A/B 修复 + WGSL 函数嵌套根因
+
+### 已证实的三个断点（全部修复并回归）
+
+1. **断点 A（fsBody 覆写从未写入）**：旧 override 用分号在注释后的切片标记，而真实编译器行格式是分号在注释前，endIdx<0 原样返回。新增 v14dState2OverrideFsBodyFixed（健壮行匹配，到行尾整行替换并保留 node 标签）。
+2. **断点 B（applyStyleGroups 重绑丢失 binding(5)）**：assignDrawCallGroups 重建 bind group 时未携带 aux mask view。修复：__auxMaskView 并入 baseBindGroupEntries（binding 5），createMaterialBindGroup 仅在 baseEntries 无 binding5 时补 fallback，assignDrawCallGroups 重绑展开 baseBindGroupEntries 自动携带 mask。
+3. **断点 C（WGSL 函数嵌套，Face graph 应用失败静默回退）**：assembleModule 把 V14D_STATE2_HELPERS_WGSL 插在 prelude（fragment fn fs 开头）之后，helper 函数被声明在 fs 函数体内（WGSL 不允许嵌套）→ 编译报 expected '}' for function body → faceResult.ok=false → 引擎回退原管线，live 公式从不渲染（v14dFaceStaticFaceApplied=false）。修复：helper 移到 prelude 之前注入。
+
+### 修正轮证据链
+
+- 红灯回归测试 web/scripts/gate-v14d-state2-override-regression.mjs：修复前 FAIL（断点 A/B 全红），修复后 OVERRIDEREGRESSION-OK 16 项全过（含断点 A2c fence 闭合、断点 A0b src 生效路径断言）。
+- patch --verify：41 升至 56 项不变量恰好一次（新增断点 A/B 修正、换行语义、helper 注入位置、fence 闭合检查），exit 0。
+- 运行时证据（PORT=3408，全新 NEXT_DIST_DIR）：v14dFaceStaticFaceApplied=true（修复前 false），console 无 WGSL 错误，三模式 faceApplied=true。
+
+### 修正轮 Gate 数值（gate-final）
+
+- 三模式 pre-tonemap HDR 均值（互异 通过）：normal=[0.885,0.598,0.556]、faceShadowOnly=[0.929,0.918,0.922]、finalFaceComposite=[0.842,0.528,0.470]（normal 不等于 shadow 不等于 composite，证明实时 override 生效且 shadow/composite 走不同公式）。
+- **完整 Face Gate MAE 仍未达标（阈值 ≤20/255，未放宽）**：faceShadowOnly [88.20,90.23,71.00]、finalFaceComposite [75.58,34.53,31.98]。覆盖率=1.0、配准 ok、pageErrors=0、liveBound=true。
+- 实时管线「结构生效」已证实（faceApplied=true、HDR 互异、用户路径三模式 faceApplied=true、USER-PATH-OK），但「与 Blender 参考逐像素对账」仍有系统偏差。
+
+### 剩余根因候选（未验证，下一张票据）
+
+- **UV/纹理空间配准**：face_d 与 mask 的 UV 在 Web 端采样坐标可能与 Blender 参考的像素坐标存在翻转/偏移。需 UV-direct 逐纹素对账（exportFaceUvPng）定位。
+- **mask 采样坐标**：v14d_state2_sample_mask 用 diffuseSampler，若 mask UV 与 face_d UV 不同源需单独 sampler/变换。
+- **通道口径**：参考帧为 EEVEE Emission 直出（Standard/exposure0/gamma1），与 Web pre-tonemap HDR 同口径线性；比值偏差（R 0.739 / G 0.878 / B 1.059）提示非均匀通道项，疑似 UV 错位或 mask 通道在 Blender 侧的取值口径（如 NarrowArtWeightFaceValid 的 faceValid 调制）与本票恒等假设不一致。
+
+### 修正轮验收项（全部实跑）
+
+- patch --verify → exit 0（56 项）。
+- override 红灯回归 → OVERRIDEREGRESSION-OK（exit 0）。
+- 默认入口 Gate → DEFAULT-GATING-OK（faceStaticCanvas=(unset)、assetsInjected=false）。
+- 配准负测 camera-override=shift + negative → STATE2-LIVE-GATE-NEGATIVE-OK（10 项被拒，Gate 有判别力）。
+- VMD runtime probe → VMD-RUNTIME-PROBE-OK（load/play/pause/seek，play 帧前进、pause 稳定、seek 到位 2.000s）。
+- 真实用户路径 → USER-PATH-OK（三模式 faceApplied=true、faceSamples=4639、badge state=2/blend=0/locked/paused 正确）。
+
+---
+
 ## 1. 唯一交付行为
 把当前 finalFaceComposite 的“整张预烘焙脸图替换”升级为 Web 实时 State 2 合成：每个像素从原始 Face BaseColor + Blender State2 packed mask + 节点常量，在 Web 线性空间执行 warm/art/fringe 合成。State 固定 2、Blend 固定 0；未实现五档动态/Narrow Blend/Hysteresis（范围外）。
 
@@ -84,4 +123,3 @@
 - 眼/口邻域眼睛材质保持性因本帧 Face 区无眼白/眼球样本未采到，需后续单列验证。
 
 证据根目录：`.scratch/v14d-face-state2-runtime/`（gate/gate-report.json、gate/*-web.png、probe/*、forensic-manifest.json、blender-ref-*.png、负测 gate-neg-shift/gate-neg-null）。
-

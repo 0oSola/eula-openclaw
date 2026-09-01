@@ -181,6 +181,29 @@ const STATE2_VERIFY_CHECKS = (() => {
     { label: "dist/graph/slots.js assembleModule state2 门控", file: slotsDist, marker: "includeState2Mask = false" },
     { label: "src/graph/compile.ts state2 门控", file: compileSrc, marker: "graph.tags?.includes(\"v14d-state2-face\")" },
     { label: "dist/graph/compile.js state2 门控", file: compileDist, marker: "graph.tags?.includes(\"v14d-state2-face\")" },
+  // 断点 A 修正轮（src + dist 生效路径）：健壮行匹配 override 存在且被 compile 接线。
+  { label: "src/graph/slots.ts state2 override 修正函数", file: slotsSrc, marker: "export function v14dState2OverrideFsBodyFixed(graphName: string, fsBody: string): string" },
+  { label: "dist/graph/slots.js state2 override 修正函数", file: slotsDist, marker: "export function v14dState2OverrideFsBodyFixed(graphName, fsBody)" },
+  { label: "src/graph/compile.ts state2 override 修正接线", file: compileSrc, marker: "const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)" },
+  { label: "dist/graph/compile.js state2 override 修正接线", file: compileDist, marker: "const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody);" },
+  // 断点 B 修正轮：aux mask view 并入 baseEntries (binding 5) 且重绑展开不丢失。
+  { label: "src/engine.ts binding5 baseEntries", file: engineSrc, marker: "binding: 5, resource: __auxMaskView" },
+  { label: "dist/engine.js binding5 baseEntries", file: engineDistJs, marker: "binding: 5, resource: __auxMaskView" },
+  { label: "src/engine.ts createMaterialBindGroup binding5 门控 fallback", file: engineSrc, marker: "baseEntries.some((e) => e.binding === 5)" },
+  { label: "dist/engine.js createMaterialBindGroup binding5 门控 fallback", file: engineDistJs, marker: "baseEntries.some((e) => e.binding === 5)" },
+  { label: "src/engine.ts assignDrawCallGroups 展开 baseEntries", file: engineSrc, marker: "...dc.baseBindGroupEntries" },
+  { label: "dist/engine.js assignDrawCallGroups 展开 baseEntries", file: engineDistJs, marker: "...dc.baseBindGroupEntries" },
+  // 断点 A 生效性（换行语义）：override 必须以真实换行拆分 fsBody 行；
+  // "\\n" 两字符转义会让 findIndex 找不到 final_color（表达式含空格），静默不生效。
+  { label: "src/graph/slots.ts override 真实换行 split", file: slotsSrc, marker: 'fsBody.split("\\n")' },
+  { label: "dist/graph/slots.js override 真实换行 split", file: slotsDist, marker: "fsBody.split(String.fromCharCode(10))" },
+  // 断点 A 生效性（fence 完整闭合）：fence 结束标记必须恰好一次且无残缺变体，
+  // 否则 "FIX_ENDD" 一类残缺注释会让后续 WGSL 函数体不闭合（expected '}'）。
+  { label: "dist/graph/slots.js fence 结束标记完整", file: slotsDist, marker: "V14D_STATE2_OVERRIDE_FIX_END" + "\n" },
+  // 断点 A 生效性（helper 注入位置）：state2 helper 必须在 prelude（fn fs 开头）之前，
+  // 否则 WGSL 函数嵌套 → expected '}' for function body，Face graph 应用失败静默回退。
+  { label: "src/graph/slots.ts helper 在 prelude 前注入", file: slotsSrc, marker: 'V14D_STATE2_HELPERS_WGSL : "") +' + "\n" + "    prelude(renderClass, alphaMode)" },
+  { label: "dist/graph/slots.js helper 在 prelude 前注入", file: slotsDist, marker: 'V14D_STATE2_HELPERS_WGSL : "") +' + "\n" + "        prelude(renderClass, alphaMode)" },
   ];
 })();
 
