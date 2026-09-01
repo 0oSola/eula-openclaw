@@ -41,7 +41,7 @@
 
 - 正式样本数、覆盖率、rejectedNoTri / rejectedMaskMismatch 记录于 gate-report.json。
 - 三层分别输出每通道 MAE / P95；通过标准 FinalComposite 每通道 MAE ≤ 20/255。
-- 本票实测：正式样本 938 像素，三层 MAE 全部达标，Gate 退出码 0。
+- 本票实测：UV 交集样本 938 像素三层 MAE ≤20/255（同 UV 层证据）；但同三角形/同可见性逐像素 Gate 在验收修正轮被判未通过（详见交付报告第九节），不得表述为 Gate 已通过。
 
 ## 相关脚本与 Gate
 

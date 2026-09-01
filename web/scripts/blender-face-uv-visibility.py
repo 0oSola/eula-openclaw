@@ -128,7 +128,8 @@ def main() -> int:
     nt = mat.node_tree
     mlinks = nt.links
 
-    # ── Face 三角形清单（材质槽按名过滤；三角形按 loop 起点记录全局 loop 起始索引）──
+    # ── Face 三角形清单（材质槽按名过滤）＋ 变形后世界坐标顶点（供 CPU 光栅化可见性）──
+    # 拓扑身份：三角形序号 i 与 PMX/Web Face 局部序号一致（已验证 2738/2738 sortedVerts 相同且同序）。
     me = mesh.data
     me.calc_loop_triangles()
     uv_layer = me.uv_layers.active.data if me.uv_layers.active else None
@@ -136,18 +137,38 @@ def main() -> int:
     if face_slot is None:
         print("Face 材质槽缺失")
         return 2
+
+    # 变形后（frame120 骨骼/形态）网格：evaluated depsgraph 取姿态应用后的世界坐标顶点。
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    eval_mesh_obj = mesh.evaluated_get(depsgraph)
+    eval_me = eval_mesh_obj.to_mesh()
+    eval_me.calc_loop_triangles()
+    mesh_mw = mesh.matrix_world
+    # 世界坐标顶点表（按变形后网格顶点索引，与原始网格顶点索引一一对应）。
+    world_verts = [tuple(mesh_mw @ v.co) for v in eval_me.vertices]
+
     tris = []
-    for lt in me.loop_triangles:
-        poly = me.polygons[lt.polygon_index]
+    for lt in eval_me.loop_triangles:
+        poly = eval_me.polygons[lt.polygon_index]
         if poly.material_index != face_slot:
             continue
+        vidx = [int(v) for v in lt.vertices]
+        # UV 取原始网格 loop UV（变形不改 UV；两侧 UV 口径一致）。
+        orig_lt = next((t for t in me.loop_triangles if list(t.vertices) == list(lt.vertices)), None)
+        uvs = None
+        if uv_layer is not None:
+            uvs = [[float(uv_layer[l].uv.x), float(uv_layer[l].uv.y)] for l in lt.loops]
         tris.append({
             "triIndex": len(tris),
             "loopStart": int(lt.loops[0]),
             "loops": [int(v) for v in lt.loops],
-            "verts": [int(v) for v in lt.vertices],
-            "uvs": [[float(uv_layer[l].uv.x), float(uv_layer[l].uv.y)] for l in lt.loops] if uv_layer else None,
+            "verts": vidx,
+            "sortedVerts": sorted(vidx),
+            "uvs": uvs,
+            # 变形后世界坐标三顶点（光栅化用）。
+            "worldVerts": [list(world_verts[v]) for v in vidx],
         })
+    eval_mesh_obj.to_mesh_clear()
 
     # ── 三角形 ID 颜色编码 ──
     tri_id = {}
@@ -224,6 +245,80 @@ def main() -> int:
     # 相机矩阵
     cam_mw = cam.matrix_world
     cam_mwi = cam_mw.inverted()
+
+    # ── CPU 光栅化可见性（Stage 2B-M2 P0-2 修正）──
+    # 用真实相机投影（world→camera→NDC→屏幕）逐 Face 三角形光栅化，逐像素 z-test
+    # 保留最近者，输出「像素 → Blender Face 三角形序号」。这是 Blender 侧独立可见性证据，
+    # 与 Emission triId PNG 的 GPU 渲染互相印证；Gate 逐像素比对 Web 三角形序号。
+    #
+    # 遮挡处理：仅 Face 网格可见（其余材质 hide_render），但 Face 内部三角形互相遮挡，
+    # 以及刘海/发绺（同属 Face 材质）覆盖脸颊/眼周，均经 z-test 正确反映。
+    from mathutils import Matrix
+
+    def project(cam_obj, mw_inv, w, h, p):
+        # world -> camera 局部
+        pc = mw_inv @ Vector(p)
+        # Blender 相机朝 -Z；相机空间点 (x,y,z)，z<0 为前方。
+        if pc.z >= 0:
+            return None
+        # 透视除法：用 camera.data 视角计算 NDC。Blender 用 lens/sensor 视场。
+        # NDC: x_ndc = (x / -z) / tan(hfov/2) / aspect_correction ...
+        # 直接用 world_to_camera_view（场景级、含分辨率与位移）。
+        co = bpy_extras.object_utils.world_to_camera_view(scene, cam_obj, Vector(p))
+        return (co.x, co.y, co.z)  # x,y∈[0,1] 屏幕归一（含 overscan），z 为深度
+
+    import bpy_extras
+    zbuf = [float("inf")] * (RES * RES)
+    vis_tri = [-1] * (RES * RES)
+
+    def raster_tri(ti, pts2d, depths):
+        (x0, y0), (x1, y1), (x2, y2) = pts2d
+        minx = max(0, int(math.floor(min(x0, x1, x2))))
+        maxx = min(RES - 1, int(math.ceil(max(x0, x1, x2))))
+        miny = max(0, int(math.floor(min(y0, y1, y2))))
+        maxy = min(RES - 1, int(math.ceil(max(y0, y1, y2))))
+        if minx > maxx or miny > maxy:
+            return
+        d = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+        if abs(d) < 1e-12:
+            return
+        for py in range(miny, maxy + 1):
+            for px in range(minx, maxx + 1):
+                cx, cy = px + 0.5, py + 0.5
+                w0 = ((y1 - y2) * (cx - x2) + (x2 - x1) * (cy - y2)) / d
+                w1 = ((y2 - y0) * (cx - x2) + (x0 - x2) * (cy - y2)) / d
+                w2 = 1.0 - w0 - w1
+                if w0 < -1e-6 or w1 < -1e-6 or w2 < -1e-6:
+                    continue
+                z = w0 * depths[0] + w1 * depths[1] + w2 * depths[2]
+                idx = py * RES + px
+                if z < zbuf[idx]:
+                    zbuf[idx] = z
+                    vis_tri[idx] = ti
+
+    for t in tris:
+        pts2d = []
+        depths = []
+        ok = True
+        for wp in t["worldVerts"]:
+            co = bpy_extras.object_utils.world_to_camera_view(scene, cam, Vector(wp))
+            if co.z <= 0:  # 相机后方
+                ok = False
+                break
+            # world_to_camera_view 的 y 自下而上；图像行自上而下，翻转 y。
+            sx = co.x * RES
+            sy = (1.0 - co.y) * RES
+            pts2d.append((sx, sy))
+            depths.append(co.z)
+        if ok:
+            raster_tri(t["triIndex"], pts2d, depths)
+
+    vis_count = sum(1 for v in vis_tri if v >= 0)
+    (outdir / "blender-visibility.json").write_text(json.dumps({
+        "width": RES, "height": RES, "visibleTri": vis_tri, "visiblePixels": vis_count,
+    }), encoding="utf-8")
+    results["visibility"] = "blender-visibility.json"
+    results["visibilityNote"] = "CPU 光栅化逐像素 z-test，visibleTri[px]=Blender Face 三角形序号（-1=不可见）"
     manifest = {
         "contract": "v14d-face-uv-visibility",
         "ticket": "Stage 2B-M2 Face UV/可见性同口径视觉 Gate",

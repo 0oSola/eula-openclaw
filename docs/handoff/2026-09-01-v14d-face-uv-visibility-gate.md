@@ -5,9 +5,9 @@
 - 实际工作目录：`E:\codexWorktree\a925\MMD project`
 - 日期：2026-09-01
 
-## 一、状态：通过（附同口径边界说明）
+## 一、状态：验收未通过 → 诚实 checkpoint（同 UV 层有证据，同三角形/同可见性被阻塞）
 
-在「同 UV、同三角形、同可见性」的正式样本集上，三层对账全部达标：
+【验收修正】主会话双轴审查判定初版不满足同三角形/同可见性（triId 恒 -1、Blender 可见性未进 Gate、coverage 倒推、负测未触判定链、三联图非同一 mask 对照）。修正轮后状态：同 UV 层在 UV 交集样本上三层 MAE 达标（下表），但同三角形/同可见性逐像素 Gate 因结构性障碍未通过（见第九节阻塞）。初版指标（仅 UV 直采一致性证据，非 Gate 通过）：
 
 | 层 | 样本数 | 每通道 MAE (/255) | 每通道 P95 (/255) | 阈值 |
 | --- | --- | --- | --- | --- |
@@ -99,6 +99,49 @@ MAE 高达 [192.9, 106.0, 92.7]——**因为刘海/发绺虽属 Face 材质（�
 大 PNG/HDR JSON 均在 `.scratch`（未提交），第三方资产未提交。
 
 ## 八、未完成项与风险
+
+## 九、验收修正轮（2026-09-01）：同三角形/同可见性被结构性阻塞
+
+主会话最终验收未通过，指出初版不满足 P0-1（同三角形）、P0-2（同可见性）、P0-3（coverage 倒推）、
+P0-4（负测未触判定链）、P0-5（三联图非同一 formal mask）。本修正轮在同 failure family 内继续，结果如下。
+
+### 已落实的真实进展
+
+1. **拓扑身份可对齐（已验证）**：Blender 导出每个 Face 三角形附加 `sortedVerts`（排序顶点索引三元组）。
+   与 PMX Face 材质（第一个材质，firstIndex=0）逐三角形对比：2738/2738 sortedVerts 完全一致且同序。
+   即 Blender triIndex i ≡ PMX/Web Face 局部三角形序号 i，拓扑身份可一一对应。
+2. **Blender 真实可见性（P0-2 实质进展）**：`blender-face-uv-visibility.py` 新增 CPU 光栅化——
+   取 evaluated depsgraph 的 frame120 变形后世界坐标顶点，用 `world_to_camera_view` 投影到 640×640，
+   逐三角形逐像素 z-test，输出 `blender-visibility.json`（visibleTri[px]=Blender 三角形序号，
+   30836 可见像素 / 1553 个可见三角形）。这是独立的 Blender 可见性证据，不再依赖退化 alpha。
+3. **Chrome WebGPU 限制实测**：`@builtin(primitive_index)` 不被支持（vertex/fragment 均实测致 pass
+   静默失败、facePixels=0）；改 `@builtin(vertex_index)/3` 可输出，但编号与 Blender triIndex 不对应
+   （同屏 13130 双可见像素 triId 一致率 0；按 UV 反查 0/96 一致；96 个 distinct ID 覆盖整脸=多三角形共享 ID）。
+
+### 未解的结构性障碍（需主会话决策）
+
+- **P0-1 同三角形逐像素身份不可信**：GPU 端无法可靠得到与 Blender 一致的三角形编号。
+  可靠方案是逐 draw call 单画一个 Face 三角形 + uniform 传序号（2728 次 draw 的诊断 pass），或 CPU 侧
+  用 model.getIndices() 反查 sortedVerts；但即便编号可信，仍受下方 P0-2 屏幕配准限制。
+- **P0-2 同可见性逐像素对齐不可靠**：Web 与 Blender 屏幕空间存在**非刚性**（透视/缩放/姿态）差异——
+  分象限最优平移互不相同（TL(-11,-18)/TR(-19,-29)/BL(7,17)/BR(-30,-11)），重叠率 0.34–0.9，
+  源于 Stage 2A-GF 遗留的相机/投影标定差异（Blender 投影头高 12mm vs Web 14.3mm）。
+  逐像素 triId 一致性 Gate 在该差异消除前不可信。
+
+### 候选路线（供主会话决策，均未验证为完整方案）
+
+- 路线 A：先做相机/投影精确标定（消除 12mm vs 14.3mm 头高差），再谈逐像素 triId Gate。工作量大。
+- 路线 B：放弃屏幕逐像素对齐，改在**三角形层级**对账——对每个双方都判定可见的拓扑三角形，
+  比较其覆盖像素的 UV 直采参考与 Web 颜色的聚合统计（均值/MAE），绕开屏幕配准。
+- 路线 C：UV 空间同三角形——用 Web 像素 UV 在 Blender 三角形清单唯一反查所属三角形，再断言
+  Web 该像素三角形的 sortedVerts 与 Blender 该三角形 sortedVerts 一致（需先解决 Web 三角形身份可信）。
+
+### 当前代码状态
+
+- `blender-face-uv-visibility.py`：含真实 CPU 光栅化可见性（已提交候选）。
+- `v14dColorBaseline.ts` `readV14dFaceTriUvMask`：vertex_index/3 输出 triId，已标注「编号未与 Blender
+  对齐、不可作同三角形依据」。rgba32float readback 已就位。
+- npm run build 通过；patch verify 58 项不变量通过；VMD runtime probe 通过（默认无泄漏）。
 
 - **同口径样本仅 938 像素**（脸部皮肤窄条），未覆盖刘海/发绺——这是 face_d 直采参考的固有边界，
   非缺陷。若需对账刘海发色，需另建「发色纹理同口径」票据。

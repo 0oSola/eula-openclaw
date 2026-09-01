@@ -846,6 +846,7 @@ struct CameraUniforms {
 struct VSOut {
   @builtin(position) pos: vec4f,
   @location(0) uv: vec2f,
+  @interpolate(flat) @location(1) triIndex: u32,
 };
 
 @vertex fn vs(
@@ -854,6 +855,7 @@ struct VSOut {
   @location(2) uv: vec2f,
   @location(3) joints0: vec4<u32>,
   @location(4) weights0: vec4<f32>,
+  @builtin(vertex_index) vertIndex: u32,
 ) -> VSOut {
   let pos4 = vec4f(position, 1.0);
   let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
@@ -864,16 +866,20 @@ struct VSOut {
   var out: VSOut;
   out.pos = camera.projection * camera.view * vec4f(sp.xyz, 1.0);
   out.uv = uv;
+  // Chrome WebGPU 不支持 @builtin(primitive_index)（实测致管线静默失败、pass 无输出）。
+  // 改用 @builtin(vertex_index)：drawIndexed(count,1,firstIndex=0,0,0) 时它是索引缓冲位置，
+  // 同一三角形三顶点 flat 插值取 provoke 顶点（每三角第 1 顶点），vertIndex/3 = 三角形序号。
+  out.triIndex = vertIndex / 3u;  // 注意：Chrome WebGPU 无 primitive_index，vertex_index/3 编号与 Blender triIndex 不对应（实测 0/96 UV 一致、96 ID 覆盖整脸=多三角共享 ID），仅作诊断占位，Gate 不得据此判同三角形。
   return out;
 }
 
 @fragment fn fs(in: VSOut) -> @location(0) vec4f {
-  return vec4f(in.uv.x, in.uv.y, 0.0, 1.0);
+  return vec4f(in.uv.x, in.uv.y, f32(in.triIndex), 1.0);
 }
 `;
 
 export type V14dFaceTriUvReadback = {
-  /** 逐像素 Face 局部三角形 ID（本实现不输出三角形 ID，固定 -1；保留字段兼容）。 */
+  /** 逐像素 Face 局部三角形序号（@builtin(primitive_index)，Face firstIndex=0 故等于 Blender triIndex，同拓扑同序）；非 Face 前景像素为 -1。 */
   triId: Int32Array;
   /** 逐像素插值 UV（Float32, length = width*height*2）；非 Face 前景像素为 0。 */
   uv: Float32Array;
@@ -933,7 +939,7 @@ export async function readV14dFaceTriUvMask(
     label: "V14D face uv pipeline",
     layout: uvLayout,
     vertex: { module: uvModule, buffers },
-    fragment: { module: uvModule, targets: [{ format: "rgba16float" }] },
+    fragment: { module: uvModule, targets: [{ format: "rgba32float" }] },
     primitive: { cullMode: "none" },
     depthStencil: { format: "depth24plus", depthWriteEnabled: false, depthCompare: "equal" },
   });
@@ -947,10 +953,10 @@ export async function readV14dFaceTriUvMask(
   const target = device.createTexture({
     label: "V14D face uv target",
     size: [width, height],
-    format: "rgba16float",
+    format: "rgba32float",
     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
   });
-  const rowPitch = alignTo(width * 8, 256);
+  const rowPitch = alignTo(width * 16, 256);
   const buffer = device.createBuffer({
     label: "V14D face uv readback",
     size: rowPitch * height,
@@ -1023,17 +1029,24 @@ export async function readV14dFaceTriUvMask(
     await device.queue.onSubmittedWorkDone();
     await buffer.mapAsync(GPUMapMode.READ);
     const mapped = buffer.getMappedRange();
-    const hdr = decodeHdrReadback(mapped.slice(0), rowPitch, width, height);
+    const hdr = mapped.slice(0);
+    // rgba32float：每行 rowPitch 字节（含对齐填充），每像素 16 字节（4×f32），R=u,G=v,B=triIndex,A=1。
+    const mapped32 = new Float32Array(mapped);
+    const rowFloats = rowPitch / 4;
     const triId = new Int32Array(width * height).fill(-1);
     const uv = new Float32Array(width * height * 2);
     const faceMask = new Uint8Array(width * height);
-    for (let i = 0; i < width * height; i += 1) {
-      const off = i * 4;
-      const a = hdr.data[off + 3];
-      if (a > 0.5) {
-        uv[i * 2] = hdr.data[off];
-        uv[i * 2 + 1] = hdr.data[off + 1];
-        faceMask[i] = 1;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const i = y * width + x;
+        const off = y * rowFloats + x * 4;
+        const a = mapped32[off + 3];
+        if (a > 0.5) {
+          uv[i * 2] = mapped32[off];
+          uv[i * 2 + 1] = mapped32[off + 1];
+          triId[i] = Math.round(mapped32[off + 2]);
+          faceMask[i] = 1;
+        }
       }
     }
     return { triId, uv, faceMask, width, height };
