@@ -9,20 +9,14 @@
  * 持久化口径：localStorage 按「用户 + 模型 + reze-k3 管线」三维隔离，
  * 不写入会话、不写入共享配置（桌面 Pet 不受影响），默认 original。
  *
- * 本模块为纯函数 .js 且自包含（不 import "@/..." 别名），供 node:test 直接
- * import 做聚焦机器测试。权威常量与 v14dFaceStatic.ts 同源（单一事实源
- * 仍为诊断入口的 V14D_FACE_STATIC_AUTHORITY / State2 mask 文件名），此处
- * 内联是为了让 node:test 不经 bundler 也能解析；改动权威资产身份时必须
- * 同步两处。
+ * 本模块为纯函数 .js；权威资产常量来自 ./v14dAuthority.js（无 bundler alias、
+ * 无外部依赖的单一事实源），v14dFaceStatic.ts、本模块与 node:test 测试三方
+ * 同源导入，消除注释式双权威（P0-2 第 2 项）。
  */
 
-/** 权威克莱妲 PMX 文件名（与 v14dFaceStatic.ts 的 V14D_FACE_STATIC_AUTHORITY.pmxFileName 同源）。 */
-const V14D_AUTHORITY_PMX_FILE_NAME = "GirlsFrontline KoledaDefault.pmx";
+import { V14D_AUTHORITY_PMX_FILE_NAME, V14D_STATE2_MASK_FILE_NAME } from "./v14dAuthority.js";
 
 /** @typedef {"original" | "v1"} RezeK3SkinVariant */
-
-/** 权威 State2 mask 文件名（诊断入口/采集脚本同源的唯一遮罩来源）。 */
-const V14D_STATE2_MASK_FILE_NAME = "v14d-01234-face-shadow-state-2.png";
 
 /** @type {readonly RezeK3SkinVariant[]} */
 export const REZE_K3_SKIN_VARIANTS = ["original", "v1"];
@@ -66,10 +60,10 @@ export function isRezeK3V1Eligible(pmxFileName) {
 /** 在导入目录文件列表中定位权威 State2 mask（按 webkitRelativePath 或文件名后缀）。 */
 export function findV14dState2MaskFile(files) {
   if (!Array.isArray(files)) return null;
+  // 用共享常量做 endsWith 匹配，消除字面量复制（与 v14dAuthority.js 同源）。
+  const target = V14D_STATE2_MASK_FILE_NAME.toLowerCase();
   return (
-    files.find((f) =>
-      /v14d-01234-face-shadow-state-2\.png$/i.test(f.webkitRelativePath || f.name),
-    ) ?? null
+    files.find((f) => ((f.webkitRelativePath || f.name) + "").toLowerCase().endsWith(target)) ?? null
   );
 }
 

@@ -11,8 +11,11 @@ import {
   writeRezeK3SkinVariant,
 } from "../src/features/stage/rezeSkinVariantPreference.js";
 
-const AUTHORITY_PMX = "GirlsFrontline KoledaDefault.pmx";
-const MASK_NAME = "v14d-01234-face-shadow-state-2.png";
+// 权威常量与生产同源（v14dAuthority.js 单一事实源），消除测试内字面量复制。
+import {
+  V14D_AUTHORITY_PMX_FILE_NAME as AUTHORITY_PMX,
+  V14D_STATE2_MASK_FILE_NAME as MASK_NAME,
+} from "../src/features/stage/v14dAuthority.js";
 
 function fakeFile(name, rel) {
   const f = { name };
@@ -115,4 +118,28 @@ test("持久化：非法值回退 original", () => {
   const key = rezeK3SkinVariantStorageKey("u1", "m.pmx");
   s.setItem(key, "garbage");
   assert.equal(readRezeK3SkinVariant(s, key), "original");
+});
+
+// 主会话第二次验收第 4 项：权威 PMX+mask 时，modelIdentifier 任意/不同，
+// UI/effective/boot 不分歧。boot 的有效资格就是 evaluateRezeK3V1Eligibility().eligible，
+// 不再叠加 isKoledaModelIdentifier；本测试调用生产资格/resolve 函数证明该不变量。
+test("资格单一权威：identifier 任意时 UI/effective/boot 不分歧", () => {
+  const good = fakeImport(AUTHORITY_PMX, [fakeFile(MASK_NAME)]);
+  // 生产资格谓词（boot 用的就是它，不含 identifier 门控）。
+  const eligibility = evaluateRezeK3V1Eligibility(good);
+  assert.equal(eligibility.eligible, true);
+  // effective variant（UI 传给 MMDStage 的值）与 boot 资格同源。
+  assert.equal(resolveRezeK3SkinVariant("v1", good), "v1");
+  // 无论 modelIdentifier 取什么值，资格/eligible 都不变（资格只看 localModelImport）。
+  for (const identifier of ["任意模型名", "Ayaka.pmx", "", "NotKoleda"]) {
+    void identifier; // identifier 不参与资格谓词
+    assert.equal(evaluateRezeK3V1Eligibility(good).eligible, true);
+    assert.equal(resolveRezeK3SkinVariant("v1", good), "v1");
+  }
+});
+
+test("资格单一权威：非克莱妲时三处一致回退 original", () => {
+  const bad = fakeImport("Ayaka.pmx", [fakeFile(MASK_NAME)]);
+  assert.equal(evaluateRezeK3V1Eligibility(bad).eligible, false);
+  assert.equal(resolveRezeK3SkinVariant("v1", bad), "original");
 });

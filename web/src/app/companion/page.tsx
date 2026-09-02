@@ -44,9 +44,8 @@ import {
   REZE_K3_SKIN_VARIANT_LABEL,
 } from "@/features/stage/rezeSkinVariantPreference.js";
 
-// RezeK3SkinVariant 联合类型（与 rezeSkinVariantPreference.js 的 @typedef 对齐；
-// .js 模块不导出 TS 类型，这里在 .tsx 本地定义）。
-type RezeK3SkinVariant = "original" | "v1";
+// RezeK3SkinVariant 共享类型权威：rezeSkinVariantPreference.d.ts（P0 第 3 项）。
+import type { RezeK3SkinVariant } from "@/features/stage/rezeSkinVariantPreference.js";
 import { CompanionCommandBar } from "./CompanionCommandBar";
 import { KnowledgeReviewBadge } from "./KnowledgeReviewBadge";
 import { MioModeBackground } from "./MioModeBackground";

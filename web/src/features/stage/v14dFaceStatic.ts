@@ -37,6 +37,7 @@
  */
 
 import type { MmdCameraSnapshot } from "@/lib/types";
+import { V14D_AUTHORITY_PMX_FILE_NAME } from "./v14dAuthority.js";
 
 export const V14D_FACE_STATIC_FRAME = 120;
 export const V14D_FACE_STATIC_FPS = 24;
@@ -140,7 +141,7 @@ export function v14dFaceCameraWithOverride(
 
 /** 权威 PMX 与 VMD 的身份（强门控；来自权威 blend / 用户本地包取证）。 */
 export const V14D_FACE_STATIC_AUTHORITY = {
-  pmxFileName: "GirlsFrontline KoledaDefault.pmx",
+  pmxFileName: V14D_AUTHORITY_PMX_FILE_NAME,
   vmdFileName: "koleda-v14d-authoritative-pose-f120.vmd",
   vmdSha256: "2536c886029af068878c674bf749a409fccaa3cad519fbcde4233bd7c3b3394d",
 } as const;

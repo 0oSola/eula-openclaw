@@ -97,8 +97,8 @@ import {
   evaluateRezeK3V1Eligibility,
 } from "@/features/stage/rezeSkinVariantPreference.js";
 
-// RezeK3SkinVariant 联合类型（.js 模块不导出 TS 类型，这里本地定义）。
-type RezeK3SkinVariant = "original" | "v1";
+// RezeK3SkinVariant 共享类型权威：rezeSkinVariantPreference.d.ts（P0 第 3 项）。
+import type { RezeK3SkinVariant } from "@/features/stage/rezeSkinVariantPreference.js";
 
 declare global {
   interface Window {
@@ -2457,13 +2457,17 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       // 生产 V1（V14D）皮肤变体：仅克莱妲 + localModelImport + v1 且 mask 已注入时，
       // 把 Face/BodySkin 切到实时合成 graph（真实重新编译 + draw-call 绑定），
       // 其余材质保持 reze-k3 正常分组。applyStyleGroups 失败或非克莱妲安全回退。
-      // 资格判定与 UI/effective variant 共用单一领域谓词（P0-2/P1）；
-      // isKoledaModelIdentifier 为运行时防御性断言（材质预设家族），非第二套资格定义。
-      const v1Active =
-        v1Requested &&
-        !!localModelImport &&
-        evaluateRezeK3V1Eligibility(localModelImport).eligible &&
-        isKoledaModelIdentifier(modelIdentifier, modelUrl, localModelImport?.pmxFile?.name);
+      // 资格判定与 UI/effective variant 完全共用同一个 eligibility.eligible（单一权威，
+      // 主会话第二次验收唯一 P0）：boot 不再叠加 isKoledaModelIdentifier 等第二套业务门控，
+      // 消除「UI 选中 V1 但 boot 因 identifier 回退」的可达分歧。
+      const v1Eligibility = evaluateRezeK3V1Eligibility(localModelImport);
+      const v1Active = v1Requested && v1Eligibility.eligible;
+      // 运行时防御性（非业务资格，不改变 effective 变体）：权威 PMX 已隐含克莱妲身份，
+      // 若 identifier 启发式不一致只暴露统一告警状态供 UI/诊断读取，不静默改渲染。
+      if (v1Active && !isKoledaModelIdentifier(modelIdentifier, modelUrl, localModelImport?.pmxFile?.name)) {
+        console.warn("[v14d-skin-variant] V1 资格已通过但克莱妲 identifier 启发式不一致（仍以资格谓词为准）");
+        if (canvasRef.current) canvasRef.current.dataset.v14dSkinVariantIdentifierMismatch = "true";
+      }
       if (v1Active) {
         try {
           const v1Groups = buildV14dSkinVariantStyleGroups(originalStyleGroups);
