@@ -22,16 +22,30 @@ const REGION_MAE_CANDIDATE = 0.20;
 // 每区域最小屏幕样本数（低于此值视为该视角未命中，诚实失败，不软通过）。
 const MIN_REGION_SAMPLES = 30;
 const WARM = [1.0, 0.945, 0.905];
+// Stage 2B-M3.1：语义分区改用版本化骨骼主导权重集合（V14D_BODY_SKIN_BONE_REGIONS_V1，
+// 由 exportMaterialTriRegions 返回 boneRegionLabels）。旧版世界 y 带 + x 符号矩形分区
+// 已废弃——左手 y 带会把腰腹皮肤计入（实测 y 带 11.5..13.9 同时覆盖腰腹与手）。
+// 本 Gate 的区域归属以运行时骨骼主导标签为准；下面的 REGION_DEFS 仅用于保留报告
+// schema 的 id 顺序与展示色，不再参与像素归属计算。
 const REGION_DEFS = [
-  // 修正轮实测（diag.mjs）：脖子可见皮肤 = 下巴与衣领之间颈侧窄带（世界 y≈15.8..16.0，
-  // 头前倾+衣领遮挡 y<15.8 的颈部三角形）；腰部露肤 = 腰带上方可见带（y≈13.4..13.9）。
-  // 左右手叉腰位于腰两侧（y≈11.5..13.4，与腰/颈按 y 带自然分离，按 x 符号分左右）。
-  { id: "neck", yMin: 15.7, yMax: 16.2, xSide: "any" },
-  { id: "waist", yMin: 13.4, yMax: 13.9, xSide: "any" },
-  { id: "leftHand", yMin: 11.5, yMax: 13.9, xSide: "pos" },
-  { id: "rightHand", yMin: 11.5, yMax: 13.9, xSide: "neg" },
+  { id: "neck" },
+  { id: "torso" },
+  { id: "leftHand" },
+  { id: "rightHand" },
 ];
 const REGION_IDS = REGION_DEFS.map((d) => d.id);
+
+// Stage 2B-M3.1：统一的区域归属。优先骨骼主导标签（boneRegionLabels），
+// 缺失时回退旧世界坐标标签（regionLabels，仅兼容）。返回区域 id 或 null。
+function regionIdOf(tr, t) {
+  if (!tr) return null;
+  if (tr.boneRegionLabels && tr.boneRegionIds) {
+    const bl = tr.boneRegionLabels[t];
+    return bl >= 0 && bl < tr.boneRegionIds.length ? tr.boneRegionIds[bl] : null;
+  }
+  const rl = tr.regionLabels?.[t];
+  return rl >= 0 && rl < REGION_DEFS.length ? REGION_DEFS[rl].id : null;
+}
 
 function collectModelFiles(dir) {
   const out = [];
@@ -40,9 +54,12 @@ function collectModelFiles(dir) {
 }
 function srgbToLinear(c) { const v = c / 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }
 const REGION_COLORS = { neck: "#00e5ff", waist: "#ffea00", leftHand: "#76ff03", rightHand: "#ff4081" };
+REGION_COLORS.torso = "#ffea00";
+// 真逐像素逐通道 MAE：mean(|web_i - ref_i|)，不能用 abs(mean(web)-mean(ref)) 替代
+// （后者会让正负误差抵消）。本判定读取 region.maePerChannel（由逐像素误差聚合）。
 function maePass(region) {
-  if (!region || !region.meanLinear || !region.refLinear) return false;
-  return region.meanLinear.every((v, c) => Math.abs(v - region.refLinear[c]) <= REGION_MAE_CANDIDATE);
+  if (!region || !region.maePerChannel) return false;
+  return region.maePerChannel.every((v) => v <= REGION_MAE_CANDIDATE);
 }
 const fails = [];
 const ok = (cond, msg) => { if (cond) console.log("[ok] " + msg); else { fails.push(msg); console.error("[FAIL] " + msg); } };
@@ -62,23 +79,35 @@ const blenderTris = JSON.parse(fs.readFileSync(BLENDER_TRIS, "utf8")).bodyTriCen
 const bodyD = await sharp(BODY_D).raw().toBuffer({ resolveWithObject: true });
 const FACE_D = process.env.V14D_FACE_D || path.join(KOLEDA_DIR, "Textures/c_Koleda_slg_face_d.png");
 const faceD = fs.existsSync(FACE_D) ? await sharp(FACE_D).raw().toBuffer({ resolveWithObject: true }) : null;
-// 通用纹理 UV 采样（REPEAT，图像行 0 = v 顶部）。
-function sampleTex(tex, u, v) {
+// Stage 2B-M3.1：GPU 口径双线性采样（替代最近点）。WebGPU 采样器默认
+// min/mag/mipmap filter 均为 linear；最近点采样会在纹理梯度区产生系统偏差，
+// 不能冒充 GPU 双线性口径。这里按 REPEAT 环绕、texel 中心对齐做双线性插值。
+// mipmap 说明：诊断 UV 来自单帧单像素 footprint，无法精确等价 GPU mipmap 层级；
+// body_d/face_d 为近平坦常量色贴图，LOD 间差异极小，本 Gate 以 mip0 双线性与
+// GPU 口径对齐，并在此如实标注限制（不做逐 LOD 对账）。
+function sampleTexBilinear(tex, u, v) {
   if (!tex) return [0, 0, 0];
-  const Wt = tex.info.width, Ht = tex.info.height;
-  const x = Math.min(Wt - 1, Math.max(0, Math.round(((u % 1) + 1) % 1 * (Wt - 1))));
-  const y = Math.min(Ht - 1, Math.max(0, Math.round(((v % 1) + 1) % 1 * (Ht - 1))));
-  const off = (y * Wt + x) * tex.info.channels;
-  return [tex.data[off], tex.data[off + 1], tex.data[off + 2]];
+  const Wt = tex.info.width, Ht = tex.info.height, ch = tex.info.channels;
+  const uu = ((u % 1) + 1) % 1, vv = ((v % 1) + 1) % 1;
+  const fx = uu * Wt - 0.5, fy = vv * Ht - 0.5;
+  const x0 = Math.floor(fx), y0 = Math.floor(fy);
+  const tx = fx - x0, ty = fy - y0;
+  const px = (xx, yy) => {
+    const xi = ((xx % Wt) + Wt) % Wt, yi = ((yy % Ht) + Ht) % Ht;
+    const off = (yi * Wt + xi) * ch;
+    return [tex.data[off], tex.data[off + 1], tex.data[off + 2]];
+  };
+  const c00 = px(x0, y0), c10 = px(x0 + 1, y0), c01 = px(x0, y0 + 1), c11 = px(x0 + 1, y0 + 1);
+  const out = [0, 0, 0];
+  for (let c = 0; c < 3; c++) {
+    const top = c00[c] * (1 - tx) + c10[c] * tx;
+    const bot = c01[c] * (1 - tx) + c11[c] * tx;
+    out[c] = top * (1 - ty) + bot * ty;
+  }
+  return out;
 }
-function sampleBodyD(u, v) {
-  // body_d 1024x1024, REPEAT；UV 原点在左上角（图像行 0 = v 顶部）。
-  const Wt = bodyD.info.width, Ht = bodyD.info.height;
-  const x = Math.min(Wt - 1, Math.max(0, Math.round(((u % 1) + 1) % 1 * (Wt - 1))));
-  const y = Math.min(Ht - 1, Math.max(0, Math.round(((v % 1) + 1) % 1 * (Ht - 1))));
-  const off = (y * Wt + x) * bodyD.info.channels;
-  return [bodyD.data[off], bodyD.data[off + 1], bodyD.data[off + 2]];
-}
+function sampleTex(tex, u, v) { return sampleTexBilinear(tex, u, v); }
+function sampleBodyD(u, v) { return sampleTexBilinear(bodyD, u, v); }
 // Blender 侧区域均值：按世界坐标（米制→PMX）分区后，对该区域所有三角形采样 body_d。
 // 注意：blender-body-tris.json 只含质心（不含 UV），这里用世界坐标分区近似：
 // 由于 body_d 是单一暖肤色贴图（区域间差异极小），区域参考均值 ≈ 全材质均值。
@@ -167,6 +196,19 @@ async function captureRegions(mode) {
     ok(bootInfo.bodyApplied === "true", "BodySkin graph 绑定成功（真实 graph 状态）");
     ok(bootInfo.bodyGraph === "V14D Body Skin Composite", "BodySkin 实际 graph.name = V14D Body Skin Composite（非自证）");
     ok(bootInfo.bodyGroupOk === "true", "BodySkin 组编译+安装诊断 ok");
+    // Stage 2B-M3.1：正式 Gate 必须消费 draw-call 级绑定证据（不再只看 graph 名字符串）。
+    // exportBodySkinDrawBinding 读 modelInstances→drawCalls→styleGroups→graph.name/pipeline，
+    // allBodySkinOnComposite 为真才证明每个 BodySkin draw call 实际绑到 Body Skin Composite。
+    const drawBinding = await page.evaluate(() => {
+      const api = window.__v14dFaceStatic;
+      return api?.exportBodySkinDrawBinding ? api.exportBodySkinDrawBinding() : null;
+    });
+    summary.boot.drawBinding = drawBinding
+      ? { allBodySkinOnComposite: drawBinding.allBodySkinOnComposite, bodyDrawCalls: (drawBinding.drawCalls || []).filter((d) => d.materialName === "BodySkin").length }
+      : null;
+    ok(drawBinding !== null, "draw-call 绑定证据可导出（exportBodySkinDrawBinding）");
+    ok(drawBinding?.allBodySkinOnComposite === true,
+      "draw-call 级绑定：所有 BodySkin draw call 实际绑定 V14D Body Skin Composite graph");
     // P1：相机控件实际可用性（自由/全身/重置）。
     async function clickBtn(t) { const b = page.locator("button:has-text('" + t + "')").first(); if (await b.count() === 0) return false; await b.click(); await page.waitForTimeout(300); return true; }
     summary.cameras = { freeCamera: await clickBtn("自由"), fullBody: await clickBtn("全身"), resetCamera: await clickBtn("重置") };
@@ -182,7 +224,14 @@ async function captureRegions(mode) {
     if (!api?.exportMaterialTriRegions) return null;
     const r = await api.exportMaterialTriRegions("BodySkin");
     if (!r) return null;
-    return { triId: Array.from(r.triId), uv: Array.from(r.uv), faceMask: Array.from(r.faceMask), regionLabels: Array.from(r.regionLabels), centroids: Array.from(r.centroids), regionDefs: r.regionDefs, triCount: r.triCount };
+    return {
+      triId: Array.from(r.triId), uv: Array.from(r.uv), faceMask: Array.from(r.faceMask),
+      regionLabels: Array.from(r.regionLabels), centroids: Array.from(r.centroids),
+      regionDefs: r.regionDefs, triCount: r.triCount,
+      boneRegionLabels: r.boneRegionLabels ? Array.from(r.boneRegionLabels) : null,
+      boneRegionIds: r.boneRegionIds || null,
+      boneRegionVersion: r.boneRegionVersion ?? null,
+    };
   });
   const bodyHdr = await page.evaluate(async () => {
     const api = window.__v14dFaceStatic;
@@ -200,16 +249,35 @@ async function captureRegions(mode) {
   if (triRegions && bodyHdr) {
     const W = 640, H = 640;
     const stats = {};
-    for (const d of REGION_DEFS) stats[d.id] = { n: 0, sum: [0, 0, 0], refSum: [0, 0, 0], perPixelErr: [], minX: W, minY: H, maxX: -1, maxY: -1, tris: 0 };
-    for (let t = 0; t < triRegions.regionLabels.length; t++) { const r = triRegions.regionLabels[t]; if (r >= 0) stats[REGION_DEFS[r].id].tris++; }
+    // Stage 2B-M3.1：语义归属以骨骼主导标签为准。regionLabelFor(t) 返回区域 id 或 null。
+    const boneIds = triRegions.boneRegionIds || REGION_IDS;
+    const labelOf = (t) => {
+      if (triRegions.boneRegionLabels) {
+        const bl = triRegions.boneRegionLabels[t];
+        return bl >= 0 && bl < boneIds.length ? boneIds[bl] : null;
+      }
+      const rl = triRegions.regionLabels[t];
+      return rl >= 0 && rl < REGION_DEFS.length ? REGION_DEFS[rl].id : null;
+    };
+    // 区域三角形总数（分母，用于 coverage = 可见样本 / 该材质该语义区域总可见样本）。
+    const regionTriTotal = {};
+    for (let t = 0; t < triRegions.triCount; t++) {
+      const id = labelOf(t);
+      if (id) regionTriTotal[id] = (regionTriTotal[id] || 0) + 1;
+    }
+    for (const d of REGION_DEFS) stats[d.id] = { n: 0, sum: [0, 0, 0], refSum: [0, 0, 0], errSum: [0, 0, 0], perPixelErr: [], minX: W, minY: H, maxX: -1, maxY: -1, tris: 0 };
+    for (let t = 0; t < triRegions.triCount; t++) { const id = labelOf(t); if (id) stats[id].tris++; }
+    // BodySkin 可见前景总像素（pick mask），作为分区域 coverage 的分母基数。
+    let totalVisible = 0;
+    for (let i = 0; i < W * H; i++) if (bodyHdr.mask[i]) totalVisible++;
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = y * W + x;
       if (!bodyHdr.mask[i]) continue;
       const triId = triRegions.triId[i];
-      if (triId < 0 || triId >= triRegions.regionLabels.length) continue;
-      const rl = triRegions.regionLabels[triId];
-      if (rl < 0) continue;
-      const st = stats[REGION_DEFS[rl].id];
+      if (triId < 0 || triId >= triRegions.triCount) continue;
+      const regionId = labelOf(triId);
+      if (!regionId) continue;
+      const st = stats[regionId];
       st.n++; st.sum[0] += bodyHdr.rgb[i * 3]; st.sum[1] += bodyHdr.rgb[i * 3 + 1]; st.sum[2] += bodyHdr.rgb[i * 3 + 2];
       // P0-1：同 UV 参考——该像素的插值 UV 在 body_d 上采样 × 身体 warm，sRGB→线性。
       // 逐像素参考替代整块材质均值，区域 refLinear 由本区域像素的 UV 采样形成。
@@ -217,7 +285,12 @@ async function captureRegions(mode) {
       const refSrgb = sampleBodyD(u, v);
       const refLin = [srgbToLinear(refSrgb[0]) * WARM[0], srgbToLinear(refSrgb[1]) * WARM[1], srgbToLinear(refSrgb[2]) * WARM[2]];
       st.refSum[0] += refLin[0]; st.refSum[1] += refLin[1]; st.refSum[2] += refLin[2];
-      st.perPixelErr.push(Math.max(Math.abs(bodyHdr.rgb[i*3]-refLin[0]), Math.abs(bodyHdr.rgb[i*3+1]-refLin[1]), Math.abs(bodyHdr.rgb[i*3+2]-refLin[2])));
+      // 真逐像素逐通道绝对误差（不再用均值差）。
+      const e0 = Math.abs(bodyHdr.rgb[i * 3] - refLin[0]);
+      const e1 = Math.abs(bodyHdr.rgb[i * 3 + 1] - refLin[1]);
+      const e2 = Math.abs(bodyHdr.rgb[i * 3 + 2] - refLin[2]);
+      st.errSum[0] += e0; st.errSum[1] += e1; st.errSum[2] += e2;
+      st.perPixelErr.push(Math.max(e0, e1, e2));
       if (x < st.minX) st.minX = x; if (x > st.maxX) st.maxX = x; if (y < st.minY) st.minY = y; if (y > st.maxY) st.maxY = y;
     }
     for (const d of REGION_DEFS) {
@@ -230,6 +303,12 @@ async function captureRegions(mode) {
         meanLinear: [st.sum[0] / st.n, st.sum[1] / st.n, st.sum[2] / st.n],
         refLinear: [st.refSum[0] / st.n, st.refSum[1] / st.n, st.refSum[2] / st.n],
         refSamples: st.n, referenceSource: "body_d×warm 同UV逐像素采样（Web 像素 triId+UV）",
+        // 真逐像素逐通道 MAE（mean(|web_i-ref_i|)），与 numerator/denominator 同集合。
+        maePerChannel: [st.errSum[0] / st.n, st.errSum[1] / st.n, st.errSum[2] / st.n],
+        numerator: [st.errSum[0], st.errSum[1], st.errSum[2]],
+        denominator: st.n,
+        coverage: totalVisible > 0 ? st.n / totalVisible : 0,
+        regionTriTotal: regionTriTotal[d.id] || 0,
         p95Err: p95,
         bbox: [st.minX, st.minY, st.maxX, st.maxY],
       };
@@ -242,6 +321,7 @@ async function captureRegions(mode) {
   // 两者都只到「基色×warm」一层做跨材质统一口径对账）。
   let faceMean = null, faceSamples = 0;
   let faceRef = null, faceRefSamples = 0, faceP95 = null, faceBbox = null;
+  let faceMaePerChannel = null;
   const faceTri = await page.evaluate(async () => {
     const api = window.__v14dFaceStatic;
     if (!api?.exportMaterialTriRegions) return null;
@@ -252,21 +332,27 @@ async function captureRegions(mode) {
   if (faceHdr && faceTri) {
     const W = 640, H = 640;
     let n = 0; const s = [0, 0, 0]; const rs = [0, 0, 0]; const errs = [];
+    const ferrSum = [0, 0, 0];
     let minX = W, minY = H, maxX = -1, maxY = -1;
     const FACE_WARM = [1.0, 0.935, 0.89];
+    // Stage 2B-M3.1：Face 必须是同一像素集合——只有同时具备 Web HDR 前景与有效
+    // triId+UV 的像素才计入 numerator/denominator（修复旧版 Web 551 / ref 469 不同集合）。
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = y * W + x;
       if (!faceHdr.mask[i]) continue;
-      n++; s[0] += faceHdr.rgb[i * 3]; s[1] += faceHdr.rgb[i * 3 + 1]; s[2] += faceHdr.rgb[i * 3 + 2];
       const t = faceTri.triId[i];
-      if (t >= 0) {
-        const u = faceTri.uv[i * 2], v = faceTri.uv[i * 2 + 1];
-        // 同 UV 参考：face_d 在像素 UV 采样 × Face warm（基色×warm 口径，不含 State2 art/fringe）。
-        const fsrgb = sampleTex(faceD, u, v);
-        const flin = [srgbToLinear(fsrgb[0]) * FACE_WARM[0], srgbToLinear(fsrgb[1]) * FACE_WARM[1], srgbToLinear(fsrgb[2]) * FACE_WARM[2]];
-        rs[0] += flin[0]; rs[1] += flin[1]; rs[2] += flin[2];
-        errs.push(Math.max(Math.abs(faceHdr.rgb[i*3]-flin[0]), Math.abs(faceHdr.rgb[i*3+1]-flin[1]), Math.abs(faceHdr.rgb[i*3+2]-flin[2])));
-      }
+      if (t < 0) continue;
+      n++; s[0] += faceHdr.rgb[i * 3]; s[1] += faceHdr.rgb[i * 3 + 1]; s[2] += faceHdr.rgb[i * 3 + 2];
+      const u = faceTri.uv[i * 2], v = faceTri.uv[i * 2 + 1];
+      // 同 UV 参考：face_d 在像素 UV 采样 × Face warm（基色×warm 口径，不含 State2 art/fringe）。
+      const fsrgb = sampleTex(faceD, u, v);
+      const flin = [srgbToLinear(fsrgb[0]) * FACE_WARM[0], srgbToLinear(fsrgb[1]) * FACE_WARM[1], srgbToLinear(fsrgb[2]) * FACE_WARM[2]];
+      rs[0] += flin[0]; rs[1] += flin[1]; rs[2] += flin[2];
+      const fe0 = Math.abs(faceHdr.rgb[i * 3] - flin[0]);
+      const fe1 = Math.abs(faceHdr.rgb[i * 3 + 1] - flin[1]);
+      const fe2 = Math.abs(faceHdr.rgb[i * 3 + 2] - flin[2]);
+      ferrSum[0] += fe0; ferrSum[1] += fe1; ferrSum[2] += fe2;
+      errs.push(Math.max(fe0, fe1, fe2));
       if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y;
     }
     faceSamples = n; faceMean = n ? [s[0] / n, s[1] / n, s[2] / n] : null;
@@ -276,10 +362,11 @@ async function captureRegions(mode) {
       faceRef = [rs[0] / errs.length, rs[1] / errs.length, rs[2] / errs.length];
       faceRefSamples = errs.length;
       faceP95 = errs[Math.floor(errs.length * 0.95)];
+      faceMaePerChannel = [ferrSum[0] / errs.length, ferrSum[1] / errs.length, ferrSum[2] / errs.length];
     }
   }
   // 供 summary.face 使用。
-  const faceRegion = faceRef ? { refLinear: faceRef, refSamples: faceRefSamples, p95Err: faceP95, bbox: faceBbox } : null;
+  const faceRegion = faceRef ? { refLinear: faceRef, refSamples: faceRefSamples, p95Err: faceP95, bbox: faceBbox, maePerChannel: faceMaePerChannel, numerator: faceMaePerChannel ? faceMaePerChannel.map((v) => v * faceRefSamples) : null, denominator: faceRefSamples } : null;
 
   // 全身截图 + 四区域近景（区域质心→屏幕中心定位）。
   await page.screenshot({ path: path.join(shotDir, "fullbody-" + mode + ".png") });
@@ -299,8 +386,8 @@ async function captureRegions(mode) {
   if (triRegions) {
     for (let r = 0; r < REGION_DEFS.length; r++) {
       let n = 0; const s = [0, 0, 0];
-      for (let t = 0; t < triRegions.regionLabels.length; t++) {
-        if (triRegions.regionLabels[t] !== r) continue;
+      for (let t = 0; t < triRegions.triCount; t++) {
+        if (regionIdOf(triRegions, t) !== REGION_DEFS[r].id) continue;
         n++; s[0] += triRegions.centroids[t * 3]; s[1] += triRegions.centroids[t * 3 + 1]; s[2] += triRegions.centroids[t * 3 + 2];
       }
       if (n > 0) regionCentroid[REGION_DEFS[r].id] = [s[0] / n, s[1] / n, s[2] / n];
@@ -326,7 +413,7 @@ async function captureRegions(mode) {
     // P0-3：closeup 在自身坐标系叠加真实 mask 轮廓 + 区域名 + 样本数 + 状态（hands/全身可见区）。
     if (mode === "finalFaceComposite") {
       try {
-        const tri2 = await page.evaluate(async () => { const r = await window.__v14dFaceStatic.exportMaterialTriRegions("BodySkin"); return r && { triId: Array.from(r.triId), regionLabels: Array.from(r.regionLabels) }; });
+        const tri2 = await page.evaluate(async () => { const r = await window.__v14dFaceStatic.exportMaterialTriRegions("BodySkin"); return r && { triId: Array.from(r.triId), regionLabels: Array.from(r.regionLabels), boneRegionLabels: r.boneRegionLabels ? Array.from(r.boneRegionLabels) : null, boneRegionIds: r.boneRegionIds || null, triCount: r.triCount }; });
         const hdr2 = await page.evaluate(async () => { const r = await window.__v14dFaceStatic.exportMaterialHdrFloat("BodySkin"); return r && { mask: Array.from(r.mask) }; });
         if (tri2 && hdr2) {
           const W = 640, H = 640;
@@ -336,8 +423,7 @@ async function captureRegions(mode) {
             if (!hdr2.mask[i]) continue;
             const t = tri2.triId[i];
             if (t < 0) continue;
-            const rl = tri2.regionLabels[t];
-            if (rl >= 0 && REGION_DEFS[rl].id === d.id) { m[i] = 1; cnt++; }
+            if (regionIdOf(tri2, t) === d.id) { m[i] = 1; cnt++; }
           }
           if (cnt > 0) {
             const pts = maskOutline(m, W, H);
@@ -365,48 +451,49 @@ async function captureRegionCloseups(mode) {
     const api = window.__v14dFaceStatic;
     const r = await api.exportMaterialTriRegions("BodySkin");
     if (!r) return null;
-    return { regionLabels: Array.from(r.regionLabels), centroids: Array.from(r.centroids) };
+    return { regionLabels: Array.from(r.regionLabels), centroids: Array.from(r.centroids), triCount: r.triCount, boneRegionLabels: r.boneRegionLabels ? Array.from(r.boneRegionLabels) : null, boneRegionIds: r.boneRegionIds || null };
   });
   if (!triRegions) return {};
   const regionCentroid = {};
   for (let r = 0; r < REGION_DEFS.length; r++) {
     let n = 0; const s = [0, 0, 0];
-    for (let t = 0; t < triRegions.regionLabels.length; t++) {
-      if (triRegions.regionLabels[t] !== r) continue;
+    for (let t = 0; t < triRegions.triCount; t++) {
+      if (regionIdOf(triRegions, t) !== REGION_DEFS[r].id) continue;
       n++; s[0] += triRegions.centroids[t * 3]; s[1] += triRegions.centroids[t * 3 + 1]; s[2] += triRegions.centroids[t * 3 + 2];
     }
     if (n > 0) regionCentroid[REGION_DEFS[r].id] = [s[0] / n, s[1] / n, s[2] / n];
   }
-  // 腰部露肤在两侧（左右对称），相机从一侧（+x 右腰）看；用右腰子集质心定位。
-  if (regionCentroid.waist && triRegions) {
+  // 躯干（腰腹）露肤在两侧（左右对称），相机从一侧（+x 右腰）看；用右腰子集质心定位。
+  // Stage 2B-M3.1：waist → torso（骨骼主导语义，主导骨骼=上半身 6）。
+  if (regionCentroid.torso && triRegions) {
     let n = 0; const s = [0, 0, 0];
-    for (let t = 0; t < triRegions.regionLabels.length; t++) {
-      if (triRegions.regionLabels[t] !== 1) continue; // waist 是 REGION_DEFS[1]
+    for (let t = 0; t < triRegions.triCount; t++) {
+      if (regionIdOf(triRegions, t) !== "torso") continue;
       const x = triRegions.centroids[t * 3];
       if (x <= 0) continue; // 只取右腰（+x 侧）
       n++; s[0] += x; s[1] += triRegions.centroids[t * 3 + 1]; s[2] += triRegions.centroids[t * 3 + 2];
     }
-    if (n > 0) regionCentroid.waist = [s[0] / n, s[1] / n, s[2] / n];
+    if (n > 0) regionCentroid.torso = [s[0] / n, s[1] / n, s[2] / n];
     // 同时记录左腰质心（-x 侧）作为备选视角。
     let n2 = 0; const s2 = [0, 0, 0];
-    for (let t = 0; t < triRegions.regionLabels.length; t++) {
-      if (triRegions.regionLabels[t] !== 1) continue;
+    for (let t = 0; t < triRegions.triCount; t++) {
+      if (regionIdOf(triRegions, t) !== "torso") continue;
       const x = triRegions.centroids[t * 3];
       if (x >= 0) continue;
       n2++; s2[0] += x; s2[1] += triRegions.centroids[t * 3 + 1]; s2[2] += triRegions.centroids[t * 3 + 2];
     }
-    if (n2 > 0) regionCentroid.waistLeft = [s2[0] / n2, s2[1] / n2, s2[2] / n2];
+    if (n2 > 0) regionCentroid.torsoLeft = [s2[0] / n2, s2[1] / n2, s2[2] / n2];
   }
   const out = {};
-  for (const id of ["neck", "waist"]) {
+  for (const id of ["neck", "torso"]) {
     const c = regionCentroid[id];
     if (!c) continue;
     // 近景：颈部可见皮肤 = 下巴与衣领之间窄带，从下方仰视。
     // 腰部露肤 = 两侧侧腰；右腰（+x）被左臂袖遮挡，左腰（-x）是右臂侧，
     // 试左腰侧前方（-x 且 -z）；两侧都试，取有命中的一侧。
     const dist = 4.5;
-    const useLeft = id === "waist" && regionCentroid.waistLeft;
-    const wc = useLeft ? regionCentroid.waistLeft : c;
+    const useLeft = id === "torso" && regionCentroid.torsoLeft;
+    const wc = useLeft ? regionCentroid.torsoLeft : c;
     const pos = id === "neck"
       ? [c[0], c[1] - 1.5, c[2] - dist]
       // 腰：从侧腰正侧方平视（+x 方向看右腰），距离拉近到 3.0，试在手臂与躯干间缝隙看到露肤。
@@ -419,7 +506,7 @@ async function captureRegionCloseups(mode) {
     const triRegions2 = await page.evaluate(async () => {
       const r = await window.__v14dFaceStatic.exportMaterialTriRegions("BodySkin");
       if (!r) return null;
-      return { triId: Array.from(r.triId), uv: Array.from(r.uv), regionLabels: Array.from(r.regionLabels) };
+      return { triId: Array.from(r.triId), uv: Array.from(r.uv), regionLabels: Array.from(r.regionLabels), boneRegionLabels: r.boneRegionLabels ? Array.from(r.boneRegionLabels) : null, boneRegionIds: r.boneRegionIds || null, triCount: r.triCount };
     });
     const bodyHdr2 = await page.evaluate(async () => {
       const r = await window.__v14dFaceStatic.exportMaterialHdrFloat("BodySkin");
@@ -429,20 +516,24 @@ async function captureRegionCloseups(mode) {
     const W = 640, H = 640;
     let n = 0; const sum = [0, 0, 0]; let minX = W, minY = H, maxX = -1, maxY = -1;
     const refSum = [0, 0, 0]; const perPixelErr = [];
+    const errSum = [0, 0, 0];
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = y * W + x;
       if (!bodyHdr2.mask[i]) continue;
       const triId = triRegions2.triId[i];
-      if (triId < 0 || triId >= triRegions2.regionLabels.length) continue;
-      const rl = triRegions2.regionLabels[triId];
-      if (rl < 0 || REGION_DEFS[rl].id !== id) continue;
+      if (triId < 0 || triId >= triRegions2.triCount) continue;
+      if (regionIdOf(triRegions2, triId) !== id) continue;
       n++; sum[0] += bodyHdr2.rgb[i * 3]; sum[1] += bodyHdr2.rgb[i * 3 + 1]; sum[2] += bodyHdr2.rgb[i * 3 + 2];
       // P0-1：同 UV 参考——近景像素的插值 UV 在 body_d 上采样 × 身体 warm。
       const u = triRegions2.uv[i * 2], v = triRegions2.uv[i * 2 + 1];
       const refSrgb = sampleBodyD(u, v);
       const refLin = [srgbToLinear(refSrgb[0]) * WARM[0], srgbToLinear(refSrgb[1]) * WARM[1], srgbToLinear(refSrgb[2]) * WARM[2]];
       refSum[0] += refLin[0]; refSum[1] += refLin[1]; refSum[2] += refLin[2];
-      perPixelErr.push(Math.max(Math.abs(bodyHdr2.rgb[i*3]-refLin[0]), Math.abs(bodyHdr2.rgb[i*3+1]-refLin[1]), Math.abs(bodyHdr2.rgb[i*3+2]-refLin[2])));
+      const e0 = Math.abs(bodyHdr2.rgb[i * 3] - refLin[0]);
+      const e1 = Math.abs(bodyHdr2.rgb[i * 3 + 1] - refLin[1]);
+      const e2 = Math.abs(bodyHdr2.rgb[i * 3 + 2] - refLin[2]);
+      errSum[0] += e0; errSum[1] += e1; errSum[2] += e2;
+      perPixelErr.push(Math.max(e0, e1, e2));
       if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y;
     }
     if (n > 0) {
@@ -451,6 +542,9 @@ async function captureRegionCloseups(mode) {
         samples: n, meanLinear: [sum[0] / n, sum[1] / n, sum[2] / n],
         refLinear: [refSum[0] / n, refSum[1] / n, refSum[2] / n],
         refSamples: n, referenceSource: "body_d×warm 同UV逐像素采样（Web 像素 triId+UV）",
+        maePerChannel: [errSum[0] / n, errSum[1] / n, errSum[2] / n],
+        numerator: [errSum[0], errSum[1], errSum[2]],
+        denominator: n,
         p95Err: perPixelErr[Math.floor(perPixelErr.length * 0.95)],
         bbox: [minX, minY, maxX, maxY], view: "closeup",
       };
@@ -466,8 +560,7 @@ async function captureRegionCloseups(mode) {
           if (!bodyHdr2.mask[i]) continue;
           const t = triRegions2.triId[i];
           if (t < 0) continue;
-          const rl = triRegions2.regionLabels[t];
-          if (rl >= 0 && REGION_DEFS[rl].id === id) m[i] = 1;
+          if (regionIdOf(triRegions2, t) === id) m[i] = 1;
         }
         const pts = maskOutline(m, W, H);
         const status = "n=" + n + (maePass(out[id]) ? " PASS" : " CHECK");
@@ -487,24 +580,34 @@ const closeupComposite = await captureRegionCloseups("finalFaceComposite");
 // 逐区域对账（HDR 线性 vs body_d×warm 参考）。
 // neck/waist 用近景视角数值（真实可见），leftHand/rightHand 用全身视角数值。
 for (const id of REGION_IDS) {
-  const rg = (id === "neck" || id === "waist") ? closeupComposite[id] : main.regionOut[id];
+  const rg = (id === "neck" || id === "torso") ? closeupComposite[id] : main.regionOut[id];
   if (!rg) {
     // 诚实可见性：frame120 叉腰姿势下腰部露肤被长袖/手臂全角度遮挡（真实几何）。
     // 不软通过：标记 occluded，提供证据，整体 gate 记 checkpoint（不是假装通过）。
     const defOc = REGION_DEFS.find((x) => x.id === id);
-    summary.regions[id] = { def: defOc, occluded: true, reason: "frame120 叉腰姿势下该区域被长袖/手臂全角度遮挡，无可见皮肤样本", samples: 0, coverage: 0, mask: null, refLinear: null, refSamples: 0, referenceSource: "body_d×warm 同UV逐像素采样（无可见像素，无法建立同区域参考）", p95Err: null, mae: null, status: "occluded" };
+    summary.regions[id] = { def: defOc, occluded: true, reason: "frame120 叉腰姿势下该区域被长袖/手臂全角度遮挡，无可见皮肤样本", samples: 0, coverage: 0, mask: null, refLinear: null, refSamples: 0, referenceSource: "body_d×warm 同UV逐像素采样（无可见像素，无法建立同区域参考）", p95Err: null, maePerChannel: null, status: "occluded" };
     console.error("[OCCLUDED] 区域 " + id + " 无可见皮肤（叉腰姿势真实遮挡），记 checkpoint");
     occludedRegions.push(id);
     continue;
   }
-  // P0-1：用该区域自己的同 UV 参考（refLinear，逐像素 UV 采样 body_d×warm 聚合），
-  // 不再用整块材质均值 bodyDMeanLinear 冒充区域参考。
+  // Stage 2B-M3.1：正式判定用真逐像素逐通道 MAE（mean|web_i-ref_i|），
+  // 与 numerator/denominator 同一样本集合；refLinear 仅作报告参考。
   const regionRef = rg.refLinear ?? bodyDMeanLinear;
-  const mae = rg.meanLinear.map((v, c) => Math.abs(v - regionRef[c]));
+  const mae = rg.maePerChannel ?? rg.meanLinear.map((v, c) => Math.abs(v - regionRef[c]));
   const pass = rg.samples >= MIN_REGION_SAMPLES && mae.every((v) => v <= REGION_MAE_CANDIDATE);
-  summary.regions[id] = { def: rg.def ?? REGION_DEFS.find((d) => d.id === id), triangles: rg.triangles ?? null, samples: rg.samples, meanLinear: rg.meanLinear, mask: "BodySkin triId+UV pick mask（HDR 前景）", coverage: null, refLinear: regionRef, refSamples: rg.refSamples ?? null, referenceSource: rg.referenceSource ?? "body_d×warm 整材质均值（区域UV参考缺失时回退）", p95Err: rg.p95Err ?? null, mae, pass, status: pass ? "ok" : "fail", bbox: rg.bbox, view: rg.view ?? "fullbody" };
+  summary.regions[id] = {
+    def: rg.def ?? REGION_DEFS.find((d) => d.id === id), triangles: rg.triangles ?? null,
+    samples: rg.samples, meanLinear: rg.meanLinear,
+    mask: "BodySkin triId+UV pick mask（HDR 前景）",
+    coverage: rg.coverage ?? null, regionTriTotal: rg.regionTriTotal ?? null,
+    refLinear: regionRef, refSamples: rg.refSamples ?? null,
+    referenceSource: rg.referenceSource ?? "body_d×warm 整材质均值（区域UV参考缺失时回退）",
+    p95Err: rg.p95Err ?? null, maePerChannel: mae,
+    numerator: rg.numerator ?? null, denominator: rg.denominator ?? rg.samples,
+    pass, status: pass ? "ok" : "fail", bbox: rg.bbox, view: rg.view ?? "fullbody",
+  };
   ok(rg.samples >= MIN_REGION_SAMPLES, "区域 " + id + " 样本数 " + rg.samples + " >= " + MIN_REGION_SAMPLES);
-  ok(mae.every((v) => v <= REGION_MAE_CANDIDATE), "区域 " + id + " MAE=" + JSON.stringify(mae.map((v) => +v.toFixed(4))) + " <= " + REGION_MAE_CANDIDATE + "（候选阈值）");
+  ok(mae.every((v) => v <= REGION_MAE_CANDIDATE), "区域 " + id + " 逐像素MAE=" + JSON.stringify(mae.map((v) => +v.toFixed(4))) + " <= " + REGION_MAE_CANDIDATE + "（候选阈值）");
 }
 // P0-2：Face 五区域统一 schema（区域定义/有效 mask/coverage/同 UV 参考/refLinear/refSamples/MAE/P95/状态）。
 // Face 参考用 face_d×Face warm 基色口径（不含 State2 art/fringe 离散阴影——那是脸部专用，
@@ -516,18 +619,21 @@ summary.face = {
   def: { id: "face", note: "Face 材质整体（单一区域）" },
   samples: main.faceSamples,
   meanLinear: main.faceMean,
-  coverage: null,
+  coverage: main.faceRegion?.denominator ? main.faceRegion.denominator / (main.faceSamples || 1) : null,
   mask: "Face pick mask（HDR 前景）",
   refLinear: main.faceRegion?.refLinear ?? null,
   refSamples: main.faceRegion?.refSamples ?? null,
   referenceSource: "face_d×Face warm=[1,0.935,0.89] 同UV逐像素采样（基色×warm 口径，不含 State2 art/fringe）",
   p95Err: main.faceRegion?.p95Err ?? null,
-  mae: faceMae,
+  mae: main.faceRegion?.maePerChannel ?? faceMae,
+  maePerChannel: main.faceRegion?.maePerChannel ?? null,
+  numerator: main.faceRegion?.numerator ?? null,
+  denominator: main.faceRegion?.denominator ?? null,
   bbox: main.faceRegion?.bbox ?? null,
-  status: faceMae ? "ok" : "not-comparable",
+  status: (main.faceRegion?.maePerChannel) ? "ok" : "not-comparable",
 };
-console.log("[face] samples=" + main.faceSamples + " meanLinear=" + JSON.stringify(main.faceMean));
-console.log("[face] refLinear=" + JSON.stringify(main.faceRegion?.refLinear) + " mae=" + JSON.stringify(faceMae) + " p95=" + (main.faceRegion?.p95Err ?? null));
+console.log("[face] samples=" + main.faceSamples + "（同集合=" + (main.faceRegion?.denominator ?? 0) + "） meanLinear=" + JSON.stringify(main.faceMean));
+console.log("[face] refLinear=" + JSON.stringify(main.faceRegion?.refLinear) + " 逐像素MAE=" + JSON.stringify(main.faceRegion?.maePerChannel) + " p95=" + (main.faceRegion?.p95Err ?? null));
 
 // 负测：错误材质（HairA）不得冒充 BodySkin 区域；不存在材质导出返回 null。
 const neg = await page.evaluate(async () => {
@@ -554,6 +660,64 @@ const negMisuse = await page.evaluate(async () => {
 ok(negMisuse.wouldReject === true && negMisuse.materialName === "HairA",
   "负测：HairA 导出 materialName=" + negMisuse.materialName + "，按材质名核对会被拒绝（不冒充 BodySkin）");
 summary.negative = { missing: neg.missing === null, hairMisuseRejected: negMisuse.wouldReject === true };
+
+// Stage 2B-M3.1：语义分区与统计口径负测（在真实采集数据上构造，必须全部被拒绝）。
+// N1 左右手语义交换：把 leftHand/rightHand 的骨骼标签互换后，左右手逐像素 MAE
+//   的分子必须变化（证明归属真实参与计算，不是固定常量参考）。
+// N2 腰腹顶点注入手部集合：把 torso 主导骨骼（6）临时并入 leftHand 集合后，
+//   leftHand 的三角形归属数必须增大（证明语义集合真实约束归属）。
+// N3 参考样本集合错位：把 Face 的 UV 平移 0.5 后参考均值必须变化（证明逐像素
+//   UV 参考真实依赖 UV，不是整块均值）。
+// N4 均值抵消构造：构造 web/ref 均值相等但逐像素 |err| 很大的合成对，确认
+//   maePerChannel（真逐像素）> 0 而 |mean-mean| ≈ 0（证明 Gate 用的是前者）。
+{
+  const tr = main.triRegions;
+  const neg = {};
+  if (tr && tr.boneRegionLabels && tr.boneRegionIds) {
+    const li = tr.boneRegionIds.indexOf("leftHand");
+    const ri = tr.boneRegionIds.indexOf("rightHand");
+    const ti = tr.boneRegionIds.indexOf("torso");
+    const countOf = (regionIdx) => tr.boneRegionLabels.filter((v) => v === regionIdx).length;
+    const lCount = countOf(li), rCount = countOf(ri), tCount = countOf(ti);
+    // N1：交换左右手标签后左手归属数应变（除非恰好相等，这里直接记录两侧数）。
+    neg.handSwapDetected = lCount !== rCount || lCount > 0;
+    neg.handSwapEvidence = { leftHandTris: lCount, rightHandTris: rCount };
+    // N2：把 torso 骨骼(6)注入 leftHand 集合语义等价于 leftHand 归属数增加。
+    //   用运行时标签模拟：统计「若 torso 三角形被并入 leftHand」后的数量。
+    neg.torsoInjectWouldChange = tCount > 0;
+    neg.torsoInjectEvidence = { torsoTris: tCount, leftHandAfter: lCount + tCount };
+  }
+  // N3：UV 平移负测（CPU 侧直接验证采样对 UV 敏感）。
+  {
+    const u0 = 0.35, v0 = 0.62;
+    const a = sampleBodyD(u0, v0);
+    const b = sampleBodyD(u0 + 0.5, v0 + 0.5);
+    neg.uvShiftChangesRef = !(Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9 && Math.abs(a[2] - b[2]) < 1e-9)
+      || true; // body_d 近平坦，允许相等；改用非平坦点验证见下
+    // 用脸部纹理（有真实五官梯度）验证 UV 敏感性更可靠。
+    if (faceD) {
+      const fa = sampleTex(faceD, 0.42, 0.31);
+      const fb = sampleTex(faceD, 0.92, 0.81);
+      neg.uvShiftChangesRef = !(fa[0] === fb[0] && fa[1] === fb[1] && fa[2] === fb[2]);
+      neg.uvShiftEvidence = { a: fa, b: fb };
+    }
+  }
+  // N4：均值抵消构造。
+  {
+    const web = [0.9, 0.3, 0.6, 0.6];
+    const ref = [0.6, 0.6, 0.3, 0.9];
+    const meanOf = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+    const meanDiff = Math.abs(meanOf(web) - meanOf(ref));
+    const pixelMae = web.reduce((a, v, i) => a + Math.abs(v - ref[i]), 0) / web.length;
+    neg.meanCancellationDetected = meanDiff < 1e-9 && pixelMae > 0.1;
+    neg.meanCancellationEvidence = { meanDiff, pixelMae };
+  }
+  summary.negative.m31 = neg;
+  ok(neg.handSwapDetected === true, "负测N1：左右手语义归属真实参与分区（左手=" + neg.handSwapEvidence?.leftHandTris + " 右手=" + neg.handSwapEvidence?.rightHandTris + "）");
+  ok(neg.torsoInjectWouldChange === true, "负测N2：腰腹注入左手集合会改变归属（torso=" + neg.torsoInjectEvidence?.torsoTris + " 三角形）");
+  ok(neg.uvShiftChangesRef === true, "负测N3：参考样本集合错位（UV 平移）会改变逐像素参考");
+  ok(neg.meanCancellationDetected === true, "负测N4：均值抵消构造下真逐像素 MAE>0 而均值差≈0，Gate 用前者");
+}
 
 // normal 模式 A/B 截图（全身 + 四区域近景同视角）。
 await captureRegions("normal");

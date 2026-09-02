@@ -1,0 +1,258 @@
+{
+  "out": "E:\\codexWorktree\\bacb\\MMD project\\.scratch\\v14d-body-skin-state2\\gate-m31-v2",
+  "pageErrors": [],
+  "failedRequests": [],
+  "httpBadResponses": [],
+  "cameras": {
+    "freeCamera": true,
+    "fullBody": true,
+    "resetCamera": true
+  },
+  "regions": {
+    "neck": {
+      "def": {
+        "id": "neck"
+      },
+      "triangles": null,
+      "samples": 1525,
+      "meanLinear": [
+        0.9887551229508197,
+        0.927015881147541,
+        0.8809682377049181
+      ],
+      "mask": "BodySkin triId+UV pick mask（HDR 前景）",
+      "coverage": null,
+      "regionTriTotal": null,
+      "refLinear": [
+        0.732969129342961,
+        0.3448587633728679,
+        0.2489744413329608
+      ],
+      "refSamples": 1525,
+      "referenceSource": "body_d×warm 同UV逐像素采样（Web 像素 triId+UV）",
+      "p95Err": 0.6495731776534095,
+      "maePerChannel": [
+        0.2628237139858135,
+        0.5821571177746709,
+        0.631993796371966
+      ],
+      "numerator": [
+        400.8061638283656,
+        887.7896046063732,
+        963.7905394672481
+      ],
+      "denominator": 1525,
+      "pass": false,
+      "status": "fail",
+      "bbox": [
+        226,
+        342,
+        338,
+        402
+      ],
+      "view": "closeup"
+    },
+    "torso": {
+      "def": {
+        "id": "torso"
+      },
+      "triangles": null,
+      "samples": 2999,
+      "meanLinear": [
+        0.9960247165721907,
+        0.9338008502834279,
+        0.8871863537845949
+      ],
+      "mask": "BodySkin triId+UV pick mask（HDR 前景）",
+      "coverage": null,
+      "regionTriTotal": null,
+      "refLinear": [
+        0.7616072226585677,
+        0.3879960320581013,
+        0.2878628887824115
+      ],
+      "refSamples": 2999,
+      "referenceSource": "body_d×warm 同UV逐像素采样（Web 像素 triId+UV）",
+      "p95Err": 0.6182438169578943,
+      "maePerChannel": [
+        0.23692629934635648,
+        0.545804818225331,
+        0.5993234650021869
+      ],
+      "numerator": [
+        710.5419717397231,
+        1636.8686498577677,
+        1797.3710715415584
+      ],
+      "denominator": 2999,
+      "pass": false,
+      "status": "fail",
+      "bbox": [
+        26,
+        256,
+        86,
+        321
+      ],
+      "view": "closeup"
+    },
+    "leftHand": {
+      "def": {
+        "id": "leftHand"
+      },
+      "triangles": 882,
+      "samples": 88,
+      "meanLinear": [
+        0.9378551136363636,
+        0.8785511363636364,
+        0.8337180397727273
+      ],
+      "mask": "BodySkin triId+UV pick mask（HDR 前景）",
+      "coverage": 0.0990990990990991,
+      "regionTriTotal": 882,
+      "refLinear": [
+        0.8550548600007083,
+        0.47018776705051624,
+        0.35585337002296424
+      ],
+      "refSamples": 88,
+      "referenceSource": "body_d×warm 同UV逐像素采样（Web 像素 triId+UV）",
+      "p95Err": 0.5976394752830843,
+      "maePerChannel": [
+        0.1510464275081965,
+        0.40995960749050925,
+        0.47786466974976294
+      ],
+      "numerator": [
+        13.292085620721291,
+        36.076445459164816,
+        42.05209093797914
+      ],
+      "denominator": 88,
+      "pass": false,
+      "status": "fail",
+      "bbox": [
+        426,
+        247,
+        440,
+        264
+      ],
+      "view": "fullbody"
+    },
+    "rightHand": {
+      "def": {
+        "id": "rightHand"
+      },
+      "triangles": 882,
+      "samples": 175,
+      "meanLinear": [
+        0.9642857142857143,
+        0.9026785714285714,
+        0.8576339285714286
+      ],
+      "mask": "BodySkin triId+UV pick mask（HDR 前景）",
+      "coverage": 0.19707207207207209,
+      "regionTriTotal": 882,
+      "refLinear": [
+        0.8591207581856157,
+        0.4701081019088665,
+        0.35620564263951526
+      ],
+      "refSamples": 175,
+      "referenceSource": "body_d×warm 同UV逐像素采样（Web 像素 triId+UV）",
+      "p95Err": 0.5992111310805762,
+      "maePerChannel": [
+        0.1474850121911248,
+        0.43320018611899097,
+        0.5014282859319131
+      ],
+      "numerator": [
+        25.809877133446843,
+        75.81003257082342,
+        87.74995003808479
+      ],
+      "denominator": 175,
+      "pass": false,
+      "status": "fail",
+      "bbox": [
+        278,
+        227,
+        325,
+        241
+      ],
+      "view": "fullbody"
+    }
+  },
+  "face": {
+    "def": {
+      "id": "face",
+      "note": "Face 材质整体（单一区域）"
+    },
+    "samples": 469,
+    "meanLinear": [
+      0.9488772654584222,
+      0.8802888459488273,
+      0.8359375
+    ],
+    "coverage": 1,
+    "mask": "Face pick mask（HDR 前景）",
+    "refLinear": [
+      0.8809435310929737,
+      0.5555633289365999,
+      0.49094144426524844
+    ],
+    "refSamples": 469,
+    "referenceSource": "face_d×Face warm=[1,0.935,0.89] 同UV逐像素采样（基色×warm 口径，不含 State2 art/fringe）",
+    "p95Err": 0.5480793678819663,
+    "mae": [
+      0.12025908044322153,
+      0.32725198115108606,
+      0.34532703668608977
+    ],
+    "maePerChannel": [
+      0.12025908044322153,
+      0.32725198115108606,
+      0.34532703668608977
+    ],
+    "numerator": [
+      56.4015087278709,
+      153.48117915985935,
+      161.9583802057761
+    ],
+    "denominator": 469,
+    "bbox": [
+      294,
+      36,
+      339,
+      65
+    ],
+    "status": "ok"
+  },
+  "boot": {
+    "webgpuStatus": "ready",
+    "mode": "finalFaceComposite",
+    "frame": "120",
+    "paused": "true",
+    "faceApplied": "true",
+    "bodyApplied": "true",
+    "bodyGraph": "V14D Body Skin Composite",
+    "bodyGroupOk": "true"
+  },
+  "negative": {
+    "missing": true,
+    "hairMisuseRejected": true
+  },
+  "threshold": {
+    "regionMaeCandidate": 0.2,
+    "minRegionSamples": 30,
+    "note": "候选阈值（非正式）；Web 四区域 HDR 线性 vs Blender 同材质同语义区域（body_d×warm）参考；非逐像素对齐（Web/Blender frame120 姿态差已证），口径=材质级常量+区域语义分区"
+  },
+  "ref": {
+    "bodyDMeanLinear": [
+      0.8244139668897734,
+      0.43950975512214735,
+      0.33020184502104444
+    ],
+    "blenderTris": 0
+  },
+  "occludedRegions": []
+}
