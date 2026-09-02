@@ -822,6 +822,8 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   const modelRef = useRef<Awaited<ReturnType<Engine["loadModel"]>> | null>(null);
   const materialStateRef = useRef(new Map<string, { visible: boolean; preset: string }>());
   const currentVmdUrlRef = useRef("");
+  // 进度镜像 rAF 清理句柄（验收探针用，effect 卸载时取消循环）。
+  const vmdPlaybackMirrorCleanupRef = useRef<(() => void) | null>(null);
   const lastLoopVmdUrlRef = useRef("");
   const vmdCompletionFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const vmdRequestGuardRef = useRef(createRezeVmdRequestGuard());
@@ -2945,18 +2947,142 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         // 才代表真的没有动作在播，直接 show/play 从绑定姿势起跳；只要前一个
         // 动作仍在进行中（currentVmdUrlRef 非空），新动作必须保留当前姿势，避免
         // 模型被 resetAllBones() 拉回 T 形再跳到新动作，产生闪烁。
-        playRezeVmd(model, name, { preserveCurrentPose: Boolean(currentVmdUrlRef.current) });
-        currentVmdUrlRef.current = url;
-        if (interaction.vmdLoopUrls?.includes(url)) lastLoopVmdUrlRef.current = url;
-        armRezeVmdCompletionFallback(model, name, url);
-        engine.resetPhysics();
+       playRezeVmd(model, name, { preserveCurrentPose: Boolean(currentVmdUrlRef.current) });
+       currentVmdUrlRef.current = url;
+       if (interaction.vmdLoopUrls?.includes(url)) lastLoopVmdUrlRef.current = url;
+       armRezeVmdCompletionFallback(model, name, url);
       } catch (error) {
         if (!vmdRequestGuardRef.current.isCurrent(requestId)) return;
         reportStatus("error", `VMD 加载失败：${error instanceof Error ? error.message : String(error)}`);
       }
     };
     void load();
+    // 进度镜像（只读）：当前 VMD 播放进度 → canvas dataset，供真实 /companion 验收
+    // 断言 play/pause/seek 的实际帧前进。reze-k3 无 __mmdCompanionRuntime，本 dataset
+    // 是该管线唯一可外部读取的播放状态来源。随 VMD 播放生命周期启动/终止。
+    if (canvasRef.current) {
+      const canvas = canvasRef.current;
+      const nm = (interaction.vmdUrl || "").split("/").pop() || "";
+      canvas.dataset.vmdPlaybackName = nm;
+      let rafId = 0;
+      let cancelled = false;
+      const tick = () => {
+        if (cancelled || canvas.dataset.vmdPlaybackName !== nm || !nm) return; // 已停止/切换/卸载
+        const progress = modelRef.current?.getAnimationProgress?.();
+        if (progress) {
+          canvas.dataset.vmdPlaybackCurrent = String(Number(progress.current) || 0);
+          canvas.dataset.vmdPlaybackDuration = String(Number(progress.duration) || 0);
+          canvas.dataset.vmdPlaybackPlaying = String(Boolean(progress.playing));
+        }
+        rafId = globalThis.requestAnimationFrame(tick);
+      };
+      rafId = globalThis.requestAnimationFrame(tick);
+      vmdPlaybackMirrorCleanupRef.current = () => { cancelled = true; globalThis.cancelAnimationFrame(rafId); };
+    }
+    return () => {
+      // 清理：取消进度镜像 rAF 并清除 dataset，避免卸载后残留。
+      vmdPlaybackMirrorCleanupRef.current?.();
+      vmdPlaybackMirrorCleanupRef.current = null;
+      if (canvasRef.current) {
+        const canvas = canvasRef.current;
+        delete canvas.dataset.vmdPlaybackName;
+        delete canvas.dataset.vmdPlaybackCurrent;
+        delete canvas.dataset.vmdPlaybackDuration;
+        delete canvas.dataset.vmdPlaybackPlaying;
+      }
+    };
   }, [interaction.mode, interaction.vmdUrl, interaction.playbackRate, interaction.vmdRequestId, v14dColorBaseline, v14dFaceStatic]);
+
+  // 验收探针（仅在显式验收开关 ?v14dAcceptanceProbe=1 下暴露，生产默认不挂载）：reze-k3
+  // 走 reze-engine，没有 __mmdCompanionRuntime。暴露最小 play/pause/seek 供真实
+  // /companion 验收脚本驱动 VMD load→play→pause→seek，经 modelRef/engineRef 复用与
+  // interaction effect 同一条引擎调用路径。卸载时清除，避免残留。
+  const acceptanceProbeEnabled =
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("v14dAcceptanceProbe") === "1";
+  useEffect(() => {
+    if (!acceptanceProbeEnabled) return;
+    (window as unknown as { __rezeStageProbe?: unknown }).__rezeStageProbe = {
+      async playVmd(url: string) {
+        const m = modelRef.current;
+        if (!m) throw new Error("no model");
+        const nm = url.split("/").pop() || "motion.vmd";
+        await m.loadVmd(nm, url);
+        playRezeVmd(m, nm, { preserveCurrentPose: Boolean(currentVmdUrlRef.current) });
+        currentVmdUrlRef.current = url;
+        engineRef.current?.resetPhysics();
+        if (canvasRef.current) {
+          const canvas = canvasRef.current;
+          canvas.dataset.vmdPlaybackName = nm;
+          let rafId = 0;
+          let cancelled = false;
+          const tick = () => {
+            if (cancelled || canvas.dataset.vmdPlaybackName !== nm) return; // 已停止/切换/卸载则终止
+            const progress = m.getAnimationProgress?.();
+            if (progress) {
+              canvas.dataset.vmdPlaybackCurrent = String(Number(progress.current) || 0);
+              canvas.dataset.vmdPlaybackDuration = String(Number(progress.duration) || 0);
+              canvas.dataset.vmdPlaybackPlaying = String(Boolean(progress.playing));
+            }
+            rafId = globalThis.requestAnimationFrame(tick);
+          };
+          rafId = globalThis.requestAnimationFrame(tick);
+          vmdPlaybackMirrorCleanupRef.current = () => { cancelled = true; globalThis.cancelAnimationFrame(rafId); };
+        }
+      },
+      pauseVmd() { modelRef.current?.pause(); },
+      seekVmd(seconds: number) { modelRef.current?.seek(seconds); },
+      // 负测钩子（仅验收开关）：用错误 graph / 编译非法 graph 驱动 V1 styleGroup 应用，
+      // 真实验证「错误 graph 不命中 Face draw-call」「applyStyleGroups 失败回退 original」。
+      async applyBadSkinGraph(kind: "wrongGraph" | "failCompile") {
+        const engine = engineRef.current;
+        if (!engine) throw new Error("no engine");
+        const groups = buildV14dSkinVariantStyleGroups(engine.getStyleGroups("companion"));
+        const bad = groups.map((g) => {
+          if (kind === "wrongGraph") {
+            // 错误 graph：graph.name 不是权威 V14D 名 → draw-call 不应计入 Face/BodySkin composite。
+            return { ...g, graph: { ...g.graph, name: "V14D WRONG Non-Authoritative Graph" } as ShaderGraph };
+          }
+          // 编译失败：注入非法 output 引用（指向不存在的节点/算子）→ applyStyleGroups 返回 ok:false，UI 回退 original。
+          return { ...g, graph: { ...g.graph, output: { node: "__missing_node__", socket: "color" }, nodes: [...(g.graph.nodes ?? []), { id: "__bad__", type: "__nonexistent_op__", inputs: {} }] } as ShaderGraph };
+        });
+        const res = await engine.applyStyleGroups("companion", bad);
+        if (canvasRef.current) {
+          canvasRef.current.dataset.v14dSkinVariant = res.ok ? "v1" : "original";
+          canvasRef.current.dataset.v14dSkinVariantFaceGraph = res.ok ? String(bad[0]?.graph?.name ?? "") : "";
+          try {
+            const insts = (engine as unknown as { modelInstances?: Map<string, unknown> }).modelInstances;
+            let faceOnComposite = 0, bodyOnComposite = 0, faceCalls = 0, bodyCalls = 0;
+            if (insts) {
+              for (const inst of insts.values()) {
+                const drawCalls = (inst as { drawCalls?: { materialName: string; groupId: string | null; baseBindGroupEntries?: unknown }[] }).drawCalls;
+                const styleGroups = (inst as { styleGroups?: Map<string, { pipeline?: unknown; group?: { graph?: { name?: string } } }> }).styleGroups;
+                if (!drawCalls) continue;
+                for (const dc of drawCalls) {
+                  if (!dc.baseBindGroupEntries) continue;
+                  const install = dc.groupId && styleGroups ? styleGroups.get(dc.groupId) : undefined;
+                  const graphName = install?.group?.graph?.name ?? null;
+                  if (dc.materialName === V14D_FACE_MATERIAL_NAME) { faceCalls += 1; if (install?.pipeline && graphName === V14D_FACE_V1_COMPOSITE_GRAPH.name) faceOnComposite += 1; }
+                  else if (dc.materialName === V14D_BODY_MATERIAL_NAME) { bodyCalls += 1; if (install?.pipeline && graphName === V14D_BODY_V1_COMPOSITE_GRAPH.name) bodyOnComposite += 1; }
+                }
+              }
+            }
+            canvasRef.current.dataset.v14dSkinVariantFaceDrawCalls = String(faceCalls);
+            canvasRef.current.dataset.v14dSkinVariantFaceOnComposite = String(faceOnComposite);
+            canvasRef.current.dataset.v14dSkinVariantBodyDrawCalls = String(bodyCalls);
+            canvasRef.current.dataset.v14dSkinVariantBodyOnComposite = String(bodyOnComposite);
+          } catch { /* 证据读取失败不阻断负测 */ }
+        }
+        return { ok: res.ok };
+      },
+    };
+    return () => {
+      delete (window as unknown as { __rezeStageProbe?: unknown }).__rezeStageProbe;
+      vmdPlaybackMirrorCleanupRef.current?.();
+      vmdPlaybackMirrorCleanupRef.current = null;
+    };
+    // 探针只读 ref，不随 interaction 变化重建。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [acceptanceProbeEnabled]);
 
   useEffect(() => {
     if (v14dColorBaseline || v14dFaceStatic) return;

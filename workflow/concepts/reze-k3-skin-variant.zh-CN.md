@@ -4,7 +4,7 @@
 - 英文机器名：`rezeK3SkinVariant`（localStorage 字段 / prop）
 - 枚举值：`original`（原始 Reze K3）/ `v1`（Reze K3 V1（V14D））
 - 票据：Reze K3 V1 舞台接入与 V14D 切换（`codex/reze-k3-v1-v14d-toggle`）
-- 状态：**已实现，待生产舞台端到端验收**
+- 状态：**已实现，生产 /companion 舞台端到端验收通过（存根环境，2026-09-02 第二轮）**
 
 ## 概念定义
 
@@ -75,6 +75,14 @@ composite），形成两个用户可见且可持久选择的效果：
   含权威 PMX 与 State2 mask；检查 applyStyleGroups 返回与 console 警告。
 - 脸部变化但 BodySkin 不变：读 `v14dSkinVariantBodyOnComposite` 是否
   等于 BodyDrawCalls；不等于则 BodySkin graph 未绑定成功。
+
+## 生产舞台验收（2026-09-02 第二轮）
+
+票据 `codex/reze-k3-v1-stage-visual-acceptance`，交付 `docs/handoff/2026-09-02-reze-k3-v1-stage-visual-acceptance.md`。
+在保留 K3 灯光/星空/自由相机/动态 VMD 的前提下，G1-G7 全过；V1 仅 Face/BodySkin 走 V14D 合成
+（皮肤区掩码采样 MAE 23-31 显著收敛），非皮肤/星空背景零泄漏（星空暗空像素 maxMeanDiff=0.000）。
+验收探针 `__rezeStageProbe` 仅在 `?v14dAcceptanceProbe=1` 显式开关下挂载，含负测钩子
+`applyBadSkinGraph`。环境为存根端到端（API 后端本机不可达，route 存根 bootstrap）。
 
 ## 与现有概念的关系
 
