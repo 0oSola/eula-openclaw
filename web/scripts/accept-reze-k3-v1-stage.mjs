@@ -433,6 +433,7 @@ try {
     await stage.seekVmd(0);
     await stage.playVmd("/__probe__/koleda-v14d-authoritative-pose-f120.vmd");
     const fallbackDelay = Number(c()?.dataset.vmdCompletionFallbackDelay || 0);
+    const armT = Date.now(); // fallback 在 playVmd 内 arm，记录 arm 时刻
     await new Promise((s) => setTimeout(s, 1200)); // 只播 ~1.2s，远未到 4s 尾部
     await stage.pauseVmd();
     // 等待超过 fallback 窗口（duration+350ms），证明暂停后兜底计时器也不会自增完成计数。
@@ -441,9 +442,12 @@ try {
     const after = Number(c()?.dataset.vmdNaturalFinishCount || 0);
     const fallbackFired = c()?.dataset.vmdCompletionFallbackFired || "";
     const midT = Number(c()?.dataset.vmdPlaybackCurrent || -1);
-    return { before, after, midT, fallbackDelay, fallbackFired, waitMs, notFinished: after === before };
+    const totalObservedAfterArmMs = Date.now() - armT; // arm 后实际总观察时长（含 1200 播放 + waitMs）
+    return { before, after, midT, fallbackDelay, fallbackFired, waitMs, totalObservedAfterArmMs, notFinished: after === before };
   });
   if (!negG5.notFinished) fail("G5", "负测失败：提前停止却触发了完成计数 " + JSON.stringify(negG5));
+  // P1：硬断言总观察时长确实超过 fallback 窗口，避免报告文字与单字段数值看似矛盾。
+  if (!(negG5.totalObservedAfterArmMs > negG5.fallbackDelay)) fail("G5", "负测总观察时长未超过 fallback 窗口 " + JSON.stringify(negG5));
   report.gates.G5.negEarlyStop = negG5; note("G5", "负测 PASS " + JSON.stringify(negG5));
   // G5 竞态回归（P0）：A 慢 / B 快，B 成为最新后 A 才完成。最终播放必须是 B，且 A
   // 不得增加 resetPhysics / 完成 fallback / 完成计数（vmdRaceStaleCount 须自增≥1）。
@@ -467,7 +471,8 @@ try {
     const rpDelta = rpAfter - rpBefore;
     const finishDelta = finishAfter - finishBefore;
     const staleDelta = staleAfter - staleBefore;
-    const ok = retA === null && currentName === nameB && currentName.includes("f120") && rpDelta === 1 && staleDelta >= 1;
+    // finishDelta===0 硬断言纳入 ok（P0-2）：旧请求 A 不得增加完成计数，否则 Gate exit1。
+    const ok = retA === null && currentName === nameB && currentName.includes("f120") && rpDelta === 1 && staleDelta >= 1 && finishDelta === 0;
     return {
       retA, nameB, currentName,
       rpDelta, finishDelta, staleDelta, ok,
@@ -475,6 +480,38 @@ try {
   });
   if (!race.ok) fail("G5", "竞态回归失败：旧请求未无副作用退出 " + JSON.stringify(race));
   report.gates.G5.raceGuard = race; note("G5", "竞态回归 PASS " + JSON.stringify(race));
+  // G5 过期完成回调负测（P0-1）：B 已成为当前动作且 fallback 已 arm，此时注入 A 的过期
+  // finishedName 回调。要求：完成计数不增、currentName 仍为 B、B 的 fallback 保持有效未被清除，
+  // 且 B 后续仍能正常完成（finish 自增）。
+  note("G5", "负测：过期完成回调不得清当前 fallback");
+  const stale = await page.evaluate(async () => {
+    const stage = window.__rezeStageProbe;
+    const c = () => document.querySelector("canvas");
+    // 起一个当前动作 B（正常速度），让它 arm fallback。
+    await stage.playVmd("/__probe__/koleda-v14d-authoritative-pose-f120.vmd");
+    const stateBefore = stage.vmdFallbackState();
+    const finishBefore = Number(c()?.dataset.vmdNaturalFinishCount || 0);
+    // 注入过期/错误 finishedName 回调（不属于当前动作 B）。
+    stage.fireStaleFinish("__stale__previous-motion.vmd");
+    await new Promise((s) => setTimeout(s, 200));
+    const stateAfter = stage.vmdFallbackState();
+    const finishAfterStale = Number(c()?.dataset.vmdNaturalFinishCount || 0);
+    const countNotBumped = finishAfterStale === finishBefore;
+    const stillB = stateAfter.currentName === stateBefore.currentName && stateAfter.currentName.includes("f120");
+    const fallbackKept = stateAfter.armed === true && stateAfter.timerActive === true;
+    // B 后续仍能正常完成：等到超过 B 的 fallback 窗口，完成计数应自增。
+    const waitMs = Math.max(0, stateAfter.delay) + 500;
+    await new Promise((s) => setTimeout(s, waitMs));
+    const finishFinal = Number(c()?.dataset.vmdNaturalFinishCount || 0);
+    const bCompleted = finishFinal > finishAfterStale;
+    const ok = countNotBumped && stillB && fallbackKept && bCompleted;
+    return {
+      stateBefore, stateAfter, finishBefore, finishAfterStale, finishFinal,
+      countNotBumped, stillB, fallbackKept, bCompleted, waitMs, ok,
+    };
+  });
+  if (!stale.ok) fail("G5", "过期完成回调负测失败 " + JSON.stringify(stale));
+  report.gates.G5.staleFinish = stale; note("G5", "过期完成回调负测 PASS " + JSON.stringify(stale));
   // G5 resetPhysics 回归：通用 VMD effect 每次成功 load/apply/play 后自增计数（P0-2）。
   const rp = await page.evaluate(() => Number(document.querySelector("canvas")?.dataset.vmdEffectResetPhysicsCount || 0));
   if (!(rp > 0)) fail("G5", "通用 VMD effect 未观察到 resetPhysics 计数自增（P0-2 回归）");

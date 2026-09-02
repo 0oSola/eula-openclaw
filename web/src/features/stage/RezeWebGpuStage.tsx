@@ -896,6 +896,8 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     if (vmdCompletionFallbackTimerRef.current === null) return;
     globalThis.clearTimeout(vmdCompletionFallbackTimerRef.current);
     vmdCompletionFallbackTimerRef.current = null;
+    // 清理证据（仅验收用）：记录兜底已被清除、当前不再 armed。
+    if (canvasRef.current) canvasRef.current.dataset.vmdCompletionFallbackArmed = "false";
   };
 
   const readRezeVmdIkPolicy = async (url: string) => {
@@ -946,9 +948,12 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     model: Awaited<ReturnType<Engine["loadModel"]>>,
     finishedName: string,
   ) => {
-    clearVmdCompletionFallback();
+    // 身份/模型有效性校验必须放在任何 clear/count/loop/reset/complete 副作用之前（P0-1）。
+    // 旧动作/错误 finishedName 的回调不得清除当前新动作已 arm 的 fallback，也不得计数。
     const currentName = currentVmdUrlRef.current.split("/").pop();
-    if (!currentName || currentName !== finishedName) return;
+    if (!currentName || currentName !== finishedName || model !== modelRef.current) return;
+    // 仅匹配当前动作的回调才可清当前 fallback 并继续后续完成流程。
+    clearVmdCompletionFallback();
     // 可判别完成证据（先验身份再计数，回归 P0）：仅当回调的 finishedName 就是当前
     // 动作时才自增，过期/错误名称的回调不得充当完成证据。供验收区分「真播完触发
     // 完成回调」与「仅超时后 !playing」。
@@ -1015,10 +1020,14 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     if (canvasRef.current) {
       canvasRef.current.dataset.vmdCompletionFallbackDelay = String(delayMs);
       canvasRef.current.dataset.vmdCompletionFallbackFired = "false";
+      canvasRef.current.dataset.vmdCompletionFallbackArmed = "true"; // 兜底已 arm（仅验收证据）
     }
     vmdCompletionFallbackTimerRef.current = globalThis.setTimeout(() => {
       vmdCompletionFallbackTimerRef.current = null;
-      if (canvasRef.current) canvasRef.current.dataset.vmdCompletionFallbackFired = "true";
+      if (canvasRef.current) {
+        canvasRef.current.dataset.vmdCompletionFallbackFired = "true";
+        canvasRef.current.dataset.vmdCompletionFallbackArmed = "false"; // 兜底已触发，不再 armed
+      }
       if (model !== modelRef.current || currentVmdUrlRef.current !== url) return;
       handleRezeVmdFinished(model, name);
     }, delayMs);
@@ -3089,6 +3098,24 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       // 中段暂停/跳走误判为「自然播完」。这是真实行为修复（配合完成回调先验身份）。
       pauseVmd() { modelRef.current?.pause(); clearVmdCompletionFallback(); },
       seekVmd(seconds: number) { modelRef.current?.seek(seconds); clearVmdCompletionFallback(); },
+      // 过期完成回调负测钩子（P0-1，仅验收开关）：注入一个 finishedName 不等于当前动作的
+      // 过期/错误回调。修复后它不得清当前 fallback、不得自增完成计数、不得改 currentName。
+      fireStaleFinish(staleName: string) {
+        const m = modelRef.current;
+        if (!m) throw new Error("no model");
+        handleRezeVmdFinished(m, staleName);
+      },
+      // 完成兜底状态证据（仅验收开关）：armed/cleared/fired/delay + 当前动作名。
+      vmdFallbackState() {
+        const c = canvasRef.current;
+        return {
+          armed: (c?.dataset.vmdCompletionFallbackArmed || "") === "true",
+          fired: (c?.dataset.vmdCompletionFallbackFired || "") === "true",
+          delay: Number(c?.dataset.vmdCompletionFallbackDelay || 0),
+          currentName: (currentVmdUrlRef.current.split("/").pop()) || "",
+          timerActive: vmdCompletionFallbackTimerRef.current !== null,
+        };
+      },
       // 场景不变性证据（P1-1）：只读场景文档源 settingsRef + grade + 背景效果。
       // 变体切换只改 Face/BodySkin 材质 graph，不触碰这些字段；original/V1 各捕获一次
       // 逐字段比对即可证明 K3 灯光/星空/相机/Bloom/grade/tone mapping 未被 V1 改写。

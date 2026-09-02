@@ -1,10 +1,10 @@
-# Reze K3 V1 皮肤阶段（V14D）真实舞台视觉与 VMD 验收交付（第四轮修正）
+# Reze K3 V1 皮肤阶段（V14D）生产路由存根环境视觉与 VMD 验收交付（第四轮收口）
 
 **票据**：`codex/reze-k3-v1-stage-visual-acceptance`（来源 `codex/reze-k3-v1-acceptance-contract-cleanup`）
 **执行模型**：kimi/k3-256k（视觉识别/真实浏览器验收）
 **工作树**：`E:\codexWorktree\004b\MMD project`，分支 `codex/reze-k3-v1-stage-visual-acceptance`
 **基线**：base_commit `6430ee11750c575620b70702ce755e99c9fad88e`
-**完成时间**：2026-09-02（第四轮）
+**完成时间**：2026-09-02（第四轮收口）
 
 > **范围纠偏（第三轮）**：本票交付的是「**皮肤阶段**」——只迁移 Face + BodySkin 两个
 > PMX 材质槽。最终目标是「Reze K3 + V14D 角色外观材质（**15 槽**）」，其余 13 槽
@@ -14,9 +14,11 @@
 
 ## 结论
 
-**G1-G7 全部通过**。真实生产 `/companion` 舞台的「原始 Reze K3 / Reze K3 V1 皮肤预览（V14D）」
-切换在**保留 Reze K3 原有灯光与星空背景**的前提下端到端可用：V1 仅让 Face/BodySkin 材质响应接近
-V14D State2 目标风格，用户相机、正常 VMD 播放、K3 灯光、星空背景与非皮肤材质外观全部保留。
+**G1-G7 全部通过（存根环境端到端）**。生产路由 `/companion` 的存根环境端到端中，
+「原始 Reze K3 / Reze K3 V1 皮肤预览（V14D）」切换在**保留 Reze K3 原有灯光与星空背景**的前提下
+可用：V1 仅让 Face/BodySkin 材质响应接近 V14D State2 目标风格，用户相机、正常 VMD 播放、K3 灯光、
+星空背景与非皮肤材质外观全部保留。**注意**：本结论基于 Playwright route 存根 API（本机无 Python、
+API 后端不可达），是「存根环境端到端」而非真实部署生产端到端；V1 资格/绑定/渲染/VMD 均不依赖 API。
 
 > **撤回声明（第一轮）**：第一轮「G1-G7 全部通过」被来源主会话撤回——彼时未在原 K3 舞台环境约束下
 > 证明场景不变性，且缺少错误 graph / applyStyleGroups 失败负测、G3 仅算 verdict 未硬阻断、G6 软
@@ -37,6 +39,17 @@ V14D State2 目标风格，用户相机、正常 VMD 播放、K3 灯光、星空
 > 500ms、未超过 fallback 窗口；(3) 目标收敛把「整图肤色色比」当作对齐证据，未声明
 > 候选指标口径；(4) topology 仍写「生产 /companion 端到端通过」、概念元数据仍是第二轮。
 > 第四轮逐项修复并加竞态回归负测，结论以本轮为准。
+
+> **撤回声明（第四轮）**：第四轮结论再被主会话部分驳回（P0）——(1) `handleRezeVmdFinished`
+> 仍先 `clearVmdCompletionFallback()` 后才比较 `currentName!==finishedName`，过期/错误
+> finishedName 回调虽不计数，却会清掉当前新动作已 arm 的 fallback；(2) 竞态 Gate 计算了
+> `finishDelta` 但 `race.ok` 漏掉 `finishDelta===0`；(3) 提前停止负测报告文字与单字段
+> `fallbackDelay=4350/waitMs=3650` 看似矛盾（实为 arm 后 1200+3650≈4850ms>4350ms），未显式输出
+> 总观察时长。第四轮收口：身份/模型校验移到任何 clear/count/loop/reset/complete 副作用之前；
+> `race.ok` 纳入 `finishDelta===0` 并负向自验（finishDelta=1 时 Gate exit1）；负测输出
+> `totalObservedAfterArmMs` 并硬断言其 > fallbackDelay；新增过期完成回调负测（注入 A 过期
+> finishedName，证明完成计数不增、currentName 仍为 B、B 的 fallback 保持 armed 未被清、B 后续
+> 仍正常完成）。结论以本轮为准。
 
 > **环境措辞**：本机无 Python，API 后端（127.0.0.1:8000）不可达，验收用 Playwright route 存根
 > bootstrap API。因此本轮结论是「**存根环境端到端**」，不是真实部署生产端到端。V1 资格判定、
@@ -64,7 +77,7 @@ V14D State2 目标风格，用户相机、正常 VMD 播放、K3 灯光、星空
 | G2 真实绑定 + 负测 | ✅ pass | Face/BodySkin drawCalls 各 1/1 命中合成 graph；负测 original不命中/重命名PMX/缺mask/**错误graph(composite命中=0)**/**applyStyleGroups失败(回退original)** 全过 |
 | G3 完整模型视觉 A/B | ✅ pass | 皮肤区（掩码采样）face MAE=31.4、neck=11.5、leftHand=23.6、rightHand=26.1 显著变化；**目标收敛**：V1 对 V14D 目标的色比距离 distOrig=0.196→distV1=0.141（drop=28.2%>15%）；非皮肤/星空稳定；waist 标 occluded |
 | G4 持久化 | ✅ pass | V1 刷新+重导入后 UI=v1、canvas=v1；切回 original 刷新保持 original |
-| G5 VMD 零回归 | ✅ pass | original 与 V1 各 play→pause→seek→**完整播放至结束**：finishBefore→finishAfter 自增（original 0→1、V1 1→2）+ nearTail，非软通过；负测提前停止不计数；resetPhysics effect 计数=5 |
+| G5 VMD 零回归 | ✅ pass | original 与 V1 各 play→pause→seek→**完整播放至结束**：finishBefore→finishAfter 自增（original 0→1、V1 1→2）+ nearTail，非软通过；负测提前停止不计数（totalObservedAfterArmMs=4859>fallbackDelay=4350）；竞态回归 A慢/B快 下旧请求 A 无副作用退出（retA=null、rpDelta=1、finishDelta=0、staleDelta=1）；过期完成回调负测证明其不清当前 fallback、不计数、当前动作仍正常完成；resetPhysics effect 计数=7 |
 | G6 管线隔离 | ✅ pass | 切 reze-design 后真实克莱妲导入重建为 original，变体 UI 不显示、无资产/variant 残留（硬阻断，非软通过） |
 | G7 工程门禁 | ✅ pass | `node --test reze-k3-skin-variant` 12/12、`npm run build` 通过、patch `--self-test` 62 项、`git diff --check` 干净 |
 

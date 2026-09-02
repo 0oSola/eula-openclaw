@@ -4,7 +4,7 @@
 - 英文机器名：`rezeK3SkinVariant`（localStorage 字段 / prop）
 - 枚举值：`original`（原始 Reze K3）/ `v1`（Reze K3 V1 皮肤预览（V14D））
 - 票据：Reze K3 V1 舞台接入与 V14D 切换（`codex/reze-k3-v1-v14d-toggle`）
-- 状态：**已实现（皮肤阶段 2/15），/companion 舞台存根环境端到端验收通过（2026-09-02 第三轮）**
+- 状态：**已实现（皮肤阶段 2/15），/companion 舞台存根环境端到端验收通过（2026-09-02 第四轮）**
 
 ## 概念定义
 
@@ -97,7 +97,7 @@ composite），形成两个用户可见且可持久选择的效果：
 - 脸部变化但 BodySkin 不变：读 `v14dSkinVariantBodyOnComposite` 是否
   等于 BodyDrawCalls；不等于则 BodySkin graph 未绑定成功。
 
-## 生产舞台验收（2026-09-02 第三轮）
+## 生产舞台验收（2026-09-02 第四轮）
 
 票据 `codex/reze-k3-v1-stage-visual-acceptance`，交付 `docs/handoff/2026-09-02-reze-k3-v1-stage-visual-acceptance.md`。
 在保留 K3 灯光/星空/自由相机/动态 VMD 的前提下，G1-G7 全过；V1 仅 Face/BodySkin 走 V14D 合成
@@ -105,9 +105,13 @@ composite），形成两个用户可见且可持久选择的效果：
 （original 0.196→V1 0.141，drop 28.2%，含错误颜色负测）；(b) 恢复通用 VMD effect 的
 `engine.resetPhysics()` 并抽共享函数 `loadVmdThroughInteractionPath`（effect 与探针同路径，
 effect 计数=5）；(c) G5 完整结束改为硬证据（完成回调计数自增 + nearTail，含提前停止负测）；
-(d) 场景不变性在 original/V1 两侧逐字段硬断言。验收探针 `__rezeStageProbe` 仅在
-`?v14dAcceptanceProbe=1` 显式开关下挂载，含负测钩子 `applyBadSkinGraph`。环境为存根端到端
-（API 后端本机不可达，route 存根 bootstrap）。**全材质迁移（15 槽）尚未开始/未完成。**
+(d) 场景不变性在 original/V1 两侧逐字段硬断言。第四轮继续收口：(e) 共享函数把请求守卫作为
+guard 回调传入、在任何副作用前硬检查（竞态回归 A慢/B快 下旧请求无副作用退出）；(f) 完成回调
+先验证 currentName===finishedName 再计数，并把身份/模型校验放到任何 clear/count/loop/reset/complete
+副作用之前（pause/seek 取消完成兜底；过期完成回调负测证明其不得清当前 fallback、计数不增、当前
+动作后续仍正常完成）。验收探针 `__rezeStageProbe` 仅在 `?v14dAcceptanceProbe=1` 显式开关下挂载，
+含负测钩子 `applyBadSkinGraph`/`fireStaleFinish`/`vmdFallbackState`。环境为存根端到端
+（API 后端本机不可达，route 存根 bootstrap）。**全材质迁移（15 槽）尚未开始/未完成；当前为皮肤阶段 2/15。**
 
 ## 与现有概念的关系
 
