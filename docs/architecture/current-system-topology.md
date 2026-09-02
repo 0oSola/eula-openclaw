@@ -100,6 +100,8 @@ Web build 和 Pet build 均接收同一个 `NEXT_PUBLIC_API_BASE_URL`/`MMD_PET_A
 
 Pet production runtime 的路径由 `desktop-pet/electron/rendererPaths.ts` 统一计算：编译后的 `dist-electron` 旁边的 `../dist` 是默认 renderer 根目录；`main.ts` 在 release mode 下用 `BrowserWindow.loadFile()` 加载三个 HTML 入口。Vite production `base` 为 `./`，确保 `file://` 页面把 JS/CSS 解析到同一 `dist/assets` 目录，而不是错误请求磁盘根路径。
 
+Pet renderer 的 Vite 构建还会通过 `@` 别名直接复用 `web/src` 的舞台和共享组件。由于 `desktop-pet` 与 `web` 各自拥有独立的 `node_modules`，`desktop-pet/vite.config.ts` 必须用 `resolve.dedupe: ["react", "react-dom"]` 把 React、ReactDOM 及 JSX runtime 统一解析到 desktop-pet 包根；否则同一 production renderer 会内联两份 React，组件导出的 Hook 与 `createRoot` 使用不同 dispatcher，最终在 Release 窗口中出现 `useRef` 的 null dispatcher 崩溃并清空 Pet DOM。`desktop-pet/vite.config.test.ts` 以不写入磁盘的真实 Vite module graph 检查该约束，必须证明 React 和 ReactDOM 都只来自 desktop-pet 的包根，不能只依赖窗口可见性或 renderer 文件存在性。
+
 主 Pet 窗口 renderer shell 挂载后写入 `pet-ready.json`，其中包含 PID、`file://` URL、本地 renderer 文件和 shell ready 状态；Electron GUI 不可观察时，状态仍区分进程、文件证据和 renderer window 未验证。
 
 发布入口的数据目录解析保留显式配置优先级：显式 `-ApiDataDir` 优先，其次是非空 `API_DATA_DIR`，两者均未指定时才检查默认 `api/data/sqlite/trace.db`。默认文件缺失、被识别为 Git LFS pointer 或无法通过 SQLite 连接检查时，release build/start 创建并使用 `.runtime/release-stack/data` 及其 `sqlite`、`logs` 子目录；原始 `api/data` 不会被覆盖或修复。显式数据目录若无效则严格失败，不会静默回退。状态文件记录最终实际使用的 `api_data_dir`。

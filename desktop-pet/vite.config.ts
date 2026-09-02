@@ -25,6 +25,7 @@ export default defineConfig({
     strictPort: true,
   },
   resolve: {
+    dedupe: ["react", "react-dom"],
     alias: {
       "@": fileURLToPath(new URL("../web/src", import.meta.url)),
     },
