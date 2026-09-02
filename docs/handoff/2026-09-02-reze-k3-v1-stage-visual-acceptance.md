@@ -46,10 +46,12 @@ API 后端不可达），是「存根环境端到端」而非真实部署生产�
 > `finishDelta` 但 `race.ok` 漏掉 `finishDelta===0`；(3) 提前停止负测报告文字与单字段
 > `fallbackDelay=4350/waitMs=3650` 看似矛盾（实为 arm 后 1200+3650≈4850ms>4350ms），未显式输出
 > 总观察时长。第四轮收口：身份/模型校验移到任何 clear/count/loop/reset/complete 副作用之前；
-> `race.ok` 纳入 `finishDelta===0` 并负向自验（finishDelta=1 时 Gate exit1）；负测输出
-> `totalObservedAfterArmMs` 并硬断言其 > fallbackDelay；新增过期完成回调负测（注入 A 过期
-> finishedName，证明完成计数不增、currentName 仍为 B、B 的 fallback 保持 armed 未被清、B 后续
-> 仍正常完成）。结论以本轮为准。
+> `race.ok` 纳入 `finishDelta===0`，并新增可重复负向自验 `--self-test-g5-race`（healthy
+> finishDelta=0→true/exit0，finishDelta=1→false/exit1，已实测）；负测先硬断言
+> `Number.isFinite(fallbackDelay) && fallbackDelay>0` 再断言 `totalObservedAfterArmMs` >
+> fallbackDelay；过期完成回调负测改用**真实 A 名 `race-a.vmd`**（来自竞态回归的慢请求），
+> 并记录 `vmdNaturalFinishName`：注入 A 后名称不得改为 A、B 完成后必须等于 B，证明完成计数
+> 不增、currentName 仍为 B、B 的 fallback 保持 armed 未被清、B 后续仍正常完成。结论以本轮为准。
 
 > **环境措辞**：本机无 Python，API 后端（127.0.0.1:8000）不可达，验收用 Playwright route 存根
 > bootstrap API。因此本轮结论是「**存根环境端到端**」，不是真实部署生产端到端。V1 资格判定、
@@ -135,13 +137,23 @@ API 后端不可达），是「存根环境端到端」而非真实部署生产�
   在 `await` 之后、**任何 apply/play/currentUrl/fallback/resetPhysics 副作用之前**硬检查；
   较慢完成的旧请求无副作用退出（返回 null）。探针 `playVmd(url, raceKey)` 用
   `vmdProbeRaceTokenRef` 标识请求，旧请求被覆盖时自增 `vmdRaceStaleCount`。
-- **完成回调身份修复（第四轮 P0）**：`handleRezeVmdFinished` 现在**先验证
-  `currentName===finishedName` 再自增 `vmdNaturalFinishCount`**，过期/错误名称回调不再
-  充当完成证据；提前停止负测等待超过 fallback 窗口（`duration*1000+350`）证明计数长期不增。
+- **完成回调身份修复（第四轮 P0）**：`handleRezeVmdFinished` 的身份/模型有效性校验
+  （`currentName===finishedName` 且 `model===modelRef.current`）现在**先于任何
+  clear/count/loop/reset/complete 副作用**；只有匹配当前动作的回调才 `clearVmdCompletionFallback`
+  并自增 `vmdNaturalFinishCount`。过期/错误 finishedName 回调不得清当前 fallback、不计数、不改
+  `currentVmdUrl`。`pauseVmd`/`seekVmd` 会取消完成兜底计时器，避免中段暂停/跳走被兜底误判为播完。
+- **G5 竞态负向自验（可重复、真实执行）**：`node scripts/accept-reze-k3-v1-stage.mjs
+  --self-test-g5-race`——healthy（finishDelta=0）→ true/**exit 0**；finishDelta=1 → false/**exit 1**
+  （另含 staleRet/wrongCurrent/rpZero/staleZero 各负向用例均须 false）。实测：健康 exit 0
+  （`===G5-RACE-SELF-TEST-OK===`）；临时把判定式 `finishDelta===0` 削弱为 `>=0` 后 exit 1
+  （`===G5-RACE-SELF-TEST-FAIL===`），证明判别力。判定抽成纯函数 `computeG5RaceOk`，
+  `page.evaluate` 内竞态 Gate 注入同一函数源码复用同一口径。
 - **验证**：G5 original/V1 各 load→play→pause→seek→完整播放至结束
-  （finishBefore→finishAfter 自增、endReached/fullPlayOk=true）；负测提前停止超过 fallback
-  窗口后计数不增；竞态回归 A慢/B快 下最终播放为 B、A 无副作用退出
-  （retA=null、rpDelta=1、staleDelta≥1）。
+  （finishBefore→finishAfter 自增、endReached/fullPlayOk=true）；负测提前停止先硬断言
+  `Number.isFinite(fallbackDelay) && fallbackDelay>0` 再断言 `totalObservedAfterArmMs` >
+  `fallbackDelay`（实测 4859>4350）后计数不增；竞态回归 A慢/B快 下最终播放为 B、A 无副作用退出
+  （retA=null、rpDelta=1、staleDelta≥1、finishDelta=0）；过期回调负测用真实 A 名 `race-a.vmd`，
+  注入后 `vmdNaturalFinishName` 不改 A、B 完成后等于 B。
 
 ## 视觉证据
 
@@ -165,6 +177,7 @@ npm ci --no-audit --no-fund
 node scripts\patch-reze-engine.mjs   # 关键：移除 PMX 文本长度上限
 node ./scripts/run-next.mjs dev -p 3114 -H 127.0.0.1
 # 另一终端：
+node scripts\accept-reze-k3-v1-stage.mjs --self-test-g5-race  # G5 竞态判定负向自验（healthy exit0 / finishDelta=1 exit1）
 node scripts\accept-reze-k3-v1-stage.mjs    # G1-G6 真实浏览器验收（硬阻断）
 node scripts\analyze-reze-k3-v1-diff.mjs    # G3 区域像素差异（退出码硬阻断）
 node scripts\finalize-reze-k3-v1-report.mjs # 合并报告 + 生成三联/差异图

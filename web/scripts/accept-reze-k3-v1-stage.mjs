@@ -71,6 +71,33 @@ const fail = (gate, msg) => {
 };
 const note = (gate, msg) => console.log("[" + gate + "] " + msg);
 
+// ── G5 竞态判定纯函数（供 --self-test-g5-race 负向自验复用，与下方 page.evaluate 口径一致）──
+// 语义：旧请求 A 无副作用退出（retA===null）、当前播放名为 B、resetPhysics 仅 B 自增（rpDelta===1）、
+// A 被守卫判旧（staleDelta>=1）、A 未增加完成计数（finishDelta===0）。
+function computeG5RaceOk({ retA, currentName, nameB, rpDelta, staleDelta, finishDelta }) {
+  return retA === null && currentName === nameB && String(currentName).includes("f120")
+    && rpDelta === 1 && staleDelta >= 1 && finishDelta === 0;
+}
+
+// P0：可重复、真实执行的 G5 竞态负向自验。healthy(finishDelta=0) 必须 true；
+// 其他条件相同但 finishDelta=1 必须被判失败（本分支以非零退出码拒绝）。
+if (process.argv.includes("--self-test-g5-race")) {
+  const healthy = computeG5RaceOk({ retA: null, currentName: "koleda-v14d-authoritative-pose-f120.vmd", nameB: "koleda-v14d-authoritative-pose-f120.vmd", rpDelta: 1, staleDelta: 1, finishDelta: 0 });
+  const finishBump = computeG5RaceOk({ retA: null, currentName: "koleda-v14d-authoritative-pose-f120.vmd", nameB: "koleda-v14d-authoritative-pose-f120.vmd", rpDelta: 1, staleDelta: 1, finishDelta: 1 });
+  const staleRet = computeG5RaceOk({ retA: "koleda-v14d-authoritative-pose-f120.vmd", currentName: "koleda-v14d-authoritative-pose-f120.vmd", nameB: "koleda-v14d-authoritative-pose-f120.vmd", rpDelta: 1, staleDelta: 1, finishDelta: 0 });
+  const wrongCurrent = computeG5RaceOk({ retA: null, currentName: "race-a.vmd", nameB: "koleda-v14d-authoritative-pose-f120.vmd", rpDelta: 1, staleDelta: 1, finishDelta: 0 });
+  const rpZero = computeG5RaceOk({ retA: null, currentName: "koleda-v14d-authoritative-pose-f120.vmd", nameB: "koleda-v14d-authoritative-pose-f120.vmd", rpDelta: 0, staleDelta: 1, finishDelta: 0 });
+  const staleZero = computeG5RaceOk({ retA: null, currentName: "koleda-v14d-authoritative-pose-f120.vmd", nameB: "koleda-v14d-authoritative-pose-f120.vmd", rpDelta: 1, staleDelta: 0, finishDelta: 0 });
+  const results = { healthy, finishBump, staleRet, wrongCurrent, rpZero, staleZero };
+  console.log("G5-race self-test:", JSON.stringify(results));
+  const pass = healthy === true && finishBump === false && staleRet === false && wrongCurrent === false && rpZero === false && staleZero === false;
+  // 短路退出：self-test 不执行下方浏览器代码。用 setImmediate 包裹 process.exit，避免
+  // 「永不 resolve 的顶层 await」触发 unsettled-TLA 警告；process.exit 立即按结果终止。
+  if (!pass) { console.error("===G5-RACE-SELF-TEST-FAIL==="); setImmediate(() => process.exit(1)); }
+  else { console.log("===G5-RACE-SELF-TEST-OK==="); setImmediate(() => process.exit(0)); }
+  await new Promise(() => {}); // 阻止下方浏览器代码执行；setImmediate 在进程退出前已调度
+}
+
 // ── 浏览器 + 会话预置 + API 兜底（本机无 Python，API 后端不可达）────────
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "rk3v1-stage-"));
 const context = await chromium.launchPersistentContext(profile, { executablePath: CHROME_EXE, headless: true, viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1, args: ["--enable-unsafe-webgpu"] });
@@ -446,13 +473,17 @@ try {
     return { before, after, midT, fallbackDelay, fallbackFired, waitMs, totalObservedAfterArmMs, notFinished: after === before };
   });
   if (!negG5.notFinished) fail("G5", "负测失败：提前停止却触发了完成计数 " + JSON.stringify(negG5));
+  // P1-1：fallbackDelay 必须是有限正数（缺失会变 0 导致软通过），再断言总观察时长超过它。
+  if (!(Number.isFinite(negG5.fallbackDelay) && negG5.fallbackDelay > 0)) fail("G5", "负测 fallbackDelay 非法（缺失或为 0）" + JSON.stringify(negG5));
   // P1：硬断言总观察时长确实超过 fallback 窗口，避免报告文字与单字段数值看似矛盾。
   if (!(negG5.totalObservedAfterArmMs > negG5.fallbackDelay)) fail("G5", "负测总观察时长未超过 fallback 窗口 " + JSON.stringify(negG5));
   report.gates.G5.negEarlyStop = negG5; note("G5", "负测 PASS " + JSON.stringify(negG5));
   // G5 竞态回归（P0）：A 慢 / B 快，B 成为最新后 A 才完成。最终播放必须是 B，且 A
   // 不得增加 resetPhysics / 完成 fallback / 完成计数（vmdRaceStaleCount 须自增≥1）。
   note("G5", "竞态回归：旧请求无副作用退出");
-  const race = await page.evaluate(async () => {
+  const race = await page.evaluate(async (computeOkSrc) => {
+    // 复用脚本顶层纯函数 computeG5RaceOk 的同一口径（注入求值，避免双份实现漂移）。
+    const computeOk = eval("(" + computeOkSrc + ")");
     const stage = window.__rezeStageProbe;
     const c = () => document.querySelector("canvas");
     const rpBefore = Number(c()?.dataset.vmdEffectResetPhysicsCount || 0);
@@ -472,42 +503,48 @@ try {
     const finishDelta = finishAfter - finishBefore;
     const staleDelta = staleAfter - staleBefore;
     // finishDelta===0 硬断言纳入 ok（P0-2）：旧请求 A 不得增加完成计数，否则 Gate exit1。
-    const ok = retA === null && currentName === nameB && currentName.includes("f120") && rpDelta === 1 && staleDelta >= 1 && finishDelta === 0;
+    const ok = computeOk({ retA, currentName, nameB, rpDelta, staleDelta, finishDelta });
     return {
       retA, nameB, currentName,
       rpDelta, finishDelta, staleDelta, ok,
     };
-  });
+  }, computeG5RaceOk.toString());
   if (!race.ok) fail("G5", "竞态回归失败：旧请求未无副作用退出 " + JSON.stringify(race));
   report.gates.G5.raceGuard = race; note("G5", "竞态回归 PASS " + JSON.stringify(race));
-  // G5 过期完成回调负测（P0-1）：B 已成为当前动作且 fallback 已 arm，此时注入 A 的过期
-  // finishedName 回调。要求：完成计数不增、currentName 仍为 B、B 的 fallback 保持有效未被清除，
-  // 且 B 后续仍能正常完成（finish 自增）。
-  note("G5", "负测：过期完成回调不得清当前 fallback");
+  // G5 过期完成回调负测（P0-1 + P1-2）：B 已成为当前动作且 fallback 已 arm，此时注入真实
+  // A 动作名（race-a.vmd，来自上方竞态回归的慢请求）的过期 finishedName 回调。要求：完成计数
+  // 不增、currentName 仍为 B、naturalFinishName 不得被改为 A、B 的 fallback 保持有效未被清除，
+  // 且 B 后续仍能正常完成（finish 自增、naturalFinishName 变为 B）。
+  note("G5", "负测：注入真实 A 名的过期完成回调不得清当前 fallback");
   const stale = await page.evaluate(async () => {
     const stage = window.__rezeStageProbe;
     const c = () => document.querySelector("canvas");
+    const staleAName = "race-a.vmd"; // 真实 A 动作名（竞态回归里的慢请求）
     // 起一个当前动作 B（正常速度），让它 arm fallback。
     await stage.playVmd("/__probe__/koleda-v14d-authoritative-pose-f120.vmd");
     const stateBefore = stage.vmdFallbackState();
     const finishBefore = Number(c()?.dataset.vmdNaturalFinishCount || 0);
-    // 注入过期/错误 finishedName 回调（不属于当前动作 B）。
-    stage.fireStaleFinish("__stale__previous-motion.vmd");
+    // 注入真实 A 动作名的过期 finishedName 回调（不属于当前动作 B）。
+    stage.fireStaleFinish(staleAName);
     await new Promise((s) => setTimeout(s, 200));
     const stateAfter = stage.vmdFallbackState();
     const finishAfterStale = Number(c()?.dataset.vmdNaturalFinishCount || 0);
+    const nameAfterStale = c()?.dataset.vmdNaturalFinishName || ""; // 注入 A 后不得被改为 A
     const countNotBumped = finishAfterStale === finishBefore;
     const stillB = stateAfter.currentName === stateBefore.currentName && stateAfter.currentName.includes("f120");
+    const nameNotA = nameAfterStale !== staleAName;
     const fallbackKept = stateAfter.armed === true && stateAfter.timerActive === true;
     // B 后续仍能正常完成：等到超过 B 的 fallback 窗口，完成计数应自增。
     const waitMs = Math.max(0, stateAfter.delay) + 500;
     await new Promise((s) => setTimeout(s, waitMs));
     const finishFinal = Number(c()?.dataset.vmdNaturalFinishCount || 0);
+    const nameFinal = c()?.dataset.vmdNaturalFinishName || ""; // B 完成后必须等于 B
     const bCompleted = finishFinal > finishAfterStale;
-    const ok = countNotBumped && stillB && fallbackKept && bCompleted;
+    const nameFinalIsB = nameFinal.includes("f120");
+    const ok = countNotBumped && stillB && nameNotA && fallbackKept && bCompleted && nameFinalIsB;
     return {
-      stateBefore, stateAfter, finishBefore, finishAfterStale, finishFinal,
-      countNotBumped, stillB, fallbackKept, bCompleted, waitMs, ok,
+      staleAName, stateBefore, stateAfter, finishBefore, finishAfterStale, finishFinal,
+      nameAfterStale, nameFinal, countNotBumped, stillB, nameNotA, fallbackKept, bCompleted, nameFinalIsB, waitMs, ok,
     };
   });
   if (!stale.ok) fail("G5", "过期完成回调负测失败 " + JSON.stringify(stale));
