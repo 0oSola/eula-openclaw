@@ -753,6 +753,30 @@ describe("Electron main runtime integration", () => {
     expect(didFinishLoadBlock).toContain("void refreshRecentSessionsInBackground(window)");
   });
 
+  it("restores and shows a minimized Pet window without stealing focus after renderer load", () => {
+    const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
+    const visibilityBlock = mainSource.slice(
+      mainSource.indexOf("function restorePetWindowAfterRendererLoad"),
+      mainSource.indexOf("async function createPetWindow"),
+    );
+    const didFinishLoadBlock = mainSource.slice(
+      mainSource.indexOf('window.webContents.on("did-finish-load"'),
+      mainSource.indexOf("if (isDev)", mainSource.indexOf('window.webContents.on("did-finish-load"')),
+    );
+
+    expect(visibilityBlock).toContain("window.isMinimized()");
+    expect(visibilityBlock).toContain("window.restore()");
+    expect(visibilityBlock).toContain("window.showInactive()");
+    expect(visibilityBlock).toContain("!window.isVisible()");
+    expect(visibilityBlock).not.toContain("window.focus()");
+    expect(visibilityBlock).not.toContain("window.setBounds");
+    expect(visibilityBlock.indexOf("window.restore()")).toBeLessThan(visibilityBlock.indexOf("window.showInactive()"));
+    expect(didFinishLoadBlock).toContain("restorePetWindowAfterRendererLoad(window)");
+    expect(didFinishLoadBlock.indexOf("restorePetWindowAfterRendererLoad(window)")).toBeLessThan(
+      didFinishLoadBlock.indexOf("void writePetReadyMarkerForWindow(window)"),
+    );
+  });
+
   it("builds the context menu from memory without synchronously scanning session files", () => {
     const mainSource = readFileSync(path.resolve(__dirname, "main.ts"), "utf8");
     const immediateSessionsBlock = mainSource.slice(

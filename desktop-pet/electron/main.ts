@@ -2938,6 +2938,21 @@ async function scanAndUpsertRecentCodexSessions(
   }
 }
 
+function restorePetWindowAfterRendererLoad(window: BrowserWindow) {
+  if (window.isDestroyed()) return;
+
+  const wasMinimized = window.isMinimized();
+  if (wasMinimized) {
+    window.restore();
+  }
+  if (wasMinimized || !window.isVisible()) {
+    window.showInactive();
+  }
+  if (wasMinimized) {
+    logPetDebugEvent("pet-window:restored-after-renderer-load");
+  }
+}
+
 async function createPetWindow() {
   logPetDebugEvent("app:start", {
     isDev,
@@ -3036,6 +3051,7 @@ async function createPetWindow() {
       processId: window.webContents.getOSProcessId(),
       url: window.webContents.getURL(),
     });
+    restorePetWindowAfterRendererLoad(window);
     void writePetReadyMarkerForWindow(window);
     logRendererDomState(window, "did-finish-load");
     setTimeout(() => logRendererDomState(window, "after-1500ms"), 1500);
