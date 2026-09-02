@@ -95,9 +95,10 @@ import {
 } from "@/features/stage/v14dFaceStatic";
 import {
   evaluateRezeK3V1Eligibility,
+  resolveRezeK3SkinVariantActivation,
 } from "@/features/stage/rezeSkinVariantPreference.js";
 
-// RezeK3SkinVariant 共享类型权威：rezeSkinVariantPreference.d.ts（P0 第 3 项）。
+// RezeK3SkinVariant 共享类型权威：rezeSkinVariantPreference.types.d.ts（P0 第 3 项）。
 import type { RezeK3SkinVariant } from "@/features/stage/rezeSkinVariantPreference.js";
 
 declare global {
@@ -2461,10 +2462,15 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       // 主会话第二次验收唯一 P0）：boot 不再叠加 isKoledaModelIdentifier 等第二套业务门控，
       // 消除「UI 选中 V1 但 boot 因 identifier 回退」的可达分歧。
       const v1Eligibility = evaluateRezeK3V1Eligibility(localModelImport);
-      const v1Active = v1Requested && v1Eligibility.eligible;
+      const v1Activation = resolveRezeK3SkinVariantActivation(
+        v1Requested ? "v1" : "original",
+        v1Eligibility,
+        [modelIdentifier, modelUrl, localModelImport?.pmxFile?.name],
+      );
+      const v1Active = v1Activation.active;
       // 运行时防御性（非业务资格，不改变 effective 变体）：权威 PMX 已隐含克莱妲身份，
       // 若 identifier 启发式不一致只暴露统一告警状态供 UI/诊断读取，不静默改渲染。
-      if (v1Active && !isKoledaModelIdentifier(modelIdentifier, modelUrl, localModelImport?.pmxFile?.name)) {
+      if (v1Activation.diagnosticIdentifierMismatch) {
         console.warn("[v14d-skin-variant] V1 资格已通过但克莱妲 identifier 启发式不一致（仍以资格谓词为准）");
         if (canvasRef.current) canvasRef.current.dataset.v14dSkinVariantIdentifierMismatch = "true";
       }
@@ -2517,7 +2523,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           console.warn("[v14d-skin-variant] V1 启用异常，回退原始 Reze K3", error);
         }
       } else if (canvasRef.current) {
-        canvasRef.current.dataset.v14dSkinVariant = "original";
+        canvasRef.current.dataset.v14dSkinVariant = v1Activation.effective;
       }
       if (v14dUnlitDiagnostic) {
         const modelMaterialNames = new Set(model.getMaterials().map((material) => material.name));

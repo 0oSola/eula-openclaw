@@ -14,9 +14,10 @@
  * 同源导入，消除注释式双权威（P0-2 第 2 项）。
  */
 
+import { isKoledaModelIdentifier } from "./koledaDefaultAppearance.js";
 import { V14D_AUTHORITY_PMX_FILE_NAME, V14D_STATE2_MASK_FILE_NAME } from "./v14dAuthority.js";
 
-/** @typedef {"original" | "v1"} RezeK3SkinVariant */
+/** @typedef {import("./rezeSkinVariantPreference.types").RezeK3SkinVariant} RezeK3SkinVariant */
 
 /** @type {readonly RezeK3SkinVariant[]} */
 export const REZE_K3_SKIN_VARIANTS = ["original", "v1"];
@@ -83,6 +84,25 @@ export function evaluateRezeK3V1Eligibility(localModelImport) {
     hasAuthorityPmx,
     hasState2Mask: !!state2Mask,
     state2Mask,
+  };
+}
+
+/**
+ * 收敛 V1 启用契约：资格决定 effective/active，identifier 只产生诊断信息。
+ * 这样 boot 与测试都能调用同一条真实生产路径，避免把标识符影响误写成业务门控。
+ *
+ * @param {RezeK3SkinVariant} requested
+ * @param {{ eligible: boolean }} eligibility
+ * @param {unknown | readonly unknown[]} identifier
+ * @returns {{ effective: RezeK3SkinVariant, active: boolean, diagnosticIdentifierMismatch: boolean }}
+ */
+export function resolveRezeK3SkinVariantActivation(requested, eligibility, identifier) {
+  const active = requested === "v1" && eligibility?.eligible === true;
+  const identifiers = Array.isArray(identifier) ? identifier : [identifier];
+  return {
+    effective: active ? "v1" : "original",
+    active,
+    diagnosticIdentifierMismatch: active && !isKoledaModelIdentifier(...identifiers),
   };
 }
 

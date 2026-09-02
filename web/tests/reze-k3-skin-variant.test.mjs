@@ -7,6 +7,7 @@ import {
   isRezeK3V1Eligible,
   readRezeK3SkinVariant,
   rezeK3SkinVariantStorageKey,
+  resolveRezeK3SkinVariantActivation,
   resolveRezeK3SkinVariant,
   writeRezeK3SkinVariant,
 } from "../src/features/stage/rezeSkinVariantPreference.js";
@@ -120,22 +121,30 @@ test("持久化：非法值回退 original", () => {
   assert.equal(readRezeK3SkinVariant(s, key), "original");
 });
 
-// 主会话第二次验收第 4 项：权威 PMX+mask 时，modelIdentifier 任意/不同，
-// UI/effective/boot 不分歧。boot 的有效资格就是 evaluateRezeK3V1Eligibility().eligible，
-// 不再叠加 isKoledaModelIdentifier；本测试调用生产资格/resolve 函数证明该不变量。
-test("资格单一权威：identifier 任意时 UI/effective/boot 不分歧", () => {
+// 主会话第二次验收第 4 项：权威 PMX+mask 时，identifier 只影响诊断，不影响激活。
+// 直接调用 boot 使用的生产契约函数，禁止用 void identifier 或源码字符串匹配冒充行为测试。
+test("资格单一权威：不同 identifier 不改变 active/effective，只改变诊断", () => {
   const good = fakeImport(AUTHORITY_PMX, [fakeFile(MASK_NAME)]);
-  // 生产资格谓词（boot 用的就是它，不含 identifier 门控）。
   const eligibility = evaluateRezeK3V1Eligibility(good);
   assert.equal(eligibility.eligible, true);
-  // effective variant（UI 传给 MMDStage 的值）与 boot 资格同源。
-  assert.equal(resolveRezeK3SkinVariant("v1", good), "v1");
-  // 无论 modelIdentifier 取什么值，资格/eligible 都不变（资格只看 localModelImport）。
-  for (const identifier of ["任意模型名", "Ayaka.pmx", "", "NotKoleda"]) {
-    void identifier; // identifier 不参与资格谓词
-    assert.equal(evaluateRezeK3V1Eligibility(good).eligible, true);
-    assert.equal(resolveRezeK3SkinVariant("v1", good), "v1");
-  }
+  const matching = resolveRezeK3SkinVariantActivation("v1", eligibility, "Koleda.pmx");
+  const arbitrary = resolveRezeK3SkinVariantActivation("v1", eligibility, "Ayaka.pmx");
+  const absent = resolveRezeK3SkinVariantActivation("v1", eligibility, []);
+
+  assert.deepEqual(
+    [matching, arbitrary, absent].map(({ active, effective }) => ({ active, effective })),
+    [
+      { active: true, effective: "v1" },
+      { active: true, effective: "v1" },
+      { active: true, effective: "v1" },
+    ],
+  );
+  assert.equal(matching.diagnosticIdentifierMismatch, false);
+  assert.equal(arbitrary.diagnosticIdentifierMismatch, true);
+  assert.equal(absent.diagnosticIdentifierMismatch, true);
+
+  const original = resolveRezeK3SkinVariantActivation("original", eligibility, ["Ayaka.pmx"]);
+  assert.deepEqual(original, { effective: "original", active: false, diagnosticIdentifierMismatch: false });
 });
 
 test("资格单一权威：非克莱妲时三处一致回退 original", () => {

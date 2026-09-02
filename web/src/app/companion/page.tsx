@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -44,7 +44,7 @@ import {
   REZE_K3_SKIN_VARIANT_LABEL,
 } from "@/features/stage/rezeSkinVariantPreference.js";
 
-// RezeK3SkinVariant 共享类型权威：rezeSkinVariantPreference.d.ts（P0 第 3 项）。
+// RezeK3SkinVariant 共享类型权威：rezeSkinVariantPreference.types.d.ts（P0 第 3 项）。
 import type { RezeK3SkinVariant } from "@/features/stage/rezeSkinVariantPreference.js";
 import { CompanionCommandBar } from "./CompanionCommandBar";
 import { KnowledgeReviewBadge } from "./KnowledgeReviewBadge";
@@ -569,7 +569,7 @@ export default function CompanionPage() {
   const [renderPipeline, setRenderPipeline] = useState<RenderPipeline>("mio-reference");
   // Reze K3 皮肤变体（"原始 Reze K3" / "Reze K3 V1（V14D）"）：
   // 按 用户+模型+reze-k3 管线 隔离持久化；仅克莱妲权威 PMX 可启用 V1，
-  // 非克莱妲安全回退 original。详见 rezeSkinVariantPreference.ts 概念注释。
+  // 非克莱妲安全回退 original。详见 rezeSkinVariantPreference.js 概念注释。
   const [rezeK3SkinVariant, setRezeK3SkinVariant] = useState<RezeK3SkinVariant>("original");
   // P0-1 水合竞态：写 effect 只在对应 user+model+pipeline 的恢复完成后运行。
   // 记录已完成恢复的存储键；null 表示尚未对当前键完成读取，禁止写回。
