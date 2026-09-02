@@ -94,10 +94,11 @@ import {
   type V14dFaceCameraOverride,
 } from "@/features/stage/v14dFaceStatic";
 import {
-  isRezeK3SkinVariant,
-  isRezeK3V1Eligible,
-  type RezeK3SkinVariant,
-} from "@/features/stage/rezeSkinVariantPreference";
+  evaluateRezeK3V1Eligibility,
+} from "@/features/stage/rezeSkinVariantPreference.js";
+
+// RezeK3SkinVariant 联合类型（.js 模块不导出 TS 类型，这里本地定义）。
+type RezeK3SkinVariant = "original" | "v1";
 
 declare global {
   interface Window {
@@ -534,14 +535,11 @@ function resolveV14dV1AssetsFromImport(localModelImport: {
   files: File[];
   pmxFile: File;
 }): { files: File[]; pmxFile: File; state2Mask: File } | null {
-  if (!isRezeK3V1Eligible(localModelImport.pmxFile.name)) return null;
-  const maskFile =
-    localModelImport.files.find((f) =>
-      /v14d-01234-face-shadow-state-2\.png$/i.test(
-        (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name,
-      ),
-    ) ?? null;
-  if (!maskFile) return null;
+  // 资格判定收敛为单一领域谓词 evaluateRezeK3V1Eligibility（P0-2/P1），
+  // 不再在此重复 PMX/mask 两套检查。
+  const eligibility = evaluateRezeK3V1Eligibility(localModelImport);
+  if (!eligibility.eligible || !eligibility.state2Mask) return null;
+  const maskFile = eligibility.state2Mask;
   // 以唯一逻辑键重建 mask File，引擎补丁按此前缀建立独立 rgba8unorm 纹理。
   const state2Mask = new File([maskFile], "state2.png", { type: "image/png" });
   Object.defineProperty(state2Mask, "webkitRelativePath", { value: V14D_STATE2_MASK_LOGICAL_PATH });
@@ -2459,10 +2457,12 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       // 生产 V1（V14D）皮肤变体：仅克莱妲 + localModelImport + v1 且 mask 已注入时，
       // 把 Face/BodySkin 切到实时合成 graph（真实重新编译 + draw-call 绑定），
       // 其余材质保持 reze-k3 正常分组。applyStyleGroups 失败或非克莱妲安全回退。
+      // 资格判定与 UI/effective variant 共用单一领域谓词（P0-2/P1）；
+      // isKoledaModelIdentifier 为运行时防御性断言（材质预设家族），非第二套资格定义。
       const v1Active =
         v1Requested &&
         !!localModelImport &&
-        !!resolveV14dV1AssetsFromImport(localModelImport) &&
+        evaluateRezeK3V1Eligibility(localModelImport).eligible &&
         isKoledaModelIdentifier(modelIdentifier, modelUrl, localModelImport?.pmxFile?.name);
       if (v1Active) {
         try {
