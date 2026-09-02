@@ -47,7 +47,7 @@ API 后端不可达），是「存根环境端到端」而非真实部署生产�
 > `fallbackDelay=4350/waitMs=3650` 看似矛盾（实为 arm 后 1200+3650≈4850ms>4350ms），未显式输出
 > 总观察时长。第四轮收口：身份/模型校验移到任何 clear/count/loop/reset/complete 副作用之前；
 > `race.ok` 纳入 `finishDelta===0`，并新增可重复负向自验 `--self-test-g5-race`（healthy
-> finishDelta=0→true/exit0，finishDelta=1→false/exit1，已实测）；负测先硬断言
+> finishDelta=0→true/exit0，finishDelta=1→false/exit1；只验证判定函数、不外推生产运行时）；负测先硬断言
 > `Number.isFinite(fallbackDelay) && fallbackDelay>0` 再断言 `totalObservedAfterArmMs` >
 > fallbackDelay；过期完成回调负测改用**真实 A 名 `race-a.vmd`**（来自竞态回归的慢请求），
 > 并记录 `vmdNaturalFinishName`：注入 A 后名称不得改为 A、B 完成后必须等于 B，证明完成计数
@@ -120,6 +120,10 @@ API 后端不可达），是「存根环境端到端」而非真实部署生产�
 
 ### 2. 验收探针 `__rezeStageProbe`（验收基建，默认关闭）
 - **改动**：`RezeWebGpuStage.tsx` 探针仅在显式验收开关 `?v14dAcceptanceProbe=1` 下挂载，生产默认不暴露；
+  **探针泄漏硬断言（G6）**：验收脚本另开默认生产入口（不带 `?v14dAcceptanceProbe=1`）页面，
+  导入克莱妲至画布 ready 后硬断言 `window.__rezeStageProbe` **不存在**（实测 defaultProbePresent=false、
+  defaultCanvasReady=true），同时硬断言显式开关入口**有**探针（explicitProbeOn=true）。证明探针只在
+  显式验收开关下暴露、生产默认关闭。
   rAF 进度镜像循环带 `cancelled` 标志 + `cancelAnimationFrame`，卸载时完整清理并删除 dataset。
 - **新增负测钩子** `applyBadSkinGraph(kind)`（仅验收开关）：驱动「错误 graph」「applyStyleGroups 失败」
   真实负测，验证回退路径。
@@ -144,10 +148,11 @@ API 后端不可达），是「存根环境端到端」而非真实部署生产�
   `currentVmdUrl`。`pauseVmd`/`seekVmd` 会取消完成兜底计时器，避免中段暂停/跳走被兜底误判为播完。
 - **G5 竞态负向自验（可重复、真实执行）**：`node scripts/accept-reze-k3-v1-stage.mjs
   --self-test-g5-race`——healthy（finishDelta=0）→ true/**exit 0**；finishDelta=1 → false/**exit 1**
-  （另含 staleRet/wrongCurrent/rpZero/staleZero 各负向用例均须 false）。实测：健康 exit 0
-  （`===G5-RACE-SELF-TEST-OK===`）；临时把判定式 `finishDelta===0` 削弱为 `>=0` 后 exit 1
-  （`===G5-RACE-SELF-TEST-FAIL===`），证明判别力。判定抽成纯函数 `computeG5RaceOk`，
-  `page.evaluate` 内竞态 Gate 注入同一函数源码复用同一口径。
+  （另含 staleRet/wrongCurrent/rpZero/staleZero 各负向用例均须 false）。
+  **边界**：该 self-test 只验证 Gate **判定函数** `computeG5RaceOk` 对 finishDelta=1 返回 false
+  并以非零退出，证明 Gate 具备判别力；它**不外推生产运行时行为**（运行时行为由上方真实浏览器
+  竞态回归覆盖）。判定抽成纯函数 `computeG5RaceOk`，`page.evaluate` 内竞态 Gate 注入同一函数
+  源码复用同一口径。
 - **验证**：G5 original/V1 各 load→play→pause→seek→完整播放至结束
   （finishBefore→finishAfter 自增、endReached/fullPlayOk=true）；负测提前停止先硬断言
   `Number.isFinite(fallbackDelay) && fallbackDelay>0` 再断言 `totalObservedAfterArmMs` >
@@ -177,7 +182,8 @@ npm ci --no-audit --no-fund
 node scripts\patch-reze-engine.mjs   # 关键：移除 PMX 文本长度上限
 node ./scripts/run-next.mjs dev -p 3114 -H 127.0.0.1
 # 另一终端：
-node scripts\accept-reze-k3-v1-stage.mjs --self-test-g5-race  # G5 竞态判定负向自验（healthy exit0 / finishDelta=1 exit1）
+node scripts\accept-reze-k3-v1-stage.mjs --self-test-g5-race   # G5 竞态判定负向自验（healthy exit0 / finishDelta=1 exit1）
+node scripts\accept-reze-k3-v1-stage.mjs --self-test-g5-stale  # G5 过期回调名称判定负向自验（严格绑定 B 名）
 node scripts\accept-reze-k3-v1-stage.mjs    # G1-G6 真实浏览器验收（硬阻断）
 node scripts\analyze-reze-k3-v1-diff.mjs    # G3 区域像素差异（退出码硬阻断）
 node scripts\finalize-reze-k3-v1-report.mjs # 合并报告 + 生成三联/差异图

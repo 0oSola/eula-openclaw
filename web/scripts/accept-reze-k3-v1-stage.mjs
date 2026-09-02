@@ -79,6 +79,16 @@ function computeG5RaceOk({ retA, currentName, nameB, rpDelta, staleDelta, finish
     && rpDelta === 1 && staleDelta >= 1 && finishDelta === 0;
 }
 
+// ── G5 过期完成回调名称判定纯函数（供 --self-test-g5-stale 复用，与 page.evaluate 口径一致）──
+// 语义：注入过期 A 名后 naturalFinishName 仍【严格等于】本次 B 的真实动作名（不是仅"含 f120"）；
+// B 完成后 naturalFinishName 仍严格等于 B；且注入名确为 A（不等于 B）。
+function computeG5StaleNameOk({ bName, staleAName, nameAfterStale, nameFinal }) {
+  return typeof bName === "string" && bName.length > 0
+    && staleAName !== bName
+    && nameAfterStale === bName
+    && nameFinal === bName;
+}
+
 // P0：可重复、真实执行的 G5 竞态负向自验。healthy(finishDelta=0) 必须 true；
 // 其他条件相同但 finishDelta=1 必须被判失败（本分支以非零退出码拒绝）。
 if (process.argv.includes("--self-test-g5-race")) {
@@ -96,6 +106,23 @@ if (process.argv.includes("--self-test-g5-race")) {
   if (!pass) { console.error("===G5-RACE-SELF-TEST-FAIL==="); setImmediate(() => process.exit(1)); }
   else { console.log("===G5-RACE-SELF-TEST-OK==="); setImmediate(() => process.exit(0)); }
   await new Promise(() => {}); // 阻止下方浏览器代码执行；setImmediate 在进程退出前已调度
+}
+
+// P0：G5 过期回调名称判定负向自验（可重复、真实执行）。healthy（A≠B 且注入后/完成后都严格=B）
+// 必须 true；名称错绑（注入后=B 但完成≠B、注入后≠B、stale=B 等）必须 false → 非零退出。
+if (process.argv.includes("--self-test-g5-stale")) {
+  const B = "koleda-v14d-authoritative-pose-f120.vmd";
+  const A = "race-a.vmd";
+  const healthy = computeG5StaleNameOk({ bName: B, staleAName: A, nameAfterStale: B, nameFinal: B });
+  const finalWrong = computeG5StaleNameOk({ bName: B, staleAName: A, nameAfterStale: B, nameFinal: A }); // 完成后被改成 A
+  const afterWrong = computeG5StaleNameOk({ bName: B, staleAName: A, nameAfterStale: A, nameFinal: B }); // 注入后即被改成 A
+  const staleIsB = computeG5StaleNameOk({ bName: B, staleAName: B, nameAfterStale: B, nameFinal: B });   // 注入名=B（非过期）
+  const results = { healthy, finalWrong, afterWrong, staleIsB };
+  console.log("G5-stale self-test:", JSON.stringify(results));
+  const pass = healthy === true && finalWrong === false && afterWrong === false && staleIsB === false;
+  if (!pass) { console.error("===G5-STALE-SELF-TEST-FAIL==="); setImmediate(() => process.exit(1)); }
+  else { console.log("===G5-STALE-SELF-TEST-OK==="); setImmediate(() => process.exit(0)); }
+  await new Promise(() => {});
 }
 
 // ── 浏览器 + 会话预置 + API 兜底（本机无 Python，API 后端不可达）────────
@@ -516,12 +543,15 @@ try {
   // 不增、currentName 仍为 B、naturalFinishName 不得被改为 A、B 的 fallback 保持有效未被清除，
   // 且 B 后续仍能正常完成（finish 自增、naturalFinishName 变为 B）。
   note("G5", "负测：注入真实 A 名的过期完成回调不得清当前 fallback");
-  const stale = await page.evaluate(async () => {
+  const stale = await page.evaluate(async (computeNameOkSrc) => {
+    // 复用脚本顶层纯函数 computeG5StaleNameOk 的同一口径（注入求值，避免双份实现漂移）。
+    const computeNameOk = eval("(" + computeNameOkSrc + ")");
     const stage = window.__rezeStageProbe;
     const c = () => document.querySelector("canvas");
     const staleAName = "race-a.vmd"; // 真实 A 动作名（竞态回归里的慢请求）
     // 起一个当前动作 B（正常速度），让它 arm fallback。
     await stage.playVmd("/__probe__/koleda-v14d-authoritative-pose-f120.vmd");
+    const bName = c()?.dataset.vmdPlaybackName || ""; // 本次 B 的真实动作名
     const stateBefore = stage.vmdFallbackState();
     const finishBefore = Number(c()?.dataset.vmdNaturalFinishCount || 0);
     // 注入真实 A 动作名的过期 finishedName 回调（不属于当前动作 B）。
@@ -529,24 +559,24 @@ try {
     await new Promise((s) => setTimeout(s, 200));
     const stateAfter = stage.vmdFallbackState();
     const finishAfterStale = Number(c()?.dataset.vmdNaturalFinishCount || 0);
-    const nameAfterStale = c()?.dataset.vmdNaturalFinishName || ""; // 注入 A 后不得被改为 A
+    const nameAfterStale = c()?.dataset.vmdNaturalFinishName || ""; // 注入 A 后必须仍严格等于 B
     const countNotBumped = finishAfterStale === finishBefore;
-    const stillB = stateAfter.currentName === stateBefore.currentName && stateAfter.currentName.includes("f120");
-    const nameNotA = nameAfterStale !== staleAName;
+    const stillB = stateAfter.currentName === stateBefore.currentName && stateAfter.currentName === bName;
     const fallbackKept = stateAfter.armed === true && stateAfter.timerActive === true;
     // B 后续仍能正常完成：等到超过 B 的 fallback 窗口，完成计数应自增。
     const waitMs = Math.max(0, stateAfter.delay) + 500;
     await new Promise((s) => setTimeout(s, waitMs));
     const finishFinal = Number(c()?.dataset.vmdNaturalFinishCount || 0);
-    const nameFinal = c()?.dataset.vmdNaturalFinishName || ""; // B 完成后必须等于 B
+    const nameFinal = c()?.dataset.vmdNaturalFinishName || ""; // B 完成后必须仍严格等于 B
     const bCompleted = finishFinal > finishAfterStale;
-    const nameFinalIsB = nameFinal.includes("f120");
-    const ok = countNotBumped && stillB && nameNotA && fallbackKept && bCompleted && nameFinalIsB;
+    // 名称判定（P0）：注入 A 后/完成后 naturalFinishName 都严格等于本次 B 的真实动作名。
+    const nameOk = computeNameOk({ bName, staleAName, nameAfterStale, nameFinal });
+    const ok = countNotBumped && stillB && fallbackKept && bCompleted && nameOk;
     return {
-      staleAName, stateBefore, stateAfter, finishBefore, finishAfterStale, finishFinal,
-      nameAfterStale, nameFinal, countNotBumped, stillB, nameNotA, fallbackKept, bCompleted, nameFinalIsB, waitMs, ok,
+      staleAName, bName, stateBefore, stateAfter, finishBefore, finishAfterStale, finishFinal,
+      nameAfterStale, nameFinal, countNotBumped, stillB, fallbackKept, bCompleted, nameOk, waitMs, ok,
     };
-  });
+  }, computeG5StaleNameOk.toString());
   if (!stale.ok) fail("G5", "过期完成回调负测失败 " + JSON.stringify(stale));
   report.gates.G5.staleFinish = stale; note("G5", "过期完成回调负测 PASS " + JSON.stringify(stale));
   // G5 resetPhysics 回归：通用 VMD effect 每次成功 load/apply/play 后自增计数（P0-2）。
@@ -581,6 +611,72 @@ try {
   if (leak.variant !== "original") fail("G6", "reze-design 下 canvas variant 应 original，实际 " + leak.variant + "（v1 残留）");
   report.gates.G6 = report.gates.G6 || { status: "pass", failures: [], leak }; note("G6", "PASS");
 } catch (e) { fail("G6", "exception: " + (e?.stack || e)); }
+
+// ── 探针泄漏断言（P1）：默认生产入口（不带 ?v14dAcceptanceProbe=1）不得挂载 __rezeStageProbe；
+// 显式开关入口必须有。这证明探针只在显式验收开关下暴露、生产默认关闭。 ──
+try {
+  note("G6", "探针泄漏：默认入口无探针 / 显式开关入口有探针");
+  // (a) 当前页面为显式开关入口（BASE 带 ?v14dAcceptanceProbe=1）：探针必须存在。
+  const probeOn = await page.evaluate(() => typeof window.__rezeStageProbe !== "undefined" && window.__rezeStageProbe !== null);
+  if (!probeOn) fail("G6", "显式开关入口（?v14dAcceptanceProbe=1）未挂载 __rezeStageProbe");
+  // (b) 默认生产入口（不带开关）：探针必须不存在。新页面需重复注册 API 存根 route 与
+  // 会话 initScript（它们注册在主 page 上、不继承到 context 新页面），否则 bootstrap 不完整。
+  const prodPage = await context.newPage();
+  await prodPage.addInitScript((uid) => {
+    window.localStorage.setItem("mmd_companion_session_v1", JSON.stringify({ userId: uid, renderPipeline: "mio-reference", ttsEnabled: false }));
+  }, USER_ID);
+  await prodPage.route("**/api/backend/**", async (route) => {
+    const url = new URL(route.request().url());
+    const p = url.pathname.replace(/^\/api\/backend/, "");
+    const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (p.startsWith("/codex/knowledge/review-summary")) return json({ workspace_key: null, total: 0, pending: 0, by_status: {} });
+    if (p.startsWith("/assets/mmd/models")) return json({ items: [STUB_MODEL] });
+    if (p.startsWith("/assets/vmd")) return json({ items: [] });
+    if (p.startsWith("/config/mapping/resolved/")) return json({ mappings: {} });
+    if (p === "/sessions" && route.request().method() === "GET") return json({ items: [] });
+    if (p === "/sessions" && route.request().method() === "POST") return json({ session: { id: "stub-session-1", title: "验收会话", selected_model_path: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() } });
+    if (/^\/sessions\/[^/]+\/messages/.test(p)) return json({ items: [] });
+    if (p.startsWith("/companion") || p.startsWith("/config/companion")) return json({ user_id: USER_ID, selected_model_path: null, render_pipeline: "reze-k3", reze_stage_document: null, updated_at: null });
+    return json({ items: [] });
+  });
+  await prodPage.route("**://127.0.0.1:8000/**", async (route) => {
+    const url = new URL(route.request().url());
+    const p = url.pathname;
+    const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (/\.pmx$/i.test(p)) return route.fulfill({ status: 200, contentType: "application/octet-stream", body: fs.readFileSync(PMX) });
+    if (/\.(png|jpe?g|webp|bmp|tga|sph|spa)$/i.test(p)) {
+      const base = p.replace(/^\/assets\/mmd\/models\/?/i, "");
+      const cand = findKoledaAsset(base);
+      if (cand) return route.fulfill({ status: 200, contentType: "application/octet-stream", body: fs.readFileSync(cand) });
+      return json({ detail: "texture not found: " + base }, 404);
+    }
+    if (p.startsWith("/desktop-pet/shared-config")) return json({ user_id: USER_ID, selected_model_path: null, render_pipeline: "reze-k3" });
+    if (p.startsWith("/assets/mmd/models")) return json({ items: [STUB_MODEL] });
+    if (p.startsWith("/assets/mmd/vmds") || p.startsWith("/assets/vmd")) return json({ items: [] });
+    if (p.startsWith("/codex/knowledge/review-summary")) return json({ workspace_key: null, total: 0, pending: 0, by_status: {} });
+    return json({ items: [] });
+  });
+  await prodPage.goto(ORIGIN + "/companion", { waitUntil: "domcontentloaded", timeout: 60000 });
+  await prodPage.waitForSelector("[data-render-pipeline]", { timeout: 60000 });
+  await prodPage.waitForTimeout(2500); // 等 bootstrap
+  await prodPage.click("button.mio-advanced-mode");
+  await prodPage.waitForSelector('[data-testid="mio-advanced-panel"]', { timeout: 15000 });
+  await prodPage.click('.mio-pipeline-option:has-text("Reze K3")');
+  await prodPage.waitForTimeout(1200);
+  await prodPage.click('button.mio-nav-button[aria-label="打开 Reze 材质与场景编辑器"]', { force: true });
+  await prodPage.waitForSelector('button.mio-reze-editor-tool[aria-label="资产"]', { timeout: 20000 });
+  await prodPage.click('button.mio-reze-editor-tool[aria-label="资产"]');
+  const fileInput = prodPage.locator("input[type=file][webkitdirectory]").first();
+  await fileInput.setInputFiles(IMPORT_DIR);
+  await prodPage.waitForSelector(sel.canvasReady, { timeout: 120000 });
+  await prodPage.waitForTimeout(500);
+  const prodProbe = await prodPage.evaluate(() => ({ probePresent: typeof window.__rezeStageProbe !== "undefined" && window.__rezeStageProbe !== null, canvasReady: Boolean(document.querySelector('canvas[data-webgpu-status="ready"]')) }));
+  await prodPage.close();
+  if (!prodProbe.canvasReady) fail("G6", "默认生产入口画布未 ready（无法判定探针泄漏）");
+  if (prodProbe.probePresent) fail("G6", "默认生产入口（不带 ?v14dAcceptanceProbe=1）泄漏 __rezeStageProbe");
+  report.gates.G6.probeLeak = { explicitProbeOn: probeOn, defaultProbePresent: prodProbe.probePresent, defaultCanvasReady: prodProbe.canvasReady };
+  note("G6", "探针泄漏 PASS " + JSON.stringify(report.gates.G6.probeLeak));
+} catch (e) { fail("G6", "探针泄漏断言 exception: " + (e?.stack || e)); }
 
 if (report.pageErrors.length) fail("G1", "pageErrors: " + report.pageErrors.slice(0, 3).join(" | "));
 // 硬阻断：API 失败请求与 HTTP 错误必须进入 Gate 判定（存根环境下应为 0）。
