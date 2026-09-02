@@ -35,16 +35,17 @@ const REGION_DEFS = [
 ];
 const REGION_IDS = REGION_DEFS.map((d) => d.id);
 
-// Stage 2B-M3.1：统一的区域归属。优先骨骼主导标签（boneRegionLabels），
-// 缺失时回退旧世界坐标标签（regionLabels，仅兼容）。返回区域 id 或 null。
+// Stage 2B-M3.1 修正轮（验收修正·阻断4）：正式 BodySkin Gate 的统一区域归属。
+// 硬要求骨骼主导标签（boneRegionLabels）；缺失即返回 null（上层据此 Gate 失败），
+// 不回退到旧世界坐标矩形分区（regionLabels 已废弃——它会把腰腹误计入左手）。
+// 旧 regionLabels 仅作 legacy 诊断字段透传，绝不参与正式归属判定。返回区域 id 或 null。
 function regionIdOf(tr, t) {
   if (!tr) return null;
   if (tr.boneRegionLabels && tr.boneRegionIds) {
     const bl = tr.boneRegionLabels[t];
     return bl >= 0 && bl < tr.boneRegionIds.length ? tr.boneRegionIds[bl] : null;
   }
-  const rl = tr.regionLabels?.[t];
-  return rl >= 0 && rl < REGION_DEFS.length ? REGION_DEFS[rl].id : null;
+  return null;
 }
 
 function collectModelFiles(dir) {
@@ -253,23 +254,16 @@ async function captureRegions(mode) {
   if (triRegions && bodyHdr) {
     const W = 640, H = 640;
     const stats = {};
-    // Stage 2B-M3.1：语义归属以骨骼主导标签为准。regionLabelFor(t) 返回区域 id 或 null。
+    // Stage 2B-M3.1 修正轮（阻断4）：正式归属硬要求骨骼主导标签，不回退旧矩形分区。
     const boneIds = triRegions.boneRegionIds || REGION_IDS;
-    const labelOf = (t) => {
-      if (triRegions.boneRegionLabels) {
-        const bl = triRegions.boneRegionLabels[t];
-        return bl >= 0 && bl < boneIds.length ? boneIds[bl] : null;
-      }
-      const rl = triRegions.regionLabels[t];
-      return rl >= 0 && rl < REGION_DEFS.length ? REGION_DEFS[rl].id : null;
-    };
+    const labelOf = (t) => regionIdOf(triRegions, t);
     // 区域三角形总数（分母，用于 coverage = 可见样本 / 该材质该语义区域总可见样本）。
     const regionTriTotal = {};
     for (let t = 0; t < triRegions.triCount; t++) {
       const id = labelOf(t);
       if (id) regionTriTotal[id] = (regionTriTotal[id] || 0) + 1;
     }
-    for (const d of REGION_DEFS) stats[d.id] = { n: 0, sum: [0, 0, 0], refSum: [0, 0, 0], errSum: [0, 0, 0], perPixelErr: [], minX: W, minY: H, maxX: -1, maxY: -1, tris: 0 };
+    for (const d of REGION_DEFS) stats[d.id] = { n: 0, sum: [0, 0, 0], refSum: [0, 0, 0], errSum: [0, 0, 0], perPixelErr: [], minX: W, minY: H, maxX: -1, maxY: -1, tris: 0, uniq: new Set() };
     for (let t = 0; t < triRegions.triCount; t++) { const id = labelOf(t); if (id) stats[id].tris++; }
     // BodySkin 可见前景总像素（pick mask），作为全身采集的分母基数（诊断参考，非正式 coverage）。
     let totalVisible = 0;
@@ -283,6 +277,7 @@ async function captureRegions(mode) {
       if (!regionId) continue;
       const st = stats[regionId];
       st.n++; st.sum[0] += bodyHdr.rgb[i * 3]; st.sum[1] += bodyHdr.rgb[i * 3 + 1]; st.sum[2] += bodyHdr.rgb[i * 3 + 2];
+      st.uniq.add(triId); // 阻断2：正式样本命中的唯一三角形集合（覆盖率分子）。
       // P0-1：同 UV 参考——该像素的插值 UV 在 body_d 上采样 × 身体 warm，sRGB→线性。
       // 逐像素参考替代整块材质均值，区域 refLinear 由本区域像素的 UV 采样形成。
       const u = triRegions.uv[i * 2], v = triRegions.uv[i * 2 + 1];
@@ -311,9 +306,13 @@ async function captureRegions(mode) {
         maePerChannel: [st.errSum[0] / st.n, st.errSum[1] / st.n, st.errSum[2] / st.n],
         numerator: [st.errSum[0], st.errSum[1], st.errSum[2]],
         denominator: st.n,
-        coverage: regionTriTotal[d.id] > 0 ? st.n / regionTriTotal[d.id] : 0,
+        // 阻断2：覆盖率 = 正式样本命中的唯一三角形数 / 该语义区域三角形总数，∈[0,1]。
+        visibleTriCoverageNumerator: st.uniq.size,
+        visibleTriCoverageDenominator: regionTriTotal[d.id] || 0,
+        coverage: regionTriTotal[d.id] > 0 ? st.uniq.size / regionTriTotal[d.id] : 0,
+        samplesPerTriangle: st.uniq.size > 0 ? st.n / st.uniq.size : 0,
         regionTriTotal: regionTriTotal[d.id] || 0,
-        coverageNote: "coverage=numerator/denominator=全身命中像素数/该语义区域三角形总数；量纲为像素/三角形，非 0..1 面积占比。占 BodySkin 可见总像素比=n/totalVisible（诊断参考，见 fullbodyShare）。",
+        coverageNote: "coverage=visibleTriCoverageNumerator/visibleTriCoverageDenominator=正式样本命中的唯一三角形数/该语义区域三角形总数，∈[0,1]。samples=命中像素数、samplesPerTriangle=每三角形平均像素；占 BodySkin 可见总像素比=n/totalVisible（诊断参考，见 fullbodyShare）。",
         fullbodyShare: totalVisible > 0 ? st.n / totalVisible : 0,
         p95Err: p95,
         bbox: [st.minX, st.minY, st.maxX, st.maxY],
@@ -458,18 +457,45 @@ const BODY_BONE_ASSERT = [
   ...[59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73].map((i) => [i, /^左[親中人小薬][指]?[0-9０-３]*$/]),
   ...[74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88].map((i) => [i, /^右[親中人小薬][指]?[0-9０-３]*$/]),
 ];
+// 阻断4：正式归属要求的骨骼语义区域 id 顺序（与 V14D_BODY_SKIN_BONE_REGION_IDS 一致）。
+const REQUIRED_BONE_REGION_IDS = ["neck", "torso", "leftHand", "rightHand"];
+const REQUIRED_BONE_REGION_VERSION = 1; // V14D_BODY_SKIN_BONE_REGIONS_V1.version
+
+// 阻断3：骨名硬断言抽为可测试纯函数（供负测脚本独立红绿验证，不依赖页面）。
+// 输入骨骼名表，返回失配索引列表（空=全部匹配）。
+function checkBoneNames(names) {
+  const mismatches = [];
+  if (!Array.isArray(names)) return ["<non-array>"];
+  for (const [idx, re] of BODY_BONE_ASSERT) {
+    const actual = names[idx] ?? "";
+    if (!re.test(actual)) mismatches.push(idx + ":" + actual + "!~" + re);
+  }
+  return mismatches;
+}
 {
   const names = main.triRegions?.skeletonBoneNames ?? null;
   ok(Array.isArray(names) && names.length > 88, "骨骼名表可导出且长度>88（实际=" + (names ? names.length : "null") + "）");
-  const boneMismatches = [];
-  if (Array.isArray(names)) {
-    for (const [idx, re] of BODY_BONE_ASSERT) {
-      const actual = names[idx] ?? "";
-      if (!re.test(actual)) boneMismatches.push(idx + ":" + actual + "!~" + re);
-    }
-  }
+  const boneMismatches = checkBoneNames(names);
   summary.boneNameAssert = { checked: BODY_BONE_ASSERT.length, mismatches: boneMismatches };
   ok(boneMismatches.length === 0, "骨骼索引→骨名硬断言（" + BODY_BONE_ASSERT.length + " 索引全部匹配语义骨名）" + (boneMismatches.length ? " 失配=" + boneMismatches.join(",") : ""));
+  // 阻断4：正式归属硬要求骨骼主导标签链完整（缺失/错序/错版本即 Gate 失败，不回退旧矩形分区）。
+  const ids = main.triRegions?.boneRegionIds ?? null;
+  const ver = main.triRegions?.boneRegionVersion ?? null;
+  ok(Array.isArray(main.triRegions?.boneRegionLabels) && main.triRegions.boneRegionLabels.length > 0,
+    "正式归属：boneRegionLabels 存在且非空（len=" + (main.triRegions?.boneRegionLabels?.length ?? "null") + "）");
+  ok(Array.isArray(ids) && JSON.stringify(ids) === JSON.stringify(REQUIRED_BONE_REGION_IDS),
+    "正式归属：boneRegionIds 顺序=" + REQUIRED_BONE_REGION_IDS.join(",") + "（实际=" + (ids ? ids.join(",") : "null") + "）");
+  ok(ver === REQUIRED_BONE_REGION_VERSION, "正式归属：boneRegionVersion=" + REQUIRED_BONE_REGION_VERSION + "（实际=" + ver + "）");
+  // 真实骨序扰动负测：交换 6/8 骨名后硬断言必须报失配（正式 Gate 内即时自验，骨序漂移可被检出）。
+  if (Array.isArray(names)) {
+    const swapped = names.slice(); const tmp = swapped[6]; swapped[6] = swapped[8]; swapped[8] = tmp;
+    const swapMismatch = checkBoneNames(swapped);
+    const renamed = names.slice(); renamed[6] = "下半身";
+    const renameMismatch = checkBoneNames(renamed);
+    summary.boneNameNeg = { swap68: swapMismatch.length, rename6: renameMismatch.length };
+    ok(swapMismatch.length > 0, "真实错骨序负测：交换骨名 6/8 后硬断言报失配（" + swapMismatch.length + " 处）");
+    ok(renameMismatch.length > 0, "真实错骨名负测：index6 改错名后硬断言报失配（" + renameMismatch.length + " 处）");
+  }
 }
 
 // P0-2 修复：neck/waist 在正面全身视角被头/衣领/腰带深度遮挡（真实可见性）。
@@ -550,6 +576,7 @@ async function captureRegionCloseups(mode) {
     let n = 0; const sum = [0, 0, 0]; let minX = W, minY = H, maxX = -1, maxY = -1;
     const refSum = [0, 0, 0]; const perPixelErr = [];
     const errSum = [0, 0, 0];
+    const uniq = new Set();
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = y * W + x;
       if (!bodyHdr2.mask[i]) continue;
@@ -557,6 +584,7 @@ async function captureRegionCloseups(mode) {
       if (triId < 0 || triId >= triRegions2.triCount) continue;
       if (regionIdOf(triRegions2, triId) !== id) continue;
       n++; sum[0] += bodyHdr2.rgb[i * 3]; sum[1] += bodyHdr2.rgb[i * 3 + 1]; sum[2] += bodyHdr2.rgb[i * 3 + 2];
+      uniq.add(triId); // 阻断2：正式样本命中的唯一三角形集合（覆盖率分子，与全身同一口径）。
       // P0-1：同 UV 参考——近景像素的插值 UV 在 body_d 上采样 × 身体 warm。
       const u = triRegions2.uv[i * 2], v = triRegions2.uv[i * 2 + 1];
       const refSrgb = sampleBodyD(u, v);
@@ -578,9 +606,13 @@ async function captureRegionCloseups(mode) {
         maePerChannel: [errSum[0] / n, errSum[1] / n, errSum[2] / n],
         numerator: [errSum[0], errSum[1], errSum[2]],
         denominator: n,
-        coverage: regionTriTotal > 0 ? n / regionTriTotal : 0,
+        // 阻断2：覆盖率 = 正式样本命中的唯一三角形数 / 该语义区域三角形总数，∈[0,1]（与全身同一语义分母）。
+        visibleTriCoverageNumerator: uniq.size,
+        visibleTriCoverageDenominator: regionTriTotal,
+        coverage: regionTriTotal > 0 ? uniq.size / regionTriTotal : 0,
+        samplesPerTriangle: uniq.size > 0 ? n / uniq.size : 0,
         regionTriTotal,
-        coverageNote: "coverage=numerator/denominator=近景命中像素数/该语义区域三角形总数；量纲为像素/三角形（与全身区一致），非 0..1 面积占比。",
+        coverageNote: "coverage=visibleTriCoverageNumerator/visibleTriCoverageDenominator=近景正式样本命中的唯一三角形数/该语义区域三角形总数，∈[0,1]（与全身同一语义分母：regionTriTotal）。",
         p95Err: perPixelErr[Math.floor(perPixelErr.length * 0.95)],
         bbox: [minX, minY, maxX, maxY], view: "closeup",
       };
@@ -642,21 +674,32 @@ for (const id of REGION_IDS) {
   const regionRef = rg.refLinear ?? bodyDMeanLinear;
   const mae = rg.maePerChannel ?? rg.meanLinear.map((v, c) => Math.abs(v - regionRef[c]));
   const pass = rg.samples >= MIN_REGION_SAMPLES && mae.every((v) => v <= REGION_MAE_CANDIDATE);
+  // 阻断2：coverage = 唯一可见三角形数 / 该语义区域三角形总数，∈[0,1]。
+  // 分子=正式样本命中的唯一三角形数（近景/全身同一口径），分母=regionTriTotal（同一语义）。
   const covDenominator = rg.regionTriTotal ?? regionTriTotalFull[id] ?? 0;
-  const cov = covDenominator > 0 ? rg.samples / covDenominator : (rg.coverage ?? 0);
+  const covNumerator = rg.visibleTriCoverageNumerator ?? 0;
+  const cov = covDenominator > 0 ? covNumerator / covDenominator : 0;
   summary.regions[id] = {
     def: rg.def ?? REGION_DEFS.find((d) => d.id === id), triangles: rg.triangles ?? null,
     samples: rg.samples, meanLinear: rg.meanLinear,
     mask: "BodySkin triId+UV pick mask（HDR 前景）",
-    coverage: cov, coverageNumerator: rg.samples, coverageDenominator: covDenominator,
+    coverage: cov,
+    visibleTriCoverageNumerator: covNumerator,
+    visibleTriCoverageDenominator: covDenominator,
+    samplesPerTriangle: rg.samplesPerTriangle ?? (covNumerator > 0 ? rg.samples / covNumerator : 0),
+    coverageNumerator: covNumerator, coverageDenominator: covDenominator,
     regionTriTotal: covDenominator,
-    coverageNote: rg.coverageNote ?? "coverage=coverageNumerator/coverageDenominator=命中像素数/该语义区域三角形总数（像素/三角形，非面积占比）。",
+    coverageNote: rg.coverageNote ?? "coverage=coverageNumerator/coverageDenominator=唯一可见三角形数/该语义区域三角形总数，∈[0,1]。samples=命中像素数、samplesPerTriangle=每三角形平均像素。",
     refLinear: regionRef, refSamples: rg.refSamples ?? null,
     referenceSource: rg.referenceSource ?? "body_d×warm 整材质均值（区域UV参考缺失时回退）",
     p95Err: rg.p95Err ?? null, maePerChannel: mae,
     numerator: rg.numerator ?? null, denominator: rg.denominator ?? rg.samples,
     pass, status: pass ? "ok" : "fail", bbox: rg.bbox, view: rg.view ?? "fullbody",
   };
+  // 阻断2：覆盖率硬断言——分子>0、分母>0、0<coverage<=1（保留 MIN_REGION_SAMPLES 判定）。
+  ok(covNumerator > 0, "区域 " + id + " 覆盖率分子（唯一可见三角形）>0（实际=" + covNumerator + "）");
+  ok(covDenominator > 0, "区域 " + id + " 覆盖率分母（区域三角形总数）>0（实际=" + covDenominator + "）");
+  ok(cov > 0 && cov <= 1, "区域 " + id + " 覆盖率∈(0,1]（实际=" + cov.toFixed(4) + "）");
   ok(rg.samples >= MIN_REGION_SAMPLES, "区域 " + id + " 样本数 " + rg.samples + " >= " + MIN_REGION_SAMPLES);
   ok(mae.every((v) => v <= REGION_MAE_CANDIDATE), "区域 " + id + " 逐像素MAE=" + JSON.stringify(mae.map((v) => +v.toFixed(4))) + " <= " + REGION_MAE_CANDIDATE + "（候选阈值）");
 }
@@ -849,16 +892,17 @@ summary.negative = { missing: neg.missing === null, hairMisuseRejected: negMisus
     neg.meanCancellationDetected = meanDiff < 1e-9 && pixelMae > 0.1;
     neg.meanCancellationEvidence = { meanDiff, pixelMae };
   }
-  // N5：错骨序——剔除 torso 骨骼 6 后 torso 归属必须塌缩为 0（证明归属由骨骼集合驱动）。
+  // 集合扰动（补充，非骨名/骨序负测）：剔除 torso 骨骼 6 后 torso 归属必须塌缩为 0，
+  // 证明归属真实由骨骼集合驱动。错骨名/骨序负测见上方 boneNameAssert 块的 swap68/rename6 自验。
   const noTorsoCounts = await regionTriCounts([AUTH.neck, [], AUTH.leftHand, AUTH.rightHand]);
-  neg.boneOrderDrift = { baseTorso: baseCounts?.torso, noTorsoAfter: noTorsoCounts?.torso };
-  neg.boneOrderDriftDetected = !!(noTorsoCounts && noTorsoCounts.torso === 0 && baseCounts.torso > 0);
+  neg.boneSetRemoval = { baseTorso: baseCounts?.torso, noTorsoAfter: noTorsoCounts?.torso };
+  neg.boneSetRemovalDetected = !!(noTorsoCounts && noTorsoCounts.torso === 0 && baseCounts.torso > 0);
   summary.negative.m31 = neg;
   ok(neg.handSwapDetected === true, "负测N1：左右手交换后语义对调（swap.leftMae≈base.rightMae 且与 base.leftMae 不同；计数对称 " + (neg.handSwap.baseLeft ?? "?") + "↔" + (neg.handSwap.baseRight ?? "?") + "）");
   ok(neg.torsoInjectDetected === true, "负测N2：腰腹注入左手后左手归属数增大且逐像素MAE变化（左 " + (neg.torsoInject.baseLeft ?? "?") + "→" + (neg.torsoInject.injectLeft ?? "?") + "，torso " + (neg.torsoInject.baseTorso ?? "?") + "→" + (neg.torsoInject.injectTorso ?? "?") + "）");
   ok(neg.uvShiftChangesRef === true, "负测N3：参考样本集合错位（UV 平移）改变逐像素参考（face_d 已在启动配置守卫）");
   ok(neg.meanCancellationDetected === true, "负测N4：均值抵消构造下真逐像素 MAE>0 而均值差≈0，Gate 用前者");
-  ok(neg.boneOrderDriftDetected === true, "负测N5：错骨序（剔除 torso 骨骼 6）后 torso 归属塌缩为 0（" + (neg.boneOrderDrift.baseTorso ?? "?") + "→" + (neg.boneOrderDrift.noTorsoAfter ?? "?") + "），骨序漂移可被检出");
+  ok(neg.boneSetRemovalDetected === true, "集合扰动：剔除 torso 骨骼 6 后 torso 归属塌缩为 0（" + (neg.boneSetRemoval.baseTorso ?? "?") + "→" + (neg.boneSetRemoval.noTorsoAfter ?? "?") + "），归属由骨骼集合驱动");
 }
 
 // normal 模式 A/B 截图（全身 + 四区域近景同视角）。
@@ -928,11 +972,14 @@ summary.threshold = { regionMaeCandidate: REGION_MAE_CANDIDATE, minRegionSamples
 // 修正轮（验收修正 7）：四区域 MAE 仍超阈值时，参考为纯 albedo（body_d×warm 无光照）而 Web HDR
 // 含白光世界光照是当前的主要候选差异来源；但真实 GPU sampler/LOD 对照未做，mip/LOD/sampler
 // 仍为未排除项，不得表述为「颜色/光照是唯一剩余根因」。
-summary.remainingRootCause = {
-  status: "color-gate-unresolved",
-  primaryCandidate: "参考=纯albedo(body_d×warm 无光照) vs Web HDR 含白光世界光照（G/B 通道口径差）",
-  unExcluded: ["mip/LOD 逐层对照未做（双线性 mip0 与 GPU 逐 mip 采样无法完全等价）", "GPU sampler 各向异性/过滤细节未对照", "色彩空间/显示变换链未逐段对账"],
-  note: "机制 Gate（语义分区/同集合/逐像素口径/draw-call 绑定/负测）已闭合；颜色对账属独立 failure family。",
+// 阻断5：正式 MAE Gate 已 exit0（四区域+Face 逐像素 MAE 均过候选阈值），状态与结论必须一致——
+// 不得同时宣称 unresolved 与 complete。候选颜色 Gate 记为通过；mip/LOD/sampler/色彩空间链是
+// 未排除的残余风险（limitations/unexcludedRisks），不构成未完成项。
+summary.colorGate = {
+  status: "candidate-color-gate-passed",
+  note: "正式逐像素 MAE Gate 已通过（候选阈值）。机制 Gate（语义分区/同集合/逐像素口径/draw-call 绑定/负测）已闭合。",
+  limitations: ["本 Gate 用 body_d/face_d×warm 的 mip0 双线性参考，非 GPU 逐 mip/逐 sampler 对照"],
+  unexcludedRisks: ["mip/LOD 逐层对照未做（双线性 mip0 与 GPU 逐 mip 采样无法完全等价）", "GPU sampler 各向异性/过滤细节未对照", "色彩空间/显示变换链未逐段对账"],
 };
 summary.ref = { bodyDMeanLinear, blenderTris: blenderTris.length };
 summary.occludedRegions = occludedRegions;

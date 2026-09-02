@@ -52,6 +52,12 @@ api/D/
 web/.next-codex-dev-reze-material-library/
 web/.next-codex-dev-vmd-isolation/
 web/.next-codex-v13/
+
+# 票据证据政策（2026-09-02）：BodySkin Gate 的逐像素 mask overlay 截图属于本地可重生成证据，
+# 不入版本（大 PNG）。机器 JSON 报告仍跟踪。需要截图时按脚本在本地重生成。
+.scratch/v14d-body-skin-state2/gate-m31-*/shots/*.png
+.scratch/v14d-body-skin-state2/gate/shots/*.png
+.scratch/v14d-body-skin-state2/gate/gate-report.json
 web/public/twist-tests/
 imgToAction/archives/
 .codex-pet/

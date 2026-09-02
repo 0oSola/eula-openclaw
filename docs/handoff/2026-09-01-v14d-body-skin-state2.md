@@ -238,6 +238,37 @@ Gate 产物：.scratch/v14d-body-skin-state2/gate-m31-v3/（gate-report.json + s
 
 Gate 产物：.scratch/v14d-body-skin-state2/gate-m31-final/（gate-report.json + shots/）。
 
+## Stage 2B-M3.1 验收修正轮·最终收口（同 failure family 三次闭合，2026-09-02）
+
+来源主会话二次验收要求阻断 1-5 全部闭合。本轮修正并复验，正式 BodySkin Gate exit 0、独立语义负测红绿全过。
+
+### 阻断逐项闭合
+
+1. **资产政策**：本票所有 .scratch/**/*.png（gate-m31-final 与残留 gate-m31-v3 共 36 张）已从 Git 索引移除（git rm --cached，磁盘保留供脚本重生成）；未移到其他 tracked 目录，未碰其他票据/用户的 .scratch 产物。
+2. **coverage 语义**：改为有明确集合语义、∈[0,1] 的覆盖率——visibleTriCoverageNumerator=正式样本命中的唯一三角形数，visibleTriCoverageDenominator=regionTriTotal（该语义区域三角形总数），coverage=唯一可见三角形/regionTriTotal；samples=命中像素数、samplesPerTriangle=每三角形平均像素另列。四区域硬断言 numerator>0、denominator>0、0<coverage<=1（实测 neck 29/262=0.111、torso 11/216=0.051、leftHand 76/882=0.086、rightHand 127/882=0.144），保留 MIN_REGION_SAMPLES。近景/全身分母同一语义（regionTriTotal）。
+3. **N5 错骨名/骨序负测**：骨名硬断言抽为可测试纯函数 checkBoneNames；正式 Gate 内对 skeletonBoneNames 做真实扰动自验——交换骨名 6/8（swap68 报 2 处失配）、index6 改错名（rename6 报 1 处失配）均检出并 ok。原「剔除 torso 骨集合」保留为集合扰动（boneSetRemoval），不再命名 boneOrderDrift。
+4. **正式路径不回退旧坏分区**：regionIdOf 与全身 labelOf 均硬要求 boneRegionLabels（缺失即返回 null→Gate 失败），不再回退旧世界坐标矩形分区；正式 Gate 硬断言 boneRegionLabels 非空、boneRegionIds 顺序=neck,torso,leftHand,rightHand、boneRegionVersion=1。旧 regionLabels 仅作 legacy 诊断透传。
+5. **报告状态一致**：remainingRootCause(color-gate-unresolved) 移除，改 colorGate.status=candidate-color-gate-passed；mip/LOD/sampler/色彩空间链放入 limitations/unexcludedRisks，不再同时宣称 unresolved 与 complete。
+
+### N1/N2 红绿进程退出码自验（独立脚本）
+
+新增 web/scripts/gate-v14d-body-skin-semantic-negative.mjs：每场景起独立页面，在真实 PMX joints/weights 上用扰动骨骼集合重跑 exportMaterialTriRegions 分类，healthy（权威集合）期望 exit0、hand-swap/torso-inject/wrong-bone-name/wrong-bone-order 期望 exit1（非零拒绝）。实测 ===SEMANTIC-NEG-OK===：healthy gateExit=0、hand-swap=1（交换后语义对调 swap.leftHand=base.rightHand=882）、torso-inject=1（leftHand 882→1098、torso 216→0）、wrong-bone-name=1（rename6 1 处失配）、wrong-bone-order=1（swap68 2 处失配）。
+
+### 复验命令与实际退出码（本轮实际运行）
+
+| 验收项 | 结果 |
+| --- | --- |
+| npm run build | exit 0（62 项不变量，Compiled successfully） |
+| 正式 BodySkin Gate（gate-m31-final） | exit 0（===BODY-SKIN-GATE-OK===；coverage 边界硬断言全过；错骨名/错骨序自验检出；正式归属硬要求 boneRegionLabels/Ids/version=1） |
+| 独立语义负测 gate-v14d-body-skin-semantic-negative | exit 0（===SEMANTIC-NEG-OK===，healthy 0、四扰动全非零拒绝） |
+| N3 配置失败负测（V14D_FACE_D=不存在） | exit 2（GATE-CONFIG-FAIL: face_d 不存在） |
+| 运行时 graph 负测 missing/wrongGraph/wrongMaterial/none | exit 1/1/1/0（===RUNTIME-NEG-OK===） |
+| probe-v14d-face-default / probe-v14d-vmd-runtime | exit 0 / exit 0 |
+| git diff --check | exit 0 |
+| PMX/VMD/动画运行时零 diff | 确认（git status 无 .pmx/.vmd/运行时文件改动） |
+
+Gate 产物：.scratch/v14d-body-skin-state2/gate-m31-final/gate-report.json（机器 JSON；PNG 截图未入版本，可按脚本在本地重生成）。
+
 ## 交付握手
 
 完成后停止写入、释放单写者租约，并向来源主会话发送结构化交付。
