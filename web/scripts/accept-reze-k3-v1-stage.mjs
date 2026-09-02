@@ -410,6 +410,32 @@ try {
  report.gates.G3 = report.gates.G3 || { status: "pass", failures: [] };
  report.gates.G3.canvasSize = { width: v1Pix.width, height: v1Pix.height };
  report.gates.G3.origCanvas = oPng; report.gates.G3.v1Canvas = vPng;
+  // HairA/HairB 逐槽身份：同一 full-frame、同一相机的 engine pick material-ID+
+  // depth pass。PNG 中 R=modelId、G=materialId；metadata 是同一 PMX 材质列表推导的
+  // 1-based 映射。后续 analyze 只接受对应 materialId 的前景像素，矩形 ROI 不再猜槽。
+  const hairMaterialMask = await page.evaluate(() => window.__rezeStageProbe?.captureMaterialMask?.() || null);
+  if (!hairMaterialMask || hairMaterialMask.error || !hairMaterialMask.png) {
+    fail("G3", "HairA/HairB 材质身份掩码采集失败: " + JSON.stringify(hairMaterialMask));
+  } else if (hairMaterialMask.width !== v1Pix.width || hairMaterialMask.height !== v1Pix.height) {
+    fail("G3", "材质身份掩码尺寸与画布不一致: " + JSON.stringify({ mask: [hairMaterialMask.width, hairMaterialMask.height], canvas: [v1Pix.width, v1Pix.height] }));
+  } else {
+    const maskPng = saveDataUrl(hairMaterialMask.png, "g3-hair-material-mask.png");
+    const maskMeta = path.join(OUT, "g3-hair-material-mask.json");
+    fs.writeFileSync(maskMeta, JSON.stringify({
+      source: hairMaterialMask.source,
+      width: hairMaterialMask.width,
+      height: hairMaterialMask.height,
+      materialIdByName: hairMaterialMask.materialIdByName,
+    }, null, 2));
+    report.gates.G3.hairSlotIdentity = {
+      source: hairMaterialMask.source,
+      mask: maskPng,
+      metadata: maskMeta,
+      materialIdByName: hairMaterialMask.materialIdByName,
+      hairA: { materialName: "HairA", materialId: hairMaterialMask.materialIdByName?.HairA ?? null },
+      hairB: { materialName: "HairB", materialId: hairMaterialMask.materialIdByName?.HairB ?? null },
+    };
+  }
   // P1-1 Scene invariance：original 与 V1 的场景文档源（settingsRef：world/sun/bloom/
   // ground/camera/background）+ grade + 背景效果逐字段硬断言一致。变体切换只改 Face/
   // BodySkin 材质 graph，不得触碰场景/显示链；这是「保留 K3 灯光与星空背景」的引擎级证据。
@@ -477,13 +503,40 @@ try {
   await page.waitForTimeout(400);
   const negTintPix = await captureStagePixels();
   if (!negTintPix.error) saveDataUrl(negTintPix.dataUrl, "g3-v1-canvas-wrongtint.png");
-  let wrongTintRejected = false;
+  let wrongTintExit = 0;
+  let wrongTintStdout = "";
+  let wrongTintStderr = "";
   try {
-    execSync("node scripts/analyze-reze-k3-v1-diff.mjs --neg-wrongtint", { cwd: process.cwd(), stdio: "pipe" });
-  } catch { wrongTintRejected = true; }
-  report.gates.G3.wrongTint = { applied: negTint, canvasSaved: !negTintPix.error, rejected: wrongTintRejected };
-  if (!wrongTintRejected) fail("G3", "wrongTint 负测失效：错误 tint 未被收敛 Gate 拒绝 " + JSON.stringify(negTint));
-  else note("G3", "wrongTint 负测 PASS（错误颜色被收敛 Gate 非零拒绝）");
+    wrongTintStdout = execSync("node scripts/analyze-reze-k3-v1-diff.mjs --neg-wrongtint", { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (error) {
+    wrongTintExit = Number(error?.status ?? 1);
+    wrongTintStdout = String(error?.stdout ?? "");
+    wrongTintStderr = String(error?.stderr ?? "");
+  }
+  const parseVisualReport = (text) => {
+    const marker = text.indexOf("===VISUAL-GATE");
+    const body = text.slice(text.indexOf("{"), marker >= 0 ? marker : text.length).trim();
+    try { return body.startsWith("{") ? JSON.parse(body) : null; } catch { return null; }
+  };
+  const wrongTintAnalysis = parseVisualReport(wrongTintStdout);
+  const negativeVerdict = wrongTintAnalysis?.negativeVerdict ?? null;
+  const formalReject = negativeVerdict?.status === "rejected"
+    && negativeVerdict?.formalTargetGate?.hairA === false
+    && negativeVerdict?.formalTargetGate?.hairB === false;
+  const wrongTintRejected = wrongTintExit === 0 && formalReject && Array.isArray(negativeVerdict?.rejectionReason)
+    && (wrongTintAnalysis?.failures?.length ?? 0) === 0;
+  report.gates.G3.wrongTint = {
+    applied: negTint,
+    canvasSaved: !negTintPix.error,
+    analyzerExit: wrongTintExit,
+    analyzer: negativeVerdict,
+    analyzerFailures: wrongTintAnalysis?.failures ?? null,
+    stderr: wrongTintStderr.slice(0, 1000),
+    rejected: wrongTintRejected,
+  };
+  if (!wrongTintRejected) {
+    fail("G3", "wrongTint 负测协议失败：必须是 analyzer exit=0、HairA/HairB 正式目标 Gate 均 false 且无其他 failures；实际 " + JSON.stringify(report.gates.G3.wrongTint));
+  } else note("G3", "wrongTint 负测 PASS（两槽正式目标 Gate 均判不收敛，预期拒绝已机器确认）");
   // 负测注入了错误 graph；整页刷新+重导入恢复干净 V1，避免污染后续 Gate。
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-render-pipeline]", { timeout: 60000 });

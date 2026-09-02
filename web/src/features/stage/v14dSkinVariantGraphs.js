@@ -137,8 +137,8 @@ export function buildV14dSkinVariantStyleGroups(originalGroups) {
  *   该槽 OnComposite 应为 0，其余分区不受影响（单变量）。
  * - wrongHairMaterial：hair V1 分组的 materials 换成 BodySkin → HairA/HairB 命中 0。
  * - wrongTint：hair graph 换成「错误颜色 graph」——graph.name 仍触发引擎覆写，
- *   但 nodes[0].inputs.color 改为错误青绿 [0.35,1.05,0.55]；运行时画布由 G3 分析
- *   脚本判定不收敛（同一 Gate 非零退出），node 侧验证图结构偏离权威 tint。
+ *   但 v14d_hair_tint 改为经单变量实验确认远离两槽目标的红绿偏置 [1.35,0.25,0.25]；
+ *   正式目标 Gate 必须分别判 HairA/HairB 不收敛，accept 才记录“预期拒绝”。
  */
 export function perturbV14dSkinVariantStyleGroups(groups, kind) {
   if (kind === "missingHairA" || kind === "missingHairB") {
@@ -170,7 +170,7 @@ export function perturbV14dSkinVariantStyleGroups(groups, kind) {
               ...g.graph,
               // 节点 id 与权威 graph 一致（v14d_hair_tint）：引擎补丁按该 id 取 tint
               // 写入 WGSL，错误青绿真实进入运行时着色，被 G3 收敛 Gate 非零拒绝。
-              nodes: [{ id: "v14d_hair_tint", type: "rgb", inputs: { color: [0.35, 1.05, 0.55] } }],
+              nodes: [{ id: "v14d_hair_tint", type: "rgb", inputs: { color: [1.35, 0.25, 0.25] } }],
             },
           }
         : g,

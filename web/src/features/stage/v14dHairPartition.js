@@ -14,8 +14,10 @@
  * 收敛判据用「误差较 original 显著下降 + 绝对上限」，不用绝对零误差冒充逐像素对齐。
  */
 
-/** 权威头发 tint（与 v14dFaceStatic.V14D_HAIR_TINT 同值，纯模块内联避免组件依赖）。 */
-export const V14D_HAIR_TINT_LINEAR = [0.84, 0.85, 0.96];
+import { V14D_HAIR_TINT } from "./v14dAuthority.js";
+
+/** 权威头发 tint 的 Node 侧兼容导出；实际值来自共享纯 JS 权威模块。 */
+export const V14D_HAIR_TINT_LINEAR = V14D_HAIR_TINT;
 
 export function srgbByteToLinear(c) {
   const s = c / 255;

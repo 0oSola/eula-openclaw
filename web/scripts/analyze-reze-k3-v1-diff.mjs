@@ -21,6 +21,8 @@ const V1 = path.join(OUT, "g3-v1-canvas.png");
 // 同变体连拍（original 第二帧，可选）：用于把 original↔V1 的衣服/装备差异与同变体
 // 待机微动帧间噪声区分（Stage 2C-M1 噪声基线，防把微动误判为材质泄漏）。
 const ORIG_B = path.join(OUT, "g3-original-canvas-b.png");
+const HAIR_MASK = path.join(OUT, "g3-hair-material-mask.png");
+const HAIR_MASK_META = path.join(OUT, "g3-hair-material-mask.json");
 const TARGET = process.env.V14D_TARGET || "C:\\w\\rk3-face-v14d\\.scratch\\v14d-face-static-derived\\blender-ref-finalFaceComposite.png";
 // 负测模式（仅 --neg-wrongtint）：读 G3 负测注入后的 wrongTint 画布，其余同正式口径。
 // 该模式要求正式画布已存在（用于对比），产出独立 visual-diff-wrongtint.json，不覆盖正式报告。
@@ -31,11 +33,39 @@ if (!fs.existsSync(ORIG) || !fs.existsSync(V1)) { console.error("missing canvas 
 if (NEG_WRONGTINT && !fs.existsSync(V1_ACTUAL)) { console.error("missing wrongtint canvas " + V1_ACTUAL); process.exit(1); }
 
 async function loadRaw(p) { const { data, info } = await sharp(p).ensureAlpha().raw().toBuffer({ resolveWithObject: true }); return { data, width: info.width, height: info.height }; }
-const a = await loadRaw(ORIG); const b = await loadRaw(NEG_WRONGTINT ? V1_ACTUAL : V1);
-if (a.width !== b.width || a.height !== b.height) { console.error("size mismatch"); process.exit(1); }
+const a = await loadRaw(ORIG);
+// 负测只替换 HairA/HairB 的实际画布；其余正式 Gate 仍以健康 V1 画布为参照，
+// 避免把 hair-only 扰动错误包装成 Face/场景 failure，同时保留其他 failure 的硬阻断。
+const b = await loadRaw(V1);
+const hairActual = NEG_WRONGTINT ? await loadRaw(V1_ACTUAL) : b;
+if (a.width !== b.width || a.height !== b.height || hairActual.width !== a.width || hairActual.height !== a.height) { console.error("size mismatch"); process.exit(1); }
 // 同变体连拍（可选）：original 第二帧，作为非皮肤「待机微动噪声基线」。
 const a2 = fs.existsSync(ORIG_B) ? await loadRaw(ORIG_B) : null;
 const W = a.width, H = a.height;
+let materialMask = null;
+let materialMaskMeta = null;
+if (fs.existsSync(HAIR_MASK) && fs.existsSync(HAIR_MASK_META)) {
+  try {
+    materialMask = await loadRaw(HAIR_MASK);
+    materialMaskMeta = JSON.parse(fs.readFileSync(HAIR_MASK_META, "utf8"));
+    if (materialMask.width !== W || materialMask.height !== H) {
+      materialMask = null;
+      materialMaskMeta = { error: "material mask dimensions do not match canvas" };
+    }
+  } catch (error) {
+    materialMask = null;
+    materialMaskMeta = { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+const hairMaterialIds = {
+  hairA: Number(materialMaskMeta?.materialIdByName?.HairA),
+  hairB: Number(materialMaskMeta?.materialIdByName?.HairB),
+};
+const hairMaterialMaskReady = Boolean(
+  materialMask && Number.isInteger(hairMaterialIds.hairA) && hairMaterialIds.hairA > 0
+  && Number.isInteger(hairMaterialIds.hairB) && hairMaterialIds.hairB > 0
+  && hairMaterialIds.hairA !== hairMaterialIds.hairB,
+);
 
 function isSkin(r, g, bl) { const mx = Math.max(r, g, bl), mn = Math.min(r, g, bl); return r > 95 && g > 40 && bl > 20 && (mx - mn) > 15 && r > g && r > bl && Math.abs(r - g) > 8; }
 const lum = (d, i) => (d[i] + d[i + 1] + d[i + 2]) / 3;
@@ -191,8 +221,53 @@ const THRESHOLDS = {
   targetConvergeDrop: 0.15,      // (dist_orig - dist_v1) / dist_orig 必须 > 0.15（色比口径）
 };
 
-const out = { width: W, height: H, thresholds: THRESHOLDS, target: TARGET, regions: {}, verdict: {}, occluded: [] };
+const out = {
+  width: W,
+  height: H,
+  thresholds: THRESHOLDS,
+  target: TARGET,
+  regions: {},
+  verdict: {},
+  occluded: [],
+  hairSlotIdentity: {
+    source: materialMaskMeta?.source ?? null,
+    maskPath: fs.existsSync(HAIR_MASK) ? HAIR_MASK : null,
+    metadataPath: fs.existsSync(HAIR_MASK_META) ? HAIR_MASK_META : null,
+    materialIdByName: materialMaskMeta?.materialIdByName ?? null,
+    hairA: { materialName: "HairA", materialId: hairMaterialIds.hairA || null },
+    hairB: { materialName: "HairB", materialId: hairMaterialIds.hairB || null },
+    ready: hairMaterialMaskReady,
+  },
+};
 const failures = [];
+if (!hairMaterialMaskReady) failures.push("HairA/HairB 逐像素材质身份掩码不可用或材质 ID 不唯一");
+if (hairMaterialMaskReady) {
+  const countMaterialPixels = (materialId) => {
+    let count = 0;
+    for (let i = 0; i < materialMask.data.length; i += 4) {
+      if (materialMask.data[i] !== 0 && materialMask.data[i + 1] === materialId) count += 1;
+    }
+    return count;
+  };
+  const correctA = countMaterialPixels(hairMaterialIds.hairA);
+  const correctB = countMaterialPixels(hairMaterialIds.hairB);
+  // 错槽归属负测：故意交换 HairA/HairB 的 materialId，期望所得样本集合严格
+  // 互换而非合并/重叠。这样可证明正式逐槽统计不会把另一槽混进当前槽后仍假通过。
+  const swappedA = countMaterialPixels(hairMaterialIds.hairB);
+  const swappedB = countMaterialPixels(hairMaterialIds.hairA);
+  const wrongAssignmentDetected = correctA > 0 && correctB > 0
+    && swappedA === correctB && swappedB === correctA && hairMaterialIds.hairA !== hairMaterialIds.hairB;
+  out.hairSlotIdentity.wrongSlotAttributionNegative = {
+    correct: { hairA: correctA, hairB: correctB },
+    swappedAssignment: { hairA: swappedA, hairB: swappedB },
+    disjointMaterialIds: hairMaterialIds.hairA !== hairMaterialIds.hairB,
+    detected: wrongAssignmentDetected,
+    reason: wrongAssignmentDetected
+      ? "交换 materialId 后 HairA/HairB 样本严格互换，未发生跨槽合并"
+      : "交换 materialId 未产生可判别的互换样本集合",
+  };
+  if (!wrongAssignmentDetected) failures.push("HairA/HairB 错槽归属负测失败：样本集合未能证明严格互换");
+}
 
 // ── Stage 2C-M1 修正轮：HairA/HairB 分区权威目标网格（同 UV 取证）─────────────
 // 从权威 PMX 解析 HairA/HairB 面区间顶点 UV 归属网格，加载权威 hair_d 纹理，
@@ -288,6 +363,47 @@ function hairSlotUvStats(slot) {
   };
 }
 
+/**
+ * 逐槽屏幕统计：仅接受 engine-pick-material-id-depth 掩码中对应 PMX 材质 ID
+ * 的前景像素。ROI 只负责限定画面区域，不能改变槽位身份；因此另一槽、衣物、
+ * 背景即使落入同一矩形也不会进入该槽样本。
+ */
+function hairSlotDiffStats(r, materialId) {
+  if (!materialMask || !Number.isInteger(materialId) || materialId <= 0) {
+    return { error: "missing material identity mask", samples: 0, roiPixels: 0, coverage: 0 };
+  }
+  const { x0, y0, x1, y1 } = bounds(r);
+  let roiPixels = 0;
+  let slotPixels = 0;
+  let n = 0;
+  let sumAbs = 0;
+  const md = [0, 0, 0];
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const i = (y * W + x) * 4;
+    roiPixels += 1;
+    if (materialMask.data[i] === 0 || materialMask.data[i + 1] !== materialId) continue;
+    slotPixels += 1;
+    if (a.data[i + 3] < 8) continue;
+    const d0 = a.data[i] - b.data[i];
+    const d1 = a.data[i + 1] - hairActual.data[i + 1];
+    const d2 = a.data[i + 2] - hairActual.data[i + 2];
+    sumAbs += (Math.abs(d0) + Math.abs(d1) + Math.abs(d2)) / 3;
+    md[0] += d0; md[1] += d1; md[2] += d2;
+    n += 1;
+  }
+  const meanDiff = md.map((v) => +(n ? Math.abs(v / n) : 0).toFixed(3));
+  return {
+    samples: n,
+    roiPixels,
+    slotPixels,
+    coverage: +(roiPixels ? slotPixels / roiPixels : 0).toFixed(6),
+    mae: +(n ? sumAbs / n : 0).toFixed(3),
+    meanDiff,
+    maxMeanDiff: Math.max(...meanDiff),
+    materialId,
+  };
+}
+
 for (const [name, r] of Object.entries(regions)) {
   if (r.occluded) { out.regions[name] = { occluded: true, note: "frame 当前姿势下不可见，标记 occluded，不参与收敛/稳定判定" }; out.occluded.push(name); continue; }
  if (r.kind === "skin") {
@@ -315,7 +431,15 @@ for (const [name, r] of Object.entries(regions)) {
     // Stage 2C-M1 修正轮：头发目标槽做「显著变化 + 向权威 V14D BaseColor 目标收敛」
     // 双判定（非「hairChanged=true」冒充）。变化判定与皮肤同判别力；收敛判定用
     // 同 UV 目标误差（targetMae/drop，目标=srgb(hair_d)×tint 的线性合成转回显示字节）。
-    const st = nonSkinStats(r); out.regions[name] = st;
+    const slot = name === "hairA" ? "hairA" : name === "hairB" ? "hairB" : null;
+    const st = slot ? hairSlotDiffStats(r, hairMaterialIds[slot]) : nonSkinStats(r); out.regions[name] = st;
+    if (slot) out.regions[name].identity = { materialName: slot === "hairA" ? "HairA" : "HairB", materialId: hairMaterialIds[slot], source: "engine-pick-material-id-depth" };
+    if (st.error) {
+      failures.push(name + " 逐槽材质身份样本不可用: " + st.error);
+      out.verdict[name + "Changed"] = false;
+      out.verdict[name + "TargetConverged"] = false;
+      continue;
+    }
     const changed = st.mae > THRESHOLDS.hairChangeMae && st.maxMeanDiff > THRESHOLDS.hairChangeMaxMeanDiff;
     out.verdict[name + "Changed"] = changed;
     if (!changed) failures.push(name + " 头发目标槽未显著变化 mae=" + st.mae + " maxMeanDiff=" + st.maxMeanDiff + "（需 mae>" + THRESHOLDS.hairChangeMae + " 且 maxMeanDiff>" + THRESHOLDS.hairChangeMaxMeanDiff + "）");
@@ -325,15 +449,14 @@ for (const [name, r] of Object.entries(regions)) {
     // 显著下降（drop>hairTargetDrop）且绝对 MAE < hairTargetAbsMae。目标色取自本槽
     // UV 锚点均值（hairSlotUvStats 的 targetMean）：屏幕像素与 UV 无一一映射，故以
     // 分区均值色作为目标参考点，误差判定在显示字节空间。网格不可用显式 unavailable。
-    if (hairTargetGrid && r.image) {
-      const slot = name === "hairA" ? "hairA" : "hairB";
+    if (hairTargetGrid && r.image && slot && hairMaterialMaskReady) {
       const uv = hairSlotUvStats(slot);
       out.regions[name].uvAnchor = uv;
       if (uv.error) {
         out.verdict[name + "TargetConverged"] = false;
         failures.push(name + " 目标 UV 锚点不可用: " + uv.error);
       } else {
-        const conv = hairSlotTargetError(a, b, r, uv.targetMean);
+        const conv = hairSlotTargetError(a, hairActual, r, uv.targetMean, materialMask, hairMaterialIds[slot]);
         out.regions[name].targetConvergence = conv;
         if (conv.error) {
           out.verdict[name + "TargetConverged"] = false;
@@ -358,31 +481,31 @@ for (const [name, r] of Object.entries(regions)) {
 out.failures = failures;
 
 /**
- * 分区屏幕侧目标误差：近景 ROI 内每个非皮肤像素对「本槽 UV 锚点目标均值色」的
- * 逐像素 MAE，original 与 V1 各一份。目标参考点 = targetMean（v14dHairTargetDisplay
- * 对本槽全部 hair_d UV 像素的均值）。屏幕像素与 UV 无一一映射，故以分区均值色为
- * 目标点；收敛 = V1 误差显著低于 original（颜色向权威目标色靠拢）。
+ * 分区屏幕侧目标误差：近景 ROI 内仅使用对应 PMX 材质 ID+深度前景像素，对
+ * 「本槽 UV 锚点目标均值色」求 original/V1 MAE。ROI 只限空间，materialMask 才是
+ * 槽位身份；缺失掩码或材质 ID 时显式失败，不能退化为矩形平均。
  */
-function hairSlotTargetError(imgOrig, imgV1, region, targetMean) {
+function hairSlotTargetError(imgOrig, imgV1, region, targetMean, slotMask, materialId) {
+  if (!slotMask || !Number.isInteger(materialId) || materialId <= 0) return { error: "missing material identity mask" };
   const { x0, y0, x1, y1 } = bounds(region);
-  let n = 0, origAbs = 0, v1Abs = 0;
+  let roiPixels = 0, slotPixels = 0, n = 0, origAbs = 0, v1Abs = 0;
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
     const i = (y * W + x) * 4;
+    roiPixels += 1;
+    if (slotMask.data[i] === 0 || slotMask.data[i + 1] !== materialId) continue;
+    slotPixels += 1;
     if (imgOrig.data[i + 3] < 8) continue;
     const r0 = imgOrig.data[i], g0 = imgOrig.data[i + 1], b0 = imgOrig.data[i + 2];
-    if (isSkin(r0, g0, b0)) continue;
-    // 剔除近黑背景/星空像素（lum<30），只统计头发本体可见像素。
-    if ((r0 + g0 + b0) / 3 < 30) continue;
     const v1 = [imgV1.data[i], imgV1.data[i + 1], imgV1.data[i + 2]];
     origAbs += (Math.abs(r0 - targetMean[0]) + Math.abs(g0 - targetMean[1]) + Math.abs(b0 - targetMean[2])) / 3;
     v1Abs += (Math.abs(v1[0] - targetMean[0]) + Math.abs(v1[1] - targetMean[1]) + Math.abs(v1[2] - targetMean[2])) / 3;
     n++;
   }
-  if (n < THRESHOLDS.minHairTargetSamples) return { error: "insufficient samples " + n, samples: n };
+  if (n < THRESHOLDS.minHairTargetSamples) return { error: "insufficient identity samples " + n, samples: n, roiPixels, slotPixels, coverage: roiPixels ? slotPixels / roiPixels : 0, materialId };
   const origMae = +(origAbs / n).toFixed(3);
   const v1Mae = +(v1Abs / n).toFixed(3);
   const drop = origMae > 0 ? +((origMae - v1Mae) / origMae).toFixed(4) : 0;
-  return { samples: n, targetMean, origMae, v1Mae, drop };
+  return { samples: n, roiPixels, slotPixels, coverage: +(roiPixels ? slotPixels / roiPixels : 0).toFixed(6), materialId, targetMean, origMae, v1Mae, drop };
 }
 
 // ── P0-1 目标参考收敛判定（脸部皮肤，色比口径）────────────────────
@@ -455,20 +578,43 @@ try {
   out.hairUvImages = await writeHairSlotUvImages();
 } catch (e) { out.hairUvImagesError = String(e); }
 
-// wrongTint 负测模式：除常规 failures 外，硬断言「错误颜色确实被判不收敛」——
-  // 若 hairA/hairB TargetConverged 仍为 true，说明收敛 Gate 对错误颜色无判别力，
-  // 本模式必须以非零退出（负测失效）。健康路径（非负测）由 failures 判定。
+// wrongTint 负测模式：把“预期的正式目标 Gate 拒绝”与“负测失效/配置错误/分析异常”
+// 机器区分。预期拒绝是 analyzer exit 0 + negativeVerdict.status=rejected；只有 HairA
+// 与 HairB 都由正式 TargetConverged 判据得到 false 才能成立。
 if (NEG_WRONGTINT) {
   const negA = out.verdict.hairATargetConverged;
   const negB = out.verdict.hairBTargetConverged;
-  out.negWrongTint = { hairATargetConverged: negA, hairBTargetConverged: negB };
-  if (negA === true || negB === true) {
-    failures.push("wrongTint 负测失效：错误颜色被判收敛 hairA=" + negA + " hairB=" + negB);
+  const expectedHairFailure = (message) => message.startsWith("hairA 未向权威 V14D 头发目标收敛")
+    || message.startsWith("hairB 未向权威 V14D 头发目标收敛");
+  const formalReject = negA === false && negB === false;
+  // HairA/HairB 正式目标 Gate 的 false 是本负测的预期结果，不属于“其他 failure”；
+  // 其余 failure（缺掩码、样本不足、Face/场景异常、配置错误等）必须保留并阻断。
+  if (formalReject) {
+    for (let i = failures.length - 1; i >= 0; i -= 1) if (expectedHairFailure(failures[i])) failures.splice(i, 1);
+  }
+  const otherFailures = [...failures];
+  const rejectionReason = formalReject
+    ? ["HairA formal target gate = false", "HairB formal target gate = false"]
+    : [
+        ...(negA !== false ? ["HairA formal target gate did not reject: " + negA] : []),
+        ...(negB !== false ? ["HairB formal target gate did not reject: " + negB] : []),
+        ...(otherFailures.length > 0 ? ["other analysis failures: " + otherFailures.join(" | ")] : []),
+      ];
+  out.negativeVerdict = {
+    mode: "wrongTint",
+    status: formalReject && otherFailures.length === 0 ? "rejected" : "failed",
+    rejected: formalReject,
+    formalTargetGate: { hairA: negA, hairB: negB },
+    rejectionReason,
+    analysisFailures: otherFailures,
+  };
+  if (out.negativeVerdict.status !== "rejected") {
+    failures.push("wrongTint negative protocol failed: " + rejectionReason.join(" | "));
   }
 }
 
 out.pass = failures.length === 0;
 fs.writeFileSync(REPORT_JSON, JSON.stringify(out, null, 2));
-console.log(JSON.stringify({ pass: out.pass, verdict: out.verdict, occluded: out.occluded, failures }, null, 2));
+console.log(JSON.stringify({ pass: out.pass, verdict: out.verdict, negativeVerdict: out.negativeVerdict ?? null, hairSlotIdentity: out.hairSlotIdentity, occluded: out.occluded, failures }, null, 2));
 if (!out.pass) { console.error("===VISUAL-GATE-FAIL==="); process.exit(1); }
 console.log(NEG_WRONGTINT ? "===VISUAL-GATE-WRONGTINT-REJECTED===" : "===VISUAL-GATE-OK===");

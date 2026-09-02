@@ -37,7 +37,25 @@
  */
 
 import type { MmdCameraSnapshot } from "@/lib/types";
-import { V14D_AUTHORITY_PMX_FILE_NAME } from "./v14dAuthority.js";
+import {
+  V14D_AUTHORITY_PMX_FILE_NAME,
+  V14D_FACE_MATERIAL_NAME,
+  V14D_BODY_MATERIAL_NAME,
+  V14D_HAIR_A_MATERIAL_NAME,
+  V14D_HAIR_B_MATERIAL_NAME,
+  V14D_HAIR_TINT,
+  V14D_BODY_WARM,
+} from "./v14dAuthority.js";
+
+// 保留本模块既有导出面；值由纯 JS 权威模块统一提供，避免 TS/JS 双写漂移。
+export {
+  V14D_FACE_MATERIAL_NAME,
+  V14D_BODY_MATERIAL_NAME,
+  V14D_HAIR_A_MATERIAL_NAME,
+  V14D_HAIR_B_MATERIAL_NAME,
+  V14D_HAIR_TINT,
+  V14D_BODY_WARM,
+};
 
 export const V14D_FACE_STATIC_FRAME = 120;
 export const V14D_FACE_STATIC_FPS = 24;
@@ -46,8 +64,6 @@ export const V14D_FACE_STATIC_SIZE = 640;
 export const V14D_FACE_STATIC_STATE = 2;
 export const V14D_FACE_STATIC_BLEND = 0;
 
-/** 权威脸部材质名（PMX/Blender/Web 三侧一致），用于推导 Face pick ID（不硬编码材质 ID）。 */
-export const V14D_FACE_MATERIAL_NAME = "Face";
 /** 权威脸部 diffuse 纹理文件名（原始 BaseColor），normal 模式直接用它。 */
 export const V14D_FACE_BASE_TEXTURE_NAME = "c_Koleda_slg_face_d.png";
 /**
@@ -71,7 +87,6 @@ export const V14D_FACE_BASE_TEXTURE_NAME = "c_Koleda_slg_face_d.png";
  *     （材质 manifest 中仅 BodySkin 与 FingerNails 使用 body 纹理族；FingerNails
  *     用独立 body_zhijia01_da.png 美甲纹理，不属于皮肤，不纳入）。
  */
-export const V14D_BODY_MATERIAL_NAME = "BodySkin";
 
 /**
  * Stage 2C-M1：HairA/HairB V1（V14D）头发材质迁移的权威 PMX 材质名。
@@ -80,16 +95,10 @@ export const V14D_BODY_MATERIAL_NAME = "BodySkin";
  * （PROTO_HairTint MIX_RGB MULTIPLY Factor=1），见
  * web/scripts/forensic-v14d-hair-state.py 输出 manifest。
  */
-export const V14D_HAIR_A_MATERIAL_NAME = "HairA";
-export const V14D_HAIR_B_MATERIAL_NAME = "HairB";
-/** Blender 取证：头发 PROTO_HairTint Color2（银白紫乘色，线性乘法，Factor=1）。 */
-export const V14D_HAIR_TINT = [0.84, 0.85, 0.96] as const;
 /** 引擎补丁 WGSL helper 函数名（graph 覆写表达式前缀，错 tint 负测按此前缀识别）。 */
 export const V14D_HAIR_HELPER_FN = "v14d_hair_composite";
 /** 权威身体皮肤 diffuse 纹理文件名（原始 BaseColor，body_d.png）。 */
 export const V14D_BODY_BASE_TEXTURE_NAME = "body_d.png";
-/** Blender 取证：BodySkin PROTO_FaceWarm Color2（暖肤 tint，线性乘法）。 */
-export const V14D_BODY_WARM = [1.0, 0.945, 0.905] as const;
 
 /**
  * Stage 2B-M3 修正轮：BodySkin 四区域语义分区（世界坐标，PMX 单位，frame120 姿态）。

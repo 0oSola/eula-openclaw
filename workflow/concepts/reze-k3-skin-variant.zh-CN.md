@@ -8,14 +8,15 @@
 
 ## 概念定义
 
-在同一 `/companion` 的 reze-k3 WebGPU 舞台运行时中，对克莱妲 Face/BodySkin（Stage 2C-M1 起含 HairA/HairB，见文末头发阶段）
-材质可选启用 V14D State2 实时合成（Face finalComposite + BodySkin warm
-composite），形成两个用户可见且可持久选择的效果：
+在同一 `/companion` 的 reze-k3 WebGPU 舞台运行时中，对克莱妲 Face/BodySkin 材质启用 V14D State2 实时合成；
+自 Stage 2C-M1 起，V1 同时对 HairA/HairB 启用权威 BaseColor 乘色 graph（详见文末头发阶段），
+形成两个用户可见且可持久选择的效果：
 
 - **原始 Reze K3**：保持现有生产 reze-k3 材质、灯光、VMD 行为不变。
 - **Reze K3 V1 皮肤预览（V14D）**：Face 应用 State2 实时合成图（face_d 线性 × warm
-  × shadowFactor），BodySkin 应用暖肤合成（body_d 线性 × warm）；不使用
-  bakedGolden 或任何失败实验纹理；头发/衣服等其余材质保持原始 Reze K3。
+  × shadowFactor），BodySkin 应用暖肤合成（body_d 线性 × warm），HairA/HairB 应用
+  `hair_d` 线性 × `[0.84,0.85,0.96]`；不使用 bakedGolden 或任何失败实验纹理，
+  其余尚未迁移材质和明确排除的衣物/装备保持原始 Reze K3。
 
 切换触发引擎 style group / shader graph 的真实重新编译与 draw-call 绑定，
 不是改标签或 dataset。
@@ -77,12 +78,20 @@ composite），形成两个用户可见且可持久选择的效果：
   HairA/HairB 分区各自核对 graph.name "V14D Hair V1 Composite"）。
 - 验收需读取引擎 styleGroups/drawCalls 证明 Face/BodySkin/HairA/HairB graph 生效；
   错 graph、漏 mask、非克莱妲负测必须失败或安全回退。
+- HairA/HairB 视觉目标使用权威公式 `targetLinear(uv)=srgbToLinear(hair_d(uv))×[0.84,0.85,0.96]`；
+  舞台画布比较前转回显示字节。正式样本必须来自同一全画面
+  `engine-pick-material-id-depth` pass 的对应 PMX materialId + 深度前景像素，矩形 ROI
+  只限制空间范围，不能赋予槽位身份。
+- `--neg-wrongtint` 是“预期拒绝”协议：analyzer 必须输出
+  `negativeVerdict.status=rejected`、HairA/HairB 正式目标判据均为 false、
+  `analysisFailures=[]` 与 `rejectionReason`，并以 exit=0 返回；配置错误、样本缺失、
+  其他 Gate failure 或异常均不得包装成负测通过。
 
 ## 正例 / 反例
 
 - 正例：克莱妲 + reze-k3 + localModelImport 含 State2 mask → 显示
   「原始 Reze K3 / Reze K3 V1 皮肤预览（V14D）」切换，选 V1 后脸部/脖子/手部皮肤
-  真实变化，头发/衣服不变，刷新后按用户+模型恢复。
+  真实变化，其余尚未迁移材质/衣服不变，刷新后按用户+模型恢复。
 - 反例：非克莱妲模型选择 V1 → 不显示切换或安全回退 original；把
   bakedGolden 烘焙图或 AgX display-byte atlas 当作 V1 → 禁止。
 
@@ -98,10 +107,10 @@ composite），形成两个用户可见且可持久选择的效果：
 - 脸部变化但 BodySkin 不变：读 `v14dSkinVariantBodyOnComposite` 是否
   等于 BodyDrawCalls；不等于则 BodySkin graph 未绑定成功。
 
-## 生产舞台验收（2026-09-02 第四轮）
+## 生产舞台验收（2026-09-02 第四轮，历史快照）
 
 票据 `codex/reze-k3-v1-stage-visual-acceptance`，交付 `docs/handoff/2026-09-02-reze-k3-v1-stage-visual-acceptance.md`。
-在保留 K3 灯光/星空/自由相机/动态 VMD 的前提下，G1-G6 六项运行时 Gate 全过 + 独立工程门禁（当时统称 G1-G7）；V1 仅 Face/BodySkin 走 V14D 合成
+在保留 K3 灯光/星空/自由相机/动态 VMD 的前提下，G1-G6 六项运行时 Gate 全过 + 独立工程门禁（当时统称 G1-G7）；该轮 V1 仅 Face/BodySkin 走 V14D 合成
 （皮肤阶段，其余 13 槽未迁移）。第三轮修正主会话 P0：(a) G3 收敛引入 V14D 目标参考色比比较
 （original 0.196→V1 0.141，drop 28.2%，含错误颜色负测）；(b) 恢复通用 VMD effect 的
 `engine.resetPhysics()` 并抽共享函数 `loadVmdThroughInteractionPath`（effect 与探针同路径，
@@ -120,7 +129,7 @@ guard 回调传入、在任何副作用前硬检查（竞态回归 A慢/B快 下
   的实时合成图，但语义从「诊断入口固定帧」转为「生产舞台可选变体」；
   两者共享引擎补丁五的 WGSL 覆写（按 graph.name + tags），不复制公式常量。
 
-## Stage 2C-M1 头发阶段（2026-09-03）
+## Stage 2C-M1 头发阶段（2026-09-03，当前权威）
 
 票据 `codex/v14d-hairab-stage` 把 HairA/HairB 两个 PMX 材质槽迁移进 V1：
 新增引擎独立 `V14D_HAIR_HELPER_WGSL` 常量（`v14d_hair_composite(base)=base×
@@ -129,9 +138,20 @@ guard 回调传入、在任何副作用前硬检查（竞态回归 A慢/B快 下
 `includeV14dHairHelper` 参数单独注入（不连带 State2 mask 声明/binding 5，hair graph
 无需 mask 即可编译），compile 按 graph.name "V14D Hair V1 Composite" 覆写
 final_color。生产 V1 把 HairA/HairB 抽出绑定到 `V14D_HAIR_V1_COMPOSITE_GRAPH`
-（renderClass=hair）。头发视角相关部分（Anisotropic 0.72、Roughness/Specular
-MapRange 支路、ToonRamp 经 ShaderToRGB）按 A/B/C 分类为 C（不能烘焙/不固化视角
-高光），本阶段只迁移 BaseColor 乘色。验收：真实 `/companion` 舞台 G1-G6 全过，
-HairA/HairB draw-call 各 1/1 命中 V14D Hair V1 Composite，头发区 mae=10.5/
-maxMeanDiff=11.1 显著变化，衣服/装备/星空稳定（同变体连拍噪声基线校准）。
+（renderClass=hair）。头发视角相关部分（Anisotropic 0.7200000286、Roughness/Specular
+MapRange 参数、ToonRamp 三段参数、ShaderToRGB/Tangent/Alpha 链）按 A/B/C 分类为 C
+（不能烘焙/不固化视角高光），本阶段只迁移 BaseColor 乘色。
+
+验收：真实 `/companion` 舞台 G1-G6 全过，HairA/HairB draw-call 各 1/1 命中
+V14D Hair V1 Composite。最终回放 HairA materialId=24、samples=4,189、coverage=0.037214、
+targetMean=[136.05,129.45,154.60]、origMae=40.879、v1Mae=32.181、drop=0.2128；HairB
+materialId=25、samples=15,426、slotPixels=15,495、coverage=0.096902、targetMean=[141.89,135.47,161.77]、
+origMae=53.705、v1Mae=39.132、drop=0.2714。正式阈值为每槽 samples≥30、drop>0.05、
+v1Mae<90，变化阈值为 mae>1 且 maxMeanDiff>1。样本由
+`engine-pick-material-id-depth` 对应材质身份掩码提供，错槽交换负测样本严格互换。
+wrongTint `[1.35,0.25,0.25]` 的 HairA 正式误差为 53.535（drop=-0.3096），HairB 为 51.806
+（drop=0.0354）；analyzer exit=0，`negativeVerdict.status=rejected`，HairA/HairB 正式目标判据
+均 false 且无 failures；accept 能区分预期拒绝与负测失效。场景快照逐字段覆盖 settings、grade、
+backgroundEffect、transparentBackground、viewTransform（exposure/gamma/look），前刘海/后长发近景
+与差异图已产出。
 交付报告 `docs/handoff/2026-09-03-reze-k3-v1-hairab-stage.md`。

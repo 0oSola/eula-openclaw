@@ -2305,9 +2305,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           intensity: effectiveInitialSettings.bloomStrength,
           color: hexToLinearVec3(effectiveInitialSettings.bloomColor),
         },
-        // 仅为颜色基线诊断启用引擎已有的材质 pick 资源；生产路径不创建
-        // pick draw call，也不改变生产材质 shader 或灯光行为。
-        onRaycast: v14dColorBaseline || v14dFaceStatic ? () => undefined : undefined,
+        // 仅为颜色基线/验收探针启用引擎已有的材质 pick 资源；生产默认不创建
+        // pick draw call，也不改变生产材质 shader 或灯光行为。验收探针用它
+        // 导出同一帧、同一相机的 PMX 材质 ID+深度前景掩码，区分 HairA/HairB。
+        onRaycast: v14dColorBaseline || v14dFaceStatic || acceptanceProbeEnabled ? () => undefined : undefined,
       });
       engineRef.current = engine;
       await engine.init();
@@ -3138,6 +3139,50 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           // 同等级：original/V1 逐字段比对证明 V1 不改写全局显示链。
           viewTransform,
         };
+      },
+      /**
+       * 验收专用逐像素 PMX 材质身份 pass：复用引擎 pick pipeline 的 material-ID+
+       * depth 前景结果，导出 RGBA PNG（R=modelId，G=materialId）及同源材质映射。
+       * 该掩码与当前画布同尺寸、同相机、同一帧，只在显式 acceptance probe 下可见；
+       * analyze 据此把屏幕样本严格分到 HairA/HairB，不再用矩形 ROI 猜槽位。
+       */
+      async captureMaterialMask() {
+        const canvas = canvasRef.current;
+        const engine = engineRef.current;
+        const model = modelRef.current;
+        if (!canvas || !engine || !model) return null;
+        try {
+          await flushV14dDiagnosticBarrier(engine);
+          try { engine.renderFrame(0); } catch { /* 保持当前姿态 */ }
+          const width = canvas.width;
+          const height = canvas.height;
+          const materialMask = await readV14dColorBaselineMaterialMask(engine, width, height);
+          const materials = model.getMaterials().map((m) => ({ name: m.name, vertexCount: m.vertexCount }));
+          const materialIdByName: Record<string, number> = {};
+          let nextId = 1;
+          for (const material of materials) {
+            if (material.vertexCount <= 0) continue;
+            materialIdByName[material.name] = nextId;
+            nextId += 1;
+          }
+          const maskCanvas = document.createElement("canvas");
+          maskCanvas.width = width;
+          maskCanvas.height = height;
+          const ctx = maskCanvas.getContext("2d");
+          if (!ctx) return null;
+          const image = ctx.createImageData(width, height);
+          image.data.set(materialMask.data);
+          ctx.putImageData(image, 0, 0);
+          return {
+            width,
+            height,
+            source: "engine-pick-material-id-depth",
+            materialIdByName,
+            png: maskCanvas.toDataURL("image/png"),
+          };
+        } catch (error) {
+          return { error: error instanceof Error ? error.message : String(error) };
+        }
       },
       // 负测钩子（仅验收开关）：用错误 graph / 编译非法 graph 驱动 V1 styleGroup 应用，
       // 真实验证「错误 graph 不命中 Face draw-call」「applyStyleGroups 失败回退 original」。

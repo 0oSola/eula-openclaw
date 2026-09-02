@@ -72,14 +72,14 @@ test("负测扰动 wrongHairMaterial：hair V1 分组 materials 换成 BodySkin"
   assert.deepEqual(hair.materials, ["BodySkin"]);
 });
 
-test("负测扰动 wrongTint：hair graph tint 偏离权威 [0.84,0.85,0.96]", () => {
+test("负测扰动 wrongTint：红绿偏置远离权威 [0.84,0.85,0.96]", () => {
   const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
   const bad = perturbV14dSkinVariantStyleGroups(v1, "wrongTint");
   const hair = bad.find((g) => g.id === "v14d-skin-variant-hair");
-  // graph.name 仍触发引擎覆写，但 tint 常量被改成错误青绿。
+  // graph.name 仍触发引擎覆写，但 tint 常量被改成经实跑确认的错误红绿偏置。
   assert.equal(hair.graph.name, "V14D Hair V1 Composite");
   assert.notDeepEqual(hair.graph.nodes[0].inputs.color, [0.84, 0.85, 0.96]);
-  assert.deepEqual(hair.graph.nodes[0].inputs.color, [0.35, 1.05, 0.55]);
+  assert.deepEqual(hair.graph.nodes[0].inputs.color, [1.35, 0.25, 0.25]);
 });
 
 test("负测扰动 wrongGraph：全部 graph.name 换成非权威名", () => {
