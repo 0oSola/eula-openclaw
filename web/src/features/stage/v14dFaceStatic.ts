@@ -98,6 +98,66 @@ export const V14D_BODY_SKIN_REGIONS = [
   { id: "leftHand", yMin: 11.5, yMax: 13.9, xSide: "pos" },
   { id: "rightHand", yMin: 11.5, yMax: 13.9, xSide: "neg" },
 ] as const;
+
+/**
+ * Stage 2B-M3.1 修正轮：BodySkin 语义分区（版本化骨骼主导权重集合，版本 = v1）。
+ *
+ * 替代旧版 V14D_BODY_SKIN_REGIONS 的世界 y 带 + x 符号矩形分区（已验证问题：左手 y 带把
+ * 腰腹皮肤计入，左右手与腰腹无法按几何语义准确区分）。本集合按「顶点主导骨骼」（蒙皮权重
+ * 最大的骨骼）的 PMX 骨骼索引划分语义区域，骨骼索引序 = PMX 骨骼段顺序 = 权威 blend
+ * armature 骨骼序（mmd_tools 按 PMX 序建骨骼，已交叉验证）。
+ *
+ * 语义稳定性证据：骨骼是拓扑/解剖语义单位（"首"=颈、"上半身"=躯干、"腕/手首/手指"=手），
+ * 不随姿态/相机变化；同一 PMX 内骨骼索引固定。版本号 v1 记录集合内容，后续模型更换需同步
+ * 升版本并重新核对索引。
+ *
+ * 骨骼索引为 reze-engine 运行时 skeleton.bones 顺序（= PMX 骨骼段顺序，401 骨骼）。
+ * 实测 BodySkin 主导骨骼（frame120 叉腰，dominantBoneHistogram 取证）确认：颈部皮肤主导
+ * 骨骼 = 8（首）；腰腹/躯干露肤 = 6（上半身）；左手皮肤 = 左手首(42)+左手指(59..73)；
+ * 右手皮肤 = 右手首(57)+右手指(74..88)。腕/手捩骨（32..41 / 47..56）是手腕与前臂扭转，
+ * 被袖口/手套覆盖，不计入"手"可见皮肤。
+ *
+ * 区域定义（machine id → 中文含义 → 主导骨骼索引集合）：
+ *   neck      颈部     = { 8 }（首）
+ *   torso     躯干/腰腹 = { 6 }（上半身；腰腹露肤主导骨骼）
+ *   leftHand  左手     = { 42 } 左手首 + 左手指 59..73
+ *   rightHand 右手     = { 57 } 右手首 + 右手指 74..88
+ *   unassigned 未分区  = 其余主导骨骼（下半身/頭/裙/腿等，不计入四区域对账）
+ */
+export const V14D_BODY_SKIN_BONE_REGIONS_V1 = {
+  version: 1,
+  neck: [8],
+  torso: [6],
+  leftHand: [42, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73],
+  rightHand: [57, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88],
+} as const;
+
+/**
+ * Stage 2B-M3.1 修正轮（验收修正 5）：骨骼索引 → 期望语义骨名硬断言表。
+ *
+ * 骨骼索引序（joints 索引序 = reze-engine skeleton.bones 序）与骨名的对应是骨骼主导分区的
+ * 正确性前提；模型/引擎若更换骨骼排序，索引会静默错配，分区随之静默错分。正式 Gate 必须按
+ * 本表对 skeletonBoneNames 做硬断言：任一索引的实际骨名与期望不符即 Gate 失败（不软通过）。
+ *
+ * 期望模式（正则）：左右手指骨按「左/右 + 指名 + 段号」匹配（如 59 左中指１、74 右中指１）；
+ * 6=上半身、8=首、42=左手首、57=右手首为精确字面名。
+ * 实测自 .scratch/v14d-body-skin-state2/runtimeBoneNames.json（401 骨骼，本模型权威值）。
+ */
+export const V14D_BODY_SKIN_BONE_NAME_ASSERT: readonly (readonly [number, RegExp])[] = [
+  [6, /^上半身$/],
+  [8, /^首$/],
+  [42, /^左手首$/],
+  [57, /^右手首$/],
+  ...([59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73] as const).map(
+    (i) => [i, /^左[親中人小薬][指]?[0-9０-３]*$/] as const,
+  ),
+  ...([74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88] as const).map(
+    (i) => [i, /^右[親中人小薬][指]?[0-9０-３]*$/] as const,
+  ),
+];
+/** 语义区域 id 列表（展示/报告顺序固定）。 */
+export const V14D_BODY_SKIN_BONE_REGION_IDS = ["neck", "torso", "leftHand", "rightHand"] as const;
+export type V14dBodySkinBoneRegionId = (typeof V14D_BODY_SKIN_BONE_REGION_IDS)[number];
 /** State2 packed mask 注入逻辑键（唯一，不顶替原始纹理；引擎补丁五按此前缀建立实时 mask 纹理）。 */
 export const V14D_STATE2_MASK_LOGICAL_PATH = "Textures/v14d-state2-mask/state2.png";
 /** 实时合成模式：faceShadowOnly=ShadowFactor 视图，finalFaceComposite=FinalComposite 视图。 */

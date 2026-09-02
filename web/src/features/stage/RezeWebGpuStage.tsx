@@ -45,6 +45,7 @@ import {
   flushV14dDiagnosticBarrier,
   computeV14dMaterialWorldTriCentroids,
   classifyV14dMaterialRegions,
+  classifyV14dVerticesByBoneRegion,
   makeV14dLinearImage,
   measureV14dRoiActualMeans,
   readV14dCanvasDisplay,
@@ -88,6 +89,8 @@ import {
   V14D_BODY_MATERIAL_NAME,
   V14D_BODY_WARM,
   V14D_BODY_SKIN_REGIONS,
+  V14D_BODY_SKIN_BONE_REGIONS_V1,
+  V14D_BODY_SKIN_BONE_REGION_IDS,
   V14D_STATE2_MASK_LOGICAL_PATH,
   type V14dFaceStaticAssetSource,
   type V14dFaceStaticMode,
@@ -162,7 +165,11 @@ declare global {
         allBodySkinOnComposite: boolean;
       } | null;
       /** Stage 2B-M3 修正轮：三角形语义区域（triId+uv per pixel、世界质心、区域标签）。 */
-      exportMaterialTriRegions: (materialName: string) => Promise<{
+      exportMaterialTriRegions: (
+        materialName: string,
+        /** 可选骨骼区域集合覆盖（仅 BodySkin 诊断/负测；生产省略，等价权威集合）。 */
+        boneRegionOverride?: readonly (readonly number[])[],
+      ) => Promise<{
         width: number;
         height: number;
         materialName: string;
@@ -172,6 +179,15 @@ declare global {
         faceMask: Uint8Array;
         centroids: Float32Array;
         regionLabels: Int32Array;
+        /** Stage 2B-M3.1：骨骼主导语义区域标签（BodySkin 专用；其余材质为 null）。 */
+        boneRegionLabels: Int32Array | null;
+        /** 与 boneRegionLabels 对应的区域 id 数组（标签值 = 该数组下标）。 */
+        boneRegionIds: string[] | null;
+        /** 骨骼区域集合版本（V14D_BODY_SKIN_BONE_REGIONS_V1.version）。 */
+        boneRegionVersion: number | null;
+        /** 诊断：运行时 skeleton 骨骼名表（索引序 = joints 索引序）。 */
+        skeletonBoneNames: string[] | null;
+        dominantBoneHistogram: Record<string, number> | null;
         regionDefs: { id: string; yMin: number; yMax: number; xSide: string }[];
       } | null>;
       /** 逐像素导出 Face 三角形 ID + 插值 UV（Stage 2B-M2 同口径对账，诊断专用）。 */
@@ -1988,7 +2004,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
        * 区域标签。供 Gate 用「三角形语义区域」而非整块材质均值做四区域对账。
        * 区域标签为 Int32Array（-1=未分区，否则=V14D_BODY_SKIN_REGIONS 下标）。
        */
-      exportMaterialTriRegions: async (materialName: string) => {
+      exportMaterialTriRegions: async (
+        materialName: string,
+        boneRegionOverride?: readonly (readonly number[])[],
+      ) => {
         const engine = engineRef.current;
         const model = modelRef.current;
         if (!engine || !model) return null;
@@ -2011,6 +2030,48 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           };
           const centroids = computeV14dMaterialWorldTriCentroids(src);
           const labels = classifyV14dMaterialRegions(centroids, V14D_BODY_SKIN_REGIONS);
+          // Stage 2B-M3.1：BodySkin 语义分区改用版本化骨骼主导权重集合（v1）。
+          // 旧版 labels 为世界 y 带 + x 符号矩形分区（左手 y 带会误吞腰腹皮肤，已废弃为
+          // 仅参考用 legacy 标签）；正式归属用 boneRegionLabels（-1=未分区，否则=
+          // V14D_BODY_SKIN_BONE_REGION_IDS 下标：0=neck 1=torso 2=leftHand 3=rightHand）。
+          const boneRegionLabels =
+            materialName === V14D_BODY_MATERIAL_NAME
+              ? classifyV14dVerticesByBoneRegion(
+                  skinning.joints,
+                  skinning.weights,
+                  model.getIndices(),
+                  firstIndex,
+                  indexCount,
+                  V14D_BODY_SKIN_BONE_REGION_IDS,
+                  [
+                    V14D_BODY_SKIN_BONE_REGIONS_V1.neck,
+                    V14D_BODY_SKIN_BONE_REGIONS_V1.torso,
+                    V14D_BODY_SKIN_BONE_REGIONS_V1.leftHand,
+                    V14D_BODY_SKIN_BONE_REGIONS_V1.rightHand,
+                  ],
+                  boneRegionOverride,
+                )
+              : null;
+          // 诊断：逐三角形主导骨骼直方图（索引），供探针核对骨骼集合是否命中。
+          let dominantBoneHistogram: Record<string, number> | null = null;
+          let skeletonBoneNames: string[] | null = null;
+          if (materialName === V14D_BODY_MATERIAL_NAME) {
+            try {
+              skeletonBoneNames = (model.getSkeleton?.()?.bones ?? []).map((b: { name: string }) => b.name);
+            } catch { skeletonBoneNames = null; }
+            const indices = model.getIndices();
+            const hist: Record<string, number> = {};
+            for (let t = 0; t < Math.floor(indexCount / 3); t += 1) {
+              const vi = indices[firstIndex + t * 3];
+              let bestBone = -1, bestW = -1;
+              for (let j = 0; j < 4; j += 1) {
+                const w = skinning.weights[vi * 4 + j];
+                if (w > bestW) { bestW = w; bestBone = skinning.joints[vi * 4 + j]; }
+              }
+              hist[String(bestBone)] = (hist[String(bestBone)] || 0) + 1;
+            }
+            dominantBoneHistogram = hist;
+          }
           const size = V14D_FACE_STATIC_SIZE;
           // Stage 2B-M3 修正轮（P0-2 修复）：自由相机/近景视角下，诊断 pass 的
           // pickPerFrameBindGroup 可能是启动时脸部相机的旧矩阵。导出前先用当前实际
@@ -2035,6 +2096,11 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             faceMask: triUv.faceMask,
             centroids,
             regionLabels: labels,
+            boneRegionLabels,
+            boneRegionIds: boneRegionLabels ? [...V14D_BODY_SKIN_BONE_REGION_IDS] : null,
+            boneRegionVersion: boneRegionLabels ? V14D_BODY_SKIN_BONE_REGIONS_V1.version : null,
+            dominantBoneHistogram,
+            skeletonBoneNames,
             regionDefs: V14D_BODY_SKIN_REGIONS.map((d) => ({ id: d.id, yMin: d.yMin, yMax: d.yMax, xSide: d.xSide })),
           };
         } catch {

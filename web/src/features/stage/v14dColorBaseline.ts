@@ -1377,6 +1377,78 @@ export function classifyV14dMaterialRegions(
   return labels;
 }
 
+/**
+ * Stage 2B-M3.1：按顶点主导骨骼的语义区域分类。
+ *
+ * 对某材质的每个三角形，先求 3 个顶点各自的主导骨骼（蒙皮权重最大的骨骼索引），
+ * 再按版本化骨骼集合 boneSets（region id → 骨骼索引数组）把三角形归属到语义区域：
+ *   - 三角形归属 = 其 3 顶点主导骨骼投票数最多的区域；
+ *   - 3 顶点骨骼都不在任何区域集合 → 标签 -1（unassigned）。
+ *
+ * 与 classifyV14dMaterialRegions（世界 y 带 + x 符号）的区别：本函数不依赖世界坐标，
+ * 按骨骼语义分区，几何/姿态变化下区域归属稳定（骨骼是解剖语义单位）。
+ *
+ * @param joints 每顶点 4 骨骼索引（Uint16Array，joints[v*4+j]）
+ * @param weights 每顶点 4 骨骼权重（Uint8Array，weights[v*4+j]，0..255）
+ * @param indices 三角形索引缓冲（Uint32Array）
+ * @param firstIndex 该材质在 indices 中的起始偏移
+ * @param indexCount 该材质的索引数（= 三角形数 × 3）
+ * @param regionOrder 区域 id 数组（输出标签 = 该数组下标，-1=未分区）
+ * @param boneSets 与 regionOrder 对应的骨骼索引数组（每区域一组）
+ * @returns 与三角形数同长的 Int32Array 标签
+ */
+export function classifyV14dVerticesByBoneRegion(
+  joints: Uint16Array,
+  weights: Uint8Array,
+  indices: Uint32Array,
+  firstIndex: number,
+  indexCount: number,
+  regionOrder: readonly string[],
+  boneSets: readonly (readonly number[])[],
+  boneSetsOverride?: readonly (readonly number[])[],
+): Int32Array {
+  // Stage 2B-M3.1 修正轮：可选扰动集合（仅诊断/负测用，如左右手交换/腰腹注入/错骨序）。
+  // 提供时用它代替 boneSets 参与归属；生产路径省略本参数，行为与权威集合完全一致（零改动）。
+  const sets = boneSetsOverride ?? boneSets;
+  const triCount = Math.floor(indexCount / 3);
+  const labels = new Int32Array(triCount).fill(-1);
+  // 骨骼索引 → 区域下标 的查找表（骨骼总数上限 4096，足够 PMX 449 骨骼）。
+  const boneToRegion = new Int32Array(4096).fill(-1);
+  for (let r = 0; r < sets.length; r += 1) {
+    for (const b of sets[r]) {
+      if (b >= 0 && b < 4096) boneToRegion[b] = r;
+    }
+  }
+  for (let t = 0; t < triCount; t += 1) {
+    const votes = new Int32Array(regionOrder.length);
+    for (let k = 0; k < 3; k += 1) {
+      const vi = indices[firstIndex + t * 3 + k];
+      // 主导骨骼 = 权重最大的骨骼索引。
+      let bestBone = -1;
+      let bestW = -1;
+      for (let j = 0; j < 4; j += 1) {
+        const w = weights[vi * 4 + j];
+        if (w > bestW) {
+          bestW = w;
+          bestBone = joints[vi * 4 + j];
+        }
+      }
+      const region = bestBone >= 0 && bestBone < 4096 ? boneToRegion[bestBone] : -1;
+      if (region >= 0) votes[region] += 1;
+    }
+    let best = -1;
+    let bestVotes = 0;
+    for (let r = 0; r < regionOrder.length; r += 1) {
+      if (votes[r] > bestVotes) {
+        bestVotes = votes[r];
+        best = r;
+      }
+    }
+    labels[t] = best;
+  }
+  return labels;
+}
+
 
 export async function readV14dCanvasDisplay(canvas: HTMLCanvasElement): Promise<V14dNormalizedImage> {
   const width = canvas.width || V14D_COLOR_BASELINE_WIDTH;
