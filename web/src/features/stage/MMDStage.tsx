@@ -11,6 +11,7 @@ import type {
   RezeGradePreset,
   RezeSceneDebugSettings,
 } from "@/features/stage/rezeDesignDefaults";
+import type { V14dColorBaselineResult } from "@/features/stage/v14dColorBaseline";
 import type { MmdCameraSnapshot, MmdModelAsset, RenderPipeline } from "@/lib/types";
 
 declare global {
@@ -77,6 +78,7 @@ export type MMDStageHandle = {
   unlockCamera: () => MmdCameraSnapshot | null;
   lockCamera: () => MmdCameraSnapshot | null;
   captureCamera: () => MmdCameraSnapshot | null;
+  setCameraSnapshot?: (snapshot: MmdCameraSnapshot) => MmdCameraSnapshot | null;
   resetCamera: () => MmdCameraSnapshot | null;
   adjustCameraDistance?: (delta: number) => MmdCameraSnapshot | number | null;
   hitTestCharacterAtClientPoint: (clientX: number, clientY: number) => boolean;
@@ -101,6 +103,8 @@ export type MMDStageHandle = {
   captureStagePng: () => string | null;
   setSceneDebugSettings: (settings: Record<string, number | string | boolean>) => Record<string, number | string | boolean> | null;
   resetSceneDebugSettings: () => Record<string, number | string | boolean> | null;
+  captureColorBaseline?: () => Promise<V14dColorBaselineResult>;
+  getColorBaselineResult?: () => V14dColorBaselineResult | null;
   getRendererLabel?: () => string;
 };
 
@@ -130,6 +134,16 @@ type MMDStageProps = {
   rezeGrade?: RezeGradePreset;
   rezeGradeIntensity?: number;
   rezeSceneDebugSettings?: RezeSceneDebugSettings;
+  v14dUnlitDiagnostic?: boolean;
+  v14dColorBaseline?: boolean;
+  v14dFaceStatic?: boolean;
+  v14dFaceStaticMode?: "normal" | "faceShadowOnly" | "finalFaceComposite" | "uvDebug" | "worldPos" | "diffuseFlat" | "bakedGolden";
+  /** 黄金帧诊断 ROI/pick 门控：仅 finalFaceComposite 模式启用脸部取样口径。 */
+  v14dFaceStaticGated?: boolean;
+  /** State2 实时合成配准负测相机覆写（仅 faceStatic 诊断；shift/null，默认关闭）。 */
+  v14dFaceCameraOverride?: "shift" | "null" | null;
+  /** 生产 V1（V14D）皮肤变体（仅 reze-k3 + 克莱妲生效；默认 original）。 */
+  v14dSkinVariant?: "original" | "v1";
   rezeTransparentBackground?: boolean;
 };
 
@@ -155,6 +169,13 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   rezeGrade = "中性",
   rezeGradeIntensity = 1,
   rezeSceneDebugSettings,
+  v14dUnlitDiagnostic = false,
+  v14dColorBaseline = false,
+  v14dFaceStatic = false,
+  v14dFaceStaticMode = "normal",
+  v14dFaceStaticGated = false,
+  v14dFaceCameraOverride = null,
+  v14dSkinVariant = "original",
   rezeTransparentBackground = false,
 }: MMDStageProps, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -185,6 +206,9 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       },
       captureCamera() {
         return webGpuStageRef.current?.captureCamera?.() ?? runtimeRef.current?.getCameraSnapshot?.() ?? null;
+      },
+      setCameraSnapshot(snapshot: MmdCameraSnapshot) {
+        return webGpuStageRef.current?.setCameraSnapshot?.(snapshot) ?? runtimeRef.current?.setCameraSnapshot?.(snapshot) ?? null;
       },
       resetCamera() {
         return webGpuStageRef.current?.resetCamera?.() ?? runtimeRef.current?.resetCameraToDefault?.() ?? null;
@@ -228,6 +252,12 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       },
       resetSceneDebugSettings() {
         return webGpuStageRef.current?.resetSceneDebugSettings?.() ?? runtimeRef.current?.resetSceneDebugSettings?.() ?? null;
+      },
+      captureColorBaseline() {
+        return webGpuStageRef.current?.captureColorBaseline?.() ?? Promise.reject(new Error("当前渲染管线不支持 V14D 颜色基线采集。"));
+      },
+      getColorBaselineResult() {
+        return webGpuStageRef.current?.getColorBaselineResult?.() ?? null;
       },
       getRendererLabel() {
         return webGpuStageRef.current?.getRendererLabel?.() ?? "Three.js MMD";
@@ -477,6 +507,14 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
             grade={rezeGrade}
             gradeIntensity={rezeGradeIntensity}
             sceneSettings={rezeSceneDebugSettings}
+            scenePreset={renderPipeline === "reze-k3" ? "reze-k3" : "reze-design"}
+            v14dUnlitDiagnostic={v14dUnlitDiagnostic}
+            v14dColorBaseline={v14dColorBaseline}
+            v14dFaceStatic={v14dFaceStatic}
+            v14dFaceStaticMode={v14dFaceStaticMode}
+            v14dFaceStaticGated={v14dFaceStaticGated}
+            v14dFaceCameraOverride={v14dFaceCameraOverride}
+            v14dSkinVariant={v14dSkinVariant}
             transparentBackground={rezeTransparentBackground}
             cameraSnapshot={cameraSnapshot}
             onInteractionComplete={onInteractionComplete}
@@ -520,7 +558,8 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       </header>
       {renderPipeline === "reze-design" || renderPipeline === "reze-k3" ? (
         <div style={{ margin: "0.45rem 0.95rem", minHeight: 0, borderRadius: "0.8rem", border: "1px solid rgba(140, 209, 255, 0.19)", overflow: "hidden" }}>
-          <RezeWebGpuStage ref={webGpuStageRef} modelUrl={toAbsolute(modelUrl)} modelIdentifier={selectedModelPath || modelLabel} localModelImport={rezeLocalModelImport} interaction={webGpuInteraction} backgroundEffect={rezeBackgroundEffect} grade={rezeGrade} gradeIntensity={rezeGradeIntensity} sceneSettings={rezeSceneDebugSettings} transparentBackground={rezeTransparentBackground} cameraSnapshot={cameraSnapshot} onInteractionComplete={onInteractionComplete} />
+        <RezeWebGpuStage ref={webGpuStageRef} modelUrl={toAbsolute(modelUrl)} modelIdentifier={selectedModelPath || modelLabel} localModelImport={rezeLocalModelImport} interaction={webGpuInteraction} backgroundEffect={rezeBackgroundEffect} grade={rezeGrade} gradeIntensity={rezeGradeIntensity} sceneSettings={rezeSceneDebugSettings} scenePreset={renderPipeline === "reze-k3" ? "reze-k3" : "reze-design"} v14dUnlitDiagnostic={v14dUnlitDiagnostic} v14dColorBaseline={v14dColorBaseline} transparentBackground={rezeTransparentBackground} cameraSnapshot={cameraSnapshot} onInteractionComplete={onInteractionComplete} />
+        {/* chrome="panel" 分支为旧诊断入口，不接 V1 皮肤变体（默认 original）。 */}
         </div>
       ) : (
         <div

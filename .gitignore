@@ -19,6 +19,7 @@ web/.next-codex-dev-web
 web/.next-codex-build
 web/.next-codex-release
 web/.next-codex-test
+web/.scratch/
 web/tmp/
 web/output/
 docs/screenshot/

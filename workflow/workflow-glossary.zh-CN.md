@@ -1,5 +1,27 @@
 # 工作流术语表
 
+## Reze K3 皮肤变体
+
+- 英文机器名：`rezeK3SkinVariant`
+- 含义：`/companion` reze-k3 舞台中克莱妲 Face/BodySkin 的可选 V14D
+  实时合成模式；`original`=原始 Reze K3，`v1`=Reze K3 V1（V14D）。
+  持久化按 用户+模型+reze-k3 管线 三维隔离，默认 original。
+- 允许用法：描述生产舞台两个用户可见效果及其切换、持久化与克莱妲资格门控。
+- 禁止用法：不得把它等同诊断 `/mmd-calibration-render` 的 faceStatic
+  固定帧预览；不得用 bakedGolden/AgX display-byte atlas 冒充 V1；不得让
+  V1 泄漏到 reze-design 或其他管线/非克莱妲模型。
+- 路由影响：仅影响 `/companion` + reze-k3 + 克莱妲 + localModelImport
+  的 RezeWebGpuStage 皮肤变体分支；完整定义见
+  `workflow/concepts/reze-k3-skin-variant.zh-CN.md`。
+
+## V14D Face UV/可见性同口径对账
+
+- 英文机器名：`v14d-face-uv-visibility`
+- 含义：固定 frame120/State2/Blend0 下，Blender 与 Web 脸部渲染的「同 UV、同三角形、同可见性」三层离线对账；正式样本为 Web UV 前景 pass 与 HDR 材质 pick 双方都判 Face 且 UV 落在同一 Blender Face 三角形内的像素，参考色由同一 UV 直采 face_d 与 State2 mask 合成。
+- 允许用法：描述 Stage 2B-M2 的三层（BaseColor/ShadowFactor/FinalComposite）对账口径与其 Gate。
+- 禁止用法：不得把刘海/发绺等使用独立发色纹理的 Face 材质几何纳入 face_d 直采对账；不得手调 RGB 或放宽 MAE 宣称通过。
+- 路由影响：对应 `web/scripts/gate-v14d-face-uv-visibility.mjs`；完整定义见 `workflow/concepts/v14d-face-uv-visibility-gate.zh-CN.md`。
+
 # 项目级 Blender MCP 接入
 
 - 英文机器名：`ProjectLocalBlenderMcp`
@@ -222,3 +244,42 @@
 - 禁止用法：不得由普通 Review `accept` 触发；不得在 marker 中决定 Obsidian 路径、主题身份或发布动作；不得把 candidate 声明为 canonical knowledge；不得在无知识变化时生成空包。
 - 路由影响：数据主链固定为 `Codex -> Pet -> FastAPI -> OpenClaw -> Obsidian`；FastAPI 负责 Repository Evidence 和 Gate，OpenClaw 负责双审核、Vault Topic Resolution、Accepted Wiki Change Set 和发布。
 - 完整定义：见 `workflow/concepts/codex-author-knowledge-handoff.zh-CN.md`。
+
+# 黄金帧最终着色烘焙（bakedGolden）
+
+- 英文机器名：`bakedGolden`（`v14dFaceMode=bakedGolden`）
+- 含义：V14D 固定黄金帧诊断入口下的一个**非默认**模式。[Stage 2A-GF2] 起为「最终着色烘焙」：在**带 UI 的 Blender 会话**（非 `-b` 无头）用 Cycles `bpy.ops.object.bake(type='COMBINED')` 把 frame120 的**六 AREA 灯 + 世界光 + Toon + Face Shadow(State2/Blend0)** 固化进逐材质线性纹理（`baked_<材质>.png`），经 `rgba8unorm-srgb` 绑定 + sRGB 解码注入 Web，对 Face/EyeWhite/Eyes/Eyes+/HairA/HairB/BodySkin/Cth1-Top/Cth1-Cape 套纯纹理 unlit graph 显示（exposure=0）。
+- 与旧「反照率烘焙诊断（失败实验）」的区别：旧版用「发射 + 逐材质 mask」只固化 BaseColor 反照率、**不含光照**（实测 ROI MAE 不降反升，已作废）；新版 Cycles COMBINED **含全部光照**，是真正闭合材质/光照视觉 Gate 的路线。带 UI 会话解除了无头环境 `bpy.ops.object.bake` `poll()` 恒 False 的硬阻塞。
+- 允许用法：作为固定帧（frame120/State2/Blend0）的视觉对齐诊断与验收；管线与资产政策不变（第三方 PMX/VMD/原始纹理不提交，派生烘焙图由用户本地目录注入）。
+- 禁止用法：**不得作为默认模式**（默认仍为 `finalFaceComposite`）；**不得实现动态五档/窄混合/迟滞/通用实时六灯**（那是独立票据）；**不得替代动态 VMD 播放渲染**。
+- 逐材质独立绑定不变量（验收修正轮）：烘焙文件以**唯一逻辑键** `Textures/v14d-baked/baked_<key>.png` 注入；真实 GPU 绑定由引擎 `materialDiffuseOverrides` 在 `loadFromReader` 后、GPU 材质建立（`setupMaterialsForInstance` 上传 GPUTexture/建 bind group）前为每个目标材质**追加独立 texture entry 并改 diffuseTextureIndex** 完成——loadModel 返回后才改 `tex.path` 属伪绑定（不重传 GPUTexture）。9 个目标材质一一对应、互不覆盖。禁止复用原始纹理键（face_d/hair_d/cloth1_da）冒充按槽绑定——`fileListToMap()` `Map.set()` 后写覆盖前写曾致 EyeWhite 覆盖 Face、HairB 覆盖 HairA、空 Cape 覆盖 Top。`faceApplied=true` 只证明 graph 应用，不作纹理注入通过证据；逐材质绑定硬 Gate `validateBakedBinding` 要求 9 材质全部命中且数量恰好为 9。
+- 路由影响：只影响 `/mmd-calibration-render?v14dFaceStatic=1&v14dFaceMode=bakedGolden` 诊断渲染层，不影响 PMX/VMD Runtime；默认生产入口与 `finalFaceComposite` 默认模式均不启用。
+- 完整定义：见 `docs/handoff/2026-08-28-v14d-static-golden-frame.md`「修正轮烘焙尝试与阻塞」与本票交付报告（最终着色烘焙）。
+- 完整定义：见 `workflow/concepts/v14d-golden-frame-final-shading-bake.zh-CN.md`、`docs/handoff/2026-08-28-v14d-static-golden-frame.md`「修正轮烘焙尝试与阻塞」与本票交付报告（最终着色烘焙）。
+
+# V14D 显示字节直通捕获（displayPassthrough）
+
+- 英文机器名：`displayPassthrough`（引擎视图变换字段，默认 `false`）；诊断管线「显示字节捕获/反投影」。
+- 含义：一条默认关闭的诊断契约，让 Web 端 Face 材质最终显示字节逐字节等于磁盘权威 AgX PNG 的原始 8-bit 显示字节。链路：fresh EEVEE frame120 AgX PNG 原始字节 → 按屏幕像素→UV 反投影到 Face atlas（G3）→ 经 materialDiffuseOverrides 真绑定注入 → 引擎 composite 的 displayPassthrough 绕过 Filmic/grade/gamma 并做 linear→sRGB 编码 → 最终 canvas 字节等于注入纹理字节。
+- 允许用法：固定黄金帧（frame120/State2/Blend0）下验证显示字节闭环（G1 色块、G4 对照）；`displayPassthrough` 仅在 `v14dFaceMode=bakedGolden` 诊断下置 true。
+- 禁止用法：反投影源不得用 image.pixels 猜颜色空间、不得再过 Filmic、不得手调 RGB、不得改写权威参考；不得作为默认生产路径（默认 finalFaceComposite，displayPassthrough 默认 false）；G4 MAE 未达 ≤20/255 时不得宣称「Face 明显对齐」；Face Gate 未通过前不得扩展其他材质；不得用它闭跨渲染器的像素级几何错位。
+- 路由影响：只影响 `/mmd-calibration-render?v14dFaceStatic=1&v14dFaceMode=bakedGolden` 诊断渲染层与 `patch-reze-engine.mjs` 的引擎补丁；不影响 PMX/VMD Runtime、默认生产入口。
+- 完整定义：见 `workflow/concepts/v14d-display-byte-passthrough-capture.zh-CN.md`。
+
+# V14D 脸部 State 2 实时合成（固定帧）
+
+- 英文机器名：`v14d-face-state2-live-composite`（契约 / contract id）；Web 实时 State 2 脸部合成。
+- 含义：对 PMX 材质名 `Face` 每像素从原始 BaseColor（`face_d`）+ Blender State2 packed mask + 节点常量，在 Web 线性空间实时执行 warm/art/fringe 合成（State=2/Blend=0 恒等）。公式：`warm=faceD_linear*warmColor`、`art=mix(white,artShadowTint,R*(1-B))`、`fringe=mix(white,fringeTint,G*(1-B))`、`shadowFactor=art*fringe`、`composite=warm*shadowFactor`。
+- 允许用法：固定帧（frame120/State2/Blend0）实时合成预览与三诊断视图（BaseColor/ShadowFactor/FinalComposite）；经 reze-engine 补丁 materialAuxTextures + binding(5) mask + `v14dState2OverrideFsBodyFixed` 注入。
+- 禁止用法：不用屏幕像素→UV 反投影 atlas 作运行时材质；不用 bakedGolden 烘焙冒充生产方案；不把灯光/阴影/高光/AgX 固化进 BaseColor；不手调 RGB；不实现五档动态/Narrow Blend/Hysteresis（范围外）；完整 Face Gate MAE 未达 ≤20/255 时不得宣称完成。
+- 路由影响：只影响 `/mmd-calibration-render` faceStatic 的 faceShadowOnly/finalFaceComposite 实时合成模式与 `patch-reze-engine.mjs`；不影响 PMX/VMD Runtime、默认生产入口（诊断开关默认关闭）。当前 Gate 未达标阻塞。
+- 完整定义：见 `workflow/concepts/v14d-face-state2-live-composite.zh-CN.md`、`docs/handoff/2026-08-31-v14d-face-state2-runtime.md`。
+
+# V14D 全身皮肤 State 2 实时合成（固定帧）
+
+- 英文机器名：`v14d-body-skin-state2`（契约 / contract id）；Web 全身皮肤（BodySkin）实时合成。
+- 含义：在 `v14dFaceStatic=1&v14dFaceMode=finalFaceComposite` 诊断入口下，把「只接入 Face」扩展为「Face + BodySkin 同一 V14D skin family」。BodySkin 用「body_d 线性 × 身体 warm=[1,0.945,0.905]」直出（不套脸部专用 State2 packed mask），与 Face 共享线性色彩处理与显示变换。四区域（neck/waist/leftHand/rightHand）按 BodySkin 三角形蒙皮世界质心（V14D_BODY_SKIN_REGIONS，世界 y 带 + x 符号）独立对账。
+- 允许用法：固定 frame120 全身皮肤预览；bodyApplied 必须来自真实 graph 状态（组诊断 ok 且实际绑定 graph.name === "V14D Body Skin Composite"）；区域样本不足时诚实标记 occluded/checkpoint（exit 3），不软通过。
+- 禁止用法：不把脸部 State2 mask 套到 BodySkin UV；不用 faceResult.ok && 材质存在自证 bodyApplied；不把白衣/头发/眼睛归入皮肤；不在 loadModel 后伪改 path；不写成「完整 V14D/Face Gate 已通过」（本概念是视觉预览范围扩展）。
+- 路由影响：只影响 v14dFaceStatic=1&v14dFaceMode=finalFaceComposite 诊断渲染层与 patch-reze-engine.mjs（WGSL v14d_skin_body_composite helper）；不影响 PMX/VMD Runtime、默认生产入口（诊断开关默认关闭）。
+- 完整定义：见 workflow/concepts/v14d-body-skin-state2.zh-CN.md、docs/handoff/2026-09-01-v14d-body-skin-state2.md。

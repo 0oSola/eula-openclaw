@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -35,6 +35,17 @@ import {
   REZE_K3_SCENE_DEFAULTS,
   type RezeSceneDebugSettings,
 } from "@/features/stage/rezeDesignDefaults";
+import {
+  evaluateRezeK3V1Eligibility,
+  resolveRezeK3SkinVariant,
+  readRezeK3SkinVariant,
+  rezeK3SkinVariantStorageKey,
+  writeRezeK3SkinVariant,
+  REZE_K3_SKIN_VARIANT_LABEL,
+} from "@/features/stage/rezeSkinVariantPreference.js";
+
+// RezeK3SkinVariant 共享类型权威：rezeSkinVariantPreference.types.d.ts（P0 第 3 项）。
+import type { RezeK3SkinVariant } from "@/features/stage/rezeSkinVariantPreference.js";
 import { CompanionCommandBar } from "./CompanionCommandBar";
 import { KnowledgeReviewBadge } from "./KnowledgeReviewBadge";
 import { MioModeBackground } from "./MioModeBackground";
@@ -556,6 +567,13 @@ export default function CompanionPage() {
   const [realtimeVoiceStatus, setRealtimeVoiceStatus] = useState<RealtimeVoiceStatus>("idle");
   const [backgroundActivityPulse, setBackgroundActivityPulse] = useState(0);
   const [renderPipeline, setRenderPipeline] = useState<RenderPipeline>("mio-reference");
+  // Reze K3 皮肤变体（"原始 Reze K3" / "Reze K3 V1（V14D）"）：
+  // 按 用户+模型+reze-k3 管线 隔离持久化；仅克莱妲权威 PMX 可启用 V1，
+  // 非克莱妲安全回退 original。详见 rezeSkinVariantPreference.js 概念注释。
+  const [rezeK3SkinVariant, setRezeK3SkinVariant] = useState<RezeK3SkinVariant>("original");
+  // P0-1 水合竞态：写 effect 只在对应 user+model+pipeline 的恢复完成后运行。
+  // 记录已完成恢复的存储键；null 表示尚未对当前键完成读取，禁止写回。
+  const [rezeK3SkinVariantHydratedKey, setRezeK3SkinVariantHydratedKey] = useState<string | null>(null);
   const [isAdvancedPanelOpen, setIsAdvancedPanelOpen] = useState(false);
   const [isRezeEditorOpen, setIsRezeEditorOpen] = useState(false);
   const [advancedTab, setAdvancedTab] = useState<"library" | "favorites">("library");
@@ -679,6 +697,35 @@ export default function CompanionPage() {
     if (!session?.userId) return;
     window.localStorage.setItem(companionRenderPipelineStorageKey(session.userId), renderPipeline);
   }, [renderPipeline, session?.userId]);
+
+  // 皮肤变体：切换 用户/模型/管线 时读取持久化值（默认 original）。
+  // P0-1：先按当前键完成水合（读取+置 hydratedKey），再允许写回；
+  // 切换模型/用户/管线时键变化会触发重新水合，避免把前一个键的值写到新键。
+  useEffect(() => {
+    if (!session?.userId || !selectedModelPath || renderPipeline !== "reze-k3") {
+      setRezeK3SkinVariantHydratedKey(null);
+      return;
+    }
+    const key = rezeK3SkinVariantStorageKey(session.userId, selectedModelPath);
+    setRezeK3SkinVariant(
+      readRezeK3SkinVariant(window.localStorage, key),
+    );
+    setRezeK3SkinVariantHydratedKey(key);
+  }, [renderPipeline, selectedModelPath, session?.userId]);
+
+  // 皮肤变体：切换时写回持久化（original 为默认值，清除键）。
+  // P0-1：仅当当前键已完成水合（hydratedKey 等于当前键）才写回，
+  // 防止刷新时写 effect 以初始 original 先于读取执行 removeItem 清掉已存 v1。
+  useEffect(() => {
+    if (!session?.userId || !selectedModelPath || renderPipeline !== "reze-k3") return;
+    const key = rezeK3SkinVariantStorageKey(session.userId, selectedModelPath);
+    if (rezeK3SkinVariantHydratedKey !== key) return;
+    writeRezeK3SkinVariant(
+      window.localStorage,
+      key,
+      rezeK3SkinVariant,
+    );
+  }, [renderPipeline, rezeK3SkinVariant, rezeK3SkinVariantHydratedKey, selectedModelPath, session?.userId]);
 
   useEffect(() => {
     return () => {
@@ -3282,6 +3329,13 @@ export default function CompanionPage() {
             rezeGrade={rezeStageDocument.grade}
             rezeGradeIntensity={rezeStageDocument.gradeIntensity}
             rezeSceneDebugSettings={rezeSceneDebugSettings}
+            v14dSkinVariant={
+              // P0-2：effective variant 与 UI/资格共用单一谓词；
+              // 资格不满足（无 mask/非克莱妲）时持久化的 v1 安全回退 original。
+              renderPipeline === "reze-k3"
+                ? resolveRezeK3SkinVariant(rezeK3SkinVariant, rezeLocalModelImport)
+                : "original"
+            }
             rezeTransparentBackground={renderPipeline === "reze-k3"}
             cameraSnapshot={stageCameraSnapshot}
             onModelChange={handleCharacterSwitch}
@@ -3404,6 +3458,36 @@ export default function CompanionPage() {
                       </button>
                     ))}
                   </div>
+                  {// P0-2：UI 显示与 effective variant/资格共用单一谓词；
+                  // 需 权威克莱妲 PMX + State2 mask 同时满足才显示 V1 切换。
+                  renderPipeline === "reze-k3" &&
+                  evaluateRezeK3V1Eligibility(rezeLocalModelImport).eligible ? (
+                    <div
+                      className="mio-pipeline-options"
+                      role="radiogroup"
+                      aria-label="Reze K3 皮肤变体"
+                      data-testid="reze-k3-skin-variant-bar"
+                    >
+                      {(["original", "v1"] as const).map((variant) => (
+                        <button
+                          key={variant}
+                          type="button"
+                          className={"mio-pipeline-option" + (rezeK3SkinVariant === variant ? " is-active" : "")}
+                          role="radio"
+                          aria-checked={rezeK3SkinVariant === variant}
+                          data-testid={"reze-k3-skin-variant-" + variant}
+                          onClick={() => setRezeK3SkinVariant(variant)}
+                        >
+                          <strong>{REZE_K3_SKIN_VARIANT_LABEL[variant]}</strong>
+                          <span>
+                            {variant === "v1"
+                              ? "克莱妲 V14D 皮肤阶段（仅 Face + BodySkin，未含其余 13 槽）"
+                              : "现有 Reze K3 材质与灯光"}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="mio-camera-actions">
                     <button
                       type="button"
