@@ -273,7 +273,7 @@
 # V14D BodySkin 骨骼主导语义分区
 
 - 英文机器名：v14d-bodyskin-bone-semantic-region（概念 id）；常量 V14D_BODY_SKIN_BONE_REGIONS_V1、函数 classifyV14dVerticesByBoneRegion、导出字段 boneRegionLabels。
-- 含义：BodySkin 三角形按顶点主导骨骼（蒙皮权重最大的骨骼索引）归属语义区域（neck 颈部 / torso 躯干腰腹 / leftHand 左手 / rightHand 右手），替代旧版 V14D_BODY_SKIN_REGIONS 的世界 y 带 + x 符号矩形分区。骨骼索引序 = reze-engine 运行时 skeleton.bones 顺序（PMX 骨骼段序），版本号 v2 与该索引集合绑定。
+- 含义：BodySkin 三角形按顶点主导骨骼（蒙皮权重最大的骨骼索引）归属语义区域（neck 颈部 / torso 躯干腰腹 / leftHand 左手 / rightHand 右手），替代旧版 V14D_BODY_SKIN_REGIONS 的世界 y 带 + x 符号矩形分区。骨骼索引序 = reze-engine 运行时 skeleton.bones 顺序（PMX 骨骼段序），版本号 v1 与该索引集合绑定（与常量名 V14D_BODY_SKIN_BONE_REGIONS_V1 一致，单一权威版本名）。
 - 允许用法：作为 BodySkin 语义区域正式归属依据；区域集合互不重叠、一个骨骼索引至多属一个区域；模型或引擎更换骨骼排序必须升版本并重新核对索引。
 - 禁止用法：不再用世界 y 带 + x 符号矩形作为正式归属（已废弃，仅兼容回退）；不把 Blender 顶点组索引直接当 PMX joints 索引（两套索引序不同）；不把腕/手捩骨（被袖口覆盖）计入手部可见皮肤。
 - 路由影响：只影响 v14dFaceStatic=1 诊断导出（exportMaterialTriRegions）与 web/scripts/gate-v14d-body-skin-state2.mjs 的区域归属计算；不影响生产默认入口、PMX/VMD/骨骼/物理/播放链。

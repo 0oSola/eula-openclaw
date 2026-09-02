@@ -1405,13 +1405,17 @@ export function classifyV14dVerticesByBoneRegion(
   indexCount: number,
   regionOrder: readonly string[],
   boneSets: readonly (readonly number[])[],
+  boneSetsOverride?: readonly (readonly number[])[],
 ): Int32Array {
+  // Stage 2B-M3.1 修正轮：可选扰动集合（仅诊断/负测用，如左右手交换/腰腹注入/错骨序）。
+  // 提供时用它代替 boneSets 参与归属；生产路径省略本参数，行为与权威集合完全一致（零改动）。
+  const sets = boneSetsOverride ?? boneSets;
   const triCount = Math.floor(indexCount / 3);
   const labels = new Int32Array(triCount).fill(-1);
   // 骨骼索引 → 区域下标 的查找表（骨骼总数上限 4096，足够 PMX 449 骨骼）。
   const boneToRegion = new Int32Array(4096).fill(-1);
-  for (let r = 0; r < boneSets.length; r += 1) {
-    for (const b of boneSets[r]) {
+  for (let r = 0; r < sets.length; r += 1) {
+    for (const b of sets[r]) {
       if (b >= 0 && b < 4096) boneToRegion[b] = r;
     }
   }

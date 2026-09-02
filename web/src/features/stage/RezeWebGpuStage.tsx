@@ -158,7 +158,11 @@ declare global {
         allBodySkinOnComposite: boolean;
       } | null;
       /** Stage 2B-M3 修正轮：三角形语义区域（triId+uv per pixel、世界质心、区域标签）。 */
-      exportMaterialTriRegions: (materialName: string) => Promise<{
+      exportMaterialTriRegions: (
+        materialName: string,
+        /** 可选骨骼区域集合覆盖（仅 BodySkin 诊断/负测；生产省略，等价权威集合）。 */
+        boneRegionOverride?: readonly (readonly number[])[],
+      ) => Promise<{
         width: number;
         height: number;
         materialName: string;
@@ -1873,7 +1877,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
        * 区域标签。供 Gate 用「三角形语义区域」而非整块材质均值做四区域对账。
        * 区域标签为 Int32Array（-1=未分区，否则=V14D_BODY_SKIN_REGIONS 下标）。
        */
-      exportMaterialTriRegions: async (materialName: string) => {
+      exportMaterialTriRegions: async (
+        materialName: string,
+        boneRegionOverride?: readonly (readonly number[])[],
+      ) => {
         const engine = engineRef.current;
         const model = modelRef.current;
         if (!engine || !model) return null;
@@ -1915,6 +1922,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
                     V14D_BODY_SKIN_BONE_REGIONS_V1.leftHand,
                     V14D_BODY_SKIN_BONE_REGIONS_V1.rightHand,
                   ],
+                  boneRegionOverride,
                 )
               : null;
           // 诊断：逐三角形主导骨骼直方图（索引），供探针核对骨骼集合是否命中。

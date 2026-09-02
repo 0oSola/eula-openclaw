@@ -99,7 +99,7 @@ export const V14D_BODY_SKIN_REGIONS = [
 ] as const;
 
 /**
- * Stage 2B-M3.1：BodySkin 语义分区（版本化骨骼主导权重集合，v1）。
+ * Stage 2B-M3.1 修正轮：BodySkin 语义分区（版本化骨骼主导权重集合，版本 = v1）。
  *
  * 替代旧版 V14D_BODY_SKIN_REGIONS 的世界 y 带 + x 符号矩形分区（已验证问题：左手 y 带把
  * 腰腹皮肤计入，左右手与腰腹无法按几何语义准确区分）。本集合按「顶点主导骨骼」（蒙皮权重
@@ -124,12 +124,36 @@ export const V14D_BODY_SKIN_REGIONS = [
  *   unassigned 未分区  = 其余主导骨骼（下半身/頭/裙/腿等，不计入四区域对账）
  */
 export const V14D_BODY_SKIN_BONE_REGIONS_V1 = {
-  version: 2,
+  version: 1,
   neck: [8],
   torso: [6],
   leftHand: [42, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73],
   rightHand: [57, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88],
 } as const;
+
+/**
+ * Stage 2B-M3.1 修正轮（验收修正 5）：骨骼索引 → 期望语义骨名硬断言表。
+ *
+ * 骨骼索引序（joints 索引序 = reze-engine skeleton.bones 序）与骨名的对应是骨骼主导分区的
+ * 正确性前提；模型/引擎若更换骨骼排序，索引会静默错配，分区随之静默错分。正式 Gate 必须按
+ * 本表对 skeletonBoneNames 做硬断言：任一索引的实际骨名与期望不符即 Gate 失败（不软通过）。
+ *
+ * 期望模式（正则）：左右手指骨按「左/右 + 指名 + 段号」匹配（如 59 左中指１、74 右中指１）；
+ * 6=上半身、8=首、42=左手首、57=右手首为精确字面名。
+ * 实测自 .scratch/v14d-body-skin-state2/runtimeBoneNames.json（401 骨骼，本模型权威值）。
+ */
+export const V14D_BODY_SKIN_BONE_NAME_ASSERT: readonly (readonly [number, RegExp])[] = [
+  [6, /^上半身$/],
+  [8, /^首$/],
+  [42, /^左手首$/],
+  [57, /^右手首$/],
+  ...([59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73] as const).map(
+    (i) => [i, /^左[親中人小薬][指]?[0-9０-３]*$/] as const,
+  ),
+  ...([74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88] as const).map(
+    (i) => [i, /^右[親中人小薬][指]?[0-9０-３]*$/] as const,
+  ),
+];
 /** 语义区域 id 列表（展示/报告顺序固定）。 */
 export const V14D_BODY_SKIN_BONE_REGION_IDS = ["neck", "torso", "leftHand", "rightHand"] as const;
 export type V14dBodySkinBoneRegionId = (typeof V14D_BODY_SKIN_BONE_REGION_IDS)[number];

@@ -2,7 +2,7 @@
 
 - 中文名称：BodySkin 骨骼主导语义分区
 - 英文机器名：常量 V14D_BODY_SKIN_BONE_REGIONS_V1、函数 classifyV14dVerticesByBoneRegion、导出字段 boneRegionLabels
-- 版本：v2（索引集合实测自 reze-engine 运行时 skeleton，401 骨骼，PMX 骨骼段序）
+- 版本：v1（索引集合实测自 reze-engine 运行时 skeleton，401 骨骼，PMX 骨骼段序）。版本号与常量名 V14D_BODY_SKIN_BONE_REGIONS_V1 一致，为单一权威版本名。
 
 ## 概念定义
 
@@ -19,7 +19,7 @@
 
 ## 核心不变量
 
-1. 骨骼索引序 = reze-engine skeleton.bones 顺序 = PMX 骨骼段顺序；版本号 v2 与该索引集合绑定，模型或引擎更换骨骼排序必须升版本并重新核对。
+1. 骨骼索引序 = reze-engine skeleton.bones 顺序 = PMX 骨骼段顺序；版本号 v1 与该索引集合绑定，模型或引擎更换骨骼排序必须升版本并重新核对索引（用 V14D_BODY_SKIN_BONE_NAME_ASSERT 硬断言表对 skeletonBoneNames 逐索引匹配，骨序漂移会被检出）。
 2. 骨骼是解剖语义单位（首=颈、上半身=躯干、手首+手指=手），不随姿态/相机变化。
 3. 区域集合互不重叠；一个骨骼索引至多属于一个区域。
 

@@ -78,7 +78,10 @@ for (const [label, fp] of [["PMX", PMX], ["VMD", VMD], ["State2 mask", STATE2_MA
 const blenderTris = JSON.parse(fs.readFileSync(BLENDER_TRIS, "utf8")).bodyTriCentroids;
 const bodyD = await sharp(BODY_D).raw().toBuffer({ resolveWithObject: true });
 const FACE_D = process.env.V14D_FACE_D || path.join(KOLEDA_DIR, "Textures/c_Koleda_slg_face_d.png");
-const faceD = fs.existsSync(FACE_D) ? await sharp(FACE_D).raw().toBuffer({ resolveWithObject: true }) : null;
+// 修正轮（验收修正 3）：face_d 是 Face 同 UV 逐像素参考的必需资产，缺失即配置失败，
+// 不得降级为「Face 参考为空仍跑」的软通过。
+if (!fs.existsSync(FACE_D)) { console.error("GATE-CONFIG-FAIL: face_d 不存在 " + FACE_D); process.exit(2); }
+const faceD = await sharp(FACE_D).raw().toBuffer({ resolveWithObject: true });
 // Stage 2B-M3.1：GPU 口径双线性采样（替代最近点）。WebGPU 采样器默认
 // min/mag/mipmap filter 均为 linear；最近点采样会在纹理梯度区产生系统偏差，
 // 不能冒充 GPU 双线性口径。这里按 REPEAT 环绕、texel 中心对齐做双线性插值。
@@ -231,6 +234,7 @@ async function captureRegions(mode) {
       boneRegionLabels: r.boneRegionLabels ? Array.from(r.boneRegionLabels) : null,
       boneRegionIds: r.boneRegionIds || null,
       boneRegionVersion: r.boneRegionVersion ?? null,
+      skeletonBoneNames: r.skeletonBoneNames || null,
     };
   });
   const bodyHdr = await page.evaluate(async () => {
@@ -267,7 +271,7 @@ async function captureRegions(mode) {
     }
     for (const d of REGION_DEFS) stats[d.id] = { n: 0, sum: [0, 0, 0], refSum: [0, 0, 0], errSum: [0, 0, 0], perPixelErr: [], minX: W, minY: H, maxX: -1, maxY: -1, tris: 0 };
     for (let t = 0; t < triRegions.triCount; t++) { const id = labelOf(t); if (id) stats[id].tris++; }
-    // BodySkin 可见前景总像素（pick mask），作为分区域 coverage 的分母基数。
+    // BodySkin 可见前景总像素（pick mask），作为全身采集的分母基数（诊断参考，非正式 coverage）。
     let totalVisible = 0;
     for (let i = 0; i < W * H; i++) if (bodyHdr.mask[i]) totalVisible++;
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
@@ -307,8 +311,10 @@ async function captureRegions(mode) {
         maePerChannel: [st.errSum[0] / st.n, st.errSum[1] / st.n, st.errSum[2] / st.n],
         numerator: [st.errSum[0], st.errSum[1], st.errSum[2]],
         denominator: st.n,
-        coverage: totalVisible > 0 ? st.n / totalVisible : 0,
+        coverage: regionTriTotal[d.id] > 0 ? st.n / regionTriTotal[d.id] : 0,
         regionTriTotal: regionTriTotal[d.id] || 0,
+        coverageNote: "coverage=numerator/denominator=全身命中像素数/该语义区域三角形总数；量纲为像素/三角形，非 0..1 面积占比。占 BodySkin 可见总像素比=n/totalVisible（诊断参考，见 fullbodyShare）。",
+        fullbodyShare: totalVisible > 0 ? st.n / totalVisible : 0,
         p95Err: p95,
         bbox: [st.minX, st.minY, st.maxX, st.maxY],
       };
@@ -442,6 +448,30 @@ async function captureRegions(mode) {
 // 主采集：composite 模式（全身视角，四区域数值）。
 const main = await captureRegions("finalFaceComposite");
 
+// Stage 2B-M3.1 修正轮（验收修正 5）：骨骼索引 → 语义骨名硬断言。
+// 骨骼主导分区的正确性前提是「索引序 = 运行时 skeleton 序」与骨名语义一致；模型/引擎若更换
+// 骨骼排序，索引会静默错配。这里用主采集导出的 skeletonBoneNames（401 骨骼）对权威断言表做
+// 正则匹配：任一索引的实际骨名不符期望即 Gate 失败（不软通过），防止骨序漂移静默错分。
+// 期望表内嵌（与源码 V14D_BODY_SKIN_BONE_REGIONS_V1 索引一一对应，避免 Node 侧重复导入 TS 常量）。
+const BODY_BONE_ASSERT = [
+  [6, /^上半身$/], [8, /^首$/], [42, /^左手首$/], [57, /^右手首$/],
+  ...[59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73].map((i) => [i, /^左[親中人小薬][指]?[0-9０-３]*$/]),
+  ...[74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88].map((i) => [i, /^右[親中人小薬][指]?[0-9０-３]*$/]),
+];
+{
+  const names = main.triRegions?.skeletonBoneNames ?? null;
+  ok(Array.isArray(names) && names.length > 88, "骨骼名表可导出且长度>88（实际=" + (names ? names.length : "null") + "）");
+  const boneMismatches = [];
+  if (Array.isArray(names)) {
+    for (const [idx, re] of BODY_BONE_ASSERT) {
+      const actual = names[idx] ?? "";
+      if (!re.test(actual)) boneMismatches.push(idx + ":" + actual + "!~" + re);
+    }
+  }
+  summary.boneNameAssert = { checked: BODY_BONE_ASSERT.length, mismatches: boneMismatches };
+  ok(boneMismatches.length === 0, "骨骼索引→骨名硬断言（" + BODY_BONE_ASSERT.length + " 索引全部匹配语义骨名）" + (boneMismatches.length ? " 失配=" + boneMismatches.join(",") : ""));
+}
+
 // P0-2 修复：neck/waist 在正面全身视角被头/衣领/腰带深度遮挡（真实可见性）。
 // 用「区域质心 + 前上方俯视」的专用近景视角补采集 neck/waist 的区域均值，
 // 与全身视角的 leftHand/rightHand 一起构成四区域独立数值。normal 基线用同视角。
@@ -488,6 +518,9 @@ async function captureRegionCloseups(mode) {
   for (const id of ["neck", "torso"]) {
     const c = regionCentroid[id];
     if (!c) continue;
+    // 该语义区域的三角形总数（分母，与全身采集同一骨骼归属口径）。
+    let regionTriTotal = 0;
+    for (let t = 0; t < triRegions.triCount; t++) if (regionIdOf(triRegions, t) === id) regionTriTotal++;
     // 近景：颈部可见皮肤 = 下巴与衣领之间窄带，从下方仰视。
     // 腰部露肤 = 两侧侧腰；右腰（+x）被左臂袖遮挡，左腰（-x）是右臂侧，
     // 试左腰侧前方（-x 且 -z）；两侧都试，取有命中的一侧。
@@ -545,6 +578,9 @@ async function captureRegionCloseups(mode) {
         maePerChannel: [errSum[0] / n, errSum[1] / n, errSum[2] / n],
         numerator: [errSum[0], errSum[1], errSum[2]],
         denominator: n,
+        coverage: regionTriTotal > 0 ? n / regionTriTotal : 0,
+        regionTriTotal,
+        coverageNote: "coverage=numerator/denominator=近景命中像素数/该语义区域三角形总数；量纲为像素/三角形（与全身区一致），非 0..1 面积占比。",
         p95Err: perPixelErr[Math.floor(perPixelErr.length * 0.95)],
         bbox: [minX, minY, maxX, maxY], view: "closeup",
       };
@@ -577,6 +613,17 @@ async function captureRegionCloseups(mode) {
 // neck/waist 近景补采集（正面全身视角被遮挡，用专用视角拿真实可见像素）。
 const closeupComposite = await captureRegionCloseups("finalFaceComposite");
 
+// 修正轮（验收修正 4）：主采集（全身视角）里按骨骼归属统计各语义区域三角形总数，
+// 供 closeup 区（neck/torso）回填 regionTriTotal——closeup 路径自身也算，但取主采集的
+// 骨骼归属分母更权威（与正式归属同一份 triRegions）。
+const regionTriTotalFull = {};
+if (main.triRegions) {
+  for (let t = 0; t < main.triRegions.triCount; t++) {
+    const id = regionIdOf(main.triRegions, t);
+    if (id) regionTriTotalFull[id] = (regionTriTotalFull[id] || 0) + 1;
+  }
+}
+
 // 逐区域对账（HDR 线性 vs body_d×warm 参考）。
 // neck/waist 用近景视角数值（真实可见），leftHand/rightHand 用全身视角数值。
 for (const id of REGION_IDS) {
@@ -595,11 +642,15 @@ for (const id of REGION_IDS) {
   const regionRef = rg.refLinear ?? bodyDMeanLinear;
   const mae = rg.maePerChannel ?? rg.meanLinear.map((v, c) => Math.abs(v - regionRef[c]));
   const pass = rg.samples >= MIN_REGION_SAMPLES && mae.every((v) => v <= REGION_MAE_CANDIDATE);
+  const covDenominator = rg.regionTriTotal ?? regionTriTotalFull[id] ?? 0;
+  const cov = covDenominator > 0 ? rg.samples / covDenominator : (rg.coverage ?? 0);
   summary.regions[id] = {
     def: rg.def ?? REGION_DEFS.find((d) => d.id === id), triangles: rg.triangles ?? null,
     samples: rg.samples, meanLinear: rg.meanLinear,
     mask: "BodySkin triId+UV pick mask（HDR 前景）",
-    coverage: rg.coverage ?? null, regionTriTotal: rg.regionTriTotal ?? null,
+    coverage: cov, coverageNumerator: rg.samples, coverageDenominator: covDenominator,
+    regionTriTotal: covDenominator,
+    coverageNote: rg.coverageNote ?? "coverage=coverageNumerator/coverageDenominator=命中像素数/该语义区域三角形总数（像素/三角形，非面积占比）。",
     refLinear: regionRef, refSamples: rg.refSamples ?? null,
     referenceSource: rg.referenceSource ?? "body_d×warm 整材质均值（区域UV参考缺失时回退）",
     p95Err: rg.p95Err ?? null, maePerChannel: mae,
@@ -619,7 +670,7 @@ summary.face = {
   def: { id: "face", note: "Face 材质整体（单一区域）" },
   samples: main.faceSamples,
   meanLinear: main.faceMean,
-  coverage: main.faceRegion?.denominator ? main.faceRegion.denominator / (main.faceSamples || 1) : null,
+  coverage: main.faceSamples > 0 ? (main.faceRegion?.denominator ?? 0) / main.faceSamples : null,
   mask: "Face pick mask（HDR 前景）",
   refLinear: main.faceRegion?.refLinear ?? null,
   refSamples: main.faceRegion?.refSamples ?? null,
@@ -661,46 +712,132 @@ ok(negMisuse.wouldReject === true && negMisuse.materialName === "HairA",
   "负测：HairA 导出 materialName=" + negMisuse.materialName + "，按材质名核对会被拒绝（不冒充 BodySkin）");
 summary.negative = { missing: neg.missing === null, hairMisuseRejected: negMisuse.wouldReject === true };
 
-// Stage 2B-M3.1：语义分区与统计口径负测（在真实采集数据上构造，必须全部被拒绝）。
-// N1 左右手语义交换：把 leftHand/rightHand 的骨骼标签互换后，左右手逐像素 MAE
-//   的分子必须变化（证明归属真实参与计算，不是固定常量参考）。
-// N2 腰腹顶点注入手部集合：把 torso 主导骨骼（6）临时并入 leftHand 集合后，
-//   leftHand 的三角形归属数必须增大（证明语义集合真实约束归属）。
-// N3 参考样本集合错位：把 Face 的 UV 平移 0.5 后参考均值必须变化（证明逐像素
-//   UV 参考真实依赖 UV，不是整块均值）。
-// N4 均值抵消构造：构造 web/ref 均值相等但逐像素 |err| 很大的合成对，确认
-//   maePerChannel（真逐像素）> 0 而 |mean-mean| ≈ 0（证明 Gate 用的是前者）。
+// Stage 2B-M3.1 修正轮：语义分区与统计口径负测。全部在真实 PMX joints/weights 上
+// 用扰动骨骼集合重跑同一归属函数（exportMaterialTriRegions 的可选 boneRegionOverride），
+// 并对扰动结果重算逐像素 MAE 与判定，断言 Gate 判定翻转（而非只核对计数）。
+//   N1 左右手语义交换：交换 leftHand/rightHand 骨骼集合后重跑归属，断言左右手归属与逐像素
+//     MAE 都变化（证明归属真实参与逐像素计算，非固定常量参考）。
+//   N2 腰腹顶点注入手部集合：把 torso 主导骨骼（6）并入 leftHand 集合后重跑归属，断言
+//     腰腹三角形被并入 leftHand（归属数增大、torso 减少）且 leftHand 逐像素 MAE 变化。
+//   N3 参考样本集合错位：把 Face 的 UV 平移 0.5 后逐像素参考必须变化（证明逐像素 UV 参考
+//     真实依赖 UV，不是整块均值）；face_d 缺失已在启动时配置失败，这里不再软通过。
+//   N4 均值抵消构造：web/ref 均值相等但逐像素 |err| 很大，断言真逐像素 MAE>0 而均值差≈0。
+//   N5 错骨序负测：对骨骼集合做扰动（如把 torso 骨骼 6 从集合剔除），重跑归属后 torso
+//     归属必须塌缩为 0，证明归属真实由骨骼集合驱动、骨序漂移会被检出（配合骨名硬断言）。
 {
-  const tr = main.triRegions;
-  const neg = {};
-  if (tr && tr.boneRegionLabels && tr.boneRegionIds) {
-    const li = tr.boneRegionIds.indexOf("leftHand");
-    const ri = tr.boneRegionIds.indexOf("rightHand");
-    const ti = tr.boneRegionIds.indexOf("torso");
-    const countOf = (regionIdx) => tr.boneRegionLabels.filter((v) => v === regionIdx).length;
-    const lCount = countOf(li), rCount = countOf(ri), tCount = countOf(ti);
-    // N1：交换左右手标签后左手归属数应变（除非恰好相等，这里直接记录两侧数）。
-    neg.handSwapDetected = lCount !== rCount || lCount > 0;
-    neg.handSwapEvidence = { leftHandTris: lCount, rightHandTris: rCount };
-    // N2：把 torso 骨骼(6)注入 leftHand 集合语义等价于 leftHand 归属数增加。
-    //   用运行时标签模拟：统计「若 torso 三角形被并入 leftHand」后的数量。
-    neg.torsoInjectWouldChange = tCount > 0;
-    neg.torsoInjectEvidence = { torsoTris: tCount, leftHandAfter: lCount + tCount };
-  }
-  // N3：UV 平移负测（CPU 侧直接验证采样对 UV 敏感）。
-  {
-    const u0 = 0.35, v0 = 0.62;
-    const a = sampleBodyD(u0, v0);
-    const b = sampleBodyD(u0 + 0.5, v0 + 0.5);
-    neg.uvShiftChangesRef = !(Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9 && Math.abs(a[2] - b[2]) < 1e-9)
-      || true; // body_d 近平坦，允许相等；改用非平坦点验证见下
-    // 用脸部纹理（有真实五官梯度）验证 UV 敏感性更可靠。
-    if (faceD) {
-      const fa = sampleTex(faceD, 0.42, 0.31);
-      const fb = sampleTex(faceD, 0.92, 0.81);
-      neg.uvShiftChangesRef = !(fa[0] === fb[0] && fa[1] === fb[1] && fa[2] === fb[2]);
-      neg.uvShiftEvidence = { a: fa, b: fb };
+  // 权威骨骼集合（与 V14D_BODY_SKIN_BONE_REGIONS_V1 一致；Node 侧内嵌，避免重复导入 TS 常量）。
+  const AUTH = {
+    neck: [8],
+    torso: [6],
+    leftHand: [42, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73],
+    rightHand: [57, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88],
+  };
+  const IDS = ["neck", "torso", "leftHand", "rightHand"];
+  // 在扰动骨骼集合下重跑归属并计算左右手区域逐像素 MAE（复用主采集的 HDR 前景 + UV）。
+  async function rerunRegionMae(overrideSets) {
+    const tri2 = await page.evaluate(async (ovr) => {
+      try {
+        const r = await window.__v14dFaceStatic.exportMaterialTriRegions("BodySkin", ovr);
+        return r && r.boneRegionLabels ? { boneRegionLabels: Array.from(r.boneRegionLabels), boneRegionIds: r.boneRegionIds, dbg: r.boneRegionDebug } : { __err: "export returned " + (r === null ? "null" : "no-boneRegionLabels") };
+      } catch (e) { return { __err: String(e && e.stack || e) }; }
+    }, overrideSets);
+    if (!tri2 || tri2.__err || !main.bodyHdr || !main.bodyHdr.mask || !main.bodyHdr.rgb) {
+      console.error("[neg] rerunRegionMae export err=" + (tri2 && tri2.__err ? tri2.__err : "null/bodyHdr-missing bodyHdr=" + (main.bodyHdr ? "keys:" + Object.keys(main.bodyHdr).join(",") : "null")));
+      return null;
     }
+    // 修正轮（验收修正 1/2 根因）：像素归属必须复用 main 全身采集的 triId/uv 空间——
+    // rerun 的 exportMaterialTriRegions 会用当前（近景侧腰）相机重渲，其 triId 与
+    // main.bodyHdr（全身）不同投影，逐像素归因错位。这里用扰动的 boneRegionLabels 替换
+    // main.triRegions 的归属，像素采样/UV 仍取 main（同一全身视角），保证归属扰动是
+    // 唯一变量。
+    const blArr = tri2.boneRegionLabels;
+    const mainTri = main.triRegions;
+    const W = 640, H = 640;
+    const ids = tri2.boneRegionIds || IDS;
+    const st = {};
+    for (const id of ids) st[id] = { n: 0, err: [0, 0, 0] };
+    let dbgMasked = 0, dbgTriOk = 0, dbgLabelOk = 0;
+    for (let i = 0; i < W * H; i++) {
+      if (!main.bodyHdr.mask[i]) continue;
+      dbgMasked++;
+      const t = mainTri.triId[i];
+      if (t < 0 || t >= blArr.length) continue;
+      dbgTriOk++;
+      const bl = blArr[t];
+      if (bl < 0 || bl >= ids.length) continue;
+      dbgLabelOk++;
+      const id = ids[bl];
+      const u = mainTri.uv[i * 2], v = mainTri.uv[i * 2 + 1];
+      const rs = sampleBodyD(u, v);
+      const rl = [srgbToLinear(rs[0]) * WARM[0], srgbToLinear(rs[1]) * WARM[1], srgbToLinear(rs[2]) * WARM[2]];
+      st[id].n++;
+      st[id].err[0] += Math.abs(main.bodyHdr.rgb[i * 3] - rl[0]);
+      st[id].err[1] += Math.abs(main.bodyHdr.rgb[i * 3 + 1] - rl[1]);
+      st[id].err[2] += Math.abs(main.bodyHdr.rgb[i * 3 + 2] - rl[2]);
+    }
+    const out = {};
+    for (const id of ids) out[id] = { samples: st[id].n, maePerChannel: st[id].n ? [st[id].err[0] / st[id].n, st[id].err[1] / st[id].n, st[id].err[2] / st[id].n] : null };
+    return out;
+  }
+  // 逐三角形归属数（按骨骼标签）。
+  async function regionTriCounts(overrideSets) {
+    const tri2 = await page.evaluate(async (ovr) => {
+      try {
+        const r = await window.__v14dFaceStatic.exportMaterialTriRegions("BodySkin", ovr);
+        return r && r.boneRegionLabels ? { boneRegionLabels: Array.from(r.boneRegionLabels), boneRegionIds: r.boneRegionIds, triCount: r.triCount, blLen: r.boneRegionLabels.length, dbg: r.boneRegionDebug } : null;
+      } catch (e) { return { __err: String(e && e.stack || e) }; }
+    }, overrideSets);
+    if (!tri2 || tri2.__err) return { __err: tri2 ? tri2.__err : "null" };
+    const ids = tri2.boneRegionIds || IDS;
+    const counts = {};
+    for (const id of ids) counts[id] = 0;
+    for (const bl of tri2.boneRegionLabels) if (bl >= 0 && bl < ids.length) counts[ids[bl]]++;
+    return counts;
+  }
+  const baseCounts = await regionTriCounts([AUTH.neck, AUTH.torso, AUTH.leftHand, AUTH.rightHand]);
+  const neg = {};
+  // N1：交换左右手骨骼集合。左右手解剖对称（各 882 三角形），交换后计数不变，
+  // 正确断言是「互换」：交换后 leftHand 归属应等于基线 rightHand 的归属（语义对调），
+  // 且 leftHand 的逐像素 MAE 应变（由归属的三角形集合改变驱动）。
+  const swapCounts = await regionTriCounts([AUTH.neck, AUTH.torso, AUTH.rightHand, AUTH.leftHand]);
+  const swapMae = await rerunRegionMae([AUTH.neck, AUTH.torso, AUTH.rightHand, AUTH.leftHand]);
+  const baseMae = await rerunRegionMae([AUTH.neck, AUTH.torso, AUTH.leftHand, AUTH.rightHand]);
+  neg.handSwap = {
+    baseLeft: baseCounts?.leftHand, baseRight: baseCounts?.rightHand,
+    swapLeft: swapCounts?.leftHand, swapRight: swapCounts?.rightHand,
+    baseLeftMae: baseMae?.leftHand?.maePerChannel ?? main.regionOut.leftHand?.maePerChannel ?? null,
+    baseRightMae: baseMae?.rightHand?.maePerChannel ?? main.regionOut.rightHand?.maePerChannel ?? null,
+    swapLeftMae: swapMae?.leftHand?.maePerChannel ?? null,
+    swapRightMae: swapMae?.rightHand?.maePerChannel ?? null,
+  };
+  const maeChanged = (a, b) => a && b && a.some((v, c) => Math.abs(v - b[c]) > 1e-6);
+  const maeEq = (a, b) => a && b && a.every((v, c) => Math.abs(v - b[c]) <= 1e-6);
+  // 语义对调判据：swap 后 leftHand 的归属/MAE ≈ base rightHand，且 swap rightHand ≈ base leftHand。
+  // 同时要求 swap leftHand ≠ base leftHand（否则等于没交换，未真正参与）。
+  const baseLM = baseMae?.leftHand?.maePerChannel, baseRM = baseMae?.rightHand?.maePerChannel;
+  const swapLM = swapMae?.leftHand?.maePerChannel, swapRM = swapMae?.rightHand?.maePerChannel;
+  neg.handSwapDetected = !!(swapCounts && swapMae && baseMae
+    && baseLM && baseRM && swapLM && swapRM
+    && maeEq(swapLM, baseRM) && maeEq(swapRM, baseLM)
+    && (maeChanged(swapLM, baseLM) || maeChanged(baseLM, baseRM)));
+  // N2：腰腹（torso 骨骼 6）注入 leftHand。
+  const injectCounts = await regionTriCounts([AUTH.neck, AUTH.torso, [...AUTH.leftHand, ...AUTH.torso], AUTH.rightHand]);
+  const injectMae = await rerunRegionMae([AUTH.neck, AUTH.torso, [...AUTH.leftHand, ...AUTH.torso], AUTH.rightHand]);
+  neg.torsoInject = {
+    baseTorso: baseCounts?.torso, baseLeft: baseCounts?.leftHand,
+    injectLeft: injectCounts?.leftHand, injectTorso: injectCounts?.torso,
+    baseLeftMae: baseMae?.leftHand?.maePerChannel ?? main.regionOut.leftHand?.maePerChannel ?? null,
+    injectLeftMae: injectMae?.leftHand?.maePerChannel ?? null,
+  };
+  neg.torsoInjectDetected = !!(injectCounts && injectMae
+    && injectCounts.leftHand > baseCounts.leftHand
+    && maeChanged(baseMae?.leftHand?.maePerChannel ?? main.regionOut.leftHand?.maePerChannel, injectMae.leftHand?.maePerChannel));
+  // N3：UV 平移（脸部有真实五官梯度，face_d 已在启动配置失败守卫，这里不再软通过）。
+  {
+    const fa = sampleTex(faceD, 0.42, 0.31);
+    const fb = sampleTex(faceD, 0.92, 0.81);
+    neg.uvShiftChangesRef = !(fa[0] === fb[0] && fa[1] === fb[1] && fa[2] === fb[2]);
+    neg.uvShiftEvidence = { a: fa, b: fb };
   }
   // N4：均值抵消构造。
   {
@@ -712,11 +849,16 @@ summary.negative = { missing: neg.missing === null, hairMisuseRejected: negMisus
     neg.meanCancellationDetected = meanDiff < 1e-9 && pixelMae > 0.1;
     neg.meanCancellationEvidence = { meanDiff, pixelMae };
   }
+  // N5：错骨序——剔除 torso 骨骼 6 后 torso 归属必须塌缩为 0（证明归属由骨骼集合驱动）。
+  const noTorsoCounts = await regionTriCounts([AUTH.neck, [], AUTH.leftHand, AUTH.rightHand]);
+  neg.boneOrderDrift = { baseTorso: baseCounts?.torso, noTorsoAfter: noTorsoCounts?.torso };
+  neg.boneOrderDriftDetected = !!(noTorsoCounts && noTorsoCounts.torso === 0 && baseCounts.torso > 0);
   summary.negative.m31 = neg;
-  ok(neg.handSwapDetected === true, "负测N1：左右手语义归属真实参与分区（左手=" + neg.handSwapEvidence?.leftHandTris + " 右手=" + neg.handSwapEvidence?.rightHandTris + "）");
-  ok(neg.torsoInjectWouldChange === true, "负测N2：腰腹注入左手集合会改变归属（torso=" + neg.torsoInjectEvidence?.torsoTris + " 三角形）");
-  ok(neg.uvShiftChangesRef === true, "负测N3：参考样本集合错位（UV 平移）会改变逐像素参考");
+  ok(neg.handSwapDetected === true, "负测N1：左右手交换后语义对调（swap.leftMae≈base.rightMae 且与 base.leftMae 不同；计数对称 " + (neg.handSwap.baseLeft ?? "?") + "↔" + (neg.handSwap.baseRight ?? "?") + "）");
+  ok(neg.torsoInjectDetected === true, "负测N2：腰腹注入左手后左手归属数增大且逐像素MAE变化（左 " + (neg.torsoInject.baseLeft ?? "?") + "→" + (neg.torsoInject.injectLeft ?? "?") + "，torso " + (neg.torsoInject.baseTorso ?? "?") + "→" + (neg.torsoInject.injectTorso ?? "?") + "）");
+  ok(neg.uvShiftChangesRef === true, "负测N3：参考样本集合错位（UV 平移）改变逐像素参考（face_d 已在启动配置守卫）");
   ok(neg.meanCancellationDetected === true, "负测N4：均值抵消构造下真逐像素 MAE>0 而均值差≈0，Gate 用前者");
+  ok(neg.boneOrderDriftDetected === true, "负测N5：错骨序（剔除 torso 骨骼 6）后 torso 归属塌缩为 0（" + (neg.boneOrderDrift.baseTorso ?? "?") + "→" + (neg.boneOrderDrift.noTorsoAfter ?? "?") + "），骨序漂移可被检出");
 }
 
 // normal 模式 A/B 截图（全身 + 四区域近景同视角）。
@@ -782,7 +924,16 @@ ok(summary.pageErrors.length === 0, "无 pageError（" + summary.pageErrors.leng
 ok(summary.failedRequests.length === 0, "无 failedRequests（" + summary.failedRequests.length + "）");
 ok(summary.httpBadResponses.length === 0, "无 HTTP 4xx/5xx（" + summary.httpBadResponses.length + "）");
 
-summary.threshold = { regionMaeCandidate: REGION_MAE_CANDIDATE, minRegionSamples: MIN_REGION_SAMPLES, note: "候选阈值（非正式）；Web 四区域 HDR 线性 vs Blender 同材质同语义区域（body_d×warm）参考；非逐像素对齐（Web/Blender frame120 姿态差已证），口径=材质级常量+区域语义分区" };
+summary.threshold = { regionMaeCandidate: REGION_MAE_CANDIDATE, minRegionSamples: MIN_REGION_SAMPLES, note: "候选阈值（非正式）；Web 四区域 HDR 线性 vs 同 UV 参考（body_d×warm 双线性 mip0）" };
+// 修正轮（验收修正 7）：四区域 MAE 仍超阈值时，参考为纯 albedo（body_d×warm 无光照）而 Web HDR
+// 含白光世界光照是当前的主要候选差异来源；但真实 GPU sampler/LOD 对照未做，mip/LOD/sampler
+// 仍为未排除项，不得表述为「颜色/光照是唯一剩余根因」。
+summary.remainingRootCause = {
+  status: "color-gate-unresolved",
+  primaryCandidate: "参考=纯albedo(body_d×warm 无光照) vs Web HDR 含白光世界光照（G/B 通道口径差）",
+  unExcluded: ["mip/LOD 逐层对照未做（双线性 mip0 与 GPU 逐 mip 采样无法完全等价）", "GPU sampler 各向异性/过滤细节未对照", "色彩空间/显示变换链未逐段对账"],
+  note: "机制 Gate（语义分区/同集合/逐像素口径/draw-call 绑定/负测）已闭合；颜色对账属独立 failure family。",
+};
 summary.ref = { bodyDMeanLinear, blenderTris: blenderTris.length };
 summary.occludedRegions = occludedRegions;
 fs.mkdirSync(OUT, { recursive: true });

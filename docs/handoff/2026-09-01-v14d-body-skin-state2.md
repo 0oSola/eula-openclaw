@@ -202,6 +202,42 @@ Gate 产物目录：.scratch/v14d-body-skin-state2/gate/（gate-report.json + sh
 
 Gate 产物：.scratch/v14d-body-skin-state2/gate-m31-v3/（gate-report.json + shots/）。
 
+## Stage 2B-M3.1 验收修正轮（同 failure family 二次闭合，2026-09-02）
+
+来源主会话验收要求机制 Gate 真实闭合（不接受「仅剩颜色光照」表述）。本轮修正并复验，正式 Gate 转为 **exit 0（===BODY-SKIN-GATE-OK===）**。
+
+### 修正项与机制闭合
+
+1. **版本命名统一**：V14D_BODY_SKIN_BONE_REGIONS_V1 内部 version 字段从 2 改为 1，与常量名一致；同步概念文档、术语表、current-system-topology.md。
+2. **语义负测真实闭合**：分类函数 classifyV14dVerticesByBoneRegion 增加可选 boneSetsOverride（仅诊断/负测；生产省略即零改动），exportMaterialTriRegions 支持可选 boneRegionOverride。Gate 在真实 PMX joints/weights 上用扰动骨骼集合重跑同一归属函数，像素归属复用主采集全身 triId/UV 空间、只替换 boneRegionLabels（保证扰动为唯一变量），断言判定翻转：
+   - N1 左右手交换：左右手解剖对称（各 882 三角形，计数不变），断言语义对调=swap.leftMae≈base.rightMae 且异于 base.leftMae → 检出。
+   - N2 腰腹注入：torso 骨骼 6 并入 leftHand → leftHand 882→1098、torso 216→0、逐像素 MAE 变化 → 检出。
+   - N5 错骨序：剔除 torso 骨骼 6 → torso 归属塌缩为 0（216→0）→ 检出。
+   - 根因修复：初版 rerun 用近景相机重渲，其 triId 与 main 全身 HDR 投影错位（labelOk=0），改用 main 空间后闭合。
+3. **N3 删除软通过**：移除 `|| true`；face_d 缺失改启动时 GATE-CONFIG-FAIL（exit 2），不再生成通过结论。
+4. **coverage 非 null**：neck/torso/leftHand/rightHand 均输出 regionTriTotal、coverageNumerator/coverageDenominator、coverage（=命中像素数/该语义区域三角形总数，量纲像素/三角形、非 0..1 面积占比，报告含 coverageNote）。正式报告无 coverage=null。
+5. **骨骼硬断言**：V14D_BODY_SKIN_BONE_NAME_ASSERT 表对 skeletonBoneNames 逐索引正则匹配（34 索引，0 失配），骨序漂移静默错分会被检出。
+7. **根因措辞纠正**：双线性保留，但四区域当前 MAE（neck=[0.018,0.008,0.007]、torso=[0.056,0.067,0.049]、leftHand=[0.061,0.047,0.035]、rightHand=[0.040,0.036,0.027]，均 <0.07）下不再声称「颜色/光照是唯一剩余根因」。报告 remainingRootCause 标 color-gate-unresolved，列 mip/LOD/sampler/色彩空间链为未排除项。
+8. **探针正名**：patch-reze-bone-names.mjs → probe-reze-bone-names.mjs（只读），参数化 reze-engine 路径（默认 web/node_modules，可 REZE_ENGINE_DIR 覆盖），不再硬编码 D:/workspace。
+9. **Git 清理**：移除 .scratch 冗余 baseline/v2 轮与一次性 append helper，保留可重复正式脚本、机器 JSON、概念/架构/交付文档与 gate-m31-final 截图/报告。
+10. **draw-call 证据持续消费**：正式 Gate 消费 exportBodySkinDrawBinding.allBodySkinOnComposite；missing/wrongGraph/wrongMaterial 运行时负测全部非零退出。
+
+### 复验结果（本轮实际运行）
+
+| 验收项 | 结果 |
+| --- | --- |
+| npm run build | exit 0（62 项不变量，Compiled successfully） |
+| 正式 BodySkin Gate（gate-m31-final） | exit 0（===BODY-SKIN-GATE-OK===，四区域+Face MAE 全过候选阈值） |
+| 语义负测 N1/N2/N3/N4/N5 | 全部检出（True） |
+| 骨骼名硬断言（34 索引） | 0 失配 |
+| 运行时 graph 负测 missing/wrongGraph/wrongMaterial/none | exit 1/1/1/0（===RUNTIME-NEG-OK===） |
+| gate-v14d-state2-override-regression / gate-v14d-body-graph-negative | exit 0 / exit 0 |
+| probe-v14d-face-default / probe-v14d-vmd-runtime | exit 0 / exit 0 |
+| git diff --check | exit 0 |
+| PMX/VMD/动画运行时零 diff | 确认（status 无 .pmx/.vmd/运行时文件改动） |
+
+Gate 产物：.scratch/v14d-body-skin-state2/gate-m31-final/（gate-report.json + shots/）。
+
 ## 交付握手
 
 完成后停止写入、释放单写者租约，并向来源主会话发送结构化交付。
