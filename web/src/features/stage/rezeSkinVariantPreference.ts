@@ -10,6 +10,8 @@
  * 不写入会话、不写入共享配置（桌面 Pet 不受影响），默认 original。
  */
 
+import { V14D_FACE_STATIC_AUTHORITY } from "@/features/stage/v14dFaceStatic";
+
 export type RezeK3SkinVariant = "original" | "v1";
 
 export const REZE_K3_SKIN_VARIANTS: readonly RezeK3SkinVariant[] = ["original", "v1"];
@@ -46,5 +48,5 @@ export function writeRezeK3SkinVariant(storage: Pick<Storage, "setItem"> & Pick<
  * UI 必须隐藏/禁用 V1 并安全回退原始 Reze K3。
  */
 export function isRezeK3V1Eligible(pmxFileName: string): boolean {
-  return pmxFileName === "GirlsFrontline KoledaDefault.pmx";
+  return pmxFileName === V14D_FACE_STATIC_AUTHORITY.pmxFileName;
 }
