@@ -264,7 +264,7 @@
 # V14D 全身皮肤 State 2 实时合成（固定帧）
 
 - 英文机器名：`v14d-body-skin-state2`（契约 / contract id）；Web 全身皮肤（BodySkin）实时合成。
-- 含义：在 `v14dFaceStatic=1&v14dFaceMode=finalFaceComposite` 诊断入口下，把「只接入 Face」扩展为「Face + BodySkin 同一 V14D skin family」。BodySkin 用「body_d 线性 × 身体 warm=[1,0.945,0.905]」直出（不套脸部专用 State2 packed mask），与 Face 共享线性色彩处理与显示变换。四区域（neck/waist/leftHand/rightHand）按 BodySkin 三角形蒙皮世界质心（V14D_BODY_SKIN_REGIONS，世界 y 带 + x 符号）独立对账。
+- 含义：在 `v14dFaceStatic=1&v14dFaceMode=finalFaceComposite` 诊断入口下，把「只接入 Face」扩展为「Face + BodySkin 同一 V14D skin family」。BodySkin 用「body_d 线性 × 身体 warm=[1,0.945,0.905]」直出（不套脸部专用 State2 packed mask），与 Face 共享线性色彩处理与显示变换。四区域（neck/torso/leftHand/rightHand）按 BodySkin 三角形顶点主导骨骼归属（V14D_BODY_SKIN_BONE_REGIONS_V1，骨骼主导权重集合）独立对账；旧版 V14D_BODY_SKIN_REGIONS（世界 y 带 + x 符号矩形）已废弃，仅作历史参考。
 - 允许用法：固定 frame120 全身皮肤预览；bodyApplied 必须来自真实 graph 状态（组诊断 ok 且实际绑定 graph.name === "V14D Body Skin Composite"）；区域样本不足时诚实标记 occluded/checkpoint（exit 3），不软通过。
 - 禁止用法：不把脸部 State2 mask 套到 BodySkin UV；不用 faceResult.ok && 材质存在自证 bodyApplied；不把白衣/头发/眼睛归入皮肤；不在 loadModel 后伪改 path；不写成「完整 V14D/Face Gate 已通过」（本概念是视觉预览范围扩展）。
 - 路由影响：只影响 v14dFaceStatic=1&v14dFaceMode=finalFaceComposite 诊断渲染层与 patch-reze-engine.mjs（WGSL v14d_skin_body_composite helper）；不影响 PMX/VMD Runtime、默认生产入口（诊断开关默认关闭）。
@@ -275,6 +275,6 @@
 - 英文机器名：v14d-bodyskin-bone-semantic-region（概念 id）；常量 V14D_BODY_SKIN_BONE_REGIONS_V1、函数 classifyV14dVerticesByBoneRegion、导出字段 boneRegionLabels。
 - 含义：BodySkin 三角形按顶点主导骨骼（蒙皮权重最大的骨骼索引）归属语义区域（neck 颈部 / torso 躯干腰腹 / leftHand 左手 / rightHand 右手），替代旧版 V14D_BODY_SKIN_REGIONS 的世界 y 带 + x 符号矩形分区。骨骼索引序 = reze-engine 运行时 skeleton.bones 顺序（PMX 骨骼段序），版本号 v1 与该索引集合绑定（与常量名 V14D_BODY_SKIN_BONE_REGIONS_V1 一致，单一权威版本名）。
 - 允许用法：作为 BodySkin 语义区域正式归属依据；区域集合互不重叠、一个骨骼索引至多属一个区域；模型或引擎更换骨骼排序必须升版本并重新核对索引。
-- 禁止用法：不再用世界 y 带 + x 符号矩形作为正式归属（已废弃，仅兼容回退）；不把 Blender 顶点组索引直接当 PMX joints 索引（两套索引序不同）；不把腕/手捩骨（被袖口覆盖）计入手部可见皮肤。
+- 禁止用法：不再用世界 y 带 + x 符号矩形作为正式归属（已废弃，仅历史/legacy 诊断字段透传，不参与正式归属、不是兼容回退）；不把 Blender 顶点组索引直接当 PMX joints 索引（两套索引序不同）；不把腕/手捩骨（被袖口覆盖）计入手部可见皮肤。
 - 路由影响：只影响 v14dFaceStatic=1 诊断导出（exportMaterialTriRegions）与 web/scripts/gate-v14d-body-skin-state2.mjs 的区域归属计算；不影响生产默认入口、PMX/VMD/骨骼/物理/播放链。
 - 完整定义：见 workflow/concepts/v14d-bodyskin-bone-semantic-region.zh-CN.md。

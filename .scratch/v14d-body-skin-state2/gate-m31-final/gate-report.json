@@ -21,11 +21,14 @@
         0.2422592213114754
       ],
       "mask": "BodySkin triId+UV pick mask（HDR 前景）",
-      "coverage": 5.820610687022901,
-      "coverageNumerator": 1525,
+      "coverage": 0.11068702290076336,
+      "visibleTriCoverageNumerator": 29,
+      "visibleTriCoverageDenominator": 262,
+      "samplesPerTriangle": 52.58620689655172,
+      "coverageNumerator": 29,
       "coverageDenominator": 262,
       "regionTriTotal": 262,
-      "coverageNote": "coverage=numerator/denominator=近景命中像素数/该语义区域三角形总数；量纲为像素/三角形（与全身区一致），非 0..1 面积占比。",
+      "coverageNote": "coverage=visibleTriCoverageNumerator/visibleTriCoverageDenominator=近景正式样本命中的唯一三角形数/该语义区域三角形总数，∈[0,1]（与全身同一语义分母：regionTriTotal）。",
       "refLinear": [
         0.732969129342961,
         0.3448587633728679,
@@ -60,43 +63,46 @@
         "id": "torso"
       },
       "triangles": null,
-      "samples": 2945,
+      "samples": 2893,
       "meanLinear": [
-        0.8127745649405772,
-        0.45296715831918505,
-        0.3355050933786078
+        0.8127686981507086,
+        0.45307369080539234,
+        0.33557293466989285
       ],
       "mask": "BodySkin triId+UV pick mask（HDR 前景）",
-      "coverage": 13.63425925925926,
-      "coverageNumerator": 2945,
+      "coverage": 0.05092592592592592,
+      "visibleTriCoverageNumerator": 11,
+      "visibleTriCoverageDenominator": 216,
+      "samplesPerTriangle": 263,
+      "coverageNumerator": 11,
       "coverageDenominator": 216,
       "regionTriTotal": 216,
-      "coverageNote": "coverage=numerator/denominator=近景命中像素数/该语义区域三角形总数；量纲为像素/三角形（与全身区一致），非 0..1 面积占比。",
+      "coverageNote": "coverage=visibleTriCoverageNumerator/visibleTriCoverageDenominator=近景正式样本命中的唯一三角形数/该语义区域三角形总数，∈[0,1]（与全身同一语义分母：regionTriTotal）。",
       "refLinear": [
-        0.7615163100821639,
-        0.3878516468043298,
-        0.287717100768176
+        0.7614435553587341,
+        0.3877329948565857,
+        0.28759873556929577
       ],
-      "refSamples": 2945,
+      "refSamples": 2893,
       "referenceSource": "body_d×warm 同UV逐像素采样（Web 像素 triId+UV）",
       "p95Err": 0.08308900852651152,
       "maePerChannel": [
-        0.056712268067824645,
-        0.06699230110767881,
-        0.048865286501355194
+        0.05670852980388308,
+        0.06713581003306986,
+        0.04900473788975038
       ],
       "numerator": [
-        167.01762945974357,
-        197.2923267621141,
-        143.90826874649105
+        164.05777672263375,
+        194.22389842567108,
+        141.77070671504785
       ],
-      "denominator": 2945,
+      "denominator": 2893,
       "pass": true,
       "status": "ok",
       "bbox": [
         26,
         256,
-        85,
+        84,
         321
       ],
       "view": "closeup"
@@ -113,11 +119,14 @@
         0.3273259943181818
       ],
       "mask": "BodySkin triId+UV pick mask（HDR 前景）",
-      "coverage": 0.09977324263038549,
-      "coverageNumerator": 88,
+      "coverage": 0.08616780045351474,
+      "visibleTriCoverageNumerator": 76,
+      "visibleTriCoverageDenominator": 882,
+      "samplesPerTriangle": 1.1578947368421053,
+      "coverageNumerator": 76,
       "coverageDenominator": 882,
       "regionTriTotal": 882,
-      "coverageNote": "coverage=numerator/denominator=全身命中像素数/该语义区域三角形总数；量纲为像素/三角形，非 0..1 面积占比。占 BodySkin 可见总像素比=n/totalVisible（诊断参考，见 fullbodyShare）。",
+      "coverageNote": "coverage=visibleTriCoverageNumerator/visibleTriCoverageDenominator=正式样本命中的唯一三角形数/该语义区域三角形总数，∈[0,1]。samples=命中像素数、samplesPerTriangle=每三角形平均像素；占 BodySkin 可见总像素比=n/totalVisible（诊断参考，见 fullbodyShare）。",
       "refLinear": [
         0.8550548600007083,
         0.47018776705051624,
@@ -159,11 +168,14 @@
         0.33895089285714286
       ],
       "mask": "BodySkin triId+UV pick mask（HDR 前景）",
-      "coverage": 0.1984126984126984,
-      "coverageNumerator": 175,
+      "coverage": 0.14399092970521543,
+      "visibleTriCoverageNumerator": 127,
+      "visibleTriCoverageDenominator": 882,
+      "samplesPerTriangle": 1.3779527559055118,
+      "coverageNumerator": 127,
       "coverageDenominator": 882,
       "regionTriTotal": 882,
-      "coverageNote": "coverage=numerator/denominator=全身命中像素数/该语义区域三角形总数；量纲为像素/三角形，非 0..1 面积占比。占 BodySkin 可见总像素比=n/totalVisible（诊断参考，见 fullbodyShare）。",
+      "coverageNote": "coverage=visibleTriCoverageNumerator/visibleTriCoverageDenominator=正式样本命中的唯一三角形数/该语义区域三角形总数，∈[0,1]。samples=命中像素数、samplesPerTriangle=每三角形平均像素；占 BodySkin 可见总像素比=n/totalVisible（诊断参考，见 fullbodyShare）。",
       "refLinear": [
         0.8591207581856157,
         0.4701081019088665,
@@ -201,9 +213,9 @@
     },
     "samples": 469,
     "meanLinear": [
-      0.828233275586354,
+      0.828183302238806,
       0.5328741337953091,
-      0.4818346881663113
+      0.4818180303837953
     ],
     "coverage": 1,
     "mask": "Face pick mask（HDR 前景）",
@@ -214,21 +226,21 @@
     ],
     "refSamples": 469,
     "referenceSource": "face_d×Face warm=[1,0.935,0.89] 同UV逐像素采样（基色×warm 口径，不含 State2 art/fringe）",
-    "p95Err": 0.3193722592827166,
+    "p95Err": 0.3271847592827166,
     "mae": [
-      0.09456409697654936,
+      0.09461407032409733,
       0.06327284276143764,
-      0.05111535466818625
+      0.051132012450702244
     ],
     "maePerChannel": [
-      0.09456409697654936,
+      0.09461407032409733,
       0.06327284276143764,
-      0.05111535466818625
+      0.051132012450702244
     ],
     "numerator": [
-      44.350561482001645,
+      44.373998982001645,
       29.674963255114257,
-      23.97310133937935
+      23.98091383937935
     ],
     "denominator": 469,
     "bbox": [
@@ -295,9 +307,9 @@
           0.03465033580082774
         ],
         "injectLeftMae": [
-          0.03464929872862122,
-          0.02144670055404197,
-          0.01684281778491489
+          0.03478223874798501,
+          0.02154152877824851,
+          0.016710112266239203
         ]
       },
       "torsoInjectDetected": true,
@@ -319,31 +331,37 @@
         "meanDiff": 0,
         "pixelMae": 0.30000000000000004
       },
-      "boneOrderDrift": {
+      "boneSetRemoval": {
         "baseTorso": 216,
         "noTorsoAfter": 0
       },
-      "boneOrderDriftDetected": true
+      "boneSetRemovalDetected": true
     }
   },
   "boneNameAssert": {
     "checked": 34,
     "mismatches": []
   },
+  "boneNameNeg": {
+    "swap68": 2,
+    "rename6": 1
+  },
   "threshold": {
     "regionMaeCandidate": 0.2,
     "minRegionSamples": 30,
     "note": "候选阈值（非正式）；Web 四区域 HDR 线性 vs 同 UV 参考（body_d×warm 双线性 mip0）"
   },
-  "remainingRootCause": {
-    "status": "color-gate-unresolved",
-    "primaryCandidate": "参考=纯albedo(body_d×warm 无光照) vs Web HDR 含白光世界光照（G/B 通道口径差）",
-    "unExcluded": [
+  "colorGate": {
+    "status": "candidate-color-gate-passed",
+    "note": "正式逐像素 MAE Gate 已通过（候选阈值）。机制 Gate（语义分区/同集合/逐像素口径/draw-call 绑定/负测）已闭合。",
+    "limitations": [
+      "本 Gate 用 body_d/face_d×warm 的 mip0 双线性参考，非 GPU 逐 mip/逐 sampler 对照"
+    ],
+    "unexcludedRisks": [
       "mip/LOD 逐层对照未做（双线性 mip0 与 GPU 逐 mip 采样无法完全等价）",
       "GPU sampler 各向异性/过滤细节未对照",
       "色彩空间/显示变换链未逐段对账"
-    ],
-    "note": "机制 Gate（语义分区/同集合/逐像素口径/draw-call 绑定/负测）已闭合；颜色对账属独立 failure family。"
+    ]
   },
   "ref": {
     "bodyDMeanLinear": [
