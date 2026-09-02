@@ -1,11 +1,11 @@
 # Reze K3 V1 HairA/HairB 头发材质迁移（Stage 2C-M1）交付报告
 
-- 票据：`codex/v14d-hairab-stage`（来源 threadId=01a036ca-f4cc-7b22-8482-b4e72b231053，hostId=local）
+- 票据：`codex/v14d-hairab-stage`（来源 threadId=01a036ca-f4cc-7b22-8482-b4e72b231053，hostId=local，source_project_id=local-140a2801b88e7626327b2eb4694a8b91）
 - 执行模型：kimi/k3-256k（视觉识别/真实舞台验收）
 - 工作树：`E:\codexWorktree\01bf\MMD project`，分支 `codex/v14d-hairab-stage`
 - 基线：base_commit `1c366814d54689a01356d21da358c061c4aac32b`（project_binding_verified=true）
 - 完成时间：2026-09-03
-- 状态：**实现完成、真实舞台端到端验收通过（G1-G7 全过）**
+- 状态：**实现完成、真实舞台端到端验收通过（G1-G6 六项运行时 Gate 全过 + 独立工程门禁全绿）**
 
 ## 目标
 
@@ -62,8 +62,8 @@ Face、BodySkin 保持既有 V1 行为，其余 11 个待迁移槽不实施。
 | Gate | 结果 | 关键证据 |
 | --- | --- | --- |
 | G1 用户路径与切换 | ✅ | 导入后变体 UI 出现；点 V1 后 canvas=v1；切回 original 一致 |
-| G2 真实绑定+负测 | ✅ | Face/BodySkin/HairA/HairB drawCalls 各 1/1 命中目标 graph；负测 original不命中/重命名PMX/缺mask/错误graph(全0)/applyStyleGroups失败(回退original) 全过 |
-| G3 视觉 A/B | ✅ | 皮肤收敛（face MAE=31.9 等）、**hairChanged=true（mae=10.5/maxMeanDiff=11.1）**、衣服/装备/星空稳定（同变体连拍噪声基线校准）、脸部对 V14D 目标色比距离 0.196→0.140（drop 28.7%）；场景字段 original/V1 逐字段一致 |
+| G2 真实绑定+负测 | ✅ | Face/BodySkin/HairA/HairB drawCalls 各 1/1 命中目标 graph；负测 original不命中/重命名PMX/缺mask/错误graph(全0)/applyStyleGroups失败(回退original)/missingHairA(a=0,b=1)/missingHairB(a=1,b=0)/wrongHairMaterial(hair=0) 全过 |
+| G3 视觉 A/B + 分区目标收敛 | ✅ | 皮肤收敛（face MAE=31.9 等）、衣服/装备/星空稳定（同变体连拍噪声基线校准）、脸部对 V14D 目标色比距离 0.196→0.140（drop 28.7%）；**HairA/HairB 分区目标收敛**：HairA drop=0.219（origMae 61.3→v1Mae 47.9）、HairB drop=0.117（origMae 55.0→v1Mae 48.6），各槽 UV 锚点 targetMean 分别核对；前刘海/后长发近景与 UV 取证图产出；**wrongTint 负测**：错误青绿 tint 真实改色后被同一收敛 Gate 非零拒绝（绝对阈值判定）；场景字段（含 viewTransform exposure/gamma/look）original/V1 逐字段一致 |
 | G4 持久化 | ✅ | V1 刷新+重导入后保持 v1；切回 original 刷新保持 |
 | G5 VMD 零回归 | ✅ | original/V1 各 load→play→pause→seek→完整播放至结束（完成回调计数自增+nearTail）；提前停止/竞态/过期回调负测全过；resetPhysics 计数>0 |
 | G6 管线隔离+探针泄漏 | ✅ | 切 reze-design 后真实克莱妲重建为 original、变体 UI 不显示；探针默认关闭 |

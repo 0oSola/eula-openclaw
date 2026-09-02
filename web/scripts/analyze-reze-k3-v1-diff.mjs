@@ -14,6 +14,7 @@
 import sharp from "sharp";
 import fs from "node:fs"; import path from "node:path";
 import crypto from "node:crypto";
+import { buildHairUvGridFromPmx, classifyHairPixel, v14dHairTargetDisplay } from "../src/features/stage/v14dHairPartition.js";
 const OUT = path.resolve(".scratch/reze-k3-v1-stage");
 const ORIG = path.join(OUT, "g3-original-canvas.png");
 const V1 = path.join(OUT, "g3-v1-canvas.png");
@@ -21,10 +22,16 @@ const V1 = path.join(OUT, "g3-v1-canvas.png");
 // 待机微动帧间噪声区分（Stage 2C-M1 噪声基线，防把微动误判为材质泄漏）。
 const ORIG_B = path.join(OUT, "g3-original-canvas-b.png");
 const TARGET = process.env.V14D_TARGET || "C:\\w\\rk3-face-v14d\\.scratch\\v14d-face-static-derived\\blender-ref-finalFaceComposite.png";
+// 负测模式（仅 --neg-wrongtint）：读 G3 负测注入后的 wrongTint 画布，其余同正式口径。
+// 该模式要求正式画布已存在（用于对比），产出独立 visual-diff-wrongtint.json，不覆盖正式报告。
+const NEG_WRONGTINT = process.argv.includes("--neg-wrongtint");
+const V1_ACTUAL = NEG_WRONGTINT ? path.join(OUT, "g3-v1-canvas-wrongtint.png") : V1;
+const REPORT_JSON = NEG_WRONGTINT ? path.join(OUT, "visual-diff-wrongtint.json") : path.join(OUT, "visual-diff.json");
 if (!fs.existsSync(ORIG) || !fs.existsSync(V1)) { console.error("missing canvas pngs"); process.exit(1); }
+if (NEG_WRONGTINT && !fs.existsSync(V1_ACTUAL)) { console.error("missing wrongtint canvas " + V1_ACTUAL); process.exit(1); }
 
 async function loadRaw(p) { const { data, info } = await sharp(p).ensureAlpha().raw().toBuffer({ resolveWithObject: true }); return { data, width: info.width, height: info.height }; }
-const a = await loadRaw(ORIG); const b = await loadRaw(V1);
+const a = await loadRaw(ORIG); const b = await loadRaw(NEG_WRONGTINT ? V1_ACTUAL : V1);
 if (a.width !== b.width || a.height !== b.height) { console.error("size mismatch"); process.exit(1); }
 // 同变体连拍（可选）：original 第二帧，作为非皮肤「待机微动噪声基线」。
 const a2 = fs.existsSync(ORIG_B) ? await loadRaw(ORIG_B) : null;
@@ -40,8 +47,12 @@ const regions = {
   rightHand: { x: 0.63,  y: 0.42, w: 0.10, h: 0.10, kind: "skin" },
   waist:     { x: 0.50,  y: 0.50, w: 0.10, h: 0.06, kind: "skin", occluded: true }, // T 形被外套遮挡
   // Stage 2C-M1：HairA/HairB 已迁移为 V1 目标槽，从「必须稳定」改为「必须显著变化」
-  // （kind: "hair"）。其余非皮肤（衣服/装备/星空）仍必须稳定。
+  // （kind: "hair"）。合并 hair ROI 保留（整头变化证据），另加 HairA 前刘海 /
+  // HairB 后长发分区 ROI（full-frame 归一化坐标），各自独立判定，不用整头均值
+  // 掩盖分区失败。其余非皮肤（衣服/装备/星空）仍必须稳定。
   hair:      { x: 0.53,  y: 0.0,  w: 0.10, h: 0.06, kind: "hair" },
+  hairA:     { x: 0.30,  y: 0.02, w: 0.40, h: 0.24, kind: "hair", image: "g3-hair-front-orig.png", imageV1: "g3-hair-front-v1.png" }, // 前刘海近景
+  hairB:     { x: 0.30,  y: 0.02, w: 0.40, h: 0.34, kind: "hair", image: "g3-hair-back-orig.png", imageV1: "g3-hair-back-v1.png" }, // 后长发近景
   // Stage 2C-M1：clothes ROI 收窄到衣服主体（左中 3/4），排除右列刘海/头发遮挡区
   // （网格探针显示该区 original↔V1 与同变体连拍噪声同为高位 2.3-11.7 vs 1.0-4.3，
   // 是头发遮挡/高光帧间微动噪声，非衣服材质泄漏；衣服主体两侧均 <0.5）。
@@ -164,6 +175,14 @@ const THRESHOLDS = {
   nonSkinStableMeanMeanDiff: 1.0, // 非皮肤区 meanMeanDiff（平均色偏）必须 < 1（大面积材质不被改写）
   nonSkinStableMaxMeanDiff: 2.0,  // 非皮肤区 maxMeanDiff 上限（单通道色偏，远高于噪声、低于真实改写）
   bgStableMeanDiff: 0.5,         // 星空背景暗空像素 maxMeanDiff 必须 < 0.5（灯光/背景不变）
+  // Stage 2C-M1 修正轮：HairA/HairB 分区对权威 V14D BaseColor 目标的收敛判定阈值。
+  // 目标 = hair_d(sRGB→线性)×[0.84,0.85,0.96] 经 linearToSrgb 转回显示字节（与引擎
+  // WGSL helper 同一公式、同一 sRGB 绑定采样口径）。绝对误差含引擎灯光/Toon 显示链
+  // 的乘性亮度差（未迁移部分），故收敛判据用「V1 误差 < original 误差 且 下降比例
+  // > drop 且 绝对上限」，不用绝对零误差冒充逐像素对齐。
+  hairTargetDrop: 0.05,         // (origMae - v1Mae)/origMae 必须 > 0.05（向目标显著下降）
+  hairTargetAbsMae: 90,         // V1 对目标的绝对 MAE 上限（显示字节 0-255；含显示链亮度差）
+  minHairTargetSamples: 30,     // 分区目标判定最小像素数（防近景框内无该槽像素假通过）
   // Stage 2C-M1：HairA/HairB 目标槽必须显著变化（V14D 银白紫乘色 [0.84,0.85,0.96] 真实生效）。
   // 阈值参考皮肤收敛口径（mae>1 且 maxMeanDiff>1），与皮肤/错误颜色负测共用同一判别力。
   hairChangeMae: 1.0,            // 头发区（非皮肤像素采样）MAE 必须 > 1（证明 V14D 头发材质显著变化）
@@ -174,14 +193,109 @@ const THRESHOLDS = {
 
 const out = { width: W, height: H, thresholds: THRESHOLDS, target: TARGET, regions: {}, verdict: {}, occluded: [] };
 const failures = [];
+
+// ── Stage 2C-M1 修正轮：HairA/HairB 分区权威目标网格（同 UV 取证）─────────────
+// 从权威 PMX 解析 HairA/HairB 面区间顶点 UV 归属网格，加载权威 hair_d 纹理，
+// 按「画布像素 → 近景 ROI → hair_d 纹理坐标 → 单位格归属槽位」求分区目标误差。
+// 任一资产缺失则 hairTargetGrid=null，分区收敛判定显式 unavailable（不假装通过）。
+const HAIR_TEX = process.env.V14D_HAIR_TEX || "D:\\mmd\\克莱妲原皮\\Textures\\c_KoledaSSR01_slg_hair_d.png";
+const HAIR_PMX = process.env.V14D_HAIR_PMX || "D:\\mmd\\克莱妲原皮\\GirlsFrontline KoledaDefault.pmx";
+const HAIR_FACE_RANGES = {
+  // 来自 docs/handoff/evidence/pmx_audit.out.json 的 material_face_ranges（权威冻结）。
+  hairA: { name: "HairA", startIndex: 190407, indexCount: 30198 },
+  hairB: { name: "HairB", startIndex: 220605, indexCount: 13512 },
+};
+let hairTargetGrid = null;
+let hairTexRaw = null;
+if (fs.existsSync(HAIR_PMX) && fs.existsSync(HAIR_TEX)) {
+  try {
+    const pmxBuf = fs.readFileSync(HAIR_PMX);
+    hairTargetGrid = buildHairUvGridFromPmx(
+      pmxBuf.buffer.slice(pmxBuf.byteOffset, pmxBuf.byteOffset + pmxBuf.byteLength),
+      HAIR_FACE_RANGES,
+    );
+    hairTexRaw = await loadRaw(HAIR_TEX);
+  } catch (e) {
+    failures.push("头发目标网格构建失败: " + (e && e.message ? e.message : e));
+  }
+}
+
+/**
+ * 分区 UV 取证图（人读 A/B 证据，非机器收敛判据）：把 hair_d 纹理中归属本槽的
+ * UV 像素抠出，生成 original 语义（hair_d 原色）与 V14D 目标（v14dHairTargetDisplay）
+ * 两张同 UV 对齐图 + 差异图，写入 OUT 供报告/审查。屏幕空间近景图由 accept 脚本
+ * 的相机摆拍另行产出；机器收敛判定用 hairSlotUvStats 的 UV 统计（见下）。
+ */
+async function writeHairSlotUvImages() {
+  if (!hairTargetGrid || !hairTexRaw) return {};
+  const texW = hairTexRaw.width, texH = hairTexRaw.height;
+  const written = {};
+  for (const slot of ["hairA", "hairB"]) {
+    const origPx = Buffer.alloc(texW * texH * 4);
+    const tgtPx = Buffer.alloc(texW * texH * 4);
+    const diffPx = Buffer.alloc(texW * texH * 3);
+    let n = 0;
+    for (let py = 0; py < texH; py++) for (let px = 0; px < texW; px++) {
+      if (classifyHairPixel(hairTargetGrid, px, py, texW, texH) !== slot) continue;
+      const ti = (py * texW + px) * 4;
+      const rgb = [hairTexRaw.data[ti], hairTexRaw.data[ti + 1], hairTexRaw.data[ti + 2]];
+      const tgt = v14dHairTargetDisplay(rgb);
+      const o = ti;
+      origPx[o] = rgb[0]; origPx[o + 1] = rgb[1]; origPx[o + 2] = rgb[2]; origPx[o + 3] = 255;
+      tgtPx[o] = tgt[0]; tgtPx[o + 1] = tgt[1]; tgtPx[o + 2] = tgt[2]; tgtPx[o + 3] = 255;
+      const d = Math.min(255, Math.round(((Math.abs(rgb[0] - tgt[0]) + Math.abs(rgb[1] - tgt[1]) + Math.abs(rgb[2] - tgt[2])) / 3) * 6));
+      const dj = (py * texW + px) * 3;
+      diffPx[dj] = d; diffPx[dj + 1] = d; diffPx[dj + 2] = d;
+      n++;
+    }
+    if (!n) continue;
+    const crop = await sharp(hairTexRaw.data, { raw: { width: texW, height: texH, channels: 4 } }).png().toBuffer();
+    await sharp(origPx, { raw: { width: texW, height: texH, channels: 4 } }).png().toFile(path.join(OUT, "hair-uv-" + slot + "-original.png"));
+    await sharp(tgtPx, { raw: { width: texW, height: texH, channels: 4 } }).png().toFile(path.join(OUT, "hair-uv-" + slot + "-v14d-target.png"));
+    await sharp(diffPx, { raw: { width: texW, height: texH, channels: 3 } }).png().toFile(path.join(OUT, "hair-uv-" + slot + "-diff.png"));
+    written[slot] = { samples: n, original: "hair-uv-" + slot + "-original.png", target: "hair-uv-" + slot + "-v14d-target.png", diff: "hair-uv-" + slot + "-diff.png" };
+  }
+  return written;
+}
+
+/**
+ * 分区 UV 统计（机器收敛判据）：对本槽全部 UV 单位格内像素，分别求「original 语义
+ * （hair_d 原色）」与「V14D 目标（×tint）」的差异。这证明目标公式相对 original 的
+ * 真实改写幅度（targetMae>0 且分区间可比），是屏幕侧收敛判定的纹理空间锚点：
+ * original 语义与目标的差距 = 迁移需要弥合的差距；屏幕侧 V1 的判定把「变化方向
+ * 与幅度」与该锚点对照。
+ */
+function hairSlotUvStats(slot) {
+  if (!hairTargetGrid || !hairTexRaw) return { error: "no-target-grid" };
+  const texW = hairTexRaw.width, texH = hairTexRaw.height;
+  let n = 0, origAbs = 0, tgtShift = 0;
+  const mean = [0, 0, 0], tgtMean = [0, 0, 0];
+  for (let py = 0; py < texH; py++) for (let px = 0; px < texW; px++) {
+    if (classifyHairPixel(hairTargetGrid, px, py, texW, texH) !== slot) continue;
+    const ti = (py * texW + px) * 4;
+    const rgb = [hairTexRaw.data[ti], hairTexRaw.data[ti + 1], hairTexRaw.data[ti + 2]];
+    const tgt = v14dHairTargetDisplay(rgb);
+    for (let c = 0; c < 3; c++) { mean[c] += rgb[c]; tgtMean[c] += tgt[c]; }
+    tgtShift += (Math.abs(rgb[0] - tgt[0]) + Math.abs(rgb[1] - tgt[1]) + Math.abs(rgb[2] - tgt[2])) / 3;
+    n++;
+  }
+  if (!n) return { error: "no samples" };
+  return {
+    slot, samples: n,
+    originalMean: mean.map((v) => +(v / n).toFixed(2)),
+    targetMean: tgtMean.map((v) => +(v / n).toFixed(2)),
+    targetShiftMae: +(tgtShift / n).toFixed(3), // original 语义 → 目标的逐像素 MAE（迁移需弥合的差距）
+  };
+}
+
 for (const [name, r] of Object.entries(regions)) {
   if (r.occluded) { out.regions[name] = { occluded: true, note: "frame 当前姿势下不可见，标记 occluded，不参与收敛/稳定判定" }; out.occluded.push(name); continue; }
-  if (r.kind === "skin") {
-    const st = skinStats(r); out.regions[name] = st;
-    const ok = st.samples >= THRESHOLDS.minSkinSamples && st.mae > THRESHOLDS.skinConvergeMae && st.maxMeanDiff > THRESHOLDS.skinConvergeMeanDiff;
-    out.verdict[name + "Converged"] = ok;
-    if (!ok) failures.push(name + " 皮肤区未向目标显著收敛 samples=" + st.samples + " mae=" + st.mae + " maxMeanDiff=" + st.maxMeanDiff);
-  } else if (r.kind === "nonskin") {
+ if (r.kind === "skin") {
+   const st = skinStats(r); out.regions[name] = st;
+   const ok = st.samples >= THRESHOLDS.minSkinSamples && st.mae > THRESHOLDS.skinConvergeMae && st.maxMeanDiff > THRESHOLDS.skinConvergeMeanDiff;
+   out.verdict[name + "Converged"] = ok;
+   if (!ok) failures.push(name + " 皮肤区未向目标显著收敛 samples=" + st.samples + " mae=" + st.mae + " maxMeanDiff=" + st.maxMeanDiff);
+ } else if (r.kind === "nonskin") {
     const st = nonSkinStats(r); out.regions[name] = st;
     // Stage 2C-M1 噪声基线：若有 original 同变体连拍（a2），把 original↔V1 的非皮肤
     // 差异与同变体待机微动帧间噪声比较。只有显著高于同变体噪声才判为真实材质泄漏；
@@ -197,13 +311,43 @@ for (const [name, r] of Object.entries(regions)) {
     const ok = !leaked;
     out.verdict[name + "Stable"] = ok;
     if (!ok) failures.push(name + " 非皮肤区被 V1 成片改写 meanMeanDiff=" + st.meanMeanDiff + " maxMeanDiff=" + st.maxMeanDiff + (noise ? "（同变体噪声 meanMeanDiff=" + noise.meanMeanDiff + " maxMeanDiff=" + noise.maxMeanDiff + "）" : "（无同变体基线）") + "（判定阈值见 thresholds/噪声×4）");
-  } else if (r.kind === "hair") {
-    // Stage 2C-M1：头发目标槽必须显著变化（与皮肤收敛同判别力）。用非皮肤采样口径
-    // （剔除皮肤像素），但判定方向相反——要求真实改写而非稳定。
+ } else if (r.kind === "hair") {
+    // Stage 2C-M1 修正轮：头发目标槽做「显著变化 + 向权威 V14D BaseColor 目标收敛」
+    // 双判定（非「hairChanged=true」冒充）。变化判定与皮肤同判别力；收敛判定用
+    // 同 UV 目标误差（targetMae/drop，目标=srgb(hair_d)×tint 的线性合成转回显示字节）。
     const st = nonSkinStats(r); out.regions[name] = st;
-    const ok = st.mae > THRESHOLDS.hairChangeMae && st.maxMeanDiff > THRESHOLDS.hairChangeMaxMeanDiff;
-    out.verdict[name + "Changed"] = ok;
-    if (!ok) failures.push(name + " 头发目标槽未显著变化 mae=" + st.mae + " maxMeanDiff=" + st.maxMeanDiff + "（需 mae>" + THRESHOLDS.hairChangeMae + " 且 maxMeanDiff>" + THRESHOLDS.hairChangeMaxMeanDiff + "）");
+    const changed = st.mae > THRESHOLDS.hairChangeMae && st.maxMeanDiff > THRESHOLDS.hairChangeMaxMeanDiff;
+    out.verdict[name + "Changed"] = changed;
+    if (!changed) failures.push(name + " 头发目标槽未显著变化 mae=" + st.mae + " maxMeanDiff=" + st.maxMeanDiff + "（需 mae>" + THRESHOLDS.hairChangeMae + " 且 maxMeanDiff>" + THRESHOLDS.hairChangeMaxMeanDiff + "）");
+    // 目标收敛（HairA/HairB 分区各自判定，不用整头均值掩盖单槽失败）：
+    // 权威目标 = hair_d(sRGB→线性)×[0.84,0.85,0.96] 转回显示字节（与引擎 WGSL helper
+    // 同一公式、同一 sRGB 绑定采样口径）。收敛 = V1 对本槽目标的逐像素误差较 original
+    // 显著下降（drop>hairTargetDrop）且绝对 MAE < hairTargetAbsMae。目标色取自本槽
+    // UV 锚点均值（hairSlotUvStats 的 targetMean）：屏幕像素与 UV 无一一映射，故以
+    // 分区均值色作为目标参考点，误差判定在显示字节空间。网格不可用显式 unavailable。
+    if (hairTargetGrid && r.image) {
+      const slot = name === "hairA" ? "hairA" : "hairB";
+      const uv = hairSlotUvStats(slot);
+      out.regions[name].uvAnchor = uv;
+      if (uv.error) {
+        out.verdict[name + "TargetConverged"] = false;
+        failures.push(name + " 目标 UV 锚点不可用: " + uv.error);
+      } else {
+        const conv = hairSlotTargetError(a, b, r, uv.targetMean);
+        out.regions[name].targetConvergence = conv;
+        if (conv.error) {
+          out.verdict[name + "TargetConverged"] = false;
+          failures.push(name + " 目标收敛判定样本不足: " + conv.error);
+        } else {
+          const converged = conv.v1Mae < conv.origMae && conv.drop > THRESHOLDS.hairTargetDrop && conv.v1Mae < THRESHOLDS.hairTargetAbsMae;
+          out.verdict[name + "TargetConverged"] = converged;
+          if (!converged) failures.push(name + " 未向权威 V14D 头发目标收敛 origMae=" + conv.origMae + " v1Mae=" + conv.v1Mae + " drop=" + conv.drop + "（需 drop>" + THRESHOLDS.hairTargetDrop + " 且 v1Mae<" + THRESHOLDS.hairTargetAbsMae + "）");
+        }
+      }
+    } else if (r.image) {
+      out.verdict[name + "TargetConverged"] = "unavailable";
+      failures.push(name + " 头发目标网格不可用（缺 PMX/hair_d 取证），无法判定 V14D 收敛");
+    }
   } else {
     const st = bgStats(r); out.regions[name] = st;
     const ok = st.maxMeanDiff < THRESHOLDS.bgStableMeanDiff;
@@ -212,6 +356,34 @@ for (const [name, r] of Object.entries(regions)) {
   }
 }
 out.failures = failures;
+
+/**
+ * 分区屏幕侧目标误差：近景 ROI 内每个非皮肤像素对「本槽 UV 锚点目标均值色」的
+ * 逐像素 MAE，original 与 V1 各一份。目标参考点 = targetMean（v14dHairTargetDisplay
+ * 对本槽全部 hair_d UV 像素的均值）。屏幕像素与 UV 无一一映射，故以分区均值色为
+ * 目标点；收敛 = V1 误差显著低于 original（颜色向权威目标色靠拢）。
+ */
+function hairSlotTargetError(imgOrig, imgV1, region, targetMean) {
+  const { x0, y0, x1, y1 } = bounds(region);
+  let n = 0, origAbs = 0, v1Abs = 0;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const i = (y * W + x) * 4;
+    if (imgOrig.data[i + 3] < 8) continue;
+    const r0 = imgOrig.data[i], g0 = imgOrig.data[i + 1], b0 = imgOrig.data[i + 2];
+    if (isSkin(r0, g0, b0)) continue;
+    // 剔除近黑背景/星空像素（lum<30），只统计头发本体可见像素。
+    if ((r0 + g0 + b0) / 3 < 30) continue;
+    const v1 = [imgV1.data[i], imgV1.data[i + 1], imgV1.data[i + 2]];
+    origAbs += (Math.abs(r0 - targetMean[0]) + Math.abs(g0 - targetMean[1]) + Math.abs(b0 - targetMean[2])) / 3;
+    v1Abs += (Math.abs(v1[0] - targetMean[0]) + Math.abs(v1[1] - targetMean[1]) + Math.abs(v1[2] - targetMean[2])) / 3;
+    n++;
+  }
+  if (n < THRESHOLDS.minHairTargetSamples) return { error: "insufficient samples " + n, samples: n };
+  const origMae = +(origAbs / n).toFixed(3);
+  const v1Mae = +(v1Abs / n).toFixed(3);
+  const drop = origMae > 0 ? +((origMae - v1Mae) / origMae).toFixed(4) : 0;
+  return { samples: n, targetMean, origMae, v1Mae, drop };
+}
 
 // ── P0-1 目标参考收敛判定（脸部皮肤，色比口径）────────────────────
 // 同名同帧脸框皮肤色比：original 与 V1 分别对 V14D 目标求色比距离，要求 V1 显著更接近。
@@ -277,8 +449,26 @@ if (targetCmp) {
   } catch (e) { out.negWrongColorError = String(e); failures.push("P0-1 负测执行异常: " + e); }
 }
 
+// 分区 UV 取证图（人读 A/B 证据）：HairA/HairB 各自的 original 语义 / V14D 目标 /
+// 差异图。即使 Gate 失败也产出（便于审查失败形态）；不阻断判定。
+try {
+  out.hairUvImages = await writeHairSlotUvImages();
+} catch (e) { out.hairUvImagesError = String(e); }
+
+// wrongTint 负测模式：除常规 failures 外，硬断言「错误颜色确实被判不收敛」——
+  // 若 hairA/hairB TargetConverged 仍为 true，说明收敛 Gate 对错误颜色无判别力，
+  // 本模式必须以非零退出（负测失效）。健康路径（非负测）由 failures 判定。
+if (NEG_WRONGTINT) {
+  const negA = out.verdict.hairATargetConverged;
+  const negB = out.verdict.hairBTargetConverged;
+  out.negWrongTint = { hairATargetConverged: negA, hairBTargetConverged: negB };
+  if (negA === true || negB === true) {
+    failures.push("wrongTint 负测失效：错误颜色被判收敛 hairA=" + negA + " hairB=" + negB);
+  }
+}
+
 out.pass = failures.length === 0;
-fs.writeFileSync(path.join(OUT, "visual-diff.json"), JSON.stringify(out, null, 2));
+fs.writeFileSync(REPORT_JSON, JSON.stringify(out, null, 2));
 console.log(JSON.stringify({ pass: out.pass, verdict: out.verdict, occluded: out.occluded, failures }, null, 2));
 if (!out.pass) { console.error("===VISUAL-GATE-FAIL==="); process.exit(1); }
-console.log("===VISUAL-GATE-OK===");
+console.log(NEG_WRONGTINT ? "===VISUAL-GATE-WRONGTINT-REJECTED===" : "===VISUAL-GATE-OK===");

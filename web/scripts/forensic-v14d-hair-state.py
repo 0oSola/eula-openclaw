@@ -3,7 +3,7 @@
 # Hair Spec 连接状态、Toon Ramp 与 alpha/裁切口径。不修改 .blend，不提交第三方资产。
 #
 # 用法：
-#   blender --background --python web/scripts/forensic-v14d-hair-state.mjs.py -- \
+#   blender --background --python web/scripts/forensic-v14d-hair-state.py -- \
 #     --blend <path.blend> --out <manifest.json>
 import argparse
 import json
@@ -80,6 +80,54 @@ def describe_socket(sock):
     return out
 
 
+def describe_map_range(node):
+    # MAP_RANGE 节点：输出 from/to/clamp 与插值类型（Roughness/Specular 支路的机器证据）。
+    out = {
+        "node": node.name,
+        "dataType": getattr(node, "data_type", None),
+        "interpolationType": getattr(node, "interpolation_type", None),
+        "clamp": getattr(node, "clamp", None),
+        "inputs": {},
+    }
+    for inp in node.inputs:
+        if hasattr(inp, "default_value"):
+            dv = inp.default_value
+            out["inputs"][inp.name] = (
+                [round(float(v), 6) for v in dv]
+                if not isinstance(dv, (int, float, str, bool))
+                else round(float(dv), 6) if isinstance(dv, (int, float)) else dv
+            )
+        if inp.is_linked:
+            out["inputs"].setdefault("_links", []).append(
+                {"socket": inp.name, "fromNode": inp.links[0].from_node.name,
+                 "fromType": inp.links[0].from_node.type}
+            )
+    return out
+
+
+def describe_ramp(node):
+    # VALTORGB 渐变：输出全部色标元素的位置与 RGBA（Toon Ramp 口径的机器证据）。
+    cr = getattr(node, "color_ramp", None)
+    if cr is None:
+        return {"node": node.name, "elements": []}
+    return {
+        "node": node.name,
+        "interpolation": cr.interpolation,
+        "elements": [
+            {"position": round(float(e.position), 6), "color": [round(float(c), 6) for c in e.color]}
+            for e in cr.elements
+        ],
+        "linkedTo": [
+            {"toNode": l.to_node.name, "toType": l.to_node.type, "toSocket": l.to_socket.name}
+            for l in node.outputs[0].links
+        ] if node.outputs else [],
+    }
+
+
+def describe_tangent(node):
+    return {"node": node.name, "directionType": getattr(node, "direction_type", None), "axis": getattr(node, "axis", None)}
+
+
 def describe_material(mat):
     if not mat.use_nodes:
         return {"name": mat.name, "useNodes": False}
@@ -90,6 +138,8 @@ def describe_material(mat):
     mix_nodes = [n for n in nodes if n.type in ("MIX", "MIX_RGB")]
     shader_to_rgb = [n for n in nodes if n.type == "SHADERTORGB"]
     tex_images = [n for n in nodes if n.type == "TEX_IMAGE"]
+    map_ranges = [n for n in nodes if n.type == "MAP_RANGE"]
+    tangents = [n for n in nodes if n.type == "TANGENT"]
     out = {
         "name": mat.name,
         "useNodes": True,
@@ -102,13 +152,16 @@ def describe_material(mat):
         "principled": [],
         "toonCount": len(toon),
         "rampCount": len(ramps),
+        "ramps": [describe_ramp(n) for n in ramps],
+        "mapRanges": [describe_map_range(n) for n in map_ranges],
+        "tangents": [describe_tangent(n) for n in tangents],
         "shaderToRgbCount": len(shader_to_rgb),
         "mixNodes": [],
     }
     for p in principled:
         inputs = {inp.name: describe_socket(inp) for inp in p.inputs if inp.name in (
             "Base Color", "Roughness", "Metallic", "Specular IOR Level", "Specular Tint",
-            "Anisotropic IOR Level", "Anisotropic Rotation", "Tangent",
+            "Anisotropic IOR Level", "Anisotropic", "Anisotropic Rotation", "Tangent",
             "Subsurface Weight", "Emission Color", "Emission Strength", "Alpha", "Normal",
             "Coat Weight", "Coat Roughness",
         )}

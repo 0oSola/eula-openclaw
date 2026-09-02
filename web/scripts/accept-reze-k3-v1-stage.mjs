@@ -339,9 +339,39 @@ try {
   note("G2", "负测 D PASS " + JSON.stringify(negD));
   // 负测 E：applyStyleGroups 失败（编译非法 graph）→ ok:false 且 canvas 回退 original。
   note("G2", "负测 E：applyStyleGroups 失败回退");
-  const negE = await page.evaluate(async () => { const r = await window.__rezeStageProbe.applyBadSkinGraph("failCompile"); const c = document.querySelector("canvas").dataset; return { ok: r.ok, variant: c.v14dSkinVariant, faceGraph: c.v14dSkinVariantFaceGraph }; });
-  if (negE.ok !== false || negE.variant !== "original") fail("G2", "applyStyleGroups 失败应 ok:false 且回退 original，实际 " + JSON.stringify(negE));
-  note("G2", "负测 E PASS " + JSON.stringify(negE));
+ const negE = await page.evaluate(async () => { const r = await window.__rezeStageProbe.applyBadSkinGraph("failCompile"); const c = document.querySelector("canvas").dataset; return { ok: r.ok, variant: c.v14dSkinVariant, faceGraph: c.v14dSkinVariantFaceGraph }; });
+ if (negE.ok !== false || negE.variant !== "original") fail("G2", "applyStyleGroups 失败应 ok:false 且回退 original，实际 " + JSON.stringify(negE));
+ note("G2", "负测 E PASS " + JSON.stringify(negE));
+  // 负测 F/G/H（Stage 2C-M1 修正轮）：Hair 专用 missing/wrongMaterial 扰动，
+  // 每个都真实驱动引擎 applyStyleGroups 并读回 dataset 绑定证据。要求：
+  // 漏 HairA → hairAOnComposite=0 且 hairBOnComposite=1（单变量，B 不受影响）；
+  // 漏 HairB → hairBOnComposite=0 且 hairAOnComposite=1；错材质归属（hair 组绑到
+  // BodySkin）→ hairA/hairB OnComposite 均=0。任一不满足则同一 Gate 非零退出。
+  async function hairNeg(kind, expectA, expectB) {
+    const r = await page.evaluate(async (k) => {
+      const res = await window.__rezeStageProbe.applyBadSkinGraph(k);
+      const c = document.querySelector("canvas").dataset;
+      return { ok: res.ok, a: Number(c.v14dSkinVariantHairAOnComposite), b: Number(c.v14dSkinVariantHairBOnComposite), face: Number(c.v14dSkinVariantFaceOnComposite), body: Number(c.v14dSkinVariantBodyOnComposite) };
+    }, kind);
+    // 扰动后需整页刷新+重导入恢复干净 V1，避免残留影响下一负测。
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector("[data-render-pipeline]", { timeout: 60000 });
+    await page.waitForTimeout(2500);
+    await switchToRezeK3();
+    await page.selectOption("select[aria-label=\"模型切换\"]", KOLEDA_REL).catch(() => {});
+    await importDir(IMPORT_DIR);
+    await page.click(sel.variantBtn("v1")); await waitRebuilt();
+    return r;
+  }
+  const negMissingA = await hairNeg("missingHairA", 0, 1);
+  if (!(negMissingA.a === 0 && negMissingA.b === 1)) fail("G2", "missingHairA 应使 HairA OnComposite=0 且 HairB=1，实际 " + JSON.stringify(negMissingA));
+  note("G2", "负测 F missingHairA PASS " + JSON.stringify(negMissingA));
+  const negMissingB = await hairNeg("missingHairB", 1, 0);
+  if (!(negMissingB.a === 1 && negMissingB.b === 0)) fail("G2", "missingHairB 应使 HairB OnComposite=0 且 HairA=1，实际 " + JSON.stringify(negMissingB));
+  note("G2", "负测 G missingHairB PASS " + JSON.stringify(negMissingB));
+  const negWrongMat = await hairNeg("wrongHairMaterial", 0, 0);
+  if (!(negWrongMat.a === 0 && negWrongMat.b === 0)) fail("G2", "wrongHairMaterial 应使 HairA/HairB OnComposite 均=0，实际 " + JSON.stringify(negWrongMat));
+  note("G2", "负测 H wrongHairMaterial PASS " + JSON.stringify(negWrongMat));
   // 负测 D/E 在当前引擎实例注入了错误/非法 graph 分组；需整页刷新重建干净引擎，
   // 再重导入权威目录并恢复 V1 绑定，避免坏分组残留污染后续 Gate。
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -354,7 +384,8 @@ try {
   await page.click(sel.variantBtn("v1")); await waitRebuilt();
   const rec = await readCanvasState();
   if (rec.variant !== "v1" || rec.faceGraph !== "V14D Face State2 Live Composite") fail("G2", "负测后恢复 V1 失败 " + JSON.stringify(rec));
-  report.gates.G2.negatives = { original: neg0.variant, renamed: negB.variant, noMask: negC.variant, wrongGraphCompositeHits: Number(negD.faceOnComposite) + Number(negD.bodyOnComposite), failCompileOk: negE.ok, failCompileVariant: negE.variant };
+ report.gates.G2.negatives = { original: neg0.variant, renamed: negB.variant, noMask: negC.variant, wrongGraphCompositeHits: Number(negD.faceOnComposite) + Number(negD.bodyOnComposite), failCompileOk: negE.ok, failCompileVariant: negE.variant };
+  report.gates.G2.negatives.hair = { missingHairA: negMissingA, missingHairB: negMissingB, wrongHairMaterial: negWrongMat };
   note("G2", "PASS");
 } catch (e) { fail("G2", "exception: " + (e?.stack || e)); }
 
@@ -374,11 +405,11 @@ try {
   const sceneV1 = await page.evaluate(() => window.__rezeStageProbe?.sceneSnapshot?.() || null);
   const v1Pix = await captureStagePixels(); await shot("g3-v1-full");
   if (origPix.error || v1Pix.error) fail("G3", "画布像素捕获失败 " + (origPix.error || v1Pix.error));
-  const oPng = saveDataUrl(origPix.dataUrl, "g3-original-canvas.png");
-  const vPng = saveDataUrl(v1Pix.dataUrl, "g3-v1-canvas.png");
-  report.gates.G3 = report.gates.G3 || { status: "pass", failures: [] };
-  report.gates.G3.canvasSize = { width: v1Pix.width, height: v1Pix.height };
-  report.gates.G3.origCanvas = oPng; report.gates.G3.v1Canvas = vPng;
+ const oPng = saveDataUrl(origPix.dataUrl, "g3-original-canvas.png");
+ const vPng = saveDataUrl(v1Pix.dataUrl, "g3-v1-canvas.png");
+ report.gates.G3 = report.gates.G3 || { status: "pass", failures: [] };
+ report.gates.G3.canvasSize = { width: v1Pix.width, height: v1Pix.height };
+ report.gates.G3.origCanvas = oPng; report.gates.G3.v1Canvas = vPng;
   // P1-1 Scene invariance：original 与 V1 的场景文档源（settingsRef：world/sun/bloom/
   // ground/camera/background）+ grade + 背景效果逐字段硬断言一致。变体切换只改 Face/
   // BodySkin 材质 graph，不得触碰场景/显示链；这是「保留 K3 灯光与星空背景」的引擎级证据。
@@ -392,16 +423,75 @@ try {
       for (const k of Object.keys(sceneOrig)) if (JSON.stringify(sceneOrig[k]) !== JSON.stringify(sceneV1[k])) diffs.push(k);
       for (const k of Object.keys(sceneOrig.settings || {})) if (JSON.stringify(sceneOrig.settings[k]) !== JSON.stringify(sceneV1.settings?.[k])) diffs.push("settings." + k);
       fail("G3", "P1-1 场景不变性失败：V1 改写了场景/显示字段 " + diffs.join(","));
-    } else note("G3", "P1-1 场景不变性 PASS（settings/grade/background 逐字段一致）");
+   } else note("G3", "P1-1 场景不变性 PASS（settings/grade/background 逐字段一致）");
+    // Stage 2C-M1 修正轮：硬断言 sceneSnapshot 真实包含全局显示链字段（exposure/
+    // gamma/tone mapping 经引擎 viewTransform 暴露）。缺任一字段即失败——防止
+    // 「快照结构不含这些字段却宣称覆盖」的伪不变性。
+    const vt = sceneOrig.viewTransform;
+    const vtOk = vt && Number.isFinite(vt.exposure) && Number.isFinite(vt.gamma) && typeof vt.look === "string" && vt.look.length > 0;
+    report.gates.G3.viewTransform = vt || null;
+    if (!vtOk) fail("G3", "sceneSnapshot 缺 viewTransform（exposure/gamma/look=tone mapping），实际 " + JSON.stringify(vt));
+    else note("G3", "viewTransform exposure=" + vt.exposure + " gamma=" + vt.gamma + " look=" + vt.look + "（original/V1 一致）");
+ }
+ // 硬阻断：区域差异分析以退出码判定（皮肤收敛 + 非皮肤/背景稳定），不允许只算 verdict 强过。
+ const { execSync } = await import("node:child_process");
+ try {
+   execSync("node scripts/analyze-reze-k3-v1-diff.mjs", { cwd: process.cwd(), stdio: "pipe" });
+   note("G3", "区域差异硬阻断 PASS");
+ } catch (err) {
+   fail("G3", "区域差异分析硬阻断失败: " + (err.stdout || err.message || err).toString().slice(0, 400));
+ }
+  // Stage 2C-M1 修正轮：头发前刘海/后长发独立近景（前/后视角摆拍）。
+  // 用 cameraOrbit 探针暂停待机 VMD 后摆拍头部特写，分别采 original/V1 纯画布；
+  // 近景图是屏幕空间视觉证据（人读 + 差异图），机器分区判定由 analyze 的 UV 锚点口径给出。
+  async function hairCloseup(pose, tag) {
+    await page.click(sel.variantBtn("original")); await waitRebuilt();
+    await page.evaluate((p) => window.__rezeStageProbe.cameraOrbit(p), pose);
+    await page.waitForTimeout(350);
+    const o = await captureStagePixels();
+    if (!o.error) saveDataUrl(o.dataUrl, "g3-hair-" + tag + "-orig.png");
+    await page.evaluate(() => window.__rezeStageProbe.cameraOrbit("reset"));
+    await page.click(sel.variantBtn("v1")); await waitRebuilt();
+    await page.evaluate((p) => window.__rezeStageProbe.cameraOrbit(p), pose);
+    await page.waitForTimeout(350);
+    const v = await captureStagePixels();
+    if (!v.error) saveDataUrl(v.dataUrl, "g3-hair-" + tag + "-v1.png");
+    await page.evaluate(() => window.__rezeStageProbe.cameraOrbit("reset"));
+    return { orig: !o.error, v1: !v.error };
   }
-  // 硬阻断：区域差异分析以退出码判定（皮肤收敛 + 非皮肤/背景稳定），不允许只算 verdict 强过。
-  const { execSync } = await import("node:child_process");
+  const cuFront = await hairCloseup("front", "front");
+  const cuBack = await hairCloseup("back", "back");
+  report.gates.G3.hairCloseups = { front: cuFront, back: cuBack };
+  if (!cuFront.orig || !cuFront.v1 || !cuBack.orig || !cuBack.v1) fail("G3", "头发近景采集失败 " + JSON.stringify(report.gates.G3.hairCloseups));
+  // 恢复全身取景 + V1 绑定（供 G4/G5 后续 Gate）。
+  await page.click(sel.variantBtn("original")); await waitRebuilt();
+  await page.click(sel.variantBtn("v1")); await waitRebuilt();
+  // wrongTint 负测（Stage 2C-M1 修正轮）：注入错误青绿 tint 的头发 graph，采 V1 画布，
+  // 跑 analyze --neg-wrongtint；同一收敛 Gate 必须非零退出（错误颜色被判不收敛）。
+  note("G3", "wrongTint 负测：注入错误 tint 画布");
+  const negTint = await page.evaluate(async () => {
+    const r = await window.__rezeStageProbe.applyBadSkinGraph("wrongTint");
+    const c = document.querySelector("canvas").dataset;
+    return { ok: r.ok, variant: c.v14dSkinVariant, hairAOnComposite: c.v14dSkinVariantHairAOnComposite, hairBOnComposite: c.v14dSkinVariantHairBOnComposite };
+  });
+  await page.waitForTimeout(400);
+  const negTintPix = await captureStagePixels();
+  if (!negTintPix.error) saveDataUrl(negTintPix.dataUrl, "g3-v1-canvas-wrongtint.png");
+  let wrongTintRejected = false;
   try {
-    execSync("node scripts/analyze-reze-k3-v1-diff.mjs", { cwd: process.cwd(), stdio: "pipe" });
-    note("G3", "区域差异硬阻断 PASS");
-  } catch (err) {
-    fail("G3", "区域差异分析硬阻断失败: " + (err.stdout || err.message || err).toString().slice(0, 400));
-  }
+    execSync("node scripts/analyze-reze-k3-v1-diff.mjs --neg-wrongtint", { cwd: process.cwd(), stdio: "pipe" });
+  } catch { wrongTintRejected = true; }
+  report.gates.G3.wrongTint = { applied: negTint, canvasSaved: !negTintPix.error, rejected: wrongTintRejected };
+  if (!wrongTintRejected) fail("G3", "wrongTint 负测失效：错误 tint 未被收敛 Gate 拒绝 " + JSON.stringify(negTint));
+  else note("G3", "wrongTint 负测 PASS（错误颜色被收敛 Gate 非零拒绝）");
+  // 负测注入了错误 graph；整页刷新+重导入恢复干净 V1，避免污染后续 Gate。
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector("[data-render-pipeline]", { timeout: 60000 });
+  await page.waitForTimeout(2500);
+  await switchToRezeK3();
+  await page.selectOption("select[aria-label=\"模型切换\"]", KOLEDA_REL).catch(() => {});
+  await importDir(IMPORT_DIR);
+  await page.click(sel.variantBtn("v1")); await waitRebuilt();
 } catch (e) { fail("G3", "exception: " + (e?.stack || e)); }
 
 // ── G4：持久化 ───────────────────────────────────────────────────────

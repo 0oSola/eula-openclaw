@@ -1,0 +1,161 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+
+import {
+  buildV14dSkinVariantStyleGroups,
+  collectV14dSkinVariantBindingCounts,
+  perturbV14dSkinVariantStyleGroups,
+  V14D_HAIR_V1_COMPOSITE_GRAPH,
+} from "../src/features/stage/v14dSkinVariantGraphs.js";
+import {
+  buildHairUvGridFromPmx,
+  classifyHairPixel,
+  linearToSrgbByte,
+  srgbByteToLinear,
+  v14dHairTargetDisplay,
+  V14D_HAIR_TINT_LINEAR,
+} from "../src/features/stage/v14dHairPartition.js";
+
+// 最小 fake style groups（hair/face/body 分组 + 一个无关分组），驱动纯函数负测。
+// includeV1=false 返回原始 K3 分组（供 buildV14dSkinVariantStyleGroups 的输入）；
+// 负测 missing 需要「抽空后仍保留 hair 分组」的形态，故这里保留空 hair 分组。
+function fakeGroups(keepEmptyHair = false) {
+  return [
+    { id: "k3-face", label: "Face", materials: ["Face"], graph: { version: 1, name: "Face", nodes: [], links: [], output: { node: "o", socket: "color" } } },
+    { id: "k3-body", label: "Body", materials: ["BodySkin"], graph: { version: 1, name: "Body", nodes: [], links: [], output: { node: "o", socket: "color" } } },
+    { id: "k3-hair", label: "Hair", materials: ["HairA", "HairB"], graph: { version: 1, name: "Hair", nodes: [], links: [], output: { node: "o", socket: "color" } } },
+    { id: "k3-cloth", label: "Cloth", materials: ["Cth1-Top"], graph: { version: 1, name: "Cloth", nodes: [], links: [], output: { node: "o", socket: "color" } } },
+  ];
+}
+
+test("V1 分组：HairA/HairB 抽出绑定到 V14D Hair V1 Composite（renderClass=hair）", () => {
+  const groups = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const hair = groups.find((g) => g.id === "v14d-skin-variant-hair");
+  assert.ok(hair, "应存在 hair V1 分组");
+  assert.deepEqual(hair.materials, ["HairA", "HairB"]);
+  assert.equal(hair.graph.name, "V14D Hair V1 Composite");
+  assert.equal(hair.renderClass, "hair");
+  // 原 hair 分组应被抽空（HairA/HairB 已迁出）。
+  const k3hair = groups.find((g) => g.id === "k3-hair");
+  assert.equal(k3hair, undefined, "K3 原 hair 分组抽空后应被过滤");
+});
+
+test("负测扰动 missingHairA：HairA 回塞原 hair 分组，HairB 留在 V1（单变量）", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups(true));
+  // 保留空 hair 分组供回塞：手动把抽空但被过滤的 k3-hair 加回（模拟引擎真实分组，
+  // 引擎侧即使抽空也保留分组对象，materials 为空数组）。
+  v1.push({ id: "k3-hair", label: "Hair", materials: [], graph: { version: 1, name: "Hair", nodes: [], links: [], output: { node: "o", socket: "color" } } });
+  const bad = perturbV14dSkinVariantStyleGroups(v1, "missingHairA");
+  const hair = bad.find((g) => g.id === "v14d-skin-variant-hair");
+  assert.deepEqual(hair.materials, ["HairB"], "HairA 应从 V1 分组移除");
+  const k3hair = bad.find((g) => g.graph && g.graph.name === "Hair");
+  assert.ok(k3hair.materials.includes("HairA"), "HairA 应回塞原 hair 分组");
+  assert.ok(!k3hair.materials.includes("HairB"), "HairB 不应回塞");
+});
+
+test("负测扰动 missingHairB：HairB 回塞原 hair 分组，HairA 留在 V1（单变量）", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups(true));
+  v1.push({ id: "k3-hair", label: "Hair", materials: [], graph: { version: 1, name: "Hair", nodes: [], links: [], output: { node: "o", socket: "color" } } });
+  const bad = perturbV14dSkinVariantStyleGroups(v1, "missingHairB");
+  const hair = bad.find((g) => g.id === "v14d-skin-variant-hair");
+  assert.deepEqual(hair.materials, ["HairA"]);
+  const k3hair = bad.find((g) => g.graph && g.graph.name === "Hair");
+  assert.ok(k3hair.materials.includes("HairB"));
+});
+
+test("负测扰动 wrongHairMaterial：hair V1 分组 materials 换成 BodySkin", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const bad = perturbV14dSkinVariantStyleGroups(v1, "wrongHairMaterial");
+  const hair = bad.find((g) => g.id === "v14d-skin-variant-hair");
+  assert.deepEqual(hair.materials, ["BodySkin"]);
+});
+
+test("负测扰动 wrongTint：hair graph tint 偏离权威 [0.84,0.85,0.96]", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const bad = perturbV14dSkinVariantStyleGroups(v1, "wrongTint");
+  const hair = bad.find((g) => g.id === "v14d-skin-variant-hair");
+  // graph.name 仍触发引擎覆写，但 tint 常量被改成错误青绿。
+  assert.equal(hair.graph.name, "V14D Hair V1 Composite");
+  assert.notDeepEqual(hair.graph.nodes[0].inputs.color, [0.84, 0.85, 0.96]);
+  assert.deepEqual(hair.graph.nodes[0].inputs.color, [0.35, 1.05, 0.55]);
+});
+
+test("负测扰动 wrongGraph：全部 graph.name 换成非权威名", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const bad = perturbV14dSkinVariantStyleGroups(v1, "wrongGraph");
+  for (const g of bad) assert.equal(g.graph.name, "V14D WRONG Non-Authoritative Graph");
+});
+
+test("负测扰动 failCompile：注入非法 output/节点引用", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const bad = perturbV14dSkinVariantStyleGroups(v1, "failCompile");
+  for (const g of bad) {
+    assert.equal(g.graph.output.node, "__missing_node__");
+    assert.ok(g.graph.nodes.some((n) => n.type === "__nonexistent_op__"));
+  }
+});
+
+test("绑定计数：逐 drawCall 核对 graph.name 与 pipeline（含负测 0 命中）", () => {
+  const mkInst = (drawCalls, styleGroups) => ({ drawCalls, styleGroups });
+  const sg = new Map();
+  sg.set("g-hair-v1", { pipeline: {}, group: { graph: { name: "V14D Hair V1 Composite" } } });
+  sg.set("g-hair-k3", { pipeline: {}, group: { graph: { name: "Hair" } } });
+  sg.set("g-face-v1", { pipeline: {}, group: { graph: { name: "V14D Face State2 Live Composite" } } });
+  const engine = {
+    modelInstances: new Map([
+      ["m", mkInst(
+        [
+          { materialName: "HairA", groupId: "g-hair-v1", baseBindGroupEntries: [] },
+          { materialName: "HairB", groupId: "g-hair-k3", baseBindGroupEntries: [] }, // 错 graph → 不命中
+          { materialName: "Face", groupId: "g-face-v1", baseBindGroupEntries: [] },
+          { materialName: "BodySkin", groupId: null, baseBindGroupEntries: [] },
+        ],
+        sg,
+      )],
+    ]),
+  };
+  const c = collectV14dSkinVariantBindingCounts(engine);
+  assert.equal(c.hairADrawCalls, 1);
+  assert.equal(c.hairAOnComposite, 1);
+  assert.equal(c.hairBDrawCalls, 1);
+  assert.equal(c.hairBOnComposite, 0, "错 graph 不应命中 V1 composite");
+  assert.equal(c.faceOnComposite, 1);
+  assert.equal(c.bodyOnComposite, 0);
+});
+
+test("颜色空间：srgb→linear→×tint→srgb 往返，tint 使 B 通道相对提升", () => {
+  // 幂等往返（tint=1 时）。
+  for (const c of [0, 64, 128, 192, 255]) {
+    assert.equal(linearToSrgbByte(srgbByteToLinear(c)), c);
+  }
+  // 权威公式：银白紫 tint 使 B 相对 R 提升（B 系数 0.96 > R 0.84）。
+  const src = [200, 180, 170];
+  const tgt = v14dHairTargetDisplay(src);
+  assert.ok(tgt[2] / Math.max(1, tgt[0]) > src[2] / Math.max(1, src[0]), "B/R 比应提升（偏蓝紫）");
+  assert.deepEqual(V14D_HAIR_TINT_LINEAR, [0.84, 0.85, 0.96]);
+});
+
+// 真实 PMX 分区解析（资产存在时）：HairA/HairB UV 网格非空且分区不坍缩。
+const PMX = process.env.V14D_TEST_PMX || "D:\\mmd\\克莱妲原皮\\GirlsFrontline KoledaDefault.pmx";
+test("PMX 分区：HairA/HairB 面区间解析出非空且不重叠坍缩的 UV 网格", (t) => {
+  if (!fs.existsSync(PMX)) { t.skip("权威 PMX 不在本机"); return; }
+  const buf = fs.readFileSync(PMX);
+  const grid = buildHairUvGridFromPmx(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), {
+    hairA: { name: "HairA", startIndex: 190407, indexCount: 30198 },
+    hairB: { name: "HairB", startIndex: 220605, indexCount: 13512 },
+  });
+  let aUnits = 0, bUnits = 0;
+  for (let u = 0; u < grid.gridU * grid.gridV; u++) {
+    if (grid.hairA[u] > 0) aUnits++;
+    if (grid.hairB[u] > 0) bUnits++;
+  }
+  assert.ok(aUnits > 50, "HairA 应覆盖多个 UV 单位格，实际 " + aUnits);
+  assert.ok(bUnits > 50, "HairB 应覆盖多个 UV 单位格，实际 " + bUnits);
+  // 引用计数守恒：每个面区间 index 数等于该槽顶点引用总数。
+  let aRefs = 0, bRefs = 0;
+  for (let u = 0; u < grid.gridU * grid.gridV; u++) { aRefs += grid.hairA[u]; bRefs += grid.hairB[u]; }
+  assert.equal(aRefs, 30198);
+  assert.equal(bRefs, 13512);
+});

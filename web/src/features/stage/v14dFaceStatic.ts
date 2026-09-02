@@ -82,6 +82,10 @@ export const V14D_BODY_MATERIAL_NAME = "BodySkin";
  */
 export const V14D_HAIR_A_MATERIAL_NAME = "HairA";
 export const V14D_HAIR_B_MATERIAL_NAME = "HairB";
+/** Blender 取证：头发 PROTO_HairTint Color2（银白紫乘色，线性乘法，Factor=1）。 */
+export const V14D_HAIR_TINT = [0.84, 0.85, 0.96] as const;
+/** 引擎补丁 WGSL helper 函数名（graph 覆写表达式前缀，错 tint 负测按此前缀识别）。 */
+export const V14D_HAIR_HELPER_FN = "v14d_hair_composite";
 /** 权威身体皮肤 diffuse 纹理文件名（原始 BaseColor，body_d.png）。 */
 export const V14D_BODY_BASE_TEXTURE_NAME = "body_d.png";
 /** Blender 取证：BodySkin PROTO_FaceWarm Color2（暖肤 tint，线性乘法）。 */

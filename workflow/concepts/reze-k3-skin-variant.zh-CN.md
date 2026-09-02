@@ -8,7 +8,7 @@
 
 ## 概念定义
 
-在同一 `/companion` 的 reze-k3 WebGPU 舞台运行时中，对克莱妲 Face/BodySkin
+在同一 `/companion` 的 reze-k3 WebGPU 舞台运行时中，对克莱妲 Face/BodySkin（Stage 2C-M1 起含 HairA/HairB，见文末头发阶段）
 材质可选启用 V14D State2 实时合成（Face finalComposite + BodySkin warm
 composite），形成两个用户可见且可持久选择的效果：
 
@@ -20,10 +20,10 @@ composite），形成两个用户可见且可持久选择的效果：
 切换触发引擎 style group / shader graph 的真实重新编译与 draw-call 绑定，
 不是改标签或 dataset。
 
-## 迁移范围（15 槽最终目标 vs 本概念皮肤阶段）
+## 迁移范围（15 槽最终目标 vs 已迁移 4/15）
 
-本概念当前只迁移 **Face + BodySkin** 两个 PMX 材质槽，是「皮肤阶段」，**不代表
-全部角色材质迁移已完成**。最终目标是「Reze K3 + V14D 角色外观材质（**15 槽**）」。
+本概念自 2026-09-02 皮肤阶段（Face + BodySkin，2/15）起步，Stage 2C-M1（2026-09-03）迁入 HairA/HairB 后已迁移 4/15；**不代表
+全部角色材质迁移已完成**（其余 11 槽仍未迁移）。最终目标是「Reze K3 + V14D 角色外观材质（**15 槽**）」。
 
 - **权威 15 槽清单（唯一权威，非 27/27、非"全部 PMX 材质"）**：Face、BodySkin、
   Brows、Lashes、Emotions、HairA、HairB、Eyes、EyeWhite、EyeShadow、Eyes+、
@@ -75,7 +75,7 @@ composite），形成两个用户可见且可持久选择的效果：
   `v14dSkinVariantFaceGraph`、`v14dSkinVariantFace/Body/HairA/HairBDrawCalls`、
   `v14dSkinVariantFace/Body/HairA/HairBOnComposite`（draw-call 级真实绑定证据，
   HairA/HairB 分区各自核对 graph.name "V14D Hair V1 Composite"）。
-- 验收需读取引擎 styleGroups/drawCalls 证明 Face/BodySkin graph 生效；
+- 验收需读取引擎 styleGroups/drawCalls 证明 Face/BodySkin/HairA/HairB graph 生效；
   错 graph、漏 mask、非克莱妲负测必须失败或安全回退。
 
 ## 正例 / 反例
@@ -101,7 +101,7 @@ composite），形成两个用户可见且可持久选择的效果：
 ## 生产舞台验收（2026-09-02 第四轮）
 
 票据 `codex/reze-k3-v1-stage-visual-acceptance`，交付 `docs/handoff/2026-09-02-reze-k3-v1-stage-visual-acceptance.md`。
-在保留 K3 灯光/星空/自由相机/动态 VMD 的前提下，G1-G7 全过；V1 仅 Face/BodySkin 走 V14D 合成
+在保留 K3 灯光/星空/自由相机/动态 VMD 的前提下，G1-G6 六项运行时 Gate 全过 + 独立工程门禁（当时统称 G1-G7）；V1 仅 Face/BodySkin 走 V14D 合成
 （皮肤阶段，其余 13 槽未迁移）。第三轮修正主会话 P0：(a) G3 收敛引入 V14D 目标参考色比比较
 （original 0.196→V1 0.141，drop 28.2%，含错误颜色负测）；(b) 恢复通用 VMD effect 的
 `engine.resetPhysics()` 并抽共享函数 `loadVmdThroughInteractionPath`（effect 与探针同路径，
@@ -112,7 +112,7 @@ guard 回调传入、在任何副作用前硬检查（竞态回归 A慢/B快 下
 副作用之前（pause/seek 取消完成兜底；过期完成回调负测证明其不得清当前 fallback、计数不增、当前
 动作后续仍正常完成）。验收探针 `__rezeStageProbe` 仅在 `?v14dAcceptanceProbe=1` 显式开关下挂载，
 含负测钩子 `applyBadSkinGraph`/`fireStaleFinish`/`vmdFallbackState`。环境为存根端到端
-（API 后端本机不可达，route 存根 bootstrap）。**全材质迁移（15 槽）尚未开始/未完成；当前为皮肤阶段 2/15。**
+（API 后端本机不可达，route 存根 bootstrap）。**截至该验收时为皮肤阶段 2/15（历史快照）；当前状态见本文开头与下方 Stage 2C-M1（4/15），全材质迁移（15 槽）仍未完成。**
 
 ## 与现有概念的关系
 

@@ -354,10 +354,10 @@ const STATE2_VERIFY_CHECKS = (() => {
     { label: "src/graph/compile.ts state2 门控", file: compileSrc, marker: "graph.tags?.includes(\"v14d-state2-face\")" },
     { label: "dist/graph/compile.js state2 门控", file: compileDist, marker: "graph.tags?.includes(\"v14d-state2-face\")" },
   // 断点 A 修正轮（src + dist 生效路径）：健壮行匹配 override 存在且被 compile 接线。
-  { label: "src/graph/slots.ts state2 override 修正函数", file: slotsSrc, marker: "export function v14dState2OverrideFsBodyFixed(graphName: string, fsBody: string): string" },
-  { label: "dist/graph/slots.js state2 override 修正函数", file: slotsDist, marker: "export function v14dState2OverrideFsBodyFixed(graphName, fsBody)" },
-  { label: "src/graph/compile.ts state2 override 修正接线", file: compileSrc, marker: "const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)" },
-  { label: "dist/graph/compile.js state2 override 修正接线", file: compileDist, marker: "const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody);" },
+  { label: "src/graph/slots.ts state2 override 修正函数", file: slotsSrc, marker: "export function v14dState2OverrideFsBodyFixed(graphName: string, fsBody: string, hairTint?: readonly number[]): string" },
+  { label: "dist/graph/slots.js state2 override 修正函数", file: slotsDist, marker: "export function v14dState2OverrideFsBodyFixed(graphName, fsBody, hairTint)" },
+  { label: "src/graph/compile.ts state2 override 修正接线", file: compileSrc, marker: "const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody, hairTint)" },
+  { label: "dist/graph/compile.js state2 override 修正接线", file: compileDist, marker: "const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody, hairTint);" },
   // 断点 B 修正轮：aux mask view 并入 baseEntries (binding 5) 且重绑展开不丢失。
     { label: "src/engine.ts binding5 baseEntries", file: engineSrc, marker: "binding: 5, resource: __binding5View" },
     { label: "dist/engine.js binding5 baseEntries", file: engineDistJs, marker: "binding: 5, resource: __binding5View" },
@@ -1022,6 +1022,11 @@ const state2Targets = [
 // slots.ts/compile.ts：v14d-state2-face graph 编译时注入 mask 纹理声明 + 合成 helper。
 // 常量来自权威 blend 取证（web/scripts/forensic-v14d-face-state2.py 输出 manifest）。
 const SLOTS_STATE2_ANCHOR = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`\n";
+// Stage 2C-M1 修正轮：dist/graph/slots.js 头部追加 bundle specifier 重定向，使
+// node --test 能直接 import 该文件（浏览器由打包器按 specifier 解析；node 的 ESM
+// 需要显式扩展名）。import 提升保证重定向在任何相对导入前生效，对浏览器/打包器
+// 是无副作用的合法 import。
+const SLOTS_DIST_BUNDLE_REDIRECT = "import \"reze-engine\";\n";
 const SLOTS_STATE2_DIST_ANCHOR = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`;\n";
 
 // Stage 2C-M1：V14D 头发合成 helper 的独立 WGSL 常量（不并入 state2 helpers）。
@@ -1032,10 +1037,10 @@ const SLOTS_STATE2_DIST_ANCHOR = "const HAIR_OVER_EYES_DECL = `override IS_OVER_
 // 注入（不连带 State2 mask 声明/binding 5），hair graph 无需 mask 即可编译。
 const V14D_HAIR_HELPER_DECL_SRC =
   "// V14D 头发合成 helper（Stage 2C-M1）：hair_d 线性 × 银白紫乘色（权威 blend 取证）。\n" +
-  "const V14D_HAIR_HELPER_WGSL = `fn v14d_hair_composite(base: vec3f) -> vec3f { return base * vec3f(0.84, 0.85, 0.96); }\n`;\n";
+  "const V14D_HAIR_HELPER_WGSL = `fn v14d_hair_composite(base: vec3f, tint: vec3f) -> vec3f { return base * tint; }\n`;\n";
 const V14D_HAIR_HELPER_DECL_DIST =
   "// V14D 头发合成 helper（Stage 2C-M1）：hair_d 线性 × 银白紫乘色（权威 blend 取证）。\n" +
-  "const V14D_HAIR_HELPER_WGSL = `fn v14d_hair_composite(base: vec3f) -> vec3f { return base * vec3f(0.84, 0.85, 0.96); }\n`;\n";
+  "const V14D_HAIR_HELPER_WGSL = `fn v14d_hair_composite(base: vec3f, tint: vec3f) -> vec3f { return base * tint; }\n`;\n";
 // Stage 2C-M1（HairA/HairB V1 材质迁移）：V14D 头发合成 helper，由独立升级 target
 // 追加到已存在的 V14D_STATE2_HELPERS_WGSL 模板（helper 追加 target 在 slots 声明
 // target 之后执行，fresh/旧补丁两种形态都最终收敛）。
@@ -1070,7 +1075,7 @@ const COMPILE_ASSEMBLE_DIST_REPLACEMENT = "    const wgsl = assembleModule(opts.
 // 拆分，并保留 node 注释；非 State2 graph 原样返回。src/dist 的表达式保持同构。
 const STATE2_OVERRIDE_SRC = [
   "// V14D_STATE2_OVERRIDE_FIX_BEGIN",
-  "export function v14dState2OverrideFsBodyFixed(graphName: string, fsBody: string): string {",
+  "export function v14dState2OverrideFsBodyFixed(graphName: string, fsBody: string, hairTint?: readonly number[]): string {",
   "  const isFaceLive = graphName === \"V14D Face State2 Live ShadowFactor\" || graphName === \"V14D Face State2 Live Composite\"",
   "  const isBodySkin = graphName === \"V14D Body Skin Composite\"",
   "  const isHairV1 = graphName === \"V14D Hair V1 Composite\"",
@@ -1080,7 +1085,8 @@ const STATE2_OVERRIDE_SRC = [
   "  if (finalIndex < 0) return fsBody",
   "  const tag = lines[finalIndex].match(/\\s+(\\/\\/.*)$/)?.[1] ?? \"\"",
   "  const mask = \"textureSample(v14d_state2_mask, diffuseSampler, input.uv).rgb\"",
-  "  const expr = isHairV1 ? \"v14d_hair_composite(tex_color)\" : isBodySkin ? \"v14d_skin_body_composite(tex_color)\" : (graphName === \"V14D Face State2 Live ShadowFactor\" ? \"v14d_state2_shadow_factor(\" + mask + \")\" : \"v14d_state2_composite(tex_color, \" + mask + \")\")",
+  "  const hairTintVec = \"vec3f(\" + (hairTint?.[0] ?? 0.84) + \", \" + (hairTint?.[1] ?? 0.85) + \", \" + (hairTint?.[2] ?? 0.96) + \")\"",
+  "  const expr = isHairV1 ? \"v14d_hair_composite(tex_color, \" + hairTintVec + \")\" : isBodySkin ? \"v14d_skin_body_composite(tex_color)\" : (graphName === \"V14D Face State2 Live ShadowFactor\" ? \"v14d_state2_shadow_factor(\" + mask + \")\" : \"v14d_state2_composite(tex_color, \" + mask + \")\")",
   "  lines[finalIndex] = \"  let final_color = \" + expr + \";\" + tag",
   "  return lines.join(\"\\n\")",
   "}",
@@ -1088,7 +1094,7 @@ const STATE2_OVERRIDE_SRC = [
 ].join("\n");
 const STATE2_OVERRIDE_DIST = [
   "// V14D_STATE2_OVERRIDE_FIX_BEGIN",
-  "export function v14dState2OverrideFsBodyFixed(graphName, fsBody) {",
+  "export function v14dState2OverrideFsBodyFixed(graphName, fsBody, hairTint) {",
   "    const isFaceLive = graphName === \"V14D Face State2 Live ShadowFactor\" || graphName === \"V14D Face State2 Live Composite\";",
   "    const isBodySkin = graphName === \"V14D Body Skin Composite\";",
   "    const isHairV1 = graphName === \"V14D Hair V1 Composite\";",
@@ -1098,7 +1104,8 @@ const STATE2_OVERRIDE_DIST = [
   "    if (finalIndex < 0) return fsBody;",
   "    const tag = lines[finalIndex].match(/\\s+(\\/\\/.*)$/)?.[1] ?? \"\";",
   "    const mask = \"textureSample(v14d_state2_mask, diffuseSampler, input.uv).rgb\";",
-  "    const expr = isHairV1 ? \"v14d_hair_composite(tex_color)\" : isBodySkin ? \"v14d_skin_body_composite(tex_color)\" : (graphName === \"V14D Face State2 Live ShadowFactor\" ? \"v14d_state2_shadow_factor(\" + mask + \")\" : \"v14d_state2_composite(tex_color, \" + mask + \")\");",
+  "    const hairTintVec = \"vec3f(\" + (hairTint?.[0] ?? 0.84) + \", \" + (hairTint?.[1] ?? 0.85) + \", \" + (hairTint?.[2] ?? 0.96) + \")\";",
+  "    const expr = isHairV1 ? \"v14d_hair_composite(tex_color, \" + hairTintVec + \")\" : isBodySkin ? \"v14d_skin_body_composite(tex_color)\" : (graphName === \"V14D Face State2 Live ShadowFactor\" ? \"v14d_state2_shadow_factor(\" + mask + \")\" : \"v14d_state2_composite(tex_color, \" + mask + \")\");",
   "    lines[finalIndex] = \"  let final_color = \" + expr + \";\" + tag;",
   "    return lines.join(String.fromCharCode(10));",
   "}",
@@ -1132,7 +1139,8 @@ const COMPILE_STATE2_SRC_A_STATE2_ANCHOR = [
 ].join("\n");
 const COMPILE_STATE2_SRC_FINAL = [
   "  const fsBody = lines.join(\"\\n\")",
-  "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)",
+  "  const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\")?.inputs?.color as number[] | undefined) ?? [0.84, 0.85, 0.96]",
+  "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody, hairTint)",
   "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\", graph.name === \"V14D Hair V1 Composite\")"
 ].join("\n");
 const COMPILE_STATE2_DIST_FRESH_ANCHOR = [
@@ -1155,17 +1163,32 @@ const COMPILE_STATE2_DIST_A_STATE2_ANCHOR = [
 ].join("\n");
 const COMPILE_STATE2_DIST_FINAL = [
   "    const fsBody = lines.join(\"\\n\");",
-  "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody);",
+  "    const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\")?.inputs?.color) ?? [0.84, 0.85, 0.96];",
+  "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody, hairTint);",
   "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\", graph.name === \"V14D Hair V1 Composite\");"
 ].join("\n");
 
 // Stage 2C-M1 升级形态 anchor：compile 的 assemble 调用行已是「fsBodyLive + 5 参
 // （含 BodySkin 门控）」但尚未带第 6 参 hair helper 门控。列入 anchors 使已打
 // Stage 2B/2C 前半的环境能继续收敛到最终 6 参形态。
+// Stage 2C-M1 升级形态 anchor（SRC 侧）：compile 调用行已是「fsBodyLive + 5 参
+// （含 BodySkin 门控）」但尚未带第 6 参 hair helper 门控。
 const COMPILE_STATE2_SRC_HAIR_UPGRADE_ANCHOR = [
   "  const fsBody = lines.join(\"\\n\")",
   "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)",
   "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\")"
+].join("\n");
+// Stage 2C-M1 修正轮 anchor：当前已打补丁的 compile 调用行（fsBodyLive 两参形态）。
+// 升级目标把它推进为「先取 hairTint、再三参覆写」的最终形态。
+const COMPILE_STATE2_SRC_TINT_UPGRADE_ANCHOR = [
+  "  const fsBody = lines.join(\"\\n\")",
+  "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)",
+  "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\", graph.name === \"V14D Hair V1 Composite\")"
+].join("\n");
+const COMPILE_STATE2_DIST_TINT_UPGRADE_ANCHOR = [
+  "    const fsBody = lines.join(\"\\n\");",
+  "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody);",
+  "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\", graph.name === \"V14D Hair V1 Composite\");"
 ].join("\n");
 const COMPILE_STATE2_DIST_HAIR_UPGRADE_ANCHOR = [
   "    const fsBody = lines.join(\"\\n\");",
@@ -1234,7 +1257,7 @@ const state2CompletenessTargets = [
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
     anchor: HASHED_ALPHA_ANCHOR,
     replacement: STATE2_OVERRIDE_SRC + "\n" + HASHED_ALPHA_ANCHOR,
-    doneMarker: "export function v14dState2OverrideFsBodyFixed(graphName: string, fsBody: string): string",
+    doneMarker: "export function v14dState2OverrideFsBodyFixed(graphName: string, fsBody: string, hairTint?: readonly number[]): string",
     label: "src/graph/slots.ts state2 override 修正函数",
   },
   // Stage 2C-M1：override 函数体内新增 isHairV1 分支。旧形态（无 hair 分支）与
@@ -1255,16 +1278,17 @@ const state2CompletenessTargets = [
     anchors: [
       "  const expr = isBodySkin ? \"v14d_skin_body_composite(tex_color)\"",
       "  const expr = isHairV1 ? \"v14d_hair_composite(tex_color)\"",
+      "  const expr = isHairV1 ? \"v14d_hair_composite(tex_color, \" + hairTintVec + \")\"",
     ],
-    replacement: "  const expr = isHairV1 ? \"v14d_hair_composite(tex_color)\" : isBodySkin ? \"v14d_skin_body_composite(tex_color)\"",
-    doneMarker: "  const expr = isHairV1 ? \"v14d_hair_composite(tex_color)\"",
+    replacement: "  const expr = isHairV1 ? \"v14d_hair_composite(tex_color, \" + hairTintVec + \")\" : isBodySkin ? \"v14d_skin_body_composite(tex_color)\"",
+    doneMarker: "  const expr = isHairV1 ? \"v14d_hair_composite(tex_color, \" + hairTintVec + \")\"",
     label: "src/graph/slots.ts hair override 分支（expr）",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
     anchor: HASHED_ALPHA_ANCHOR,
     replacement: STATE2_OVERRIDE_DIST + "\n" + HASHED_ALPHA_ANCHOR,
-    doneMarker: "export function v14dState2OverrideFsBodyFixed(graphName, fsBody)",
+    doneMarker: "export function v14dState2OverrideFsBodyFixed(graphName, fsBody, hairTint)",
     label: "dist/graph/slots.js state2 override 修正函数",
   },
   {
@@ -1282,9 +1306,10 @@ const state2CompletenessTargets = [
     anchors: [
       "    const expr = isBodySkin ? \"v14d_skin_body_composite(tex_color)\"",
       "    const expr = isHairV1 ? \"v14d_hair_composite(tex_color)\"",
+      "    const expr = isHairV1 ? \"v14d_hair_composite(tex_color, \" + hairTintVec + \")\"",
     ],
-    replacement: "    const expr = isHairV1 ? \"v14d_hair_composite(tex_color)\" : isBodySkin ? \"v14d_skin_body_composite(tex_color)\"",
-    doneMarker: "    const expr = isHairV1 ? \"v14d_hair_composite(tex_color)\"",
+    replacement: "    const expr = isHairV1 ? \"v14d_hair_composite(tex_color, \" + hairTintVec + \")\" : isBodySkin ? \"v14d_skin_body_composite(tex_color)\"",
+    doneMarker: "    const expr = isHairV1 ? \"v14d_hair_composite(tex_color, \" + hairTintVec + \")\"",
     label: "dist/graph/slots.js hair override 分支（expr）",
   },
   {
@@ -1303,14 +1328,14 @@ const state2CompletenessTargets = [
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "compile.ts"),
-    anchors: [COMPILE_STATE2_SRC_FRESH_ANCHOR, COMPILE_STATE2_SRC_STATE2_ANCHOR, COMPILE_STATE2_SRC_A_ANCHOR, COMPILE_STATE2_SRC_A_STATE2_ANCHOR, COMPILE_STATE2_SRC_HAIR_UPGRADE_ANCHOR],
+    anchors: [COMPILE_STATE2_SRC_FRESH_ANCHOR, COMPILE_STATE2_SRC_STATE2_ANCHOR, COMPILE_STATE2_SRC_A_ANCHOR, COMPILE_STATE2_SRC_A_STATE2_ANCHOR, COMPILE_STATE2_SRC_HAIR_UPGRADE_ANCHOR, COMPILE_STATE2_SRC_TINT_UPGRADE_ANCHOR],
     replacement: COMPILE_STATE2_SRC_FINAL,
     doneMarker: COMPILE_STATE2_SRC_FINAL,
     label: "src/graph/compile.ts state2 override + tag 门控接线",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js"),
-    anchors: [COMPILE_STATE2_DIST_FRESH_ANCHOR, COMPILE_STATE2_DIST_STATE2_ANCHOR, COMPILE_STATE2_DIST_A_ANCHOR, COMPILE_STATE2_DIST_A_STATE2_ANCHOR, COMPILE_STATE2_DIST_HAIR_UPGRADE_ANCHOR],
+    anchors: [COMPILE_STATE2_DIST_FRESH_ANCHOR, COMPILE_STATE2_DIST_STATE2_ANCHOR, COMPILE_STATE2_DIST_A_ANCHOR, COMPILE_STATE2_DIST_A_STATE2_ANCHOR, COMPILE_STATE2_DIST_HAIR_UPGRADE_ANCHOR, COMPILE_STATE2_DIST_TINT_UPGRADE_ANCHOR],
     replacement: COMPILE_STATE2_DIST_FINAL,
     doneMarker: COMPILE_STATE2_DIST_FINAL,
     label: "dist/graph/compile.js state2 override + tag 门控接线",
@@ -1395,6 +1420,17 @@ const state2SlotTargets = [
   },
 ];
 state2Targets.push(...state2CompletenessTargets, ...state2SlotTargets);
+
+// Stage 2C-M1 修正轮：dist/graph/slots.js 头部 bundle specifier 重定向（node 直跑）。
+// 独立 target：anchor 取文件首个既有 import 行（"./nodes"），幂等（doneMarker 认
+// 重定向行本身存在）。
+state2Targets.push({
+  file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
+  anchor: 'import { NODES_WGSL } from "../shaders/materials/nodes";',
+  replacement: SLOTS_DIST_BUNDLE_REDIRECT + 'import { NODES_WGSL } from "../shaders/materials/nodes";',
+  doneMarker: SLOTS_DIST_BUNDLE_REDIRECT.trim(),
+  label: "dist/graph/slots.js bundle specifier 重定向（node 直跑）",
+});
 passthroughTargets.push(...state2Targets);
 
 applyPatchManifest(passthroughTargets, "display-passthrough");

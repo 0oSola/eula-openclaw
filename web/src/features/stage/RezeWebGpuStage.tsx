@@ -89,7 +89,6 @@ import {
   V14D_BODY_MATERIAL_NAME,
   V14D_HAIR_A_MATERIAL_NAME,
   V14D_HAIR_B_MATERIAL_NAME,
-  V14D_BODY_WARM,
   V14D_BODY_SKIN_REGIONS,
   V14D_BODY_SKIN_BONE_REGIONS_V1,
   V14D_BODY_SKIN_BONE_REGION_IDS,
@@ -102,6 +101,16 @@ import {
   evaluateRezeK3V1Eligibility,
   resolveRezeK3SkinVariantActivation,
 } from "@/features/stage/rezeSkinVariantPreference.js";
+import {
+  buildV14dSkinVariantStyleGroups,
+  collectV14dSkinVariantBindingCounts,
+  perturbV14dSkinVariantStyleGroups,
+  V14D_BODY_LIVE_COMPOSITE_GRAPH,
+  V14D_BODY_V1_COMPOSITE_GRAPH,
+  V14D_FACE_V1_COMPOSITE_GRAPH,
+  V14D_HAIR_V1_COMPOSITE_GRAPH,
+  type BadSkinGraphKind,
+} from "@/features/stage/v14dSkinVariantGraphs.js";
 
 // RezeK3SkinVariant 共享类型权威：rezeSkinVariantPreference.types.d.ts（P0 第 3 项）。
 import type { RezeK3SkinVariant } from "@/features/stage/rezeSkinVariantPreference.js";
@@ -462,119 +471,9 @@ const V14D_FACE_LIVE_COMPOSITE_GRAPH: ShaderGraph = {
   output: { node: "warm", socket: "color" },
 };
 
-/**
- * 生产 V1（V14D）Face 合成图：与诊断 finalFaceComposite 同一份 WGSL 覆写
- * （graph.name 精确匹配 + tags 含 v14d-state2-face），但 tags 不带
- * "diagnostic"/"face-static"，语义上是生产可选皮肤变体而非诊断入口。
- * 引擎补丁按 tags 注入 mask 声明、按 graph.name 覆写 final_color。
- */
-const V14D_FACE_V1_COMPOSITE_GRAPH: ShaderGraph = {
-  version: 1,
-  name: "V14D Face State2 Live Composite",
-  tags: ["v14d", "v14d-state2-face", "production", "skin-variant"],
-  nodes: [
-    { id: "warm", type: "rgb", inputs: { color: [1.0, 0.935, 0.89] } },
-  ],
-  links: [],
-  output: { node: "warm", socket: "color" },
-};
-
-/**
- * Stage 2B-M3 全身皮肤统一：BodySkin 实时合成图。
- *
- * Blender 权威取证（forensic-v14d-bodyskin-state2.py）：BodySkin 无离散阴影 mask，
- * 身体是「body_d 线性 × warm=[1,0.945,0.905]」直出（与 Face 同 skin family、
- * 同乘法暖肤结构、同线性口径，但不套脸部 State2 mask）。最终输出由引擎补丁按
- * graph.name 覆写为 v14d_skin_body_composite(tex_color)。warm rgb 节点仅编译占位。
- */
-const V14D_BODY_LIVE_COMPOSITE_GRAPH: ShaderGraph = {
-  version: 1,
-  name: "V14D Body Skin Composite",
-  tags: ["diagnostic", "v14d", "face-static"],
-  nodes: [
-    { id: "warm", type: "rgb", inputs: { color: [V14D_BODY_WARM[0], V14D_BODY_WARM[1], V14D_BODY_WARM[2]] } },
-  ],
-  links: [],
-  output: { node: "warm", socket: "color" },
-};
-
-/**
- * 生产 V1 BodySkin 暖肤合成图：与诊断 V14D_BODY_LIVE_COMPOSITE_GRAPH 同一
- * graph.name（引擎补丁按 name 覆写为 v14d_skin_body_composite），tags 标记为
- * 生产皮肤变体。BodySkin 无 State2 mask，仅 body_d 线性 × warm。
- */
-const V14D_BODY_V1_COMPOSITE_GRAPH: ShaderGraph = {
-  version: 1,
-  name: "V14D Body Skin Composite",
-  tags: ["v14d", "production", "skin-variant"],
-  nodes: [
-    { id: "warm", type: "rgb", inputs: { color: [V14D_BODY_WARM[0], V14D_BODY_WARM[1], V14D_BODY_WARM[2]] } },
-  ],
-  links: [],
-  output: { node: "warm", socket: "color" },
-};
-
-/**
- * Stage 2C-M1 生产 V1 HairA/HairB 头发合成图：graph.name "V14D Hair V1 Composite"
- * 由引擎补丁精确覆写为 v14d_hair_composite(tex_color)（hair_d 线性 × 银白紫乘色
- * [0.84,0.85,0.96]，常量来自权威 blend 取证 hair-forensic.json）。与皮肤同一
- * 「单一乘法 tint、视角相关高光不烘焙」口径：Anisotropic 0.72 / Roughness /
- * Specular MapRange / ToonRamp 按 A/B/C 分类为 C（不能固化视角高光），保持引擎
- * hair 分组既有光照。HairA/HairB 无 State2 mask；tags 标记为生产变体。
- */
-const V14D_HAIR_V1_COMPOSITE_GRAPH: ShaderGraph = {
-  version: 1,
-  name: "V14D Hair V1 Composite",
-  tags: ["v14d", "production", "skin-variant", "hair-v1"],
-  nodes: [
-    { id: "tint", type: "rgb", inputs: { color: [0.84, 0.85, 0.96] } },
-  ],
-  links: [],
-  output: { node: "tint", socket: "color" },
-};
-
-/**
- * 生产 V1 变体：把 Face/BodySkin/HairA/HairB 从现有分组抽出，分别绑定到
- * V14D 实时合成 graph，其余材质保持 reze-k3 正常分组（严格 A/B）。
- * 与诊断 buildV14dUnlitStyleGroups 同构，但 graph 为生产合成图。
- * Stage 2C-M1 起纳入 HairA/HairB（V14D Hair V1 Composite，hair renderClass）。
- */
-function buildV14dSkinVariantStyleGroups(originalGroups: readonly RezeStyleGroup[]) {
-  const excluded = new Set<string>([
-    V14D_FACE_MATERIAL_NAME,
-    V14D_BODY_MATERIAL_NAME,
-    V14D_HAIR_A_MATERIAL_NAME,
-    V14D_HAIR_B_MATERIAL_NAME,
-  ]);
-  const retainedGroups = originalGroups
-    .map((group) => ({
-      ...group,
-      materials: group.materials.filter((name) => !excluded.has(name)),
-    }))
-    .filter((group) => group.materials.length > 0);
-  return [
-    ...retainedGroups,
-    {
-      id: "v14d-skin-variant-face",
-      label: "V14D Face State2 Live Composite",
-      materials: [V14D_FACE_MATERIAL_NAME],
-      graph: V14D_FACE_V1_COMPOSITE_GRAPH,
-    },
-    {
-      id: "v14d-skin-variant-body",
-      label: "V14D Body Skin Composite",
-      materials: [V14D_BODY_MATERIAL_NAME],
-      graph: V14D_BODY_V1_COMPOSITE_GRAPH,
-    },
-    {
-      id: "v14d-skin-variant-hair",
-      label: "V14D Hair V1 Composite",
-      materials: [V14D_HAIR_A_MATERIAL_NAME, V14D_HAIR_B_MATERIAL_NAME],
-      graph: V14D_HAIR_V1_COMPOSITE_GRAPH,
-      renderClass: "hair" as const,
-    },
-  ] as unknown as RezeStyleGroup[];
-}
+// 生产 V1 graph 常量、style group 构建与负测扰动收敛到 v14dSkinVariantGraphs.js
+// 纯模块（2026-09-03 修正轮抽出），供 node --test 直接驱动负测、消除 boot/探针
+// 两处 draw-call 深遍历重复。生产接线（applyStyleGroups/dataset 证据）留在本组件。
 
 /**
  * 从已有 localModelImport（用户选择的克莱妲模型目录 File[]）解析 V1 资产：
@@ -2606,49 +2505,17 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
               ? V14D_FACE_V1_COMPOSITE_GRAPH.name
               : "";
             // draw-call 级证据：Face/BodySkin/HairA/HairB 各自实际 groupId/pipeline/graph。
+            // 深遍历已抽到 collectV14dSkinVariantBindingCounts（boot/探针共用）。
             try {
-              const insts = (engine as unknown as { modelInstances?: Map<string, unknown> }).modelInstances;
-              let faceOnComposite = 0;
-              let bodyOnComposite = 0;
-              let faceCalls = 0;
-              let bodyCalls = 0;
-              let hairACalls = 0;
-              let hairAOnComposite = 0;
-              let hairBCalls = 0;
-              let hairBOnComposite = 0;
-              if (insts) {
-                for (const inst of insts.values()) {
-                  const drawCalls = (inst as { drawCalls?: { materialName: string; groupId: string | null; baseBindGroupEntries?: unknown }[] }).drawCalls;
-                  const styleGroups = (inst as { styleGroups?: Map<string, { pipeline?: unknown; group?: { graph?: { name?: string } } }> }).styleGroups;
-                  if (!drawCalls) continue;
-                  for (const dc of drawCalls) {
-                    if (!dc.baseBindGroupEntries) continue;
-                    const install = dc.groupId && styleGroups ? styleGroups.get(dc.groupId) : undefined;
-                    const graphName = install?.group?.graph?.name ?? null;
-                    if (dc.materialName === V14D_FACE_MATERIAL_NAME) {
-                      faceCalls += 1;
-                      if (install?.pipeline && graphName === V14D_FACE_V1_COMPOSITE_GRAPH.name) faceOnComposite += 1;
-                    } else if (dc.materialName === V14D_BODY_MATERIAL_NAME) {
-                      bodyCalls += 1;
-                      if (install?.pipeline && graphName === V14D_BODY_V1_COMPOSITE_GRAPH.name) bodyOnComposite += 1;
-                    } else if (dc.materialName === V14D_HAIR_A_MATERIAL_NAME) {
-                      hairACalls += 1;
-                      if (install?.pipeline && graphName === V14D_HAIR_V1_COMPOSITE_GRAPH.name) hairAOnComposite += 1;
-                    } else if (dc.materialName === V14D_HAIR_B_MATERIAL_NAME) {
-                      hairBCalls += 1;
-                      if (install?.pipeline && graphName === V14D_HAIR_V1_COMPOSITE_GRAPH.name) hairBOnComposite += 1;
-                    }
-                  }
-                }
-              }
-              canvasRef.current.dataset.v14dSkinVariantFaceDrawCalls = String(faceCalls);
-              canvasRef.current.dataset.v14dSkinVariantFaceOnComposite = String(faceOnComposite);
-              canvasRef.current.dataset.v14dSkinVariantBodyDrawCalls = String(bodyCalls);
-              canvasRef.current.dataset.v14dSkinVariantBodyOnComposite = String(bodyOnComposite);
-              canvasRef.current.dataset.v14dSkinVariantHairADrawCalls = String(hairACalls);
-              canvasRef.current.dataset.v14dSkinVariantHairAOnComposite = String(hairAOnComposite);
-              canvasRef.current.dataset.v14dSkinVariantHairBDrawCalls = String(hairBCalls);
-              canvasRef.current.dataset.v14dSkinVariantHairBOnComposite = String(hairBOnComposite);
+              const counts = collectV14dSkinVariantBindingCounts(engine);
+              canvasRef.current.dataset.v14dSkinVariantFaceDrawCalls = String(counts.faceDrawCalls);
+              canvasRef.current.dataset.v14dSkinVariantFaceOnComposite = String(counts.faceOnComposite);
+              canvasRef.current.dataset.v14dSkinVariantBodyDrawCalls = String(counts.bodyDrawCalls);
+              canvasRef.current.dataset.v14dSkinVariantBodyOnComposite = String(counts.bodyOnComposite);
+              canvasRef.current.dataset.v14dSkinVariantHairADrawCalls = String(counts.hairADrawCalls);
+              canvasRef.current.dataset.v14dSkinVariantHairAOnComposite = String(counts.hairAOnComposite);
+              canvasRef.current.dataset.v14dSkinVariantHairBDrawCalls = String(counts.hairBDrawCalls);
+              canvasRef.current.dataset.v14dSkinVariantHairBOnComposite = String(counts.hairBOnComposite);
             } catch { /* 证据读取失败不阻断渲染 */ }
           }
           if (!v1Result.ok) {
@@ -3211,7 +3078,30 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       // 暂停/跳走时取消完成兜底计时器：VMD 已不在自然播放，fallback 不应再把
       // 中段暂停/跳走误判为「自然播完」。这是真实行为修复（配合完成回调先验身份）。
       pauseVmd() { modelRef.current?.pause(); clearVmdCompletionFallback(); },
-      seekVmd(seconds: number) { modelRef.current?.seek(seconds); clearVmdCompletionFallback(); },
+     seekVmd(seconds: number) { modelRef.current?.seek(seconds); clearVmdCompletionFallback(); },
+      // 相机取景钩子（仅验收开关，Stage 2C-M1 修正轮）：暂停 VMD 后摆拍指定视角，
+      // 供头发前刘海/后长发独立近景 A/B 取证。只改引擎相机轨道参数，不改场景设置；
+      // 调用方用 cameraOrbit("reset") 恢复 settingsRef 默认取景。
+      cameraOrbit(pose: "front" | "back" | "reset") {
+        const engine = engineRef.current;
+        if (!engine) throw new Error("no engine");
+        modelRef.current?.pause();
+        clearVmdCompletionFallback();
+        const s = settingsRef.current;
+        // 近景对准头发：克莱妲头部中心约 y=11.8（全身 targetY=11.4 略低于头），距离收窄到 3.6。
+        // 修正轮校准：模型面向 -Z（alpha=π 看正面、alpha=0 看背面），头部中心 y≈11.8，
+        // 距离 3.6、beta 略仰（0.42π）让取景居中头发而非躯干。近景为诊断辅助证据，
+        // 机器分区判定由 analyze 的 UV 锚点口径（startIndex/indexCount）独立支撑。
+        engine.setCameraTarget(new Vec3(s.cameraTargetX, 11.8, s.cameraTargetZ));
+        if (pose === "front") {
+          engine.setCameraDistance(3.6); engine.setCameraAlpha(Math.PI); engine.setCameraBeta(Math.PI * 0.42);
+        } else if (pose === "back") {
+          engine.setCameraDistance(3.6); engine.setCameraAlpha(0); engine.setCameraBeta(Math.PI * 0.42);
+        } else {
+          engine.setCameraDistance(s.cameraDistance); engine.setCameraAlpha(Math.PI); engine.setCameraBeta(Math.PI / 2.5);
+        }
+        return { pose };
+      },
       // 过期完成回调负测钩子（P0-1，仅验收开关）：注入一个 finishedName 不等于当前动作的
       // 过期/错误回调。修复后它不得清当前 fallback、不得自增完成计数、不得改 currentName。
       fireStaleFinish(staleName: string) {
@@ -3234,60 +3124,43 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       // 变体切换只改 Face/BodySkin 材质 graph，不触碰这些字段；original/V1 各捕获一次
       // 逐字段比对即可证明 K3 灯光/星空/相机/Bloom/grade/tone mapping 未被 V1 改写。
       sceneSnapshot() {
+        const engine = engineRef.current;
+        const viewTransform = engine && typeof engine.getViewTransformOptions === "function"
+          ? { ...engine.getViewTransformOptions() }
+          : null;
         return {
           settings: { ...settingsRef.current },
           grade: gradeRef.current,
           gradeIntensity: gradeIntensityRef.current,
           backgroundEffect: backgroundEffectRef.current,
           transparentBackground: transparentBackgroundRef.current,
+          // 引擎 view transform（exposure/gamma/look=Filmic tone mapping）与灯光/星空
+          // 同等级：original/V1 逐字段比对证明 V1 不改写全局显示链。
+          viewTransform,
         };
       },
       // 负测钩子（仅验收开关）：用错误 graph / 编译非法 graph 驱动 V1 styleGroup 应用，
       // 真实验证「错误 graph 不命中 Face draw-call」「applyStyleGroups 失败回退 original」。
-      async applyBadSkinGraph(kind: "wrongGraph" | "failCompile") {
+      async applyBadSkinGraph(kind: BadSkinGraphKind) {
         const engine = engineRef.current;
         if (!engine) throw new Error("no engine");
         const groups = buildV14dSkinVariantStyleGroups(engine.getStyleGroups("companion"));
-        const bad = groups.map((g) => {
-          if (kind === "wrongGraph") {
-            // 错误 graph：graph.name 不是权威 V14D 名 → draw-call 不应计入 Face/BodySkin composite。
-            return { ...g, graph: { ...g.graph, name: "V14D WRONG Non-Authoritative Graph" } as ShaderGraph };
-          }
-          // 编译失败：注入非法 output 引用（指向不存在的节点/算子）→ applyStyleGroups 返回 ok:false，UI 回退 original。
-          return { ...g, graph: { ...g.graph, output: { node: "__missing_node__", socket: "color" }, nodes: [...(g.graph.nodes ?? []), { id: "__bad__", type: "__nonexistent_op__", inputs: {} }] } as ShaderGraph };
-        });
+        // 扰动由 perturbV14dSkinVariantStyleGroups 纯函数提供（node --test 可直接驱动、与生产同源）。
+        const bad = perturbV14dSkinVariantStyleGroups(groups, kind);
         const res = await engine.applyStyleGroups("companion", bad);
         if (canvasRef.current) {
           canvasRef.current.dataset.v14dSkinVariant = res.ok ? "v1" : "original";
-          canvasRef.current.dataset.v14dSkinVariantFaceGraph = res.ok ? String(bad[0]?.graph?.name ?? "") : "";
+          canvasRef.current.dataset.v14dSkinVariantFaceGraph = res.ok ? String(bad.find((g) => g.id === "v14d-skin-variant-face")?.graph?.name ?? "") : "";
           try {
-            const insts = (engine as unknown as { modelInstances?: Map<string, unknown> }).modelInstances;
-            let faceOnComposite = 0, bodyOnComposite = 0, faceCalls = 0, bodyCalls = 0;
-            let hairACalls = 0, hairAOnComposite = 0, hairBCalls = 0, hairBOnComposite = 0;
-            if (insts) {
-              for (const inst of insts.values()) {
-                const drawCalls = (inst as { drawCalls?: { materialName: string; groupId: string | null; baseBindGroupEntries?: unknown }[] }).drawCalls;
-                const styleGroups = (inst as { styleGroups?: Map<string, { pipeline?: unknown; group?: { graph?: { name?: string } } }> }).styleGroups;
-                if (!drawCalls) continue;
-                for (const dc of drawCalls) {
-                  if (!dc.baseBindGroupEntries) continue;
-                  const install = dc.groupId && styleGroups ? styleGroups.get(dc.groupId) : undefined;
-                  const graphName = install?.group?.graph?.name ?? null;
-                  if (dc.materialName === V14D_FACE_MATERIAL_NAME) { faceCalls += 1; if (install?.pipeline && graphName === V14D_FACE_V1_COMPOSITE_GRAPH.name) faceOnComposite += 1; }
-                  else if (dc.materialName === V14D_BODY_MATERIAL_NAME) { bodyCalls += 1; if (install?.pipeline && graphName === V14D_BODY_V1_COMPOSITE_GRAPH.name) bodyOnComposite += 1; }
-                  else if (dc.materialName === V14D_HAIR_A_MATERIAL_NAME) { hairACalls += 1; if (install?.pipeline && graphName === V14D_HAIR_V1_COMPOSITE_GRAPH.name) hairAOnComposite += 1; }
-                  else if (dc.materialName === V14D_HAIR_B_MATERIAL_NAME) { hairBCalls += 1; if (install?.pipeline && graphName === V14D_HAIR_V1_COMPOSITE_GRAPH.name) hairBOnComposite += 1; }
-                }
-              }
-            }
-            canvasRef.current.dataset.v14dSkinVariantFaceDrawCalls = String(faceCalls);
-            canvasRef.current.dataset.v14dSkinVariantFaceOnComposite = String(faceOnComposite);
-            canvasRef.current.dataset.v14dSkinVariantBodyDrawCalls = String(bodyCalls);
-            canvasRef.current.dataset.v14dSkinVariantBodyOnComposite = String(bodyOnComposite);
-            canvasRef.current.dataset.v14dSkinVariantHairADrawCalls = String(hairACalls);
-            canvasRef.current.dataset.v14dSkinVariantHairAOnComposite = String(hairAOnComposite);
-            canvasRef.current.dataset.v14dSkinVariantHairBDrawCalls = String(hairBCalls);
-            canvasRef.current.dataset.v14dSkinVariantHairBOnComposite = String(hairBOnComposite);
+            const counts = collectV14dSkinVariantBindingCounts(engine);
+            canvasRef.current.dataset.v14dSkinVariantFaceDrawCalls = String(counts.faceDrawCalls);
+            canvasRef.current.dataset.v14dSkinVariantFaceOnComposite = String(counts.faceOnComposite);
+            canvasRef.current.dataset.v14dSkinVariantBodyDrawCalls = String(counts.bodyDrawCalls);
+            canvasRef.current.dataset.v14dSkinVariantBodyOnComposite = String(counts.bodyOnComposite);
+            canvasRef.current.dataset.v14dSkinVariantHairADrawCalls = String(counts.hairADrawCalls);
+            canvasRef.current.dataset.v14dSkinVariantHairAOnComposite = String(counts.hairAOnComposite);
+            canvasRef.current.dataset.v14dSkinVariantHairBDrawCalls = String(counts.hairBDrawCalls);
+            canvasRef.current.dataset.v14dSkinVariantHairBOnComposite = String(counts.hairBOnComposite);
           } catch { /* 证据读取失败不阻断负测 */ }
         }
         return { ok: res.ok };
