@@ -1,5 +1,19 @@
 # 工作流术语表
 
+## Reze K3 皮肤变体
+
+- 英文机器名：`rezeK3SkinVariant`
+- 含义：`/companion` reze-k3 舞台中克莱妲 Face/BodySkin 的可选 V14D
+  实时合成模式；`original`=原始 Reze K3，`v1`=Reze K3 V1（V14D）。
+  持久化按 用户+模型+reze-k3 管线 三维隔离，默认 original。
+- 允许用法：描述生产舞台两个用户可见效果及其切换、持久化与克莱妲资格门控。
+- 禁止用法：不得把它等同诊断 `/mmd-calibration-render` 的 faceStatic
+  固定帧预览；不得用 bakedGolden/AgX display-byte atlas 冒充 V1；不得让
+  V1 泄漏到 reze-design 或其他管线/非克莱妲模型。
+- 路由影响：仅影响 `/companion` + reze-k3 + 克莱妲 + localModelImport
+  的 RezeWebGpuStage 皮肤变体分支；完整定义见
+  `workflow/concepts/reze-k3-skin-variant.zh-CN.md`。
+
 ## V14D Face UV/可见性同口径对账
 
 - 英文机器名：`v14d-face-uv-visibility`

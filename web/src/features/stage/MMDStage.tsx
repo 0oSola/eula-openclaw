@@ -142,6 +142,8 @@ type MMDStageProps = {
   v14dFaceStaticGated?: boolean;
   /** State2 实时合成配准负测相机覆写（仅 faceStatic 诊断；shift/null，默认关闭）。 */
   v14dFaceCameraOverride?: "shift" | "null" | null;
+  /** 生产 V1（V14D）皮肤变体（仅 reze-k3 + 克莱妲生效；默认 original）。 */
+  v14dSkinVariant?: "original" | "v1";
   rezeTransparentBackground?: boolean;
 };
 
@@ -173,6 +175,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   v14dFaceStaticMode = "normal",
   v14dFaceStaticGated = false,
   v14dFaceCameraOverride = null,
+  v14dSkinVariant = "original",
   rezeTransparentBackground = false,
 }: MMDStageProps, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -511,6 +514,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
             v14dFaceStaticMode={v14dFaceStaticMode}
             v14dFaceStaticGated={v14dFaceStaticGated}
             v14dFaceCameraOverride={v14dFaceCameraOverride}
+            v14dSkinVariant={v14dSkinVariant}
             transparentBackground={rezeTransparentBackground}
             cameraSnapshot={cameraSnapshot}
             onInteractionComplete={onInteractionComplete}
@@ -555,6 +559,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       {renderPipeline === "reze-design" || renderPipeline === "reze-k3" ? (
         <div style={{ margin: "0.45rem 0.95rem", minHeight: 0, borderRadius: "0.8rem", border: "1px solid rgba(140, 209, 255, 0.19)", overflow: "hidden" }}>
         <RezeWebGpuStage ref={webGpuStageRef} modelUrl={toAbsolute(modelUrl)} modelIdentifier={selectedModelPath || modelLabel} localModelImport={rezeLocalModelImport} interaction={webGpuInteraction} backgroundEffect={rezeBackgroundEffect} grade={rezeGrade} gradeIntensity={rezeGradeIntensity} sceneSettings={rezeSceneDebugSettings} scenePreset={renderPipeline === "reze-k3" ? "reze-k3" : "reze-design"} v14dUnlitDiagnostic={v14dUnlitDiagnostic} v14dColorBaseline={v14dColorBaseline} transparentBackground={rezeTransparentBackground} cameraSnapshot={cameraSnapshot} onInteractionComplete={onInteractionComplete} />
+        {/* chrome="panel" 分支为旧诊断入口，不接 V1 皮肤变体（默认 original）。 */}
         </div>
       ) : (
         <div

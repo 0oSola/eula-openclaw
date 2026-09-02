@@ -93,6 +93,11 @@ import {
   type V14dFaceStaticMode,
   type V14dFaceCameraOverride,
 } from "@/features/stage/v14dFaceStatic";
+import {
+  isRezeK3SkinVariant,
+  isRezeK3V1Eligible,
+  type RezeK3SkinVariant,
+} from "@/features/stage/rezeSkinVariantPreference";
 
 declare global {
   interface Window {
@@ -282,6 +287,13 @@ type RezeStageProps = {
   v14dFaceCameraOverride?: V14dFaceCameraOverride;
   /** 黄金帧诊断 ROI/pick/HDR 取样门控（仅 faceStatic 页面启用；与组件门控分离）。 */
   v14dFaceStaticGated?: boolean;
+  /**
+   * 生产 V1（V14D）皮肤变体开关（仅 reze-k3 + 权威克莱妲生效）。
+   * "v1" 时在同一舞台运行时中启用 State2 实时合成（Face finalComposite +
+   * BodySkin warm composite）；默认 "original" 保持现有生产渲染不变。
+   * 与诊断 v14dFaceStatic 路径互斥：faceStatic 开启时本开关被忽略。
+   */
+  v14dSkinVariant?: RezeK3SkinVariant;
   /** true 时 WebGPU 画布透明，由页面 MIO CSS 背景透出；false 用场景背景色。 */
   transparentBackground?: boolean;
   cameraSnapshot?: MmdCameraSnapshot | null;
@@ -431,6 +443,23 @@ const V14D_FACE_LIVE_COMPOSITE_GRAPH: ShaderGraph = {
 };
 
 /**
+ * 生产 V1（V14D）Face 合成图：与诊断 finalFaceComposite 同一份 WGSL 覆写
+ * （graph.name 精确匹配 + tags 含 v14d-state2-face），但 tags 不带
+ * "diagnostic"/"face-static"，语义上是生产可选皮肤变体而非诊断入口。
+ * 引擎补丁按 tags 注入 mask 声明、按 graph.name 覆写 final_color。
+ */
+const V14D_FACE_V1_COMPOSITE_GRAPH: ShaderGraph = {
+  version: 1,
+  name: "V14D Face State2 Live Composite",
+  tags: ["v14d", "v14d-state2-face", "production", "skin-variant"],
+  nodes: [
+    { id: "warm", type: "rgb", inputs: { color: [1.0, 0.935, 0.89] } },
+  ],
+  links: [],
+  output: { node: "warm", socket: "color" },
+};
+
+/**
  * Stage 2B-M3 全身皮肤统一：BodySkin 实时合成图。
  *
  * Blender 权威取证（forensic-v14d-bodyskin-state2.py）：BodySkin 无离散阴影 mask，
@@ -448,6 +477,80 @@ const V14D_BODY_LIVE_COMPOSITE_GRAPH: ShaderGraph = {
   links: [],
   output: { node: "warm", socket: "color" },
 };
+
+/**
+ * 生产 V1 BodySkin 暖肤合成图：与诊断 V14D_BODY_LIVE_COMPOSITE_GRAPH 同一
+ * graph.name（引擎补丁按 name 覆写为 v14d_skin_body_composite），tags 标记为
+ * 生产皮肤变体。BodySkin 无 State2 mask，仅 body_d 线性 × warm。
+ */
+const V14D_BODY_V1_COMPOSITE_GRAPH: ShaderGraph = {
+  version: 1,
+  name: "V14D Body Skin Composite",
+  tags: ["v14d", "production", "skin-variant"],
+  nodes: [
+    { id: "warm", type: "rgb", inputs: { color: [V14D_BODY_WARM[0], V14D_BODY_WARM[1], V14D_BODY_WARM[2]] } },
+  ],
+  links: [],
+  output: { node: "warm", socket: "color" },
+};
+
+/**
+ * 生产 V1 皮肤变体：把 Face/BodySkin 从现有分组抽出，分别绑定到
+ * V14D 实时合成 graph，其余材质保持 reze-k3 正常分组（严格 A/B）。
+ * 与诊断 buildV14dUnlitStyleGroups 同构，但 graph 为生产合成图。
+ */
+function buildV14dSkinVariantStyleGroups(originalGroups: readonly RezeStyleGroup[]) {
+  const excluded = new Set<string>([V14D_FACE_MATERIAL_NAME, V14D_BODY_MATERIAL_NAME]);
+  const retainedGroups = originalGroups
+    .map((group) => ({
+      ...group,
+      materials: group.materials.filter((name) => !excluded.has(name)),
+    }))
+    .filter((group) => group.materials.length > 0);
+  return [
+    ...retainedGroups,
+    {
+      id: "v14d-skin-variant-face",
+      label: "V14D Face State2 Live Composite",
+      materials: [V14D_FACE_MATERIAL_NAME],
+      graph: V14D_FACE_V1_COMPOSITE_GRAPH,
+    },
+    {
+      id: "v14d-skin-variant-body",
+      label: "V14D Body Skin Composite",
+      materials: [V14D_BODY_MATERIAL_NAME],
+      graph: V14D_BODY_V1_COMPOSITE_GRAPH,
+    },
+  ] as unknown as RezeStyleGroup[];
+}
+
+/**
+ * 从已有 localModelImport（用户选择的克莱妲模型目录 File[]）解析 V1 资产：
+ * 复用目录内全部文件，只额外定位 State2 mask（按 webkitRelativePath 后缀匹配
+ * 权威 mask 文件名 v14d-01234-face-shadow-state-2.png）。mask 缺失返回 null，
+ * 由调用方安全回退 original。不引入全局 fetch monkeypatch，不重复选 PMX/纹理。
+ */
+function resolveV14dV1AssetsFromImport(localModelImport: {
+  files: File[];
+  pmxFile: File;
+}): { files: File[]; pmxFile: File; state2Mask: File } | null {
+  if (!isRezeK3V1Eligible(localModelImport.pmxFile.name)) return null;
+  const maskFile =
+    localModelImport.files.find((f) =>
+      /v14d-01234-face-shadow-state-2\.png$/i.test(
+        (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name,
+      ),
+    ) ?? null;
+  if (!maskFile) return null;
+  // 以唯一逻辑键重建 mask File，引擎补丁按此前缀建立独立 rgba8unorm 纹理。
+  const state2Mask = new File([maskFile], "state2.png", { type: "image/png" });
+  Object.defineProperty(state2Mask, "webkitRelativePath", { value: V14D_STATE2_MASK_LOGICAL_PATH });
+  return {
+    files: [...localModelImport.files, state2Mask],
+    pmxFile: localModelImport.pmxFile,
+    state2Mask,
+  };
+}
 
 type RezeStyleGroup = ReturnType<Engine["getStyleGroups"]>[number];
 
@@ -703,7 +806,7 @@ function createV14dAnimationEvidence(
 }
 
 export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(function RezeWebGpuStage(
-  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, scenePreset = "reze-design", v14dUnlitDiagnostic = false, v14dColorBaseline = false, v14dFaceStatic = false, v14dFaceStaticMode = "normal", v14dFaceStaticGated = false, v14dFaceCameraOverride = null, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete },
+  { modelUrl, modelIdentifier = "", localModelImport = null, interaction, backgroundEffect = "Shining Stars", grade = "中性", gradeIntensity = 1, sceneSettings, scenePreset = "reze-design", v14dUnlitDiagnostic = false, v14dColorBaseline = false, v14dFaceStatic = false, v14dFaceStaticMode = "normal", v14dFaceStaticGated = false, v14dFaceCameraOverride = null, transparentBackground = false, cameraSnapshot = null, onReadyChange, onInteractionComplete, v14dSkinVariant = "original" },
   ref,
 ) {
   const pipelineDefaultSettings = scenePreset === "reze-k3" ? REZE_K3_SCENE_DEFAULTS : DEFAULT_SETTINGS;
@@ -743,6 +846,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   const transparentBackgroundRef = useRef(transparentBackground);
   const onReadyChangeRef = useRef(onReadyChange);
   const onInteractionCompleteRef = useRef(onInteractionComplete);
+  // 生产 V1 皮肤变体：v1 且非 faceStatic 诊断时在 boot 内启用。
+  // 资格（克莱妲权威 PMX）与 mask 解析在 boot 中判定；解析失败安全回退 original。
+  const v1Requested = v14dSkinVariant === "v1" && !v14dFaceStatic;
   interactionRef.current = interaction;
   v14dColorBaselineRef.current = v14dColorBaseline;
   v14dFaceStaticRef.current = v14dFaceStatic;
@@ -2314,7 +2420,20 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             isUvDebug ? "uv-debug" : v14dFaceStaticTextureName(v14dFaceStaticMode);
         }
       } else if (localModelImport) {
-        model = await engine.loadModel("companion", { files: localModelImport.files, pmxFile: localModelImport.pmxFile });
+        // 生产 V1（V14D）皮肤变体：v1 且克莱妲权威 PMX 时复用导入目录 File[]，
+        // 额外定位 State2 mask 并以唯一逻辑键注入（materialAuxTextures），引擎补丁
+        // 在 GPU 材质建立前为 Face 建独立 rgba8unorm mask 纹理。mask 缺失或非克莱妲
+        // 安全回退原始 Reze K3（不抛错、不污染其他模型/管线）。
+        const v1Assets = v1Requested ? resolveV14dV1AssetsFromImport(localModelImport) : null;
+        if (v1Assets) {
+          model = await engine.loadModel("companion", {
+            files: v1Assets.files,
+            pmxFile: v1Assets.pmxFile,
+            materialAuxTextures: { [V14D_FACE_MATERIAL_NAME]: V14D_STATE2_MASK_LOGICAL_PATH },
+          } as Parameters<Engine["loadModel"]>[1]);
+        } else {
+          model = await engine.loadModel("companion", { files: localModelImport.files, pmxFile: localModelImport.pmxFile });
+        }
       } else {
         model = await engine.loadModel("companion", modelUrl);
       }
@@ -2337,6 +2456,65 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         ...group,
         materials: [...group.materials],
       }));
+      // 生产 V1（V14D）皮肤变体：仅克莱妲 + localModelImport + v1 且 mask 已注入时，
+      // 把 Face/BodySkin 切到实时合成 graph（真实重新编译 + draw-call 绑定），
+      // 其余材质保持 reze-k3 正常分组。applyStyleGroups 失败或非克莱妲安全回退。
+      const v1Active =
+        v1Requested &&
+        !!localModelImport &&
+        !!resolveV14dV1AssetsFromImport(localModelImport) &&
+        isKoledaModelIdentifier(modelIdentifier, modelUrl, localModelImport?.pmxFile?.name);
+      if (v1Active) {
+        try {
+          const v1Groups = buildV14dSkinVariantStyleGroups(originalStyleGroups);
+          const v1Result = await engine.applyStyleGroups("companion", v1Groups);
+          if (canvasRef.current) {
+            canvasRef.current.dataset.v14dSkinVariant = v1Result.ok ? "v1" : "original";
+            canvasRef.current.dataset.v14dSkinVariantFaceGraph = v1Result.ok
+              ? V14D_FACE_V1_COMPOSITE_GRAPH.name
+              : "";
+            // draw-call 级证据：Face/BodySkin 各自实际 groupId/pipeline/graph。
+            try {
+              const insts = (engine as unknown as { modelInstances?: Map<string, unknown> }).modelInstances;
+              let faceOnComposite = 0;
+              let bodyOnComposite = 0;
+              let faceCalls = 0;
+              let bodyCalls = 0;
+              if (insts) {
+                for (const inst of insts.values()) {
+                  const drawCalls = (inst as { drawCalls?: { materialName: string; groupId: string | null; baseBindGroupEntries?: unknown }[] }).drawCalls;
+                  const styleGroups = (inst as { styleGroups?: Map<string, { pipeline?: unknown; group?: { graph?: { name?: string } } }> }).styleGroups;
+                  if (!drawCalls) continue;
+                  for (const dc of drawCalls) {
+                    if (!dc.baseBindGroupEntries) continue;
+                    const install = dc.groupId && styleGroups ? styleGroups.get(dc.groupId) : undefined;
+                    const graphName = install?.group?.graph?.name ?? null;
+                    if (dc.materialName === V14D_FACE_MATERIAL_NAME) {
+                      faceCalls += 1;
+                      if (install?.pipeline && graphName === V14D_FACE_V1_COMPOSITE_GRAPH.name) faceOnComposite += 1;
+                    } else if (dc.materialName === V14D_BODY_MATERIAL_NAME) {
+                      bodyCalls += 1;
+                      if (install?.pipeline && graphName === V14D_BODY_V1_COMPOSITE_GRAPH.name) bodyOnComposite += 1;
+                    }
+                  }
+                }
+              }
+              canvasRef.current.dataset.v14dSkinVariantFaceDrawCalls = String(faceCalls);
+              canvasRef.current.dataset.v14dSkinVariantFaceOnComposite = String(faceOnComposite);
+              canvasRef.current.dataset.v14dSkinVariantBodyDrawCalls = String(bodyCalls);
+              canvasRef.current.dataset.v14dSkinVariantBodyOnComposite = String(bodyOnComposite);
+            } catch { /* 证据读取失败不阻断渲染 */ }
+          }
+          if (!v1Result.ok) {
+            console.warn("[v14d-skin-variant] V1 graph 应用失败，回退原始 Reze K3", v1Result.groups);
+          }
+        } catch (error) {
+          if (canvasRef.current) canvasRef.current.dataset.v14dSkinVariant = "original";
+          console.warn("[v14d-skin-variant] V1 启用异常，回退原始 Reze K3", error);
+        }
+      } else if (canvasRef.current) {
+        canvasRef.current.dataset.v14dSkinVariant = "original";
+      }
       if (v14dUnlitDiagnostic) {
         const modelMaterialNames = new Set(model.getMaterials().map((material) => material.name));
         const unlitPlan = buildV14dUnlitStyleGroups(originalStyleGroups, modelMaterialNames, v14dFaceStatic);
@@ -2709,7 +2887,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       engineRef.current?.dispose();
       engineRef.current = null;
     };
-  }, [modelUrl, localModelImport, modelIdentifier, v14dUnlitDiagnostic, v14dColorBaseline, v14dFaceStatic, v14dFaceStaticMode, scenePreset]);
+  }, [modelUrl, localModelImport, modelIdentifier, v14dUnlitDiagnostic, v14dColorBaseline, v14dFaceStatic, v14dFaceStaticMode, scenePreset, v14dSkinVariant]);
 
   useEffect(() => {
     if (v14dColorBaseline || v14dFaceStatic || !sceneSettings) return;

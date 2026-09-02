@@ -35,6 +35,14 @@ import {
   REZE_K3_SCENE_DEFAULTS,
   type RezeSceneDebugSettings,
 } from "@/features/stage/rezeDesignDefaults";
+import {
+  isRezeK3V1Eligible,
+  readRezeK3SkinVariant,
+  rezeK3SkinVariantStorageKey,
+  writeRezeK3SkinVariant,
+  REZE_K3_SKIN_VARIANT_LABEL,
+  type RezeK3SkinVariant,
+} from "@/features/stage/rezeSkinVariantPreference";
 import { CompanionCommandBar } from "./CompanionCommandBar";
 import { KnowledgeReviewBadge } from "./KnowledgeReviewBadge";
 import { MioModeBackground } from "./MioModeBackground";
@@ -556,6 +564,10 @@ export default function CompanionPage() {
   const [realtimeVoiceStatus, setRealtimeVoiceStatus] = useState<RealtimeVoiceStatus>("idle");
   const [backgroundActivityPulse, setBackgroundActivityPulse] = useState(0);
   const [renderPipeline, setRenderPipeline] = useState<RenderPipeline>("mio-reference");
+  // Reze K3 皮肤变体（"原始 Reze K3" / "Reze K3 V1（V14D）"）：
+  // 按 用户+模型+reze-k3 管线 隔离持久化；仅克莱妲权威 PMX 可启用 V1，
+  // 非克莱妲安全回退 original。详见 rezeSkinVariantPreference.ts 概念注释。
+  const [rezeK3SkinVariant, setRezeK3SkinVariant] = useState<RezeK3SkinVariant>("original");
   const [isAdvancedPanelOpen, setIsAdvancedPanelOpen] = useState(false);
   const [isRezeEditorOpen, setIsRezeEditorOpen] = useState(false);
   const [advancedTab, setAdvancedTab] = useState<"library" | "favorites">("library");
@@ -679,6 +691,27 @@ export default function CompanionPage() {
     if (!session?.userId) return;
     window.localStorage.setItem(companionRenderPipelineStorageKey(session.userId), renderPipeline);
   }, [renderPipeline, session?.userId]);
+
+  // 皮肤变体：切换 用户/模型/管线 时读取持久化值（默认 original）。
+  useEffect(() => {
+    if (!session?.userId || !selectedModelPath || renderPipeline !== "reze-k3") return;
+    setRezeK3SkinVariant(
+      readRezeK3SkinVariant(
+        window.localStorage,
+        rezeK3SkinVariantStorageKey(session.userId, selectedModelPath),
+      ),
+    );
+  }, [renderPipeline, selectedModelPath, session?.userId]);
+
+  // 皮肤变体：切换时写回持久化（original 为默认值，清除键）。
+  useEffect(() => {
+    if (!session?.userId || !selectedModelPath || renderPipeline !== "reze-k3") return;
+    writeRezeK3SkinVariant(
+      window.localStorage,
+      rezeK3SkinVariantStorageKey(session.userId, selectedModelPath),
+      rezeK3SkinVariant,
+    );
+  }, [renderPipeline, rezeK3SkinVariant, selectedModelPath, session?.userId]);
 
   useEffect(() => {
     return () => {
@@ -3282,6 +3315,13 @@ export default function CompanionPage() {
             rezeGrade={rezeStageDocument.grade}
             rezeGradeIntensity={rezeStageDocument.gradeIntensity}
             rezeSceneDebugSettings={rezeSceneDebugSettings}
+            v14dSkinVariant={
+              renderPipeline === "reze-k3" &&
+              rezeLocalModelImport &&
+              isRezeK3V1Eligible(rezeLocalModelImport.pmxFile.name)
+                ? rezeK3SkinVariant
+                : "original"
+            }
             rezeTransparentBackground={renderPipeline === "reze-k3"}
             cameraSnapshot={stageCameraSnapshot}
             onModelChange={handleCharacterSwitch}
@@ -3404,6 +3444,35 @@ export default function CompanionPage() {
                       </button>
                     ))}
                   </div>
+                  {renderPipeline === "reze-k3" &&
+                  rezeLocalModelImport &&
+                  isRezeK3V1Eligible(rezeLocalModelImport.pmxFile.name) ? (
+                    <div
+                      className="mio-pipeline-options"
+                      role="radiogroup"
+                      aria-label="Reze K3 皮肤变体"
+                      data-testid="reze-k3-skin-variant-bar"
+                    >
+                      {(["original", "v1"] as const).map((variant) => (
+                        <button
+                          key={variant}
+                          type="button"
+                          className={"mio-pipeline-option" + (rezeK3SkinVariant === variant ? " is-active" : "")}
+                          role="radio"
+                          aria-checked={rezeK3SkinVariant === variant}
+                          data-testid={"reze-k3-skin-variant-" + variant}
+                          onClick={() => setRezeK3SkinVariant(variant)}
+                        >
+                          <strong>{REZE_K3_SKIN_VARIANT_LABEL[variant]}</strong>
+                          <span>
+                            {variant === "v1"
+                              ? "克莱妲 V14D 实时皮肤合成（Face State2 + BodySkin）"
+                              : "现有 Reze K3 材质与灯光"}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="mio-camera-actions">
                     <button
                       type="button"
