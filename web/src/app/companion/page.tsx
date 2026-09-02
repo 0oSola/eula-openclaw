@@ -3481,7 +3481,7 @@ export default function CompanionPage() {
                           <strong>{REZE_K3_SKIN_VARIANT_LABEL[variant]}</strong>
                           <span>
                             {variant === "v1"
-                              ? "克莱妲 V14D 实时皮肤合成（Face State2 + BodySkin）"
+                              ? "克莱妲 V14D 皮肤阶段（仅 Face + BodySkin，未含其余 13 槽）"
                               : "现有 Reze K3 材质与灯光"}
                           </span>
                         </button>

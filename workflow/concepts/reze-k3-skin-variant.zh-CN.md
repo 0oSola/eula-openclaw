@@ -2,7 +2,7 @@
 
 - 中文名称：Reze K3 皮肤变体
 - 英文机器名：`rezeK3SkinVariant`（localStorage 字段 / prop）
-- 枚举值：`original`（原始 Reze K3）/ `v1`（Reze K3 V1（V14D））
+- 枚举值：`original`（原始 Reze K3）/ `v1`（Reze K3 V1 皮肤预览（V14D））
 - 票据：Reze K3 V1 舞台接入与 V14D 切换（`codex/reze-k3-v1-v14d-toggle`）
 - 状态：**已实现，生产 /companion 舞台端到端验收通过（存根环境，2026-09-02 第二轮）**
 
@@ -13,12 +13,33 @@
 composite），形成两个用户可见且可持久选择的效果：
 
 - **原始 Reze K3**：保持现有生产 reze-k3 材质、灯光、VMD 行为不变。
-- **Reze K3 V1（V14D）**：Face 应用 State2 实时合成图（face_d 线性 × warm
+- **Reze K3 V1 皮肤预览（V14D）**：Face 应用 State2 实时合成图（face_d 线性 × warm
   × shadowFactor），BodySkin 应用暖肤合成（body_d 线性 × warm）；不使用
   bakedGolden 或任何失败实验纹理；头发/衣服等其余材质保持原始 Reze K3。
 
 切换触发引擎 style group / shader graph 的真实重新编译与 draw-call 绑定，
 不是改标签或 dataset。
+
+## 迁移范围（15 槽最终目标 vs 本概念皮肤阶段）
+
+本概念当前只迁移 **Face + BodySkin** 两个 PMX 材质槽，是「皮肤阶段」，**不代表
+全部角色材质迁移已完成**。最终目标是「Reze K3 + V14D 角色外观材质（**15 槽**）」。
+
+- **权威 15 槽清单（唯一权威，非 27/27、非"全部 PMX 材质"）**：Face、BodySkin、
+  Brows、Lashes、Emotions、HairA、HairB、Eyes、EyeWhite、EyeShadow、Eyes+、
+  UpperTeeth、LowerTeeth、Tongue、FingerNails。
+- **本概念已迁移（2/15）**：Face、BodySkin。
+- **尚未迁移（13/15，后续票据）**：Brows、Lashes、Emotions、HairA、HairB、Eyes、
+  EyeWhite、EyeShadow、Eyes+、UpperTeeth、LowerTeeth、Tongue、FingerNails。
+- **明确排除（永久保持原始 Reze K3，不在迁移范围）**：所有 Cth\* 衣物/披风/手套/
+  裤/鞋/口罩/包（Cth1-Cape、Cth1-Cape2、Cth1-Glove、Cth1-Top、Cth2-Pants、
+  Cth2-Pouch、Cth2-Shoes、Cth3-Mask、Cth4-Glove、Cth5-ShoesZip），以及 Glock、
+  GunSilencer 武器装备。
+
+「保留 Reze K3 灯光与星空背景」只约束**舞台环境**，不表示保留原 K3 的角色材质；
+舞台环境与角色材质迁移范围相互独立。后续全材质票据的完成定义必须是 15 槽逐槽都有
+机器可审计状态（已迁移 / 经权威证据确认等价 / 当前帧不可见但另有验证帧 / 明确阻塞），
+任何槽不得缺项。
 
 ## 解决的问题
 
@@ -59,7 +80,7 @@ composite），形成两个用户可见且可持久选择的效果：
 ## 正例 / 反例
 
 - 正例：克莱妲 + reze-k3 + localModelImport 含 State2 mask → 显示
-  「原始 Reze K3 / Reze K3 V1（V14D）」切换，选 V1 后脸部/脖子/手部皮肤
+  「原始 Reze K3 / Reze K3 V1 皮肤预览（V14D）」切换，选 V1 后脸部/脖子/手部皮肤
   真实变化，头发/衣服不变，刷新后按用户+模型恢复。
 - 反例：非克莱妲模型选择 V1 → 不显示切换或安全回退 original；把
   bakedGolden 烘焙图或 AgX display-byte atlas 当作 V1 → 禁止。
@@ -76,13 +97,17 @@ composite），形成两个用户可见且可持久选择的效果：
 - 脸部变化但 BodySkin 不变：读 `v14dSkinVariantBodyOnComposite` 是否
   等于 BodyDrawCalls；不等于则 BodySkin graph 未绑定成功。
 
-## 生产舞台验收（2026-09-02 第二轮）
+## 生产舞台验收（2026-09-02 第三轮）
 
 票据 `codex/reze-k3-v1-stage-visual-acceptance`，交付 `docs/handoff/2026-09-02-reze-k3-v1-stage-visual-acceptance.md`。
 在保留 K3 灯光/星空/自由相机/动态 VMD 的前提下，G1-G7 全过；V1 仅 Face/BodySkin 走 V14D 合成
-（皮肤区掩码采样 MAE 23-31 显著收敛），非皮肤/星空背景零泄漏（星空暗空像素 maxMeanDiff=0.000）。
-验收探针 `__rezeStageProbe` 仅在 `?v14dAcceptanceProbe=1` 显式开关下挂载，含负测钩子
-`applyBadSkinGraph`。环境为存根端到端（API 后端本机不可达，route 存根 bootstrap）。
+（皮肤阶段，其余 13 槽未迁移）。第三轮修正主会话 P0：(a) G3 收敛引入 V14D 目标参考色比比较
+（original 0.196→V1 0.141，drop 28.2%，含错误颜色负测）；(b) 恢复通用 VMD effect 的
+`engine.resetPhysics()` 并抽共享函数 `loadVmdThroughInteractionPath`（effect 与探针同路径，
+effect 计数=5）；(c) G5 完整结束改为硬证据（完成回调计数自增 + nearTail，含提前停止负测）；
+(d) 场景不变性在 original/V1 两侧逐字段硬断言。验收探针 `__rezeStageProbe` 仅在
+`?v14dAcceptanceProbe=1` 显式开关下挂载，含负测钩子 `applyBadSkinGraph`。环境为存根端到端
+（API 后端本机不可达，route 存根 bootstrap）。**全材质迁移（15 槽）尚未开始/未完成。**
 
 ## 与现有概念的关系
 

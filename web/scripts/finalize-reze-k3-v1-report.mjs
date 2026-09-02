@@ -3,7 +3,13 @@ import fs from "node:fs"; import path from "node:path"; import sharp from "sharp
 const OUT = path.resolve(".scratch/reze-k3-v1-stage");
 const report = JSON.parse(fs.readFileSync(path.join(OUT, "gate-report.json"), "utf8"));
 const diff = JSON.parse(fs.readFileSync(path.join(OUT, "visual-diff.json"), "utf8"));
-// 仅在 analyze 脚本 exit 0（G3 硬阻断已通过）后才运行本合并；这里如实并入真实阈值与逐区域数据。
+// 硬断言：仅当分析脚本判定通过（diff.pass===true）才合并 G3 为 pass；否则独立调用本脚本
+// 也不得伪造通过（此前无条件 status:pass，主会话验收指出）。退出码非零。
+if (diff.pass !== true) {
+  console.error("finalize 拒绝合并：visual-diff pass !== true。failures=" + JSON.stringify(diff.failures || []));
+  process.exit(1);
+}
+// 仅在 analyze 脚本判定通过后才合并；这里如实并入真实阈值与逐区域数据。
 report.gates.G3 = { ...(report.gates.G3 || {}), status: "pass", failures: [], regionStats: diff.regions, verdict: diff.verdict, occluded: diff.occluded, thresholds: diff.thresholds, sampling: "皮肤区=肤色掩码采样；非皮肤区=剔除皮肤；背景区=暗空多数像素（排除亮星闪烁）" };
 // 差异热图：|a-b| 逐像素放大 4x 生成灰度差异图 + 并排三联图。
 async function diffHeat() {

@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
   BODY_GRAPH,
   CLOTH_SMOOTH_GRAPH,
@@ -944,6 +944,13 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     finishedName: string,
   ) => {
     clearVmdCompletionFallback();
+    // 可判别完成证据：VMD 自然结束（引擎 onEnd 或兜底计时器）时自增计数，
+    // 供验收区分「真播完触发完成回调」与「仅超时后 !playing」。回归 P0-3。
+    if (canvasRef.current) {
+      const c = canvasRef.current;
+      c.dataset.vmdNaturalFinishCount = String(Number(c.dataset.vmdNaturalFinishCount || 0) + 1);
+      c.dataset.vmdNaturalFinishName = finishedName;
+    }
     const currentName = currentVmdUrlRef.current.split("/").pop();
     if (!currentName || currentName !== finishedName) return;
 
@@ -2924,6 +2931,37 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     applyGrade(grade, gradeIntensity);
   }, [grade, gradeIntensity]);
 
+  // 共享的「经 interaction 路径加载并播放 VMD」：通用 VMD effect 与验收探针
+  // playVmd 共用同一条调用，确保成功 load/apply/play 后必然 engine.resetPhysics()。
+  // 曾误删通用 effect 的 resetPhysics（验收回归 P0-2），此处以共享函数统一恢复并
+  // 自增可判别计数，验收据此断言该路径真实调用了 resetPhysics。
+  const loadVmdThroughInteractionPath = useCallback(async (url: string, loopUrls?: string[] | null) => {
+    const model = modelRef.current;
+    if (!model) throw new Error("no model");
+    const name = url.split("/").pop() || "motion.vmd";
+    const [policy] = await Promise.all([
+      readRezeVmdIkPolicy(url),
+      model.loadVmd(name, url),
+    ]);
+    const engine = engineRef.current;
+    if (!engine) throw new Error("no engine");
+    applyVmdIkPolicy(engine, policy);
+    // 只有在「上一个动作已经结束（currentVmdUrlRef 已被完成回调清空）」时
+    // 才代表真的没有动作在播，直接 show/play 从绑定姿势起跳；只要前一个
+    // 动作仍在进行中（currentVmdUrlRef 非空），新动作必须保留当前姿势，避免
+    // 模型被 resetAllBones() 拉回 T 形再跳到新动作，产生闪烁。
+    playRezeVmd(model, name, { preserveCurrentPose: Boolean(currentVmdUrlRef.current) });
+    currentVmdUrlRef.current = url;
+    if (loopUrls?.includes(url)) lastLoopVmdUrlRef.current = url;
+    armRezeVmdCompletionFallback(model, name, url);
+    engine.resetPhysics();
+    if (canvasRef.current) {
+      const c = canvasRef.current;
+      c.dataset.vmdEffectResetPhysicsCount = String(Number(c.dataset.vmdEffectResetPhysicsCount || 0) + 1);
+    }
+    return name;
+  }, []);
+
   useEffect(() => {
     // 固定单帧诊断（colorBaseline / faceStatic）在 boot 内一次性加载 VMD 并
     // seek→pause→stopRenderLoop→renderFrame(0)，通用 VMD effect 不得再 play/resetPhysics。
@@ -2931,26 +2969,11 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     const requestId = vmdRequestGuardRef.current.begin();
     const model = modelRef.current;
     if (!model || interaction.mode !== "vmd" || !interaction.vmdUrl) return;
+    const url = interaction.vmdUrl;
     const load = async () => {
       try {
-        const url = interaction.vmdUrl!;
-        const name = url.split("/").pop() || "motion.vmd";
-        const [policy] = await Promise.all([
-          readRezeVmdIkPolicy(url),
-          model.loadVmd(name, url),
-        ]);
+        const name = await loadVmdThroughInteractionPath(url, interaction.vmdLoopUrls);
         if (!vmdRequestGuardRef.current.isCurrent(requestId) || model !== modelRef.current) return;
-        const engine = engineRef.current;
-        if (!engine) return;
-        applyVmdIkPolicy(engine, policy);
-        // 只有在「上一个动作已经结束（currentVmdUrlRef 已被完成回调清空）」时
-        // 才代表真的没有动作在播，直接 show/play 从绑定姿势起跳；只要前一个
-        // 动作仍在进行中（currentVmdUrlRef 非空），新动作必须保留当前姿势，避免
-        // 模型被 resetAllBones() 拉回 T 形再跳到新动作，产生闪烁。
-       playRezeVmd(model, name, { preserveCurrentPose: Boolean(currentVmdUrlRef.current) });
-       currentVmdUrlRef.current = url;
-       if (interaction.vmdLoopUrls?.includes(url)) lastLoopVmdUrlRef.current = url;
-       armRezeVmdCompletionFallback(model, name, url);
       } catch (error) {
         if (!vmdRequestGuardRef.current.isCurrent(requestId)) return;
         reportStatus("error", `VMD 加载失败：${error instanceof Error ? error.message : String(error)}`);
@@ -3005,11 +3028,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       async playVmd(url: string) {
         const m = modelRef.current;
         if (!m) throw new Error("no model");
-        const nm = url.split("/").pop() || "motion.vmd";
-        await m.loadVmd(nm, url);
-        playRezeVmd(m, nm, { preserveCurrentPose: Boolean(currentVmdUrlRef.current) });
-        currentVmdUrlRef.current = url;
-        engineRef.current?.resetPhysics();
+        // 与通用 VMD effect 走同一条共享加载路径（含 resetPhysics + 计数），
+        // 确保探针驱动的 load→play 与真实 UI 交互路径一致（验收回归 P0-2）。
+        const nm = await loadVmdThroughInteractionPath(url, null);
         if (canvasRef.current) {
           const canvas = canvasRef.current;
           canvas.dataset.vmdPlaybackName = nm;
@@ -3031,6 +3052,18 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       },
       pauseVmd() { modelRef.current?.pause(); },
       seekVmd(seconds: number) { modelRef.current?.seek(seconds); },
+      // 场景不变性证据（P1-1）：只读场景文档源 settingsRef + grade + 背景效果。
+      // 变体切换只改 Face/BodySkin 材质 graph，不触碰这些字段；original/V1 各捕获一次
+      // 逐字段比对即可证明 K3 灯光/星空/相机/Bloom/grade/tone mapping 未被 V1 改写。
+      sceneSnapshot() {
+        return {
+          settings: { ...settingsRef.current },
+          grade: gradeRef.current,
+          gradeIntensity: gradeIntensityRef.current,
+          backgroundEffect: backgroundEffectRef.current,
+          transparentBackground: transparentBackgroundRef.current,
+        };
+      },
       // 负测钩子（仅验收开关）：用错误 graph / 编译非法 graph 驱动 V1 styleGroup 应用，
       // 真实验证「错误 graph 不命中 Face draw-call」「applyStyleGroups 失败回退 original」。
       async applyBadSkinGraph(kind: "wrongGraph" | "failCompile") {

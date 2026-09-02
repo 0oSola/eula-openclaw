@@ -298,8 +298,10 @@ try {
   // G2 末尾已整页刷新+重导入权威目录并恢复 V1 绑定，变体条已出现；此处不再重复 importDir
   //（重复导入会触发重建使变体条暂时不可点击）。直接切 original→V1 采 A/B。
   await page.click(sel.variantBtn("original")); await waitRebuilt();
+  const sceneOrig = await page.evaluate(() => window.__rezeStageProbe?.sceneSnapshot?.() || null);
   const origPix = await captureStagePixels(); await shot("g3-original-full");
   await page.click(sel.variantBtn("v1")); await waitRebuilt();
+  const sceneV1 = await page.evaluate(() => window.__rezeStageProbe?.sceneSnapshot?.() || null);
   const v1Pix = await captureStagePixels(); await shot("g3-v1-full");
   if (origPix.error || v1Pix.error) fail("G3", "画布像素捕获失败 " + (origPix.error || v1Pix.error));
   const oPng = saveDataUrl(origPix.dataUrl, "g3-original-canvas.png");
@@ -307,8 +309,21 @@ try {
   report.gates.G3 = report.gates.G3 || { status: "pass", failures: [] };
   report.gates.G3.canvasSize = { width: v1Pix.width, height: v1Pix.height };
   report.gates.G3.origCanvas = oPng; report.gates.G3.v1Canvas = vPng;
-  // Scene invariance：断言灯光/背景未被 V1 改写（canvas dataset 场景配置一致）。
-  const sceneA = await page.evaluate(() => { const c = document.querySelector("canvas"); return c ? { grade: c.dataset.grade || "", bg: c.dataset.backgroundEffect || "" } : null; });
+  // P1-1 Scene invariance：original 与 V1 的场景文档源（settingsRef：world/sun/bloom/
+  // ground/camera/background）+ grade + 背景效果逐字段硬断言一致。变体切换只改 Face/
+  // BodySkin 材质 graph，不得触碰场景/显示链；这是「保留 K3 灯光与星空背景」的引擎级证据。
+  if (!sceneOrig || !sceneV1) fail("G3", "sceneSnapshot 缺失（探针未暴露场景证据）");
+  else {
+    const a = JSON.stringify(sceneOrig), b = JSON.stringify(sceneV1);
+    report.gates.G3.sceneOrig = sceneOrig; report.gates.G3.sceneV1 = sceneV1;
+    if (a !== b) {
+      // 逐字段定位差异，给出可判别证据。
+      const diffs = [];
+      for (const k of Object.keys(sceneOrig)) if (JSON.stringify(sceneOrig[k]) !== JSON.stringify(sceneV1[k])) diffs.push(k);
+      for (const k of Object.keys(sceneOrig.settings || {})) if (JSON.stringify(sceneOrig.settings[k]) !== JSON.stringify(sceneV1.settings?.[k])) diffs.push("settings." + k);
+      fail("G3", "P1-1 场景不变性失败：V1 改写了场景/显示字段 " + diffs.join(","));
+    } else note("G3", "P1-1 场景不变性 PASS（settings/grade/background 逐字段一致）");
+  }
   // 硬阻断：区域差异分析以退出码判定（皮肤收敛 + 非皮肤/背景稳定），不允许只算 verdict 强过。
   const { execSync } = await import("node:child_process");
   try {
@@ -371,18 +386,21 @@ async function vmdCycle(variant) {
       await stage.seekVmd(0);
       await stage.playVmd("/__probe__/koleda-v14d-authoritative-pose-f120.vmd");
       const dur = Number(document.querySelector("canvas")?.dataset.vmdPlaybackDuration || 0);
-      let lastT = -1; let endReached = false;
+      // 记录播放前的自然完成计数，用于判别完成回调是否真实触发（非恒真软通过）。
+      const finishBefore = Number(document.querySelector("canvas")?.dataset.vmdNaturalFinishCount || 0);
+      let lastT = -1; let nearTail = false;
       for (let k = 0; k < 14; k++) {
         await new Promise((s) => setTimeout(s, 500));
         const ct = Number(document.querySelector("canvas")?.dataset.vmdPlaybackCurrent || -1);
-        const playing = document.querySelector("canvas")?.dataset.vmdPlaybackPlaying === "true";
-        if (dur > 0 && ct >= dur * 0.9) { endReached = true; }
-        if (!playing && k > 8) { endReached = endReached || true; } // 播完自动停止
+        if (dur > 0 && ct >= dur * 0.85) { nearTail = true; } // 进度真实接近尾部
         lastT = ct;
-        if (endReached) break;
       }
-      const fullPlayOk = endReached || (dur > 0 && lastT >= dur * 0.85);
-      return { t0, t1, playAdvance, pb, pa, pauseStable, sk, seekOk, name, duration: dur, lastT, endReached, fullPlayOk, ok: playAdvance && pauseStable && seekOk && !!name && fullPlayOk };
+      // 完成回调硬证据：等待播完后读取自然完成计数是否自增。
+      await new Promise((s) => setTimeout(s, 1500));
+      const finishAfter = Number(document.querySelector("canvas")?.dataset.vmdNaturalFinishCount || 0);
+      const endReached = nearTail && finishAfter > finishBefore; // 进度到尾部 且 完成回调真实触发
+      const fullPlayOk = endReached;
+      return { t0, t1, playAdvance, pb, pa, pauseStable, sk, seekOk, name, duration: dur, lastT, nearTail, finishBefore, finishAfter, endReached, fullPlayOk, ok: playAdvance && pauseStable && seekOk && !!name && fullPlayOk };
     } catch (e) { return { error: String(e) }; }
   });
   return r;
@@ -398,6 +416,27 @@ try {
     report.gates.G5 = report.gates.G5 || { status: "pass", failures: [], cycles: {} };
     report.gates.G5.cycles[variant] = cyc;
   }
+  // G5 负测：提前 seek 到中段后暂停，未播到尾部时完成计数不得自增（防恒真软通过）。
+  note("G5", "负测：提前停止不得误判为自然结束");
+  const negG5 = await page.evaluate(async () => {
+    const stage = window.__rezeStageProbe;
+    const c = () => document.querySelector("canvas");
+    const before = Number(c()?.dataset.vmdNaturalFinishCount || 0);
+    await stage.seekVmd(0);
+    await stage.playVmd("/__probe__/koleda-v14d-authoritative-pose-f120.vmd");
+    await new Promise((s) => setTimeout(s, 1200)); // 只播 ~1.2s，远未到 4s 尾部
+    await stage.pauseVmd();
+    await new Promise((s) => setTimeout(s, 500));
+    const after = Number(c()?.dataset.vmdNaturalFinishCount || 0);
+    const midT = Number(c()?.dataset.vmdPlaybackCurrent || -1);
+    return { before, after, midT, notFinished: after === before };
+  });
+  if (!negG5.notFinished) fail("G5", "负测失败：提前停止却触发了完成计数 " + JSON.stringify(negG5));
+  report.gates.G5.negEarlyStop = negG5; note("G5", "负测 PASS " + JSON.stringify(negG5));
+  // G5 resetPhysics 回归：通用 VMD effect 每次成功 load/apply/play 后自增计数（P0-2）。
+  const rp = await page.evaluate(() => Number(document.querySelector("canvas")?.dataset.vmdEffectResetPhysicsCount || 0));
+  if (!(rp > 0)) fail("G5", "通用 VMD effect 未观察到 resetPhysics 计数自增（P0-2 回归）");
+  report.gates.G5.resetPhysicsEffectCount = rp; note("G5", "resetPhysics effect 计数=" + rp);
   note("G5", "PASS");
 } catch (e) { fail("G5", "exception: " + (e?.stack || e)); }
 

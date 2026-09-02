@@ -25,7 +25,7 @@ export const REZE_K3_SKIN_VARIANTS = ["original", "v1"];
 /** @type {Record<RezeK3SkinVariant, string>} */
 export const REZE_K3_SKIN_VARIANT_LABEL = {
   original: "原始 Reze K3",
-  v1: "Reze K3 V1（V14D）",
+  v1: "Reze K3 V1 皮肤预览（V14D）",
 };
 
 /** @param {unknown} value @returns {value is RezeK3SkinVariant} */

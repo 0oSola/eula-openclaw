@@ -88,6 +88,40 @@ function bgStats(r) {
   return { samples: n, meanDiff, maxMeanDiff: Math.max(...meanDiff) };
 }
 
+// ── P0-1 目标参考收敛 ───────────────────────────────────────────────
+// K3 舞台有灯光/星空显示链，目标参考（Blender V14D finalFaceComposite）是中性白底，
+// 绝对亮度不可比。采用「色比」(R/G, R/B) 作为对光照/曝光不敏感的配准皮肤材质空间口径，
+// 只比较脸部皮肤像素（isSkin 掩码）。要求 V1 对目标的色比误差显著低于 original。
+async function targetSkinRatio(p) {
+  const { data, info } = await sharp(p).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  let n = 0, s = [0, 0, 0];
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 200) continue; // 目标为不透明渲染，剔除透明边
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    if (!isSkin(r, g, b)) continue;
+    s[0] += r; s[1] += g; s[2] += b; n++;
+  }
+  if (!n) return null;
+  const m = s.map((v) => v / n);
+  return { samples: n, mean: m.map((v) => +v.toFixed(1)), ratio: [+(m[0] / m[1]).toFixed(4), +(m[0] / m[2]).toFixed(4)] };
+}
+// 舞台脸框皮肤均值色比（与 targetSkinRatio 同 isSkin 口径）。
+function stageFaceRatio(img, r) {
+  const { x0, y0, x1, y1 } = bounds(r);
+  let n = 0, s = [0, 0, 0];
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const i = (y * W + x) * 4;
+    if (img.data[i + 3] < 8) continue;
+    const rr = img.data[i], gg = img.data[i + 1], bb = img.data[i + 2];
+    if (!isSkin(rr, gg, bb)) continue;
+    s[0] += rr; s[1] += gg; s[2] += bb; n++;
+  }
+  if (!n) return null;
+  const m = s.map((v) => v / n);
+  return { samples: n, mean: m.map((v) => +v.toFixed(1)), ratio: [+(m[0] / m[1]).toFixed(4), +(m[0] / m[2]).toFixed(4)] };
+}
+const ratioDist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+
 // ── 阈值（报告中显式定义，脚本硬阻断；非皮肤阈值对齐实测基线噪声，高于噪声、低于真实改写）──
 const THRESHOLDS = {
   skinConvergeMae: 1.0,          // 皮肤区（掩码采样）MAE 必须 > 1（证明 V14D 材质有显著变化）
@@ -99,6 +133,8 @@ const THRESHOLDS = {
   nonSkinStableMeanMeanDiff: 1.0, // 非皮肤区 meanMeanDiff（平均色偏）必须 < 1（大面积材质不被改写）
   nonSkinStableMaxMeanDiff: 2.0,  // 非皮肤区 maxMeanDiff 上限（单通道色偏，远高于噪声、低于真实改写）
   bgStableMeanDiff: 0.5,         // 星空背景暗空像素 maxMeanDiff 必须 < 0.5（灯光/背景不变）
+  // P0-1 目标收敛：V1 对 V14D 目标的色比误差必须比 original 显著下降（误差下降比例下限）。
+  targetConvergeDrop: 0.15,      // (dist_orig - dist_v1) / dist_orig 必须 > 0.15（色比口径）
 };
 
 const out = { width: W, height: H, thresholds: THRESHOLDS, target: TARGET, regions: {}, verdict: {}, occluded: [] };
@@ -123,9 +159,63 @@ for (const [name, r] of Object.entries(regions)) {
   }
 }
 out.failures = failures;
+
+// ── P0-1 目标参考收敛判定（脸部皮肤，色比口径）────────────────────
+// 同名同帧脸框皮肤色比：original 与 V1 分别对 V14D 目标求色比距离，要求 V1 显著更接近。
+// 这替代「original↔V1 差异大=收敛」的伪判定——只有对目标的误差真实下降才算收敛。
+const faceRegion = regions.face;
+const stageOrig = stageFaceRatio(a, faceRegion);
+const stageV1 = stageFaceRatio(b, faceRegion);
+let targetCmp = null;
+if (fs.existsSync(TARGET)) {
+  const tgt = await targetSkinRatio(TARGET);
+  if (tgt && stageOrig && stageV1) {
+    const distOrig = ratioDist(stageOrig.ratio, tgt.ratio);
+    const distV1 = ratioDist(stageV1.ratio, tgt.ratio);
+    const drop = distOrig > 0 ? (distOrig - distV1) / distOrig : 0;
+    targetCmp = { targetRatio: tgt.ratio, targetSamples: tgt.samples, origRatio: stageOrig.ratio, v1Ratio: stageV1.ratio, distOrig: +distOrig.toFixed(4), distV1: +distV1.toFixed(4), drop: +drop.toFixed(4) };
+    out.targetConvergence = targetCmp;
+    const ok = distV1 < distOrig && drop > THRESHOLDS.targetConvergeDrop;
+    out.verdict.faceTargetConverged = ok;
+    if (!ok) failures.push("P0-1 V1 未向 V14D 目标显著收敛 distOrig=" + distOrig.toFixed(4) + " distV1=" + distV1.toFixed(4) + " drop=" + drop.toFixed(4) + "（需 drop>" + THRESHOLDS.targetConvergeDrop + "）");
+  } else failures.push("P0-1 目标参考或脸部皮肤样本为空，无法判定收敛");
+} else failures.push("P0-1 目标参考图不存在: " + TARGET);
+
+// P0-1 错误颜色负测：把 V1 画布 R 通道压制（皮肤变青绿，远离 V14D 暖肤目标）。
+// 直接操作像素：R*0.4、保留 G/B，isSkin 仍部分命中（R>G 可能不再成立时取 R 提升前的口径），
+// 故此处用宽松皮肤掩码（仅 R>60 且曾为皮肤区）统计错色色比。若错色仍被判收敛则判定无效 → fail。
+if (targetCmp) {
+  try {
+    const mod = Buffer.from(b.data); // 复制 V1 像素
+    for (let i = 0; i < mod.length; i += 4) {
+      if (mod[i + 3] < 8) continue;
+      const r = mod[i], g = mod[i + 1], bb = mod[i + 2];
+      if (isSkin(r, g, bb)) { mod[i] = Math.round(r * 0.35); mod[i + 1] = Math.min(255, Math.round(g * 1.1)); } // 错色：压 R 提 G
+    }
+    const negImg = { data: mod, width: b.width, height: b.height };
+    // 宽松掩码：用原始图判定皮肤位置，读错色后的值
+    const { x0, y0, x1, y1 } = bounds(faceRegion);
+    let n = 0, s = [0, 0, 0];
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const i = (y * W + x) * 4;
+      if (b.data[i + 3] < 8) continue;
+      if (!isSkin(b.data[i], b.data[i + 1], b.data[i + 2])) continue; // 按原始 V1 皮肤位置
+      s[0] += mod[i]; s[1] += mod[i + 1]; s[2] += mod[i + 2]; n++;
+    }
+    if (n) {
+      const m = s.map((v) => v / n);
+      const negRatio = [+(m[0] / m[1]).toFixed(4), +(m[0] / m[2]).toFixed(4)];
+      const negDist = ratioDist(negRatio, targetCmp.targetRatio);
+      const negDrop = (targetCmp.distOrig - negDist) / targetCmp.distOrig;
+      out.negWrongColor = { negRatio, negDist: +negDist.toFixed(4), negDrop: +negDrop.toFixed(4), samples: n };
+      const negConverged = negDist < targetCmp.distOrig && negDrop > THRESHOLDS.targetConvergeDrop;
+      if (negConverged) failures.push("P0-1 负测失效：错误青绿肤色被判收敛 negDist=" + negDist.toFixed(4) + " negDrop=" + negDrop.toFixed(4));
+    } else { out.negWrongColor = { error: "无皮肤样本" }; failures.push("P0-1 负测无皮肤样本，无法验证判别力"); }
+  } catch (e) { out.negWrongColorError = String(e); failures.push("P0-1 负测执行异常: " + e); }
+}
+
 out.pass = failures.length === 0;
 fs.writeFileSync(path.join(OUT, "visual-diff.json"), JSON.stringify(out, null, 2));
 console.log(JSON.stringify({ pass: out.pass, verdict: out.verdict, occluded: out.occluded, failures }, null, 2));
 if (!out.pass) { console.error("===VISUAL-GATE-FAIL==="); process.exit(1); }
 console.log("===VISUAL-GATE-OK===");
-
