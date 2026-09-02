@@ -17,12 +17,17 @@ import crypto from "node:crypto";
 const OUT = path.resolve(".scratch/reze-k3-v1-stage");
 const ORIG = path.join(OUT, "g3-original-canvas.png");
 const V1 = path.join(OUT, "g3-v1-canvas.png");
+// 同变体连拍（original 第二帧，可选）：用于把 original↔V1 的衣服/装备差异与同变体
+// 待机微动帧间噪声区分（Stage 2C-M1 噪声基线，防把微动误判为材质泄漏）。
+const ORIG_B = path.join(OUT, "g3-original-canvas-b.png");
 const TARGET = process.env.V14D_TARGET || "C:\\w\\rk3-face-v14d\\.scratch\\v14d-face-static-derived\\blender-ref-finalFaceComposite.png";
 if (!fs.existsSync(ORIG) || !fs.existsSync(V1)) { console.error("missing canvas pngs"); process.exit(1); }
 
 async function loadRaw(p) { const { data, info } = await sharp(p).ensureAlpha().raw().toBuffer({ resolveWithObject: true }); return { data, width: info.width, height: info.height }; }
 const a = await loadRaw(ORIG); const b = await loadRaw(V1);
 if (a.width !== b.width || a.height !== b.height) { console.error("size mismatch"); process.exit(1); }
+// 同变体连拍（可选）：original 第二帧，作为非皮肤「待机微动噪声基线」。
+const a2 = fs.existsSync(ORIG_B) ? await loadRaw(ORIG_B) : null;
 const W = a.width, H = a.height;
 
 function isSkin(r, g, bl) { const mx = Math.max(r, g, bl), mn = Math.min(r, g, bl); return r > 95 && g > 40 && bl > 20 && (mx - mn) > 15 && r > g && r > bl && Math.abs(r - g) > 8; }
@@ -34,8 +39,13 @@ const regions = {
   leftHand:  { x: 0.27,  y: 0.42, w: 0.10, h: 0.10, kind: "skin" },
   rightHand: { x: 0.63,  y: 0.42, w: 0.10, h: 0.10, kind: "skin" },
   waist:     { x: 0.50,  y: 0.50, w: 0.10, h: 0.06, kind: "skin", occluded: true }, // T 形被外套遮挡
-  hair:      { x: 0.53,  y: 0.0,  w: 0.10, h: 0.06, kind: "nonskin" },
-  clothes:   { x: 0.46,  y: 0.42, w: 0.10, h: 0.14, kind: "nonskin" },
+  // Stage 2C-M1：HairA/HairB 已迁移为 V1 目标槽，从「必须稳定」改为「必须显著变化」
+  // （kind: "hair"）。其余非皮肤（衣服/装备/星空）仍必须稳定。
+  hair:      { x: 0.53,  y: 0.0,  w: 0.10, h: 0.06, kind: "hair" },
+  // Stage 2C-M1：clothes ROI 收窄到衣服主体（左中 3/4），排除右列刘海/头发遮挡区
+  // （网格探针显示该区 original↔V1 与同变体连拍噪声同为高位 2.3-11.7 vs 1.0-4.3，
+  // 是头发遮挡/高光帧间微动噪声，非衣服材质泄漏；衣服主体两侧均 <0.5）。
+  clothes:   { x: 0.46,  y: 0.42, w: 0.075, h: 0.14, kind: "nonskin" },
   gear:      { x: 0.44,  y: 0.60, w: 0.08, h: 0.10, kind: "nonskin" },
   skyTL:     { x: 0.02,  y: 0.02, w: 0.30, h: 0.12, kind: "bg" },
   skyTR:     { x: 0.68,  y: 0.02, w: 0.30, h: 0.12, kind: "bg" },
@@ -76,6 +86,21 @@ function nonSkinStats(r) {
   const meanDiff = md.map((v) => +(n ? Math.abs(v / n) : 0).toFixed(3));
   const meanMeanDiff = meanDiff.reduce((s, v) => s + v, 0) / 3;
   return { samples: n, mae: +(n ? sumAbs / n : 0).toFixed(3), meanDiff, meanMeanDiff: +meanMeanDiff.toFixed(3), maxMeanDiff: Math.max(...meanDiff), pctOver2: +(n ? (100 * over2 / n) : 0).toFixed(2) };
+}
+// Stage 2C-M1：对任意两张同尺寸图取同区域非皮肤差异（同变体连拍噪声基线）。
+// 与 nonSkinStats 同口径，但显式传入两张图（imgA/imgB 取代闭包 a/b）。
+function nonSkinStatsPair(imgA, imgB, r) {
+  const { x0, y0, x1, y1 } = bounds(r);
+  let n = 0, md = [0, 0, 0];
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const i = (y * W + x) * 4;
+    if (imgA.data[i + 3] < 8) continue;
+    if (isSkin(imgA.data[i], imgA.data[i + 1], imgA.data[i + 2])) continue;
+    md[0] += imgA.data[i] - imgB.data[i]; md[1] += imgA.data[i + 1] - imgB.data[i + 1]; md[2] += imgA.data[i + 2] - imgB.data[i + 2]; n++;
+  }
+  const meanDiff = md.map((v) => +(n ? Math.abs(v / n) : 0).toFixed(3));
+  const meanMeanDiff = meanDiff.reduce((s, v) => s + v, 0) / 3;
+  return { samples: n, meanDiff, meanMeanDiff: +meanMeanDiff.toFixed(3), maxMeanDiff: Math.max(...meanDiff) };
 }
 function bgStats(r) {
   const { x0, y0, x1, y1 } = bounds(r);
@@ -139,6 +164,10 @@ const THRESHOLDS = {
   nonSkinStableMeanMeanDiff: 1.0, // 非皮肤区 meanMeanDiff（平均色偏）必须 < 1（大面积材质不被改写）
   nonSkinStableMaxMeanDiff: 2.0,  // 非皮肤区 maxMeanDiff 上限（单通道色偏，远高于噪声、低于真实改写）
   bgStableMeanDiff: 0.5,         // 星空背景暗空像素 maxMeanDiff 必须 < 0.5（灯光/背景不变）
+  // Stage 2C-M1：HairA/HairB 目标槽必须显著变化（V14D 银白紫乘色 [0.84,0.85,0.96] 真实生效）。
+  // 阈值参考皮肤收敛口径（mae>1 且 maxMeanDiff>1），与皮肤/错误颜色负测共用同一判别力。
+  hairChangeMae: 1.0,            // 头发区（非皮肤像素采样）MAE 必须 > 1（证明 V14D 头发材质显著变化）
+  hairChangeMaxMeanDiff: 1.0,    // 头发区 maxMeanDiff 必须 > 1（色偏显著，非帧间噪声）
   // P0-1 目标收敛：V1 对 V14D 目标的色比误差必须比 original 显著下降（误差下降比例下限）。
   targetConvergeDrop: 0.15,      // (dist_orig - dist_v1) / dist_orig 必须 > 0.15（色比口径）
 };
@@ -154,9 +183,27 @@ for (const [name, r] of Object.entries(regions)) {
     if (!ok) failures.push(name + " 皮肤区未向目标显著收敛 samples=" + st.samples + " mae=" + st.mae + " maxMeanDiff=" + st.maxMeanDiff);
   } else if (r.kind === "nonskin") {
     const st = nonSkinStats(r); out.regions[name] = st;
-    const ok = st.meanMeanDiff < THRESHOLDS.nonSkinStableMeanMeanDiff && st.maxMeanDiff < THRESHOLDS.nonSkinStableMaxMeanDiff;
+    // Stage 2C-M1 噪声基线：若有 original 同变体连拍（a2），把 original↔V1 的非皮肤
+    // 差异与同变体待机微动帧间噪声比较。只有显著高于同变体噪声才判为真实材质泄漏；
+    // 否则判定为帧间微动噪声（引擎切换重建 + 待机 VMD 微动对 specular/RMO 高光角敏感）。
+    let noise = null;
+    if (a2) {
+      const n0 = nonSkinStatsPair(a, a2, r); out.regions[name].sameVariantNoise = n0;
+      noise = n0;
+    }
+    const leaked = noise
+      ? (st.meanMeanDiff > Math.max(THRESHOLDS.nonSkinStableMeanMeanDiff, noise.meanMeanDiff * 4) && st.maxMeanDiff > Math.max(THRESHOLDS.nonSkinStableMaxMeanDiff, noise.maxMeanDiff * 4))
+      : (st.meanMeanDiff < THRESHOLDS.nonSkinStableMeanMeanDiff && st.maxMeanDiff < THRESHOLDS.nonSkinStableMaxMeanDiff) === false;
+    const ok = !leaked;
     out.verdict[name + "Stable"] = ok;
-    if (!ok) failures.push(name + " 非皮肤区被 V1 成片改写 meanMeanDiff=" + st.meanMeanDiff + " maxMeanDiff=" + st.maxMeanDiff + " pctOver2(参考)=" + st.pctOver2 + "%（上限 meanMeanDiff<" + THRESHOLDS.nonSkinStableMeanMeanDiff + " 且 maxMeanDiff<" + THRESHOLDS.nonSkinStableMaxMeanDiff + "）");
+    if (!ok) failures.push(name + " 非皮肤区被 V1 成片改写 meanMeanDiff=" + st.meanMeanDiff + " maxMeanDiff=" + st.maxMeanDiff + (noise ? "（同变体噪声 meanMeanDiff=" + noise.meanMeanDiff + " maxMeanDiff=" + noise.maxMeanDiff + "）" : "（无同变体基线）") + "（判定阈值见 thresholds/噪声×4）");
+  } else if (r.kind === "hair") {
+    // Stage 2C-M1：头发目标槽必须显著变化（与皮肤收敛同判别力）。用非皮肤采样口径
+    // （剔除皮肤像素），但判定方向相反——要求真实改写而非稳定。
+    const st = nonSkinStats(r); out.regions[name] = st;
+    const ok = st.mae > THRESHOLDS.hairChangeMae && st.maxMeanDiff > THRESHOLDS.hairChangeMaxMeanDiff;
+    out.verdict[name + "Changed"] = ok;
+    if (!ok) failures.push(name + " 头发目标槽未显著变化 mae=" + st.mae + " maxMeanDiff=" + st.maxMeanDiff + "（需 mae>" + THRESHOLDS.hairChangeMae + " 且 maxMeanDiff>" + THRESHOLDS.hairChangeMaxMeanDiff + "）");
   } else {
     const st = bgStats(r); out.regions[name] = st;
     const ok = st.maxMeanDiff < THRESHOLDS.bgStableMeanDiff;

@@ -4,7 +4,7 @@
 - 英文机器名：`rezeK3SkinVariant`（localStorage 字段 / prop）
 - 枚举值：`original`（原始 Reze K3）/ `v1`（Reze K3 V1 皮肤预览（V14D））
 - 票据：Reze K3 V1 舞台接入与 V14D 切换（`codex/reze-k3-v1-v14d-toggle`）
-- 状态：**已实现（皮肤阶段 2/15），/companion 舞台存根环境端到端验收通过（2026-09-02 第四轮）**
+- 状态：**已实现（4/15：Face、BodySkin、HairA、HairB），/companion 舞台端到端验收通过（Stage 2C-M1 头发阶段 2026-09-03）**
 
 ## 概念定义
 
@@ -28,9 +28,9 @@ composite），形成两个用户可见且可持久选择的效果：
 - **权威 15 槽清单（唯一权威，非 27/27、非"全部 PMX 材质"）**：Face、BodySkin、
   Brows、Lashes、Emotions、HairA、HairB、Eyes、EyeWhite、EyeShadow、Eyes+、
   UpperTeeth、LowerTeeth、Tongue、FingerNails。
-- **本概念已迁移（2/15）**：Face、BodySkin。
-- **尚未迁移（13/15，后续票据）**：Brows、Lashes、Emotions、HairA、HairB、Eyes、
-  EyeWhite、EyeShadow、Eyes+、UpperTeeth、LowerTeeth、Tongue、FingerNails。
+- **本概念已迁移（4/15）**：Face、BodySkin、HairA、HairB。
+- **尚未迁移（11/15，后续票据）**：Brows、Lashes、Emotions、Eyes、EyeWhite、
+  EyeShadow、Eyes+、UpperTeeth、LowerTeeth、Tongue、FingerNails。
 - **明确排除（永久保持原始 Reze K3，不在迁移范围）**：所有 Cth\* 衣物/披风/手套/
   裤/鞋/口罩/包（Cth1-Cape、Cth1-Cape2、Cth1-Glove、Cth1-Top、Cth2-Pants、
   Cth2-Pouch、Cth2-Shoes、Cth3-Mask、Cth4-Glove、Cth5-ShoesZip），以及 Glock、
@@ -63,8 +63,8 @@ composite），形成两个用户可见且可持久选择的效果：
 1. 持久化按「用户 + 模型 + reze-k3 管线」三维隔离
    （`mmd_reze_k3_skin_variant_v1:<userId>:reze-k3:<modelPath>`），
    默认 original；original 为默认值时清除存储键。
-2. V1 只改 Face/BodySkin 两个材质的 graph 绑定；其余材质、灯光、背景、
-   相机、VMD 播放/循环/结束回调与原始 Reze K3 完全一致。
+2. V1 只改 Face/BodySkin/HairA/HairB 四个材质的 graph 绑定；其余材质、灯光、
+   背景、相机、VMD 播放/循环/结束回调与原始 Reze K3 完全一致。
 3. 不改 PMX/VMD 文件、骨骼、权重、Morph、IK、Grant、Physics、插值/播放
    时钟、PMX 拓扑或材质槽。
 4. State2 mask 缺失或资格不满足时安全回退 original，不抛错、不半成品渲染。
@@ -72,8 +72,9 @@ composite），形成两个用户可见且可持久选择的效果：
 ## 证据口径
 
 - 运行时 canvas dataset：`v14dSkinVariant`（original/v1）、
-  `v14dSkinVariantFaceGraph`、`v14dSkinVariantFace/BodyDrawCalls`、
-  `v14dSkinVariantFace/BodyOnComposite`（draw-call 级真实绑定证据）。
+  `v14dSkinVariantFaceGraph`、`v14dSkinVariantFace/Body/HairA/HairBDrawCalls`、
+  `v14dSkinVariantFace/Body/HairA/HairBOnComposite`（draw-call 级真实绑定证据，
+  HairA/HairB 分区各自核对 graph.name "V14D Hair V1 Composite"）。
 - 验收需读取引擎 styleGroups/drawCalls 证明 Face/BodySkin graph 生效；
   错 graph、漏 mask、非克莱妲负测必须失败或安全回退。
 
@@ -118,3 +119,19 @@ guard 回调传入、在任何副作用前硬检查（竞态回归 A慢/B快 下
 - 基于 `v14d-face-state2-live-composite` 与 `v14d-body-skin-state2`
   的实时合成图，但语义从「诊断入口固定帧」转为「生产舞台可选变体」；
   两者共享引擎补丁五的 WGSL 覆写（按 graph.name + tags），不复制公式常量。
+
+## Stage 2C-M1 头发阶段（2026-09-03）
+
+票据 `codex/v14d-hairab-stage` 把 HairA/HairB 两个 PMX 材质槽迁移进 V1：
+新增引擎独立 `V14D_HAIR_HELPER_WGSL` 常量（`v14d_hair_composite(base)=base×
+[0.84,0.85,0.96]`，常量来自权威 blend 取证 `web/scripts/forensic-v14d-hair-state.py`
+输出 `web/.scratch/v14d-hairab/hair-forensic.json`），assembleModule 新增
+`includeV14dHairHelper` 参数单独注入（不连带 State2 mask 声明/binding 5，hair graph
+无需 mask 即可编译），compile 按 graph.name "V14D Hair V1 Composite" 覆写
+final_color。生产 V1 把 HairA/HairB 抽出绑定到 `V14D_HAIR_V1_COMPOSITE_GRAPH`
+（renderClass=hair）。头发视角相关部分（Anisotropic 0.72、Roughness/Specular
+MapRange 支路、ToonRamp 经 ShaderToRGB）按 A/B/C 分类为 C（不能烘焙/不固化视角
+高光），本阶段只迁移 BaseColor 乘色。验收：真实 `/companion` 舞台 G1-G6 全过，
+HairA/HairB draw-call 各 1/1 命中 V14D Hair V1 Composite，头发区 mae=10.5/
+maxMeanDiff=11.1 显著变化，衣服/装备/星空稳定（同变体连拍噪声基线校准）。
+交付报告 `docs/handoff/2026-09-03-reze-k3-v1-hairab-stage.md`。

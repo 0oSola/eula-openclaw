@@ -130,6 +130,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "rk3v1-stage-"));
 const context = await chromium.launchPersistentContext(profile, { executablePath: CHROME_EXE, headless: true, viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1, args: ["--enable-unsafe-webgpu"] });
 const page = context.pages()[0] ?? (await context.newPage());
 page.on("pageerror", (e) => report.pageErrors.push(String((e && e.stack) || e)));
+page.on("console", (m) => { const t = m.text(); if (/v14d-skin-variant|WGSL|error|未定义|undeclared|tint/i.test(t)) (report.consoleWarn = report.consoleWarn || []).push(t.slice(0, 900)); });
 page.on("requestfailed", (r) => report.failedReqs.push({ url: r.url().slice(0, 160), err: r.failure()?.errorText || "unknown" }));
 page.on("response", (r) => { if (r.status() >= 400) report.httpBad.push({ url: r.url().slice(0, 160), status: r.status() }); });
 
@@ -247,7 +248,7 @@ async function readCanvasState() {
     const c = document.querySelector("canvas");
     if (!c) return null;
     const d = c.dataset;
-    return { webgpuStatus: d.webgpuStatus || "", variant: d.v14dSkinVariant || "(unset)", faceGraph: d.v14dSkinVariantFaceGraph || "", faceDrawCalls: d.v14dSkinVariantFaceDrawCalls || "", faceOnComposite: d.v14dSkinVariantFaceOnComposite || "", bodyDrawCalls: d.v14dSkinVariantBodyDrawCalls || "", bodyOnComposite: d.v14dSkinVariantBodyOnComposite || "", idMismatch: d.v14dSkinVariantIdentifierMismatch || "", vmdName: d.vmdPlaybackName || "", vmdCurrent: d.vmdPlaybackCurrent || "", vmdDuration: d.vmdPlaybackDuration || "", vmdPlaying: d.vmdPlaybackPlaying || "" };
+    return { webgpuStatus: d.webgpuStatus || "", variant: d.v14dSkinVariant || "(unset)", faceGraph: d.v14dSkinVariantFaceGraph || "", faceDrawCalls: d.v14dSkinVariantFaceDrawCalls || "", faceOnComposite: d.v14dSkinVariantFaceOnComposite || "", bodyDrawCalls: d.v14dSkinVariantBodyDrawCalls || "", bodyOnComposite: d.v14dSkinVariantBodyOnComposite || "", hairADrawCalls: d.v14dSkinVariantHairADrawCalls || "", hairAOnComposite: d.v14dSkinVariantHairAOnComposite || "", hairBDrawCalls: d.v14dSkinVariantHairBDrawCalls || "", hairBOnComposite: d.v14dSkinVariantHairBOnComposite || "", idMismatch: d.v14dSkinVariantIdentifierMismatch || "", vmdName: d.vmdPlaybackName || "", vmdCurrent: d.vmdPlaybackCurrent || "", vmdDuration: d.vmdPlaybackDuration || "", vmdPlaying: d.vmdPlaybackPlaying || "" };
   });
 }
 async function readUiVariant() { return page.evaluate(() => { const a = document.querySelector("[data-testid=\"reze-k3-skin-variant-bar\"] .mio-pipeline-option.is-active"); return a ? a.getAttribute("data-testid").replace("reze-k3-skin-variant-", "") : null; }); }
@@ -295,10 +296,15 @@ try {
   await page.click(sel.variantBtn("v1")); await waitRebuilt();
   const b = await readCanvasState(); note("G2", JSON.stringify(b));
   const fc = Number(b.faceDrawCalls), fo = Number(b.faceOnComposite), bc = Number(b.bodyDrawCalls), bo = Number(b.bodyOnComposite);
+  const hac = Number(b.hairADrawCalls), hao = Number(b.hairAOnComposite), hbc = Number(b.hairBDrawCalls), hbo = Number(b.hairBOnComposite);
   if (b.variant !== "v1") fail("G2", "canvas 应 v1，实际 " + b.variant);
   if (b.faceGraph !== "V14D Face State2 Live Composite") fail("G2", "Face graph=" + b.faceGraph);
   if (!(fc > 0 && fc === fo)) fail("G2", "Face drawCalls " + fo + "/" + fc + " 未全部走 State2 Composite");
   if (!(bc > 0 && bc === bo)) fail("G2", "BodySkin drawCalls " + bo + "/" + bc + " 未全部走 Body Composite");
+  // Stage 2C-M1：HairA/HairB 必须真实命中 V14D Hair V1 Composite（分区各自硬断言，
+  // 不用整头合并掩盖 A/B 分区差异）。
+  if (!(hac > 0 && hac === hao)) fail("G2", "HairA drawCalls " + hao + "/" + hac + " 未全部走 V14D Hair V1 Composite");
+  if (!(hbc > 0 && hbc === hbo)) fail("G2", "HairB drawCalls " + hbo + "/" + hbc + " 未全部走 V14D Hair V1 Composite");
   report.gates.G2 = report.gates.G2 || { status: "pass", failures: [] }; report.gates.G2.binding = b;
   // 负测 A：original 不命中 V14D graph
   await page.click(sel.variantBtn("original")); await waitRebuilt();
@@ -328,8 +334,8 @@ try {
   // 负测 D：错误 graph（graph.name 非权威 V14D 名）→ Face/BodySkin draw-call 不计入 composite。
   note("G2", "负测 D：错误 graph");
   await page.click(sel.variantBtn("v1")); await waitRebuilt();
-  const negD = await page.evaluate(async () => { const r = await window.__rezeStageProbe.applyBadSkinGraph("wrongGraph"); const c = document.querySelector("canvas").dataset; return { ok: r.ok, faceOnComposite: c.v14dSkinVariantFaceOnComposite, bodyOnComposite: c.v14dSkinVariantBodyOnComposite }; });
-  if (!(negD.ok && Number(negD.faceOnComposite) === 0 && Number(negD.bodyOnComposite) === 0)) fail("G2", "错误 graph 应使 composite 命中为 0，实际 " + JSON.stringify(negD));
+  const negD = await page.evaluate(async () => { const r = await window.__rezeStageProbe.applyBadSkinGraph("wrongGraph"); const c = document.querySelector("canvas").dataset; return { ok: r.ok, faceOnComposite: c.v14dSkinVariantFaceOnComposite, bodyOnComposite: c.v14dSkinVariantBodyOnComposite, hairAOnComposite: c.v14dSkinVariantHairAOnComposite, hairBOnComposite: c.v14dSkinVariantHairBOnComposite }; });
+  if (!(negD.ok && Number(negD.faceOnComposite) === 0 && Number(negD.bodyOnComposite) === 0 && Number(negD.hairAOnComposite) === 0 && Number(negD.hairBOnComposite) === 0)) fail("G2", "错误 graph 应使 composite 命中为 0，实际 " + JSON.stringify(negD));
   note("G2", "负测 D PASS " + JSON.stringify(negD));
   // 负测 E：applyStyleGroups 失败（编译非法 graph）→ ok:false 且 canvas 回退 original。
   note("G2", "负测 E：applyStyleGroups 失败回退");
@@ -360,6 +366,10 @@ try {
   await page.click(sel.variantBtn("original")); await waitRebuilt();
   const sceneOrig = await page.evaluate(() => window.__rezeStageProbe?.sceneSnapshot?.() || null);
   const origPix = await captureStagePixels(); await shot("g3-original-full");
+  // 同变体连拍（Stage 2C-M1 噪声基线）：original 再采一帧，用于把「original↔V1 的
+  // 衣服/装备差异」与「同变体待机微动帧间噪声」区分，避免把微动误判为材质泄漏。
+  const origPix2 = await captureStagePixels();
+  if (!origPix2.error) saveDataUrl(origPix2.dataUrl, "g3-original-canvas-b.png");
   await page.click(sel.variantBtn("v1")); await waitRebuilt();
   const sceneV1 = await page.evaluate(() => window.__rezeStageProbe?.sceneSnapshot?.() || null);
   const v1Pix = await captureStagePixels(); await shot("g3-v1-full");

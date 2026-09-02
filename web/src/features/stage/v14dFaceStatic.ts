@@ -72,6 +72,16 @@ export const V14D_FACE_BASE_TEXTURE_NAME = "c_Koleda_slg_face_d.png";
  *     用独立 body_zhijia01_da.png 美甲纹理，不属于皮肤，不纳入）。
  */
 export const V14D_BODY_MATERIAL_NAME = "BodySkin";
+
+/**
+ * Stage 2C-M1：HairA/HairB V1（V14D）头发材质迁移的权威 PMX 材质名。
+ * Blender 权威侧为 PROTO_GF2_HairA / PROTO_GF2_HairB，BaseColor 同为
+ * c_KoledaSSR01_slg_hair_d.png（sRGB）× 银白紫乘色 [0.84, 0.85, 0.96]
+ * （PROTO_HairTint MIX_RGB MULTIPLY Factor=1），见
+ * web/scripts/forensic-v14d-hair-state.py 输出 manifest。
+ */
+export const V14D_HAIR_A_MATERIAL_NAME = "HairA";
+export const V14D_HAIR_B_MATERIAL_NAME = "HairB";
 /** 权威身体皮肤 diffuse 纹理文件名（原始 BaseColor，body_d.png）。 */
 export const V14D_BODY_BASE_TEXTURE_NAME = "body_d.png";
 /** Blender 取证：BodySkin PROTO_FaceWarm Color2（暖肤 tint，线性乘法）。 */
