@@ -128,7 +128,13 @@ await page.route("**://127.0.0.1:8000/**", async (route) => {
 });
 // 权威 VMD 全局路由：G3 锁帧与 G5 完整播放都用探针 playVmd("/__probe__/....vmd")，
 // 需在脚本开头注册一次，覆盖整个验收过程（G5 内不再重复注册/注销）。
-await page.route("**/*.vmd", async (route) => route.fulfill({ status: 200, contentType: "application/octet-stream", body: fs.readFileSync(VMD) }));
+await page.route("**/*.vmd", async (route) => {
+  // 竞态回归（P0）：/__probe__/__slow__/ 前缀的 VMD 延迟返回字节，模拟「较慢完成的旧请求」。
+  if (route.request().url().includes("/__probe__/__slow__/")) {
+    await new Promise((s) => setTimeout(s, 1200));
+  }
+  return route.fulfill({ status: 200, contentType: "application/octet-stream", body: fs.readFileSync(VMD) });
+});
 
 const sel = { canvasReady: "canvas[data-webgpu-status=\"ready\"]", variantBar: "[data-testid=\"reze-k3-skin-variant-bar\"]", variantBtn: (v) => "[data-testid=\"reze-k3-skin-variant-" + v + "\"]" };
 // 初始默认 mio-reference（Three.js）对存根模型会加载失败，不出现 WebGPU ready 画布；
@@ -417,6 +423,8 @@ try {
     report.gates.G5.cycles[variant] = cyc;
   }
   // G5 负测：提前 seek 到中段后暂停，未播到尾部时完成计数不得自增（防恒真软通过）。
+  // 必须等待超过 completion fallback 窗口（duration*1000+350ms≈4.35s）证明计数长期不增，
+  // 不能只证明 0.5s 内未增。
   note("G5", "负测：提前停止不得误判为自然结束");
   const negG5 = await page.evaluate(async () => {
     const stage = window.__rezeStageProbe;
@@ -424,15 +432,49 @@ try {
     const before = Number(c()?.dataset.vmdNaturalFinishCount || 0);
     await stage.seekVmd(0);
     await stage.playVmd("/__probe__/koleda-v14d-authoritative-pose-f120.vmd");
+    const fallbackDelay = Number(c()?.dataset.vmdCompletionFallbackDelay || 0);
     await new Promise((s) => setTimeout(s, 1200)); // 只播 ~1.2s，远未到 4s 尾部
     await stage.pauseVmd();
-    await new Promise((s) => setTimeout(s, 500));
+    // 等待超过 fallback 窗口（duration+350ms），证明暂停后兜底计时器也不会自增完成计数。
+    const waitMs = Math.max(0, fallbackDelay - 1200) + 500;
+    await new Promise((s) => setTimeout(s, waitMs));
     const after = Number(c()?.dataset.vmdNaturalFinishCount || 0);
+    const fallbackFired = c()?.dataset.vmdCompletionFallbackFired || "";
     const midT = Number(c()?.dataset.vmdPlaybackCurrent || -1);
-    return { before, after, midT, notFinished: after === before };
+    return { before, after, midT, fallbackDelay, fallbackFired, waitMs, notFinished: after === before };
   });
   if (!negG5.notFinished) fail("G5", "负测失败：提前停止却触发了完成计数 " + JSON.stringify(negG5));
   report.gates.G5.negEarlyStop = negG5; note("G5", "负测 PASS " + JSON.stringify(negG5));
+  // G5 竞态回归（P0）：A 慢 / B 快，B 成为最新后 A 才完成。最终播放必须是 B，且 A
+  // 不得增加 resetPhysics / 完成 fallback / 完成计数（vmdRaceStaleCount 须自增≥1）。
+  note("G5", "竞态回归：旧请求无副作用退出");
+  const race = await page.evaluate(async () => {
+    const stage = window.__rezeStageProbe;
+    const c = () => document.querySelector("canvas");
+    const rpBefore = Number(c()?.dataset.vmdEffectResetPhysicsCount || 0);
+    const finishBefore = Number(c()?.dataset.vmdNaturalFinishCount || 0);
+    const staleBefore = Number(c()?.dataset.vmdRaceStaleCount || 0);
+    // A 慢：route 延迟其 VMD 字节；B 快：正常加载。
+    const pA = stage.playVmd("/__probe__/__slow__/race-a.vmd", "A");
+    await new Promise((s) => setTimeout(s, 150)); // 确保 A 先发出、仍在 await
+    const nameB = await stage.playVmd("/__probe__/koleda-v14d-authoritative-pose-f120.vmd", "B");
+    const retA = await pA; // A 较慢完成，应被守卫判定为旧请求而无副作用退出（返回 null）
+    await new Promise((s) => setTimeout(s, 300));
+    const currentName = c()?.dataset.vmdPlaybackName || "";
+    const rpAfter = Number(c()?.dataset.vmdEffectResetPhysicsCount || 0);
+    const finishAfter = Number(c()?.dataset.vmdNaturalFinishCount || 0);
+    const staleAfter = Number(c()?.dataset.vmdRaceStaleCount || 0);
+    const rpDelta = rpAfter - rpBefore;
+    const finishDelta = finishAfter - finishBefore;
+    const staleDelta = staleAfter - staleBefore;
+    const ok = retA === null && currentName === nameB && currentName.includes("f120") && rpDelta === 1 && staleDelta >= 1;
+    return {
+      retA, nameB, currentName,
+      rpDelta, finishDelta, staleDelta, ok,
+    };
+  });
+  if (!race.ok) fail("G5", "竞态回归失败：旧请求未无副作用退出 " + JSON.stringify(race));
+  report.gates.G5.raceGuard = race; note("G5", "竞态回归 PASS " + JSON.stringify(race));
   // G5 resetPhysics 回归：通用 VMD effect 每次成功 load/apply/play 后自增计数（P0-2）。
   const rp = await page.evaluate(() => Number(document.querySelector("canvas")?.dataset.vmdEffectResetPhysicsCount || 0));
   if (!(rp > 0)) fail("G5", "通用 VMD effect 未观察到 resetPhysics 计数自增（P0-2 回归）");

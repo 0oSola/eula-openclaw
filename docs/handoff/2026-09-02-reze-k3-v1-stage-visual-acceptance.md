@@ -1,10 +1,10 @@
-# Reze K3 V1 皮肤阶段（V14D）真实舞台视觉与 VMD 验收交付（第三轮修正）
+# Reze K3 V1 皮肤阶段（V14D）真实舞台视觉与 VMD 验收交付（第四轮修正）
 
 **票据**：`codex/reze-k3-v1-stage-visual-acceptance`（来源 `codex/reze-k3-v1-acceptance-contract-cleanup`）
 **执行模型**：kimi/k3-256k（视觉识别/真实浏览器验收）
 **工作树**：`E:\codexWorktree\004b\MMD project`，分支 `codex/reze-k3-v1-stage-visual-acceptance`
 **基线**：base_commit `6430ee11750c575620b70702ce755e99c9fad88e`
-**完成时间**：2026-09-02（第三轮）
+**完成时间**：2026-09-02（第四轮）
 
 > **范围纠偏（第三轮）**：本票交付的是「**皮肤阶段**」——只迁移 Face + BodySkin 两个
 > PMX 材质槽。最终目标是「Reze K3 + V14D 角色外观材质（**15 槽**）」，其余 13 槽
@@ -26,7 +26,17 @@ V14D State2 目标风格，用户相机、正常 VMD 播放、K3 灯光、星空
 > 差异、从未读取 V14D 目标参考，无法支撑「向目标收敛」；(2) 通用 VMD effect 的 `engine.resetPhysics()`
 > 被误删；(3) G5 完整结束在 `k>8 且 !playing` 时恒置 `endReached=true`（软通过）；(4) 场景不变性
 > 只在 V1 后读取一次、未在 original/V1 两侧逐字段硬断言；(Standards) `git diff <base>..HEAD --check`
-> 在两文件末尾有 new blank line at EOF。第三轮逐项修复并加负测，结论以本轮为准。
+> 在两文件末尾有 new blank line at EOF。第三轮逐项修复并加负测。
+
+> **撤回声明（第三轮）**：第三轮结论再被主会话部分驳回（P0）——(1) 共享函数
+> `loadVmdThroughInteractionPath` 把请求守卫破坏：`await loadVmd` 后直接
+> apply/play/写 currentUrl/arm fallback/resetPhysics，调用方直到函数返回后才
+> isCurrent(requestId)，较慢完成的旧请求已改写模型，守卫检查太晚；(2)
+> `handleRezeVmdFinished` 在验证 `currentName===finishedName` 之前就自增
+> `vmdNaturalFinishCount`，过期/错误名称回调也能充当完成证据，且提前停止负测只等
+> 500ms、未超过 fallback 窗口；(3) 目标收敛把「整图肤色色比」当作对齐证据，未声明
+> 候选指标口径；(4) topology 仍写「生产 /companion 端到端通过」、概念元数据仍是第二轮。
+> 第四轮逐项修复并加竞态回归负测，结论以本轮为准。
 
 > **环境措辞**：本机无 Python，API 后端（127.0.0.1:8000）不可达，验收用 Playwright route 存根
 > bootstrap API。因此本轮结论是「**存根环境端到端**」，不是真实部署生产端到端。V1 资格判定、
@@ -65,12 +75,17 @@ V14D State2 目标风格，用户相机、正常 VMD 播放、K3 灯光、星空
 | A Scene invariance | original/V1 用完全相同 K3 scene/灯光/星空/相机/Bloom/VMD frame | ✅ 探针在 original 与 V1 **两侧**各捕获 settings/grade/gradeIntensity/backgroundEffect/transparentBackground 并**逐字段 JSON 硬断言一致**；星空暗空像素 maxMeanDiff=0.000 |
 | B Material-only calibration | 只调 Face/BodySkin 的 V14D graph/参数；禁全局曝光/gamma/tone mapping/灯光/背景 | ✅ 仅 Face/BodySkin 走 V14D 合成 graph，其余材质/全局显示链不变 |
 | C 同相机同帧三联图 | original K3 / V1 / diff | ✅ `g3-triptych-labeled.png`；diff 图仅脸部亮、手部微亮、其余全黑 |
-| D 隔离 Gate | 头发/衣服/装备/星空保持 original；皮肤向目标收敛 | ✅ 非皮肤 meanMeanDiff 0.09–0.34（≪皮肤 25–36）；皮肤对 V14D 目标色比距离显著下降（见 G3） |
+| D 隔离 Gate | 头发/衣服/装备/星空保持 original；皮肤向目标收敛 | ✅ 非皮肤 meanMeanDiff 0.09–0.34（≪皮肤 25–36）；皮肤对 V14D 目标**整体色比**距离显著下降（候选指标口径，见 G3/阈值节） |
 | E 自由相机与动态 VMD | 不带入固定相机/frame锁定/暂停/stopRenderLoop | ✅ 验收全程用户相机 + 正常 VMD 播放，未用任何诊断固定帧/锁相机 |
 
 ### 阈值（visual-diff.json 显式定义，脚本硬阻断）
 - 皮肤变化：掩码采样 MAE>1 且 maxMeanDiff>1，且掩码像素数 ≥20（防手部无皮肤假通过）。
-- **皮肤向目标收敛（P0-1，第三轮）**：用**色比 (R/G, R/B)** 口径（对 K3 舞台灯光强度不敏感），
+- **皮肤向目标收敛（P0-1，第三轮；脸部综合色比候选指标，非同像素/非空间阴影对齐）**：
+  用**色比 (R/G, R/B)** 口径（对 K3 舞台灯光强度不敏感），目标侧取整图 isSkin 肤色像素、
+  舞台侧取舞台脸框 isSkin 像素（两者样本空间不同、未做 UV/空间配准）。该指标只证明 V1 脸部
+  皮肤整体色比比 original 更接近 V14D 目标，**不**证明 State2 空间阴影已逐像素对齐，
+  **不**作为皮肤阶段最终完成判据；目标 SHA256 与两侧样本分母记录在 visual-diff.json 的
+  `targetMetric` 字段。
   比较 original 与 V1 各自对 V14D 目标参考（`blender-ref-finalFaceComposite.png`）的色比距离，
   要求 `distV1 < distOrig` 且 `(distOrig-distV1)/distOrig > 0.15`；**错误颜色负测**（V1 脸皮肤
   R×0.35/G×1.1 错色）须判为不收敛（实测 negDrop=-5.30，正确拒绝）。
@@ -101,8 +116,19 @@ V14D State2 目标风格，用户相机、正常 VMD 播放、K3 灯光、星空
   通用 VMD effect 与验收探针 `playVmd` 走**同一条**加载路径；成功 load/apply/play 后
   必然 `engine.resetPhysics()`，并自增 canvas dataset `vmdEffectResetPhysicsCount`
   作为可判别证据。G5 据此断言该计数 >0（实测 =5），证明 resetPhysics 在共享路径真实被调用。
+- **请求守卫修复（第四轮 P0）**：第三轮的共享函数把守卫破坏——`await loadVmd` 后直接
+  apply/play/写 currentUrl/arm fallback/resetPhysics，调用方直到返回后才 isCurrent。第四轮把
+  守卫（`isCurrent(requestId) && model===modelRef.current`）作为 `guard` 回调传入共享函数，
+  在 `await` 之后、**任何 apply/play/currentUrl/fallback/resetPhysics 副作用之前**硬检查；
+  较慢完成的旧请求无副作用退出（返回 null）。探针 `playVmd(url, raceKey)` 用
+  `vmdProbeRaceTokenRef` 标识请求，旧请求被覆盖时自增 `vmdRaceStaleCount`。
+- **完成回调身份修复（第四轮 P0）**：`handleRezeVmdFinished` 现在**先验证
+  `currentName===finishedName` 再自增 `vmdNaturalFinishCount`**，过期/错误名称回调不再
+  充当完成证据；提前停止负测等待超过 fallback 窗口（`duration*1000+350`）证明计数长期不增。
 - **验证**：G5 original/V1 各 load→play→pause→seek→完整播放至结束
-  （finishBefore→finishAfter 自增、endReached/fullPlayOk=true），负测提前停止不计数。
+  （finishBefore→finishAfter 自增、endReached/fullPlayOk=true）；负测提前停止超过 fallback
+  窗口后计数不增；竞态回归 A慢/B快 下最终播放为 B、A 无副作用退出
+  （retA=null、rpDelta=1、staleDelta≥1）。
 
 ## 视觉证据
 

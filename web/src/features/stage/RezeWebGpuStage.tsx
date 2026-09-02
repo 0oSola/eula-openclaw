@@ -824,6 +824,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   const currentVmdUrlRef = useRef("");
   // 进度镜像 rAF 清理句柄（验收探针用，effect 卸载时取消循环）。
   const vmdPlaybackMirrorCleanupRef = useRef<(() => void) | null>(null);
+  // 验收探针竞态守卫令牌（仅验收路径使用）：最后一次 playVmd(raceKey) 的令牌，
+  // 用于判定较慢完成的旧请求并让其在任何副作用前无副作用退出。
+  const vmdProbeRaceTokenRef = useRef<{ key: string } | null>(null);
   const lastLoopVmdUrlRef = useRef("");
   const vmdCompletionFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const vmdRequestGuardRef = useRef(createRezeVmdRequestGuard());
@@ -944,15 +947,16 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     finishedName: string,
   ) => {
     clearVmdCompletionFallback();
-    // 可判别完成证据：VMD 自然结束（引擎 onEnd 或兜底计时器）时自增计数，
-    // 供验收区分「真播完触发完成回调」与「仅超时后 !playing」。回归 P0-3。
+    const currentName = currentVmdUrlRef.current.split("/").pop();
+    if (!currentName || currentName !== finishedName) return;
+    // 可判别完成证据（先验身份再计数，回归 P0）：仅当回调的 finishedName 就是当前
+    // 动作时才自增，过期/错误名称的回调不得充当完成证据。供验收区分「真播完触发
+    // 完成回调」与「仅超时后 !playing」。
     if (canvasRef.current) {
       const c = canvasRef.current;
       c.dataset.vmdNaturalFinishCount = String(Number(c.dataset.vmdNaturalFinishCount || 0) + 1);
       c.dataset.vmdNaturalFinishName = finishedName;
     }
-    const currentName = currentVmdUrlRef.current.split("/").pop();
-    if (!currentName || currentName !== finishedName) return;
 
     const activeInteraction = interactionRef.current;
     const loopUrls = Array.from(new Set((activeInteraction?.vmdLoopUrls || []).filter(Boolean)));
@@ -2935,7 +2939,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   // playVmd 共用同一条调用，确保成功 load/apply/play 后必然 engine.resetPhysics()。
   // 曾误删通用 effect 的 resetPhysics（验收回归 P0-2），此处以共享函数统一恢复并
   // 自增可判别计数，验收据此断言该路径真实调用了 resetPhysics。
-  const loadVmdThroughInteractionPath = useCallback(async (url: string, loopUrls?: string[] | null) => {
+  const loadVmdThroughInteractionPath = useCallback(async (url: string, loopUrls?: string[] | null, guard?: (() => boolean) | null) => {
     const model = modelRef.current;
     if (!model) throw new Error("no model");
     const name = url.split("/").pop() || "motion.vmd";
@@ -2943,6 +2947,11 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       readRezeVmdIkPolicy(url),
       model.loadVmd(name, url),
     ]);
+    // 请求守卫硬检查（P0）：必须发生在任何 apply/play/currentUrl/fallback/resetPhysics
+    // 副作用之前。较慢完成的旧请求在 await 返回时若已不是当前请求（或模型已切换），
+    // 必须无副作用退出，不得改写模型状态或自增计数。
+    if (guard && !guard()) return null;
+    if (model !== modelRef.current) return null;
     const engine = engineRef.current;
     if (!engine) throw new Error("no engine");
     applyVmdIkPolicy(engine, policy);
@@ -2972,8 +2981,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     const url = interaction.vmdUrl;
     const load = async () => {
       try {
-        const name = await loadVmdThroughInteractionPath(url, interaction.vmdLoopUrls);
-        if (!vmdRequestGuardRef.current.isCurrent(requestId) || model !== modelRef.current) return;
+        // 守卫在共享函数内部、任何副作用前检查（P0）；调用方不再依赖「返回后才检查」。
+        await loadVmdThroughInteractionPath(url, interaction.vmdLoopUrls, () =>
+          vmdRequestGuardRef.current.isCurrent(requestId) && model === modelRef.current
+        );
       } catch (error) {
         if (!vmdRequestGuardRef.current.isCurrent(requestId)) return;
         reportStatus("error", `VMD 加载失败：${error instanceof Error ? error.message : String(error)}`);
@@ -2987,6 +2998,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       const canvas = canvasRef.current;
       const nm = (interaction.vmdUrl || "").split("/").pop() || "";
       canvas.dataset.vmdPlaybackName = nm;
+      // 启动新进度镜像前先清掉旧镜像，避免同名 VMD 残留多个 rAF 循环。
+      vmdPlaybackMirrorCleanupRef.current?.();
+      vmdPlaybackMirrorCleanupRef.current = null;
       let rafId = 0;
       let cancelled = false;
       const tick = () => {
@@ -3025,15 +3039,35 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   useEffect(() => {
     if (!acceptanceProbeEnabled) return;
     (window as unknown as { __rezeStageProbe?: unknown }).__rezeStageProbe = {
-      async playVmd(url: string) {
+      async playVmd(url: string, raceKey?: string) {
         const m = modelRef.current;
         if (!m) throw new Error("no model");
+        // 竞态守卫（P0 回归）：raceKey 标识本次请求；较晚发起的请求会覆盖
+        // vmdProbeRaceTokenRef，使较慢完成的旧请求在任何副作用前退出并计数
+        // （vmdRaceStaleCount），最终播放必须是最后发起的请求。
+        let guard: (() => boolean) | null = null;
+        if (raceKey != null) {
+          const token = { key: raceKey };
+          vmdProbeRaceTokenRef.current = token;
+          guard = () => {
+            const stale = vmdProbeRaceTokenRef.current !== token;
+            if (stale && canvasRef.current) {
+              const c = canvasRef.current;
+              c.dataset.vmdRaceStaleCount = String(Number(c.dataset.vmdRaceStaleCount || 0) + 1);
+            }
+            return !stale;
+          };
+        }
         // 与通用 VMD effect 走同一条共享加载路径（含 resetPhysics + 计数），
         // 确保探针驱动的 load→play 与真实 UI 交互路径一致（验收回归 P0-2）。
-        const nm = await loadVmdThroughInteractionPath(url, null);
+        const nm = await loadVmdThroughInteractionPath(url, null, guard);
+        if (nm === null) return null; // 守卫判定为旧请求，无副作用退出
         if (canvasRef.current) {
           const canvas = canvasRef.current;
           canvas.dataset.vmdPlaybackName = nm;
+          // 启动新进度镜像前先清掉旧镜像，避免同名 VMD 残留多个 rAF 循环。
+          vmdPlaybackMirrorCleanupRef.current?.();
+          vmdPlaybackMirrorCleanupRef.current = null;
           let rafId = 0;
           let cancelled = false;
           const tick = () => {
@@ -3049,9 +3083,12 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           rafId = globalThis.requestAnimationFrame(tick);
           vmdPlaybackMirrorCleanupRef.current = () => { cancelled = true; globalThis.cancelAnimationFrame(rafId); };
         }
+        return nm;
       },
-      pauseVmd() { modelRef.current?.pause(); },
-      seekVmd(seconds: number) { modelRef.current?.seek(seconds); },
+      // 暂停/跳走时取消完成兜底计时器：VMD 已不在自然播放，fallback 不应再把
+      // 中段暂停/跳走误判为「自然播完」。这是真实行为修复（配合完成回调先验身份）。
+      pauseVmd() { modelRef.current?.pause(); clearVmdCompletionFallback(); },
+      seekVmd(seconds: number) { modelRef.current?.seek(seconds); clearVmdCompletionFallback(); },
       // 场景不变性证据（P1-1）：只读场景文档源 settingsRef + grade + 背景效果。
       // 变体切换只改 Face/BodySkin 材质 graph，不触碰这些字段；original/V1 各捕获一次
       // 逐字段比对即可证明 K3 灯光/星空/相机/Bloom/grade/tone mapping 未被 V1 改写。

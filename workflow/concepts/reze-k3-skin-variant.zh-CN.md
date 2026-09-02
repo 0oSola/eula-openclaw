@@ -4,7 +4,7 @@
 - 英文机器名：`rezeK3SkinVariant`（localStorage 字段 / prop）
 - 枚举值：`original`（原始 Reze K3）/ `v1`（Reze K3 V1 皮肤预览（V14D））
 - 票据：Reze K3 V1 舞台接入与 V14D 切换（`codex/reze-k3-v1-v14d-toggle`）
-- 状态：**已实现，生产 /companion 舞台端到端验收通过（存根环境，2026-09-02 第二轮）**
+- 状态：**已实现（皮肤阶段 2/15），/companion 舞台存根环境端到端验收通过（2026-09-02 第三轮）**
 
 ## 概念定义
 

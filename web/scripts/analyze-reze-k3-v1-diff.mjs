@@ -13,6 +13,7 @@
 //    K3 灯光/星空背景。亮星像素被显式排除（避免把星星闪烁误判为场景重写）。
 import sharp from "sharp";
 import fs from "node:fs"; import path from "node:path";
+import crypto from "node:crypto";
 const OUT = path.resolve(".scratch/reze-k3-v1-stage");
 const ORIG = path.join(OUT, "g3-original-canvas.png");
 const V1 = path.join(OUT, "g3-v1-canvas.png");
@@ -88,7 +89,12 @@ function bgStats(r) {
   return { samples: n, meanDiff, maxMeanDiff: Math.max(...meanDiff) };
 }
 
-// ── P0-1 目标参考收敛 ───────────────────────────────────────────────
+// ── P0-1 目标参考收敛（脸部综合色比「候选指标」）─────────────────────
+// 【边界声明】这是脸部综合色比候选指标，非同像素对齐、非空间阴影对齐：
+// 目标侧扫整张参考图的全部 isSkin 肤色像素（分母 targetSamples），舞台侧只取舞台脸框
+// 内的 isSkin 像素（分母 stageSamples），两者样本空间不同、未做 UV/空间配准。它只能证明
+// 「V1 脸部皮肤整体色比比 original 更接近 V14D 目标的肤色比」，不能宣称 State2 空间阴影
+// 已逐像素对齐、也不能作为皮肤阶段「最终完成」的判据。
 // K3 舞台有灯光/星空显示链，目标参考（Blender V14D finalFaceComposite）是中性白底，
 // 绝对亮度不可比。采用「色比」(R/G, R/B) 作为对光照/曝光不敏感的配准皮肤材质空间口径，
 // 只比较脸部皮肤像素（isSkin 掩码）。要求 V1 对目标的色比误差显著低于 original。
@@ -168,12 +174,22 @@ const stageOrig = stageFaceRatio(a, faceRegion);
 const stageV1 = stageFaceRatio(b, faceRegion);
 let targetCmp = null;
 if (fs.existsSync(TARGET)) {
+  const targetSha256 = crypto.createHash("sha256").update(fs.readFileSync(TARGET)).digest("hex");
   const tgt = await targetSkinRatio(TARGET);
   if (tgt && stageOrig && stageV1) {
     const distOrig = ratioDist(stageOrig.ratio, tgt.ratio);
     const distV1 = ratioDist(stageV1.ratio, tgt.ratio);
     const drop = distOrig > 0 ? (distOrig - distV1) / distOrig : 0;
     targetCmp = { targetRatio: tgt.ratio, targetSamples: tgt.samples, origRatio: stageOrig.ratio, v1Ratio: stageV1.ratio, distOrig: +distOrig.toFixed(4), distV1: +distV1.toFixed(4), drop: +drop.toFixed(4) };
+    // 候选指标元数据：记录口径边界、目标 SHA256、两侧样本分母，便于审计与复验。
+    out.targetMetric = {
+      label: "脸部综合色比候选指标（非同像素/非空间阴影对齐）",
+      caveat: "目标侧=整图 isSkin 肤色像素（分母 targetSamples），舞台侧=舞台脸框 isSkin 像素（分母 stageFaceSamples），样本空间不同、未做 UV/空间配准；仅证明整体色比更接近，不证明 State2 空间阴影逐像素对齐，非皮肤阶段最终完成判据。",
+      targetPath: TARGET,
+      targetSha256,
+      targetSamples: tgt.samples,
+      stageFaceSamples: stageV1.samples,
+    };
     out.targetConvergence = targetCmp;
     const ok = distV1 < distOrig && drop > THRESHOLDS.targetConvergeDrop;
     out.verdict.faceTargetConverged = ok;
