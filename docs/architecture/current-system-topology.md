@@ -59,7 +59,7 @@ Reze 资产页还支持本地 PMX 目录导入。前端只接受一个目录中�
 | Next.js Web | `web/`；开发默认 `http://localhost:3000`，发布栈默认 `http://127.0.0.1:3200` | UI、MMD 舞台、Chatbox、设置面板、trace 页面、runtime health 页面；发布栈使用 `.next-codex-release` 的 production server | 本项目内 | 开发页面访问；发布栈 `GET /`、状态文件和 Web PID |
 | Next.js API Proxy | `/api/backend/*` | 浏览器同源转发到 FastAPI | 本项目内 | 前端请求是否 2xx |
 | FastAPI API | `api/`, 默认 `http://127.0.0.1:8000`；dev-stack 默认 `http://127.0.0.1:8100`；发布栈默认 `http://127.0.0.1:8200` | 会话、消息、OpenClaw/TTS 代理、realtime voice WebSocket、资源、trace、admin API；默认只面向本机 loopback | 本项目内 | `GET /healthz`、`GET /admin/runtime-health`；发布栈启动前做 `app.main:app` 入口检查 |
-| Release Stack Controller | `start-release.ps1` / `scripts/release-stack.ps1` | Windows 优先编排 API、Web production server 和 Electron production runtime；保存 PID/端口/日志/产物状态，并按命令身份安全停止 | 本项目内 | `-Action build/start/status/stop`；`.runtime/release-stack.json` |
+| Release Stack Controller | `start-release.ps1` / `scripts/release-stack.ps1` | Windows 优先编排 API、Web production server 和 Electron production runtime；保存 PID/端口/日志/产物状态，并按当前包身份证明安全复用、停止和清理 | 本项目内 | `-Action build/start/status/stop/kill`；`.runtime/release-stack.json` |
 | Electron desktop-pet | `desktop-pet/`；发布栈由 `dist-electron/main.js` 启动 | 透明 Pet 窗口、菜单、通知、Codex/Claude session 状态；发布模式通过 `MMD_PET_RELEASE=1` 禁用 Vite URL，加载 `dist/index.html`、`dist/menu.html`、`dist/notification.html` | 本项目内 | Pet PID、renderer 文件存在性、`pet-ready.json` 的 `file://` URL 和 renderer shell ready |
 | OpenClaw Gateway HTTP | `http://10.11.252.164:18789` | `/v1/models`、`/v1/responses` 文本生成 | 外部服务 | `GET /healthz/openclaw` |
 | OpenClaw Gateway WebSocket RPC | `ws://10.11.252.164:18789` | Feishu session 列表、history、实时消息订阅、agent/chat delta 事件 | 外部服务 | Bridge admin 状态、`sessions.list` |
@@ -85,18 +85,18 @@ Reze 资产页还支持本地 PMX 目录导入。前端只接受一个目录中�
 
 ## 2.1 Windows release 三端生命周期
 
-仓库根目录的 `start-release.ps1` 是发布栈入口，`start-release.cmd` 仅提供 CMD 包装。`start` 默认先执行 API 入口检查、Web production build 和 desktop-pet build，再按 API → Web → Pet 的顺序启动并等待：
+仓库根目录的 `start-release.ps1` 是发布栈入口，`start-release.cmd` 仅提供 CMD 包装。`start` 默认先执行 API 入口检查、Web production build 和 desktop-pet build，再按 API → Web → Pet 的顺序逐个对账、启动或复用并等待：
 
 ```text
 start-release.ps1
-  -> API: python -m uvicorn app.main:app --host <ApiHost> --port <ApiPort>
+  -> API: python -m uvicorn app.main:app --app-dir <package>/api --host <ApiHost> --port <ApiPort>
   -> Web: node web/scripts/run-next.mjs start -p <WebPort> -H <WebHost>
   -> Pet: electron.exe . + MMD_PET_RELEASE=1
 ```
 
 Web build 和 Pet build 均接收同一个 `NEXT_PUBLIC_API_BASE_URL`/`MMD_PET_API_BASE_URL`；因此 API 地址不是只适用于开发端口的硬编码。Web 运行时仍通过 `NEXT_DIST_DIR=.next-codex-release` 使用 Next production server，不启动 `next dev`。
 
-发布栈的状态文件 `.runtime/release-stack.json` 记录三端根 PID、端口、工作目录、命令身份、stdout/stderr、Web 产物目录、Pet renderer 文件和批次 ready marker。停止时先验证根 PID 的命令行仍包含启动时记录的命令身份，再递归处理 API/Node/Electron 的受控子进程；命令身份不匹配时拒绝停止，以避免 PID 重用或误杀用户已有同类进程。停止只删除本入口创建的状态/ready 文件，批次日志、构建产物和 API 数据保留。
+发布栈的状态文件 `.runtime/release-stack.json` 记录三端根 PID、端口、工作目录、命令身份、包根路径、身份标记、进程启动时间、stdout/stderr、Web 产物目录、Pet renderer 文件和批次 ready marker。`start` 对 API、Web、Pet 独立判断：状态记录中的进程仍在运行、命令身份匹配且健康检查通过时标记 `reused`；缺失、不健康或身份不匹配时只启动该组件。状态文件缺失或只记录部分组件时，API/Web 可通过当前包路径标记、命令身份、监听端口 owner 的父进程树恢复，Pet 可通过当前包 Electron 根进程与包内 renderer ready marker 恢复；无法证明归属或端口属于其它包/其它命令时保留进程并报告冲突。`stop` 与 `kill` 都先验证当前包归属，再递归处理 API/Node/Electron 的受控子进程；`kill` 还可在状态缺失时执行同样的严格发现，并只删除当前包的状态/ready 文件。任何路径都不按端口、进程名或 PID 泛杀，批次日志、构建产物和 API 数据保留。
 
 Pet production runtime 的路径由 `desktop-pet/electron/rendererPaths.ts` 统一计算：编译后的 `dist-electron` 旁边的 `../dist` 是默认 renderer 根目录；`main.ts` 在 release mode 下用 `BrowserWindow.loadFile()` 加载三个 HTML 入口。Vite production `base` 为 `./`，确保 `file://` 页面把 JS/CSS 解析到同一 `dist/assets` 目录，而不是错误请求磁盘根路径。
 

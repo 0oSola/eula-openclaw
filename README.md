@@ -195,8 +195,9 @@ PowerShell 常用命令：
     .\start-mmd.ps1 -Action start
     .\start-mmd.ps1 -Action status
     .\start-mmd.ps1 -Action stop
+    .\start-mmd.ps1 -Action kill
 
-package 会生成 release/mmd-portable-<version>-<timestamp>/ 和同名 ZIP；start 会生成/刷新包后启动三端，默认 API 端口为 8200、Web 端口为 3200。进入已解压的包目录后，也可以直接执行包内的 .\start-mmd.ps1 -Action start|status|stop；包内入口优先使用包内 manifest.json 和 scripts\release-stack.ps1，不会回到源码路径。
+package 会生成 release/mmd-portable-<version>-<timestamp>/ 和同名 ZIP；start 会生成/刷新包后启动三端，默认 API 端口为 8200、Web 端口为 3200。进入已解压的包目录后，也可以直接执行包内的 .\start-mmd.ps1 -Action start|status|stop|kill；包内入口优先使用包内 manifest.json 和 scripts\release-stack.ps1，不会回到源码路径。
 
 每个包包含 API 源码和 requirements.txt、Web production 产物及 Node 依赖、desktop-pet production renderer/Electron 产物及 Node 依赖、README-release.md 和可用的 MMD/MMD_stage 本地资源。当前不打包 Python 解释器或 API Python 依赖，因此目标机仍需已有 Python、Node.js/npm、Windows 图形环境，并按包内说明安装 API 依赖；这不是安装器，也不实现 NSIS。
 
@@ -218,11 +219,16 @@ powershell -File .\start-release.ps1 -Action status
 
 # 只停止本入口启动且身份匹配的进程；批次日志保留
 powershell -File .\start-release.ps1 -Action stop
+
+# 受控清理当前 Release 包残留进程和状态文件
+powershell -File .\start-release.ps1 -Action kill
 ```
 
 也可以使用 `start-release.cmd`。常用参数包括 `-ApiPort`、`-WebPort`、`-ApiHost`、`-WebHost`、`-ApiBaseUrl`、`-ApiDataDir`、`-UserId`、`-WorkspacePath`、`-SkipBuild` 和 `-PetReadyTimeoutSeconds`。省略 `-ApiBaseUrl` 时，Web/Pet 使用 API 端口生成的地址，也可继承已有 `MMD_PET_API_BASE_URL`。API 数据目录按以下规则解析：显式传入 `-ApiDataDir` 时严格使用该路径；未传入参数但存在非空 `API_DATA_DIR` 时严格使用环境变量路径；两者都未指定时，先检查 `api/data/sqlite/trace.db`，若文件缺失、是 Git LFS pointer 或不是可连接的 SQLite，则创建并使用 `.runtime/release-stack/data`，不会修改原文件。
 
 Web 产物位于 `web/.next-codex-release`，Pet 产物至少包含 `desktop-pet/dist/index.html`、`menu.html`、`notification.html` 和 `dist-electron/main.js`。状态文件是 `.runtime/release-stack.json`，每次启动的 stdout/stderr 和 Pet ready marker 位于 `.runtime/release-stack/<批次>/`。只有显式的 `API_DATA_DIR` 或 `-ApiDataDir` 会严格拒绝无效数据库；省略两者时，默认 `api/data` 的 Git LFS pointer 会触发安全回退到 `.runtime/release-stack/data`。脚本不会覆盖、删除或修复原始 `api/data` 文件。
+
+`start` 按 API、Web、Pet 三个组件分别对账：当前包中进程身份匹配且健康的组件会标记为 `reused` 并直接复用，缺失、不健康或身份不匹配的组件才会启动；状态文件缺失或只记录部分组件时，只要能由当前包路径、命令身份、端口父进程树和 Pet ready marker 安全证明归属，也会采纳并写回状态。端口被其它 Release 包或其它命令占用时不会复用，也不会被 `kill`，启动会报告冲突并停止继续操作。`kill` 只清理能由状态记录或同样的当前包身份证明确认属于本包的 API/Web/Pet 进程树，并删除本包状态/ready 文件；不会按端口、进程名或 PID 泛杀。
 
 ## API Endpoints (MVP) / API 接口（MVP）
 

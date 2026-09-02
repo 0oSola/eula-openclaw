@@ -6,12 +6,12 @@ import path from "node:path";
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const read = (relativePath) => readFileSync(path.join(projectRoot, relativePath), "utf8");
 
-test("release entrypoints expose build/start/stop/status", () => {
+test("release entrypoints expose build/start/stop/status/kill", () => {
   const script = read("scripts/release-stack.ps1");
   const wrapper = read("start-release.ps1");
   const cmd = read("start-release.cmd");
 
-  assert.match(script, /ValidateSet\("build", "start", "stop", "status"\)/);
+  assert.match(script, /ValidateSet\("build", "start", "stop", "status", "kill"\)/);
   assert.match(script, /release-stack\.json/);
   assert.ok(script.includes('.runtime\\release-stack'));
   assert.match(wrapper, /scripts\\release-stack\.ps1/);

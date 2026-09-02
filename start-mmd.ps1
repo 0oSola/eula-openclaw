@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-  [ValidateSet("package", "start", "status", "stop")]
+  [ValidateSet("package", "start", "status", "stop", "kill")]
   [string]$Action = "start",
   [int]$ApiPort = 8200,
   [int]$WebPort = 3200,
@@ -197,6 +197,12 @@ try {
       exit 0
     }
     "stop" {
+      $packageRoot = Get-LatestPackageRoot
+      Write-Info "使用最近的便携包：$packageRoot"
+      Invoke-PackageEntry $packageRoot $Action
+      exit 0
+    }
+    "kill" {
       $packageRoot = Get-LatestPackageRoot
       Write-Info "使用最近的便携包：$packageRoot"
       Invoke-PackageEntry $packageRoot $Action
