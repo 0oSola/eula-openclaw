@@ -30,6 +30,12 @@ G3 的 `gate-report.json` 必须保存 requested 与 original/V1 actual 的 seco
 
 `analyze-reze-k3-v1-diff.mjs` 的 Hair 默认输入是原子产物 `g3-hair-original-canvas.png` 与 `g3-hair-v1-canvas.png`；`g3-original-canvas.png`、`g3-v1-canvas.png` 仅用于 Face/BodySkin/场景稳定性 lane。显式 `V14D_HAIR_ORIG_CANVAS` / `V14D_HAIR_V1_CANVAS` 仍可用于诊断夹具，但 accept 不为正式 analyzer 注入这两个覆盖。正式独立命令必须在 `web/` cwd、无 `V14D_HAIR_*` 环境运行：正常 exit=0，`--neg-swap-slot-target` exit=1 且两槽 `naturalMetricGate=false`、输入有效、`analysisFailures=[]`，`--neg-wrongtint` exit=0 且 `negativeVerdict.status=rejected`。
 
+### Stage 2C-M1.3 正式 Gate 单一权威
+
+正式 Hair Gate 的唯一组合判定由 `evaluateV14dHairFormalGate` 给出：HairA 与 HairB 每槽都必须同时满足 `Changed=true`、`targetConvergence.formalGate=true`、`targetBinding.consistent=true` 和 `targetBinding.inputsValid=true`，两槽组合结果写入 `hairFormalGate.formalTargetGate` 与 `hairFormalGate.pass`。任一槽的变化判定或目标收敛失败都会硬阻断正常 analyzer；合并矩形 `hair` 不再参与该判定。
+
+旧合并矩形仍可作为 `regions.hair` 与 `diagnostics.legacyAggregateHair` 的人读诊断，但必须标记 `diagnosticOnly=true`、`gateRole="report-only"`、`ignoredByFormalGate=true`；它的 MAE、`maxMeanDiff` 或 `changed` 低于阈值不能让健康 HairA/HairB Gate 失败，也不能进入 swap/wrongTint 的 `analysisFailures`。负测协议由 `evaluateV14dHairNegativeProtocol` 收口：swap-slot-target 只有在两槽正式 Gate 与自然指标均为 false、输入合法且 `analysisFailures=[]` 时才是预期拒绝并保持 exit=1；wrongTint 保持同样的语义拒绝但 exit=0。
+
 ## 解决的问题
 
 早期 Hair Gate 用 HairA/HairB 的整槽 targetMean 或矩形 ROI 统计，无法证明某个屏幕像素对应了哪一个 PMX 材质、哪一个三角形和哪一个纹理位置。平滑或重复色块还可能让错误归属看起来收敛，形成计数恒等自证；把 canvas 像素和 triUV 分成相邻调用还会在动态 VMD/物理下产生错帧证据。
@@ -52,7 +58,8 @@ G3 的 `gate-report.json` 必须保存 requested 与 original/V1 actual 的 seco
 - HairA 与 HairB 分别计算 samples、coverage、origMae、v1Mae、drop 和 p95；每槽样本与 coverage 必须非零，且 v1Mae 小于 origMae、drop 达到冻结阈值。
 - 目标来源槽、triUV 来源槽、材质 ID 必须一致；任何绑定不一致都使正式 Gate 为 false。
 - `captureId`、`currentSeconds`、`currentFrame`、`fps=30`、`fpsProvenance="vmd-standard-fixed-30"` 和有限正整数画布尺寸必须在同一次原子采集的 pixel/triUV 证据中一致；original/V1 还必须固定到同一权威动画名、秒数和帧。
-- `targetBinding.inputsValid` 只证明样本、triUV、材质 ID 和目标流合法；`metricGate` 才表示目标误差收敛，正式 verdict 必须同时组合绑定一致性与数值 Gate，不能用配置布尔值代替误差证据。
+- `targetBinding.inputsValid` 只证明样本、triUV、材质 ID 和目标流合法；`metricGate`/`formalGate` 才表示目标误差收敛，正式 `hairFormalGate` 必须同时组合每槽 changed、绑定一致性、输入合法性与数值 Gate，不能用配置布尔值代替误差证据。
+- 合并矩形 `hair` 只属于 report-only 诊断；`diagnostics.legacyAggregateHair.ignoredByFormalGate=true` 是防止旧第二权威复活的审计证据，不能作为正常或负测的硬失败来源。
 - 错槽负测为每个屏幕样本保留自身 UV 的同像素 canonical target 作权威基准，并把交换后的真实目标误差、v1Mae/drop/P95 penalty 写入报告；canonical target 只用于负测判别，不改变正常模式的目标公式。
 - v14dAuthority.js 是 V14D_HAIR_TINT 的唯一权威来源。patch-reze-engine.mjs 只动态加载、验证并序列化该导出，不手写旧常量。
 - captureHairTriUv 只在显式 acceptance probe 下暴露；采集前快照 VMD currentSeconds、playing/paused 和 render-loop 运行态，所有成功、提前返回和异常路径都在 finally 中恢复时间与播放状态，且只在采集前循环运行时恢复循环；默认生产入口不泄漏探针。原子 probe 还必须在读回前后检查时间推进并拒绝错帧；当前输入门槛为材质前景中的 triUV 解析率至少 99.9%，同时保留 `triUvResolvedPixels`、`triUvResolution` 和三类拒绝计数，即使边缘出现未解析像素也不能吞掉。
@@ -64,7 +71,7 @@ G3 的 `gate-report.json` 必须保存 requested 与 original/V1 actual 的 seco
 
 - web/src/features/stage/RezeWebGpuStage.tsx：captureHairTriUv，同帧导出材质身份和 triUV 证据；
 - web/src/features/stage/v14dHairPartition.js：颜色空间、双线性采样、目标转换和三角形重心校验；
-- web/scripts/analyze-reze-k3-v1-diff.mjs：正式逐像素统计、热图、JSON 和负测协议；
+- web/scripts/analyze-reze-k3-v1-diff.mjs：正式逐像素统计、Hair 正式 Gate 单一权威组合、热图、JSON 和负测协议；
 - web/scripts/accept-reze-k3-v1-stage.mjs：G3 采集、运行 analyzer 和机器验收。
 
 权威目标公式为：
@@ -93,10 +100,10 @@ targetLinear(uv) = bilinearRepeatLinear(hair_d, uv) × V14D_HAIR_TINT
 ## 相关 contract、Gate 与失败修正路线
 
 - contract：v14d-hair-triuv-pixel-gate。
-- 正式 Gate：web/scripts/analyze-reze-k3-v1-diff.mjs 的 HairA/HairB targetConvergence，以及 web/scripts/accept-reze-k3-v1-stage.mjs 的 G3。
+- 正式 Gate：web/scripts/analyze-reze-k3-v1-diff.mjs 的 HairA/HairB `hairFormalGate`（changed + targetConvergence + 合法同槽输入），以及 web/scripts/accept-reze-k3-v1-stage.mjs 的 G3。
 - 绑定 Gate：G2 的 HairA/HairB draw-call graph.name 与 pipeline 命中证据；missingHairA、missingHairB、wrongHairMaterial、wrongGraph、failCompile 必须真实拒绝。
 - 权威来源 Gate：web/scripts/patch-reze-engine.mjs --verify 与 --self-test；authority 导出缺失或数值非法时补丁必须失败。
-- 修正轮闭合命令：`node --test tests/v14d-hair-partition.test.mjs tests/reze-k3-skin-variant.test.mjs` exit=0（30/30）；`node --check scripts/accept-reze-k3-v1-stage.mjs` exit=0；`node --check scripts/analyze-reze-k3-v1-diff.mjs` exit=0；`node scripts/patch-reze-engine.mjs --self-test` exit=0；`node scripts/patch-reze-engine.mjs --verify` exit=0（72 项）；`npm run build` exit=0；正常 analyzer exit=0、错槽 analyzer exit=1、wrongTint analyzer exit=0；真实 `node scripts/accept-reze-k3-v1-stage.mjs` exit=0 且 G1-G6 全 pass；`git diff --check` exit=0。
+- 修正轮闭合命令：`node --test tests/v14d-hair-partition.test.mjs tests/reze-k3-skin-variant.test.mjs` exit=0；`node scripts/analyze-reze-k3-v1-diff.mjs --self-test-hair-gate` exit=0；`node --check scripts/accept-reze-k3-v1-stage.mjs` exit=0；`node --check scripts/analyze-reze-k3-v1-diff.mjs` exit=0；`node scripts/patch-reze-engine.mjs --self-test` exit=0；`node scripts/patch-reze-engine.mjs --verify` exit=0；`npm run build` exit=0；正常 analyzer exit=0、错槽 analyzer exit=1、wrongTint analyzer exit=0；真实 `node scripts/accept-reze-k3-v1-stage.mjs` exit=0 且 G1-G6 全 pass；`git diff --check` exit=0。PowerShell 复验需显式保存并 `exit $LASTEXITCODE`，不能只依赖终端摘要。
 - 失败修正顺序：先确认同一帧的画布、material mask、triUV 和 camera 状态；再检查 triId/重心校验；随后检查 hair_d 颜色空间与采样边界；最后检查 V1 graph 的真实 draw-call 绑定。不得先调阈值或改生产视觉公式。
 - 若正式 Gate 失败但所有输入证据有效，应交付 HairA/HairB 的 JSON、热图和前后近景，明确是 BaseColor 公式、显示链或未迁移视角效果中的哪一类问题。
 

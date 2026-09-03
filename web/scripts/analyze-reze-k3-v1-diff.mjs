@@ -24,6 +24,146 @@ import {
   v14dHairTargetDisplay,
   v14dHairTargetDisplayFromLinear,
 } from "../src/features/stage/v14dHairPartition.js";
+
+const V14D_HAIR_FORMAL_GATE_AUTHORITY = "material-id+atomic-triuv+slot-changed+target-convergence";
+
+/**
+ * HairA/HairB 正式 Gate 的唯一组合判定。
+ *
+ * legacy aggregate hair ROI 只能作为诊断输入，不能影响 pass；正式槽必须同时
+ * 满足「槽确实变化」与「同槽 materialId/原子 triUV 输入合法且目标指标收敛」。
+ * 该函数保持纯函数，既由 analyzer 消费，也由 --self-test-hair-gate 验证。
+ */
+export function evaluateV14dHairFormalGate({
+  hairAChanged,
+  hairBChanged,
+  hairA,
+  hairB,
+  legacyAggregate = null,
+} = {}) {
+  const evaluateSlot = (changed, targetConvergence) => {
+    const changedPass = changed === true;
+    const targetConvergencePass = targetConvergence?.formalGate === true
+      && targetConvergence?.targetBinding?.consistent === true
+      && targetConvergence?.targetBinding?.inputsValid === true;
+    return {
+      changed: changedPass,
+      targetConvergence: targetConvergencePass,
+      pass: changedPass && targetConvergencePass,
+    };
+  };
+  const slots = {
+    hairA: evaluateSlot(hairAChanged, hairA),
+    hairB: evaluateSlot(hairBChanged, hairB),
+  };
+  return {
+    authority: V14D_HAIR_FORMAL_GATE_AUTHORITY,
+    pass: slots.hairA.pass && slots.hairB.pass,
+    formalTargetGate: { hairA: slots.hairA.pass, hairB: slots.hairB.pass },
+    slots,
+    legacyAggregateDiagnostic: {
+      present: legacyAggregate !== null && legacyAggregate !== undefined,
+      ignored: true,
+    },
+  };
+}
+
+/**
+ * 负测只把「正式 Gate 自然拒绝、输入仍合法、没有其他分析异常」认作预期拒绝。
+ * wrongTint 预期 exit=0，swap-slot-target 预期 exit=1；两者不能靠缺样本或
+ * analysisFailures 伪造通过。
+ */
+export function evaluateV14dHairNegativeProtocol({
+  mode,
+  formalTargetGate,
+  hairA,
+  hairB,
+  analysisFailures,
+} = {}) {
+  const naturalMetricGate = {
+    hairA: hairA?.metricGate === true,
+    hairB: hairB?.metricGate === true,
+  };
+  const bindingInputsValid = {
+    hairA: hairA?.targetBinding?.inputsValid === true,
+    hairB: hairB?.targetBinding?.inputsValid === true,
+  };
+  const formalReject = formalTargetGate?.hairA === false && formalTargetGate?.hairB === false;
+  const naturalMetricReject = naturalMetricGate.hairA === false && naturalMetricGate.hairB === false;
+  const validNegativeInputs = bindingInputsValid.hairA && bindingInputsValid.hairB;
+  const noAnalysisFailures = Array.isArray(analysisFailures) && analysisFailures.length === 0;
+  const rejected = formalReject && naturalMetricReject && validNegativeInputs && noAnalysisFailures;
+  return {
+    mode,
+    status: rejected ? "rejected" : "failed",
+    rejected,
+    expectedExit: mode === "wrongTint" ? 0 : 1,
+    formalTargetGate: { hairA: formalTargetGate?.hairA ?? null, hairB: formalTargetGate?.hairB ?? null },
+    naturalMetricGate,
+    bindingInputsValid,
+    analysisFailures: Array.isArray(analysisFailures) ? analysisFailures : null,
+  };
+}
+
+if (process.argv.includes("--self-test-hair-gate")) {
+  const passingTarget = {
+    formalGate: true,
+    targetBinding: { consistent: true, inputsValid: true },
+    metricGate: true,
+  };
+  const failingTarget = {
+    formalGate: false,
+    targetBinding: { consistent: true, inputsValid: true },
+    metricGate: false,
+  };
+  const healthy = evaluateV14dHairFormalGate({
+    hairAChanged: true,
+    hairBChanged: true,
+    hairA: passingTarget,
+    hairB: passingTarget,
+    legacyAggregate: { mae: 0.388, maxMeanDiff: 1 },
+  });
+  const changedFailure = evaluateV14dHairFormalGate({
+    hairAChanged: false,
+    hairBChanged: true,
+    hairA: passingTarget,
+    hairB: passingTarget,
+  });
+  const targetConvergenceFailure = evaluateV14dHairFormalGate({
+    hairAChanged: true,
+    hairBChanged: true,
+    hairA: passingTarget,
+    hairB: failingTarget,
+  });
+  const negativeInput = { metricGate: false, targetBinding: { inputsValid: true } };
+  const swapNegative = evaluateV14dHairNegativeProtocol({
+    mode: "swapSlotTarget",
+    formalTargetGate: { hairA: false, hairB: false },
+    hairA: negativeInput,
+    hairB: negativeInput,
+    analysisFailures: [],
+  });
+  const wrongTintNegative = evaluateV14dHairNegativeProtocol({
+    mode: "wrongTint",
+    formalTargetGate: { hairA: false, hairB: false },
+    hairA: negativeInput,
+    hairB: negativeInput,
+    analysisFailures: [],
+  });
+  console.log(JSON.stringify({
+    healthyWithLegacyAggregateFailure: {
+      pass: healthy.pass,
+      formalTargetGate: healthy.formalTargetGate,
+      legacyAggregateIgnored: healthy.legacyAggregateDiagnostic.ignored,
+    },
+    changedFailure: { pass: changedFailure.pass, formalTargetGate: changedFailure.formalTargetGate },
+    targetConvergenceFailure: { pass: targetConvergenceFailure.pass, formalTargetGate: targetConvergenceFailure.formalTargetGate },
+    swapNegative: { status: swapNegative.status, expectedExit: swapNegative.expectedExit, analysisFailures: swapNegative.analysisFailures },
+    wrongTintNegative: { status: wrongTintNegative.status, expectedExit: wrongTintNegative.expectedExit, analysisFailures: wrongTintNegative.analysisFailures },
+  }));
+  process.exit(0);
+}
+
 const OUT = path.resolve(".scratch/reze-k3-v1-stage");
 const ORIG = path.join(OUT, "g3-original-canvas.png");
 const V1 = path.join(OUT, "g3-v1-canvas.png");
@@ -283,6 +423,7 @@ const out = {
   thresholds: THRESHOLDS,
   target: TARGET,
   regions: {},
+  diagnostics: {},
   verdict: {},
   occluded: [],
   hairSlotIdentity: {
@@ -774,11 +915,26 @@ for (const [name, r] of Object.entries(regions)) {
     out.verdict[name + "Stable"] = ok;
     if (!ok) failures.push(name + " 非皮肤区被 V1 成片改写 meanMeanDiff=" + st.meanMeanDiff + " maxMeanDiff=" + st.maxMeanDiff + (noise ? "（同变体噪声 meanMeanDiff=" + noise.meanMeanDiff + " maxMeanDiff=" + noise.maxMeanDiff + "）" : "（无同变体基线）") + "（判定阈值见 thresholds/噪声×4）");
  } else if (r.kind === "hair") {
-    // Stage 2C-M1 修正轮：头发目标槽做「显著变化 + 向权威 V14D BaseColor 目标收敛」
-    // 双判定（非「hairChanged=true」冒充）。变化判定与皮肤同判别力；收敛判定用
-    // 同 UV 目标误差（targetMae/drop，目标=srgb(hair_d)×tint 的线性合成转回显示字节）。
     const slot = name === "hairA" ? "hairA" : name === "hairB" ? "hairB" : null;
-    const st = slot ? hairSlotDiffStats(r, hairMaterialIds[slot]) : nonSkinStats(r, hairOrigImage, hairActual); out.regions[name] = st;
+    // legacy 合并矩形只保留为 report-only 诊断。它没有 materialId/triUV 身份，
+    // 不能再作为正式 Hair Gate 的第二权威，也不能污染负测 analysisFailures。
+    if (!slot) {
+      const st = nonSkinStats(r, hairOrigImage, hairActual);
+      const changed = st.mae > THRESHOLDS.hairChangeMae && st.maxMeanDiff > THRESHOLDS.hairChangeMaxMeanDiff;
+      const diagnostic = {
+        ...st,
+        changed,
+        diagnosticOnly: true,
+        gateRole: "report-only",
+        authority: "legacy-aggregate-hair-roi",
+        ignoredByFormalGate: true,
+      };
+      out.regions[name] = diagnostic;
+      out.diagnostics.legacyAggregateHair = diagnostic;
+      continue;
+    }
+    // 正式 HairA/HairB 槽：变化判定与同槽 triUV 目标收敛都必须成立。
+    const st = hairSlotDiffStats(r, hairMaterialIds[slot]); out.regions[name] = st;
     if (slot) out.regions[name].identity = { materialName: slot === "hairA" ? "HairA" : "HairB", materialId: hairMaterialIds[slot], source: "engine-pick-material-id-depth" };
     if (st.error) {
       failures.push(name + " 逐槽材质身份样本不可用: " + st.error);
@@ -799,7 +955,9 @@ for (const [name, r] of Object.entries(regions)) {
         out.verdict[name + "TargetConverged"] = false;
         failures.push(name + " 目标收敛判定样本不足: " + conv.error);
       } else {
-        const converged = conv.formalGate === true && conv.targetBinding?.consistent === true;
+        const converged = conv.formalGate === true
+          && conv.targetBinding?.consistent === true
+          && conv.targetBinding?.inputsValid === true;
         out.verdict[name + "TargetConverged"] = converged;
         if (!converged) failures.push(name + " 未向权威 V14D 头发目标收敛 origMae=" + conv.origMae + " v1Mae=" + conv.v1Mae + " drop=" + conv.drop + " targetBinding=" + (conv.targetBinding?.consistent ? "consistent" : "mismatch") + " metricFailures=" + (conv.metricFailureReasons?.join(",") || "none") + "（需同材质 triUV、drop>" + THRESHOLDS.hairTargetDrop + " 且 v1Mae<" + THRESHOLDS.hairTargetAbsMae + "）");
       }
@@ -812,6 +970,26 @@ for (const [name, r] of Object.entries(regions)) {
     const ok = st.maxMeanDiff < THRESHOLDS.bgStableMeanDiff;
     out.verdict[name + "Stable"] = ok;
     if (!ok) failures.push(name + " 星空背景被 V1 改写 maxMeanDiff=" + st.maxMeanDiff + "（上限 " + THRESHOLDS.bgStableMeanDiff + "）");
+  }
+}
+
+// HairA/HairB 正式 Gate 的唯一组合结果：legacy aggregate 诊断明确不参与。
+const hairFormalGate = evaluateV14dHairFormalGate({
+  hairAChanged: out.verdict.hairAChanged,
+  hairBChanged: out.verdict.hairBChanged,
+  hairA: out.regions.hairA?.targetConvergence,
+  hairB: out.regions.hairB?.targetConvergence,
+  legacyAggregate: out.regions.hair,
+});
+out.hairFormalGate = hairFormalGate;
+out.verdict.hairAFormalGate = hairFormalGate.formalTargetGate.hairA;
+out.verdict.hairBFormalGate = hairFormalGate.formalTargetGate.hairB;
+for (const slot of ["hairA", "hairB"]) {
+  if (hairFormalGate.formalTargetGate[slot] === true) continue;
+  // 细分失败通常已在逐槽分析中记录；这里补上组合 Gate 的硬阻断，
+  // 覆盖 inputsValid/一致性未来发生变化但细分日志未覆盖的情况。
+  if (!failures.some((failure) => failure.startsWith(slot + " "))) {
+    failures.push(slot + " 正式 Hair Gate 未通过（需 changed + targetConvergence + 合法同槽输入）");
   }
 }
 out.failures = failures;
@@ -891,25 +1069,16 @@ try {
 // analyzer exit 非零。两者都要求 negativeVerdict.status=rejected，且只有 HairA
 // 与 HairB 都由正式逐屏幕 triUV TargetConverged 判据得到 false 才能成立。
 if (NEG_WRONGTINT || NEG_SWAP_SLOT_TARGET) {
-  const negA = out.verdict.hairATargetConverged;
-  const negB = out.verdict.hairBTargetConverged;
+  const formalTargetGate = out.hairFormalGate?.formalTargetGate ?? { hairA: null, hairB: null };
+  const negA = formalTargetGate.hairA;
+  const negB = formalTargetGate.hairB;
   const negativeMetrics = {
     hairA: out.regions.hairA?.targetConvergence ?? null,
     hairB: out.regions.hairB?.targetConvergence ?? null,
   };
-  const naturalMetricGate = {
-    hairA: negativeMetrics.hairA?.metricGate === true,
-    hairB: negativeMetrics.hairB?.metricGate === true,
-  };
-  const bindingInputsValid = {
-    hairA: negativeMetrics.hairA?.targetBinding?.inputsValid === true,
-    hairB: negativeMetrics.hairB?.targetBinding?.inputsValid === true,
-  };
   const expectedHairFailure = (message) => message.startsWith("hairA 未向权威 V14D 头发目标收敛")
     || message.startsWith("hairB 未向权威 V14D 头发目标收敛");
   const formalReject = negA === false && negB === false;
-  const naturalMetricReject = naturalMetricGate.hairA === false && naturalMetricGate.hairB === false;
-  const validNegativeInputs = bindingInputsValid.hairA && bindingInputsValid.hairB;
   // 两种负测都把 HairA/HairB 正式目标 Gate=false 视为“语义拒绝”而非分析异常，
   // 因此 analysisFailures 不包含这两条预期失败；但只有 wrongTint 协议把预期失败
   // 从总 failures 移除并以 exit=0 结束。swap-slot-target 必须保留正式 Gate 失败，
@@ -919,6 +1088,17 @@ if (NEG_WRONGTINT || NEG_SWAP_SLOT_TARGET) {
     for (let i = failures.length - 1; i >= 0; i -= 1) if (expectedHairFailure(failures[i])) failures.splice(i, 1);
   }
   const mode = NEG_WRONGTINT ? "wrongTint" : "swapSlotTarget";
+  const negativeProtocol = evaluateV14dHairNegativeProtocol({
+    mode,
+    formalTargetGate,
+    hairA: negativeMetrics.hairA,
+    hairB: negativeMetrics.hairB,
+    analysisFailures: otherFailures,
+  });
+  const naturalMetricGate = negativeProtocol.naturalMetricGate;
+  const bindingInputsValid = negativeProtocol.bindingInputsValid;
+  const naturalMetricReject = naturalMetricGate.hairA === false && naturalMetricGate.hairB === false;
+  const validNegativeInputs = bindingInputsValid.hairA && bindingInputsValid.hairB;
   const naturalReasons = [
     ...(negativeMetrics.hairA?.metricFailureReasons ?? []).map((reason) => "HairA: " + reason),
     ...(negativeMetrics.hairB?.metricFailureReasons ?? []).map((reason) => "HairB: " + reason),
@@ -940,8 +1120,8 @@ if (NEG_WRONGTINT || NEG_SWAP_SLOT_TARGET) {
       ];
   out.negativeVerdict = {
     mode,
-    status: formalReject && naturalMetricReject && validNegativeInputs && otherFailures.length === 0 ? "rejected" : "failed",
-    rejected: formalReject && naturalMetricReject && validNegativeInputs,
+    status: negativeProtocol.status,
+    rejected: negativeProtocol.rejected,
     semanticMismatch: NEG_SWAP_SLOT_TARGET,
     formalTargetGate: { hairA: negA, hairB: negB },
     naturalMetricGate,

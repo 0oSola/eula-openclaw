@@ -494,6 +494,29 @@ test("Hair analyzer 默认使用原子画布，legacy 画布只留给场景 lane
   assert.match(acceptSource, /delete analyzerEnv\.V14D_HAIR_V1_CANVAS/);
 });
 
+test("Hair 正式 Gate 单一权威：legacy aggregate 诊断不能阻断健康样本，正式槽失败仍硬失败", () => {
+  const analyzerPath = path.join(process.cwd(), "scripts", "analyze-reze-k3-v1-diff.mjs");
+  const run = spawnSync(process.execPath, [analyzerPath, "--self-test-hair-gate"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assert.equal(run.status, 0, run.stdout + run.stderr);
+  const result = JSON.parse(run.stdout.trim());
+  assert.deepEqual(result.healthyWithLegacyAggregateFailure, {
+    pass: true,
+    formalTargetGate: { hairA: true, hairB: true },
+    legacyAggregateIgnored: true,
+  });
+  assert.equal(result.changedFailure.pass, false);
+  assert.equal(result.changedFailure.formalTargetGate.hairA, false);
+  assert.equal(result.changedFailure.formalTargetGate.hairB, true);
+  assert.equal(result.targetConvergenceFailure.pass, false);
+  assert.equal(result.targetConvergenceFailure.formalTargetGate.hairA, true);
+  assert.equal(result.targetConvergenceFailure.formalTargetGate.hairB, false);
+  assert.deepEqual(result.swapNegative, { status: "rejected", expectedExit: 1, analysisFailures: [] });
+  assert.deepEqual(result.wrongTintNegative, { status: "rejected", expectedExit: 0, analysisFailures: [] });
+});
+
 test("Hair 原子 probe 生成 fps 与可审计来源，accept 不再事后补造 fps", () => {
   const stageSource = fs.readFileSync(path.join(process.cwd(), "src", "features", "stage", "RezeWebGpuStage.tsx"), "utf8");
   assert.match(stageSource, /const fps = V14D_HAIR_AUTHORITATIVE_CAPTURE\.fps/);

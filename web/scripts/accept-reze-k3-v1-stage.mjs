@@ -689,17 +689,26 @@ try {
     }
   };
   const normalAnalysis = runAnalyzer();
+  const normalVisualReport = readVisualReportFile("visual-diff.json") || parseVisualReport(normalAnalysis.stdout);
+  const normalHairFormalGate = normalVisualReport?.hairFormalGate;
+  const normalHairFormalPass = normalHairFormalGate?.authority === "material-id+atomic-triuv+slot-changed+target-convergence"
+    && normalHairFormalGate.pass === true
+    && normalHairFormalGate.formalTargetGate?.hairA === true
+    && normalHairFormalGate.formalTargetGate?.hairB === true;
   try {
-    if (normalAnalysis.exit !== 0) throw new Error((normalAnalysis.stdout || normalAnalysis.stderr || "analyzer failed").slice(0, 400));
+    if (normalAnalysis.exit !== 0 || !normalHairFormalPass) {
+      throw new Error((normalAnalysis.stdout || normalAnalysis.stderr || "analyzer failed").slice(0, 400)
+        + "; hairFormalGate=" + JSON.stringify(normalHairFormalGate));
+    }
     note("G3", "区域差异硬阻断 PASS");
   } catch (err) { fail("G3", "区域差异分析硬阻断失败: " + (err.message || err).toString().slice(0, 400)); }
   // analyzer stdout 是给人看的精简摘要；regions.*.targetConvergence（含完整
   // samples/triUV/metricFailureReasons）只在对应 JSON 中。正式验收必须消费完整
   // 报告，不能因摘要省略字段而把有效证据当成缺失。
-  const normalVisualReport = readVisualReportFile("visual-diff.json") || parseVisualReport(normalAnalysis.stdout);
   report.gates.G3.visualDiff = {
     exit: normalAnalysis.exit,
     report: path.join(OUT, "visual-diff.json"),
+    hairFormalGate: normalHairFormalGate || null,
     hairA: normalVisualReport?.regions?.hairA?.targetConvergence || null,
     hairB: normalVisualReport?.regions?.hairB?.targetConvergence || null,
   };
@@ -1102,8 +1111,12 @@ if (report.pageErrors.length) fail("G1", "pageErrors: " + report.pageErrors.slic
 // 硬阻断：API 失败请求与 HTTP 错误必须进入 Gate 判定（存根环境下应为 0）。
 if (report.failedReqs.length) fail("G1", "failedRequests=" + report.failedReqs.length + ": " + report.failedReqs.slice(0, 3).map((r) => r.url).join(" | "));
 if (report.httpBad.length) fail("G1", "httpBad=" + report.httpBad.length + ": " + report.httpBad.slice(0, 3).map((r) => r.status + " " + r.url).join(" | "));
-const summary = { allPass: !process.exitCode, gates: Object.fromEntries(Object.entries(report.gates).map(([k, v]) => [k, v.status])) };
+const finalExitCode = Number.isInteger(process.exitCode) ? process.exitCode : 0;
+const summary = { allPass: finalExitCode === 0, exitCode: finalExitCode, gates: Object.fromEntries(Object.entries(report.gates).map(([k, v]) => [k, v.status])) };
 fs.writeFileSync(path.join(OUT, "gate-report.json"), JSON.stringify({ ...report, summary }, null, 2));
 console.log("===GATES=== " + JSON.stringify(summary));
-console.log(process.exitCode ? "===STAGE-V1-FAIL===" : "===STAGE-V1-OK===");
+console.log(finalExitCode ? "===STAGE-V1-FAIL===" : "===STAGE-V1-OK===");
 await context.close();
+// 显式在所有报告落盘、浏览器关闭后恢复最终退出码，避免异步清理或调用方
+// 未读取 LASTEXITCODE 时把完整验收失败误呈现为成功。
+process.exitCode = finalExitCode;
