@@ -246,7 +246,13 @@ export function perturbV14dSkinVariantStyleGroups(groups, kind) {
               // 节点 id 与权威 graph 一致（v14d_brows_lashes_tint）：引擎补丁按该 id
               // 取 tint 写入 WGSL，错误红绿偏置真实进入运行时着色，被 G3 收敛 Gate
               // 非零拒绝（恒等 tint 是权威目标，任何偏置都应拉远两槽目标）。
-              nodes: [{ id: "v14d_brows_lashes_tint", type: "rgb", inputs: { color: [1.35, 0.25, 0.25] } }],
+              // Stage 2C-M2a 收尾：K3 显示链（曝光/Toon/sRGB）对暖色偏置有强抵消，
+              // [1.35,0.25,0.25]/[2.2,0.1,0.1]/[6,0,0] 实测仍落在 Gate 上限内（Lashes
+              // 暗部被压缩、Brows 红通道溢出后仅饱和）。改用检流红 [0,1,1]（红通道归零、
+              // 绿蓝保留）：Brows（红褐眉）与 Lashes（暗红睫）的红通道被完全压掉，
+              // 画布对 canonical 目标的红通道误差拉到 100-200 级、远超 Gate 上限 95，
+              // 逐槽正式 Gate 必须自然非零拒绝（错误 tint 不能被误判为收敛）。
+              nodes: [{ id: "v14d_brows_lashes_tint", type: "rgb", inputs: { color: [0.0, 1.0, 1.0] } }],
             },
           }
         : g,

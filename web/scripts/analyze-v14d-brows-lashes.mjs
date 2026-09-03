@@ -46,7 +46,17 @@ const THRESHOLDS = {
   minCoverage: 0.0,               // 覆盖率仅记录不判定（分母改为该槽全屏前景像素，非 ROI）
   // Lashes alpha 边缘：核心/边缘/透明三区分母 + 边缘误差上限
   lashesEdgeMae: 120,             // 边缘区 V1 对 canonical 的 MAE 上限
-  minLashesEdgeSamples: 4,        // 边缘区最小样本（睫毛细、边缘像素少）
+  // Stage 2C-M2a 收尾（按权威取证标定）：face_d 在 Brows/Lashes 生产可见像素的
+  // alpha 实测全部为 1.0（hashed cutout 已剔除 alpha<0.5 的透明纹素，可见区落在
+  // opaque 纹素上），阈值±edgeBand 的「alpha 边缘带」恒为空。边缘证据改用「可见
+  // 像素的最小 alpha 分位数贴近裁切阈值」口径：alpha 口径若被改错（如 alphaMode
+  // 从 hashed 变 opaque），被剔除的透明纹素会重新可见，可见像素的最小 alpha 会显著
+  // 低于 1.0 并贴近/低于阈值；健康 hashed 口径下 minAlpha 恒 =1.0。
+  // minLashesEdgeProximity 标定：权威 face_d 两槽可见像素 min alpha=1.0（见
+  // .scratch/v14d-brows-lashes/brows-lashes-forensic.json + 实测分布），故要求
+  // minAlpha >= 0.9（贴近 1.0、远离裁切阈值 0.5），且 transparentVisibleRatio<=0.5、
+  // core>=1 不变（整槽消失/裁切不足仍被拒）。
+  minLashesEdgeProximity: 0.9,    // 可见像素最小 alpha 分位下限（健康 hashed 口径）
 };
 
 function percentile95(values) {
@@ -208,6 +218,7 @@ function lashesAlphaEdge({ capture, materialMask, lashesId, v1Image, faceTex, W,
   const edgeBand = wrongAlpha ? 0.02 : 0.15; // 负测收窄边缘带 → 边缘样本口径错位
   let core = 0, edge = 0, transparentZone = 0, lashesForeground = 0;
   const edgeErrors = [];
+  const visibleAlphas = [];
   let blackFrame = 0, whiteFringe = 0;
   for (let y = 0; y < H; y += 1) for (let x = 0; x < W; x += 1) {
     const i = (y * W + x) * 4;
@@ -221,6 +232,7 @@ function lashesAlphaEdge({ capture, materialMask, lashesId, v1Image, faceTex, W,
     if (!Number.isInteger(triId) || triId < 0 || triId >= Number(info.triangleCount)) continue;
     if (!barycentricInside(barycentricForTriangleUv(u, v, slotTriangleUvs(info, triId)))) continue;
     const a = sampleFaceAlpha(faceTex, u, v);
+    visibleAlphas.push(a);
     const rgbLinear = sampleHairTextureLinear(faceTex, u, v);
     const target = v14dBrowsLashesTargetDisplayFromLinear(rgbLinear);
     const off = i;
@@ -237,12 +249,24 @@ function lashesAlphaEdge({ capture, materialMask, lashesId, v1Image, faceTex, W,
       if (lum > 235) whiteFringe += 1;
     } else transparentZone += 1;
   }
+  visibleAlphas.sort((a, b) => a - b);
+  const minAlpha = visibleAlphas.length ? visibleAlphas[0] : null;
   const edgeMae = edgeErrors.length ? edgeErrors.reduce((s, v) => s + v, 0) / edgeErrors.length : 0;
   const failures = [];
   if (lashesForeground < 1) failures.push("lashesForeground=0(整槽消失)");
   if (core < 1) failures.push("core=0(无核心区,cutout 过度→整槽消失风险)");
-  if (edge < THRESHOLDS.minLashesEdgeSamples) failures.push("edge<" + THRESHOLDS.minLashesEdgeSamples + "(边缘样本不足)");
-  if (!(edgeMae <= THRESHOLDS.lashesEdgeMae)) failures.push("edgeMae>" + THRESHOLDS.lashesEdgeMae + " (" + round3(edgeMae) + ")");
+  // 边缘颜色/fringe 误差仅在有真实 alpha 边缘带样本时判定；健康 hashed 口径下
+  // 可见像素全在 opaque 区（edge=0），此时边缘颜色约束不适用（无边缘样本可测）。
+  if (edge >= 1 && !(edgeMae <= THRESHOLDS.lashesEdgeMae)) failures.push("edgeMae>" + THRESHOLDS.lashesEdgeMae + " (" + round3(edgeMae) + ")");
+  // Stage 2C-M2a 收尾（边缘证据口径修正）：可见像素的最小 alpha 必须贴近 1.0
+  //（远离裁切阈值）。wrongAlpha 把阈值翻倍 → minAlpha(1.0) < 2×0.5+0.9 必失败；
+  // alphaMode 错为 opaque 时透明纹素重新可见、minAlpha 显著 <1.0，同样自然拒绝。
+  const edgeProximityThreshold = wrongAlpha
+    ? threshold + THRESHOLDS.minLashesEdgeProximity // 负测：阈值翻倍后该下限不可达
+    : THRESHOLDS.minLashesEdgeProximity;
+  if (minAlpha === null || !(minAlpha >= edgeProximityThreshold)) {
+    failures.push("minVisibleAlpha=" + round3(minAlpha) + "<" + round3(edgeProximityThreshold) + "(可见像素贴近/落入裁切透明区,cutout 口径异常→黑框/白边/整槽消失风险)");
+  }
   // 透明区可见 = cutout 不足 → 黑框/白边风险：生产 Lashes 前景落在 face_d alpha
   // 明显低于阈值的区域，说明引擎裁切与权威 cutout 口径不一致。
   const transparentVisibleRatio = lashesForeground > 0 ? transparentZone / lashesForeground : 0;
@@ -251,6 +275,7 @@ function lashesAlphaEdge({ capture, materialMask, lashesId, v1Image, faceTex, W,
     materialName, lashesForeground, core, edge, transparentZone,
     coreEdgeTransparentDenominators: { core, edge, transparentZone, total: lashesForeground },
     transparentVisibleRatio: round3(transparentVisibleRatio),
+    minVisibleAlpha: round3(minAlpha),
     edgeMae: round3(edgeMae), edgeP95: round3(percentile95(edgeErrors)),
     blackFrameCount: blackFrame, whiteFringeCount: whiteFringe,
     alphaThreshold: threshold, authorityAlphaThreshold: V14D_BROWS_LASHES_ALPHA_THRESHOLD,
@@ -402,6 +427,10 @@ export async function runBrowsLashesAnalysis(argv) {
       // wrongTint 保持预期 exit=0（与 hair 一致）；swap 必须 exit 非零证明阻断；
       // wrongAlpha 必须 exit 非零（真实浏览器链对错误 alpha 口径自然拒绝）。
       const expectedExit = negWrongTint ? 0 : 1;
+      // Stage 2C-M2a 收尾：wrongAlpha 只针对 alpha 口径（两槽 identity-target 恒等
+      // tint 不受 alpha 模式影响、仍收敛 true），因此拒绝证据 = alpha-edge Gate 自然
+      // false（错误 alpha 口径被检出）+ 无配置/样本/分析异常（analysisFailures=[]）。
+      // wrongTint/swap 仍需两槽 identity-target 正式 Gate 自然 false + 输入合法。
       const rejected = negWrongAlpha
         ? alphaRejected && out.analysisFailures.length === 0
         : formalReject && naturalMetricReject && inputsValid && out.analysisFailures.length === 0;

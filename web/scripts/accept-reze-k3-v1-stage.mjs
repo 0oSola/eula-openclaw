@@ -295,7 +295,12 @@ async function prepareHairCapture() {
 }
 async function captureHairAtomic() {
   return page.evaluate(async () => {
-    const raw = await window.__rezeStageProbe?.captureHairTriUv?.();
+    // Stage 2C-M2a：HairA/HairB 保持既有 cpu-base 无深度展开口径。合并
+    // production-draw-call 基础设施后 captureHairTriUv 默认 sourceMode 变为
+    // production-draw-call，会改变 Hair 的逐屏幕 triUV 口径并导致既有 Hair 正式
+    // Gate 报「同材质同三角形同 UV 证据不可用」。Hair 链路显式固定 cpu-base，
+    // 不触碰已通过 Gate；production-draw-call 仅服务 Brows/Lashes 逐槽取证。
+    const raw = await window.__rezeStageProbe?.captureHairTriUv?.(undefined, { sourceMode: "cpu-base" });
     if (!raw || raw.error) return raw;
     const byMaterial = Object.fromEntries(Object.entries(raw.byMaterial || {}).map(([name, info]) => [name, {
       ...info,
@@ -1030,6 +1035,44 @@ try {
   if (!blWrongTintRejected) {
     fail("G3", "Brows/Lashes wrongTint 负测协议失败：必须 negativeVerdict.rejected、两槽正式 Gate 均 false、analysisFailures=[]；实际 " + JSON.stringify(report.gates.G3.browsLashesWrongTint));
   } else note("G3", "Brows/Lashes wrongTint 负测 PASS（两槽正式 Gate 自然拒绝）");
+
+  // wrongAlpha 负测（Stage 2C-M2a 收尾 P0-2/P0-4）：注入错误 alpha 口径的
+  // Brows/Lashes graph（alphaMode flipped to opaque），重采 V1 原子同帧证据，
+  // 跑 analyze --brows-lashes --neg-wrong-alpha；Lashes 透明边缘 Gate 必须自然
+  // 非零拒绝（错误 cutout 口径让被剔除的透明纹素重新可见、可见像素 minAlpha
+  // 贴近/低于阈值），且 analysisFailures=[]（配置错误/缺样本不得包装成通过）。
+  const negBLAlpha = await page.evaluate(async () => {
+    const r = await window.__rezeStageProbe.applyBadSkinGraph("wrongBrowsLashesAlpha");
+    const c = document.querySelector("canvas").dataset;
+    return { ok: r.ok, variant: c.v14dSkinVariant, browsOnComposite: c.v14dSkinVariantBrowsOnComposite, lashesOnComposite: c.v14dSkinVariantLashesOnComposite };
+  });
+  await page.waitForTimeout(400);
+  await prepareHairCapture();
+  const blWrongAlphaAtomic = await captureBrowsLashesAtomic();
+  saveDataUrl(blWrongAlphaAtomic?.canvasDataUrl, "g3-brows-lashes-v1-canvas.png");
+  if (blWrongAlphaAtomic && !blWrongAlphaAtomic.error && blWrongAlphaAtomic.materialMaskPng) {
+    fs.writeFileSync(path.join(OUT, "g3-brows-lashes-tri-uv.json"), JSON.stringify({
+      source: blWrongAlphaAtomic.source, width: blWrongAlphaAtomic.width, height: blWrongAlphaAtomic.height,
+      materialIdByName: blWrongAlphaAtomic.materialIdByName, byMaterial: blWrongAlphaAtomic.byMaterial,
+    }, null, 2));
+  }
+  const blWrongAlphaResult = runAnalyzer(["--brows-lashes", "--neg-wrong-alpha"]);
+  const blWrongAlphaReport = readVisualReportFile("visual-diff-brows-lashes-wrong-alpha.json") || parseVisualReport(blWrongAlphaResult.stdout);
+  const blWrongAlphaVerdict = blWrongAlphaReport?.negativeVerdict ?? null;
+  const blWrongAlphaRejected = blWrongAlphaResult.exit !== 0
+    && blWrongAlphaVerdict?.status === "rejected"
+    && blWrongAlphaVerdict?.lashesAlphaEdgeGate === false
+    && Array.isArray(blWrongAlphaVerdict?.analysisFailures)
+    && blWrongAlphaVerdict.analysisFailures.length === 0;
+  report.gates.G3.browsLashesWrongAlpha = {
+    applied: negBLAlpha,
+    analyzerExit: blWrongAlphaResult.exit,
+    analyzer: blWrongAlphaVerdict,
+    rejected: blWrongAlphaRejected,
+  };
+  if (!blWrongAlphaRejected) {
+    fail("G3", "Brows/Lashes wrongAlpha 负测协议失败：必须 analyzer exit 非零、lashesAlphaEdgeGate=false、analysisFailures=[]；实际 " + JSON.stringify(report.gates.G3.browsLashesWrongAlpha));
+  } else note("G3", "Brows/Lashes wrongAlpha 负测 PASS（错误 alpha 口径被透明边缘 Gate 自然拒绝）");
   // 快速迭代开关：--fast-bl 在 Brows/Lashes identity-target + wrongTint 后即收尾退出，
   // 不跑 G4-G7。正式全量验收不带此开关。
   if (FAST_BL) {

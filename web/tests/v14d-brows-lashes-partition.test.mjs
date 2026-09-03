@@ -78,7 +78,9 @@ test("negative wrongBrowsLashesTint: identity tint changed to red-green offset",
   const bl = bad.find((g) => g.id === "v14d-skin-variant-brows-lashes");
   assert.equal(bl.graph.name, "V14D Brows Lashes V1 Composite");
   assert.notDeepEqual(bl.graph.nodes[0].inputs.color, V14D_BROWS_LASHES_TINT);
-  assert.deepEqual(bl.graph.nodes[0].inputs.color, [1.35, 0.25, 0.25]);
+  // Stage 2C-M2a 收尾：K3 显示链抵消暖色偏置，[1.35/2.2/6 红偏置] 无法让逐槽正式
+  // Gate 自然拒绝；负测改用检流红 [0,1,1]（红通道归零）把红通道误差拉超阈值。
+  assert.deepEqual(bl.graph.nodes[0].inputs.color, [0.0, 1.0, 1.0]);
 });
 
 test("negative swapBrowsLashes: two distinct-identity cloned graphs cross-bound to wrong slot", () => {
