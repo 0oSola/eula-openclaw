@@ -11,12 +11,17 @@ import {
 } from "../src/features/stage/v14dSkinVariantGraphs.js";
 import {
   buildHairUvGridFromPmx,
+  barycentricForTriangleUv,
+  barycentricInside,
   classifyHairPixel,
   linearToSrgbByte,
+  sampleHairTextureLinear,
   srgbByteToLinear,
   v14dHairTargetDisplay,
+  v14dHairTargetDisplayFromLinear,
   V14D_HAIR_TINT_LINEAR,
 } from "../src/features/stage/v14dHairPartition.js";
+import { V14D_HAIR_TINT } from "../src/features/stage/v14dAuthority.js";
 
 // 最小 fake style groups（hair/face/body 分组 + 一个无关分组），驱动纯函数负测。
 // includeV1=false 返回原始 K3 分组（供 buildV14dSkinVariantStyleGroups 的输入）；
@@ -72,13 +77,13 @@ test("负测扰动 wrongHairMaterial：hair V1 分组 materials 换成 BodySkin"
   assert.deepEqual(hair.materials, ["BodySkin"]);
 });
 
-test("负测扰动 wrongTint：红绿偏置远离权威 [0.84,0.85,0.96]", () => {
+test("负测扰动 wrongTint：红绿偏置远离权威 tint", () => {
   const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
   const bad = perturbV14dSkinVariantStyleGroups(v1, "wrongTint");
   const hair = bad.find((g) => g.id === "v14d-skin-variant-hair");
   // graph.name 仍触发引擎覆写，但 tint 常量被改成经实跑确认的错误红绿偏置。
   assert.equal(hair.graph.name, "V14D Hair V1 Composite");
-  assert.notDeepEqual(hair.graph.nodes[0].inputs.color, [0.84, 0.85, 0.96]);
+  assert.notDeepEqual(hair.graph.nodes[0].inputs.color, V14D_HAIR_TINT);
   assert.deepEqual(hair.graph.nodes[0].inputs.color, [1.35, 0.25, 0.25]);
 });
 
@@ -134,7 +139,43 @@ test("颜色空间：srgb→linear→×tint→srgb 往返，tint 使 B 通道相
   const src = [200, 180, 170];
   const tgt = v14dHairTargetDisplay(src);
   assert.ok(tgt[2] / Math.max(1, tgt[0]) > src[2] / Math.max(1, src[0]), "B/R 比应提升（偏蓝紫）");
-  assert.deepEqual(V14D_HAIR_TINT_LINEAR, [0.84, 0.85, 0.96]);
+  assert.deepEqual(V14D_HAIR_TINT_LINEAR, V14D_HAIR_TINT);
+});
+
+test("线性 hair_d 双线性采样：四个角的中心值按 WebGPU texel-center 语义插值", () => {
+  const texture = {
+    width: 2,
+    height: 2,
+    linear: new Float32Array([
+      0, 0, 0,
+      1, 0, 0,
+      0, 1, 0,
+      1, 1, 1,
+    ]),
+  };
+  const sample = sampleHairTextureLinear(texture, 0.5, 0.5);
+  assert.deepEqual(sample.map((value) => Number(value.toFixed(6))), [0.5, 0.5, 0.25]);
+  assert.deepEqual(sampleHairTextureLinear(texture, 0, 0), [0, 0, 0]);
+});
+
+test("逐像素目标：线性 hair_d 样本只经 authority tint 后转回显示字节", () => {
+  const target = v14dHairTargetDisplayFromLinear([1, 1, 1]);
+  assert.deepEqual(target, V14D_HAIR_TINT.map((value) => linearToSrgbByte(value)));
+  assert.deepEqual(v14dHairTargetDisplay([255, 255, 255]), target);
+});
+
+test("triUV 重心校验：合法点通过，三角形外点和退化三角形拒绝", () => {
+  const triangle = [0, 0, 1, 0, 0, 1];
+  assert.ok(barycentricInside(barycentricForTriangleUv(0.25, 0.25, triangle)));
+  assert.equal(barycentricInside(barycentricForTriangleUv(0.8, 0.8, triangle)), false);
+  assert.equal(barycentricForTriangleUv(0.2, 0.2, [0, 0, 1, 1, 2, 2]), null);
+});
+
+test("patch 源码只从 v14dAuthority.js 生成头发 tint，不再内含旧硬编码数组", () => {
+  const patchSource = fs.readFileSync(path.join(process.cwd(), "scripts", "patch-reze-engine.mjs"), "utf8");
+  assert.match(patchSource, /v14dAuthority\.js/);
+  assert.match(patchSource, /V14D_HAIR_TINT_LITERAL/);
+  assert.doesNotMatch(patchSource, /\[0\.84\s*,\s*0\.85\s*,\s*0\.96/);
 });
 
 // 真实 PMX 分区解析（资产存在时）：HairA/HairB UV 网格非空且分区不坍缩。

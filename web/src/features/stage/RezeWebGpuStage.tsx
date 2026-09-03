@@ -3184,6 +3184,144 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           return { error: error instanceof Error ? error.message : String(error) };
         }
       },
+      /**
+       * Stage 2C-M1.1 HairA/HairB 正式 triUV 证据：在同一停帧中导出生产等价
+       * material-ID+depth 前景掩码，并分别用非索引展开 pass 给每个头发槽输出
+       * 局部三角形 ID、插值 UV 与该槽的三角形 UV 表。调用方必须把三者按同一
+       * 画布像素索引配对；不能退化为槽位均值或矩形 ROI 目标。
+       */
+      async captureHairTriUv() {
+        const canvas = canvasRef.current;
+        const engine = engineRef.current;
+        const model = modelRef.current;
+        if (!canvas || !engine || !model) return { error: "no canvas/engine/model" };
+        const progressBefore = typeof model.getAnimationProgress === "function"
+          ? model.getAnimationProgress()
+          : null;
+        const wasPlaying = Boolean(progressBefore?.playing);
+        const animationName = progressBefore?.animationName ?? null;
+        const restoreRuntimeLoop = () => {
+          try {
+            if (wasPlaying && animationName) model.play(animationName);
+            engine.runRenderLoop();
+          } catch { /* 采集失败也不能让诊断探针永久停住生产循环 */ }
+        };
+        try {
+          await flushV14dDiagnosticBarrier(engine);
+          const materials = model.getMaterials();
+          const materialIdByName: Record<string, number> = {};
+          let nextId = 1;
+          for (const material of materials) {
+            if (material.vertexCount <= 0) continue;
+            materialIdByName[material.name] = nextId;
+            nextId += 1;
+          }
+          const targetNames = [V14D_HAIR_A_MATERIAL_NAME, V14D_HAIR_B_MATERIAL_NAME] as const;
+          const targetEntries = targetNames.map((name) => {
+            const materialIndex = materials.findIndex((material) => material.name === name);
+            return {
+              name,
+              materialIndex,
+              materialId: materialIdByName[name] ?? null,
+            };
+          });
+          const missing = targetEntries.filter((entry) => entry.materialIndex < 0 || entry.materialId === null);
+          if (missing.length > 0) {
+            return { error: "missing HairA/HairB material: " + missing.map((entry) => entry.name).join(", ") };
+          }
+
+          // 所有读取先固定到一个实际相机/实际停帧，避免 triUv 与 production pick
+          // 之间因 VMD/渲染循环推进而发生屏幕位移。
+          try {
+            engine.stopRenderLoop();
+            model.pause();
+            engine.renderFrame(0);
+          } catch { /* 保持当前姿态，后续读取会如实失败 */ }
+
+          const width = canvas.width;
+          const height = canvas.height;
+          const materialMask = await readV14dColorBaselineMaterialMask(engine, width, height);
+          const maskCanvas = document.createElement("canvas");
+          maskCanvas.width = width;
+          maskCanvas.height = height;
+          const maskContext = maskCanvas.getContext("2d");
+          if (!maskContext) {
+            restoreRuntimeLoop();
+            return { error: "material mask canvas unavailable" };
+          }
+          const maskImage = maskContext.createImageData(width, height);
+          maskImage.data.set(materialMask.data);
+          maskContext.putImageData(maskImage, 0, 0);
+
+          const vertices = model.getVertices();
+          const indices = model.getIndices();
+          const skinning = model.getSkinning();
+          const byMaterial: Record<string, unknown> = {};
+          for (const entry of targetEntries) {
+            const material = materials[entry.materialIndex];
+            const firstIndex = materials
+              .slice(0, entry.materialIndex)
+              .reduce((sum, current) => sum + current.vertexCount, 0);
+            const indexCount = material.vertexCount;
+            const triangleCount = Math.floor(indexCount / 3);
+            const src = {
+              vertices,
+              indices,
+              joints: skinning.joints,
+              weights: skinning.weights,
+              faceFirstIndex: firstIndex,
+              faceIndexCount: indexCount,
+              skinMatrices: model.getSkinMatrices(),
+            };
+            const triUv = await readV14dFaceExpandedTriUv(engine, width, height, src);
+            const triangleUvs = new Float32Array(triangleCount * 6);
+            for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+              for (let corner = 0; corner < 3; corner += 1) {
+                const vertexIndex = indices[firstIndex + triangle * 3 + corner];
+                const uvOffset = (triangle * 3 + corner) * 2;
+                triangleUvs[uvOffset] = vertices[vertexIndex * 8 + 6];
+                triangleUvs[uvOffset + 1] = vertices[vertexIndex * 8 + 7];
+              }
+            }
+            byMaterial[entry.name] = {
+              materialId: entry.materialId,
+              materialIndex: entry.materialIndex,
+              firstIndex,
+              indexCount,
+              triangleCount,
+              triId: triUv.triId,
+              uv: triUv.uv,
+              triMask: triUv.faceMask,
+              triangleUvs,
+            };
+          }
+
+          const camera = engine as unknown as {
+            camera?: {
+              getViewMatrix(): { values: Float32Array };
+              getProjectionMatrix(): { values: Float32Array };
+            };
+          };
+          restoreRuntimeLoop();
+          return {
+            source: "engine-pick-material-id-depth+expanded-tri-uv",
+            width,
+            height,
+            materialIdByName,
+            materialMaskPng: maskCanvas.toDataURL("image/png"),
+            camera: camera.camera
+              ? {
+                  view: Array.from(camera.camera.getViewMatrix().values),
+                  projection: Array.from(camera.camera.getProjectionMatrix().values),
+                }
+              : null,
+            byMaterial,
+          };
+        } catch (error) {
+          restoreRuntimeLoop();
+          return { error: error instanceof Error ? error.message : String(error) };
+        }
+      },
       // 负测钩子（仅验收开关）：用错误 graph / 编译非法 graph 驱动 V1 styleGroup 应用，
       // 真实验证「错误 graph 不命中 Face draw-call」「applyStyleGroups 失败回退 original」。
       async applyBadSkinGraph(kind: BadSkinGraphKind) {

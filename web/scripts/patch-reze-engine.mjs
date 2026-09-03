@@ -19,10 +19,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
+const V14D_AUTHORITY_PATH = path.join(rootDir, "src", "features", "stage", "v14dAuthority.js");
+let V14D_HAIR_TINT;
+try {
+  ({ V14D_HAIR_TINT } = await import(pathToFileURL(V14D_AUTHORITY_PATH).href));
+} catch (error) {
+  throw new Error("无法加载 V14D 唯一权威模块: " + V14D_AUTHORITY_PATH + "（" + (error?.message || error) + "）");
+}
+if (!Array.isArray(V14D_HAIR_TINT) || V14D_HAIR_TINT.length !== 3
+  || V14D_HAIR_TINT.some((value) => !Number.isFinite(value) || value < 0 || value > 1)) {
+  throw new Error("V14D_HAIR_TINT 权威导出必须是 3 个 [0,1] 范围内的有限数值");
+}
+const V14D_HAIR_TINT_LITERAL = JSON.stringify(V14D_HAIR_TINT);
 
 // ─── --self-test 早退分流（必须在任何真实 node_modules 写入/patch target 遍历/strict verify 之前）───
 // 本块自包含、只操作临时目录：构造干净 reze-engine 0.26.0 隔离 fixture，
@@ -68,6 +80,9 @@ if (process.argv.includes("--self-test")) {
   const unpack = path.join(tmp, "unpack"); fs.mkdirSync(unpack, { recursive: true });
   execSync("tar -xzf " + JSON.stringify(tgz) + " -C " + JSON.stringify(unpack), { stdio: "pipe" });
   fs.cpSync(path.join(unpack, "package"), path.join(cleanRoot, "node_modules", "reze-engine"), { recursive: true });
+  const authorityFixture = path.join(cleanRoot, "src", "features", "stage", "v14dAuthority.js");
+  fs.mkdirSync(path.dirname(authorityFixture), { recursive: true });
+  fs.copyFileSync(path.join(realRoot, "src", "features", "stage", "v14dAuthority.js"), authorityFixture);
   fs.cpSync(cleanRoot, fixtureRoot, { recursive: true });
   // fixture 初始必须未打 State2 补丁（helper 不存在 / 走旧路径）。
   const cleanSlotsSrc = path.join(cleanRoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
@@ -1030,11 +1045,10 @@ const SLOTS_DIST_BUNDLE_REDIRECT = "import \"reze-engine\";\n";
 const SLOTS_STATE2_DIST_ANCHOR = "const HAIR_OVER_EYES_DECL = `override IS_OVER_EYES: bool = false;\n\n`;\n";
 
 // Stage 2C-M1：V14D 头发合成 helper 的独立 WGSL 常量（不并入 state2 helpers）。
-// 常量来自权威 blend 取证（web/scripts/forensic-v14d-hair-state.py，证据
-// web/.scratch/v14d-hairab/hair-forensic.json）：PROTO_GF2_HairA/HairB BaseColor =
-// c_KoledaSSR01_slg_hair_d.png（sRGB）经 PROTO_HairTint（MIX_RGB MULTIPLY Factor=1）
-// 固定银白紫乘色 [0.84, 0.85, 0.96]。assembleModule 用 includeV14dHairHelper 单独
-// 注入（不连带 State2 mask 声明/binding 5），hair graph 无需 mask 即可编译。
+// 常量来源：web/src/features/stage/v14dAuthority.js 的 V14D_HAIR_TINT 唯一权威导出。
+// 该脚本只把经过结构/数值校验的导出序列化进生成的 reze-engine 补丁；assembleModule
+// 用 includeV14dHairHelper 单独注入（不连带 State2 mask 声明/binding 5），hair graph
+// 无需 mask 即可编译。
 const V14D_HAIR_HELPER_DECL_SRC =
   "// V14D 头发合成 helper（Stage 2C-M1）：hair_d 线性 × 银白紫乘色（权威 blend 取证）。\n" +
   "const V14D_HAIR_HELPER_WGSL = `fn v14d_hair_composite(base: vec3f, tint: vec3f) -> vec3f { return base * tint; }\n`;\n";
@@ -1052,8 +1066,8 @@ const SLOTS_STATE2_DIST_REPLACEMENT = "const HAIR_OVER_EYES_DECL = `override IS_
 // 证据 web/.scratch/v14d-hairab/hair-forensic.json）：PROTO_GF2_HairA/HairB 的
 // BaseColor = c_KoledaSSR01_slg_hair_d.png（sRGB，2048x2048，hasData=true，Alpha 直连
 // Principled.Alpha，blendMethod=HASHED、alphaThreshold=0.5，与引擎 hashed-alpha 裁切
-// 口径一致）经 PROTO_HairTint（MIX_RGB MULTIPLY、Factor=1）固定银白紫乘色
-// [0.84, 0.85, 0.96, 1.0]。视角相关部分（Anisotropic 0.72、Roughness/Specular
+// 口径一致）经 PROTO_HairTint（MIX_RGB MULTIPLY、Factor=1）得到唯一权威 tint。
+// 视角相关部分（Anisotropic、Roughness/Specular
 // MapRange 支路、ToonRamp 经 ShaderToRGB）按 A/B/C 分类为 C（不能烘焙/不固化视角
 // 高光），本阶段只迁移 BaseColor 乘色。anchors 同时覆盖旧 helper 形态（无 hair
 // helper）与已升级形态，doneMarker 只认最终形态，fresh/旧补丁/二次运行三态幂等收敛。
@@ -1085,7 +1099,8 @@ const STATE2_OVERRIDE_SRC = [
   "  if (finalIndex < 0) return fsBody",
   "  const tag = lines[finalIndex].match(/\\s+(\\/\\/.*)$/)?.[1] ?? \"\"",
   "  const mask = \"textureSample(v14d_state2_mask, diffuseSampler, input.uv).rgb\"",
-  "  const hairTintVec = \"vec3f(\" + (hairTint?.[0] ?? 0.84) + \", \" + (hairTint?.[1] ?? 0.85) + \", \" + (hairTint?.[2] ?? 0.96) + \")\"",
+  "  const defaultHairTint: readonly number[] = " + V14D_HAIR_TINT_LITERAL,
+  "  const hairTintVec = \"vec3f(\" + (hairTint?.[0] ?? defaultHairTint[0]) + \", \" + (hairTint?.[1] ?? defaultHairTint[1]) + \", \" + (hairTint?.[2] ?? defaultHairTint[2]) + \")\"",
   "  const expr = isHairV1 ? \"v14d_hair_composite(tex_color, \" + hairTintVec + \")\" : isBodySkin ? \"v14d_skin_body_composite(tex_color)\" : (graphName === \"V14D Face State2 Live ShadowFactor\" ? \"v14d_state2_shadow_factor(\" + mask + \")\" : \"v14d_state2_composite(tex_color, \" + mask + \")\")",
   "  lines[finalIndex] = \"  let final_color = \" + expr + \";\" + tag",
   "  return lines.join(\"\\n\")",
@@ -1104,7 +1119,8 @@ const STATE2_OVERRIDE_DIST = [
   "    if (finalIndex < 0) return fsBody;",
   "    const tag = lines[finalIndex].match(/\\s+(\\/\\/.*)$/)?.[1] ?? \"\";",
   "    const mask = \"textureSample(v14d_state2_mask, diffuseSampler, input.uv).rgb\";",
-  "    const hairTintVec = \"vec3f(\" + (hairTint?.[0] ?? 0.84) + \", \" + (hairTint?.[1] ?? 0.85) + \", \" + (hairTint?.[2] ?? 0.96) + \")\";",
+  "    const defaultHairTint = " + V14D_HAIR_TINT_LITERAL + ";",
+  "    const hairTintVec = \"vec3f(\" + (hairTint?.[0] ?? defaultHairTint[0]) + \", \" + (hairTint?.[1] ?? defaultHairTint[1]) + \", \" + (hairTint?.[2] ?? defaultHairTint[2]) + \")\";",
   "    const expr = isHairV1 ? \"v14d_hair_composite(tex_color, \" + hairTintVec + \")\" : isBodySkin ? \"v14d_skin_body_composite(tex_color)\" : (graphName === \"V14D Face State2 Live ShadowFactor\" ? \"v14d_state2_shadow_factor(\" + mask + \")\" : \"v14d_state2_composite(tex_color, \" + mask + \")\");",
   "    lines[finalIndex] = \"  let final_color = \" + expr + \";\" + tag;",
   "    return lines.join(String.fromCharCode(10));",
@@ -1139,7 +1155,7 @@ const COMPILE_STATE2_SRC_A_STATE2_ANCHOR = [
 ].join("\n");
 const COMPILE_STATE2_SRC_FINAL = [
   "  const fsBody = lines.join(\"\\n\")",
-  "  const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\")?.inputs?.color as number[] | undefined) ?? [0.84, 0.85, 0.96]",
+  "  const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\")?.inputs?.color as number[] | undefined) ?? " + V14D_HAIR_TINT_LITERAL,
   "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody, hairTint)",
   "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\", graph.name === \"V14D Hair V1 Composite\")"
 ].join("\n");
@@ -1163,7 +1179,7 @@ const COMPILE_STATE2_DIST_A_STATE2_ANCHOR = [
 ].join("\n");
 const COMPILE_STATE2_DIST_FINAL = [
   "    const fsBody = lines.join(\"\\n\");",
-  "    const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\")?.inputs?.color) ?? [0.84, 0.85, 0.96];",
+  "    const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\")?.inputs?.color) ?? " + V14D_HAIR_TINT_LITERAL + ";",
   "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody, hairTint);",
   "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\", graph.name === \"V14D Hair V1 Composite\");"
 ].join("\n");

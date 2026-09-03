@@ -47,6 +47,10 @@ function findKoledaAsset(rel) {
   }
   return fs.existsSync(cur) && fs.statSync(cur).isFile() ? cur : null;
 }
+const HAIR_TEX = process.env.V14D_HAIR_TEX
+  || findKoledaAsset("Textures/c_KoledaSSR01_slg_hair_d.png")
+  || path.join(KOLEDA_DIR, "Textures", "c_KoledaSSR01_slg_hair_d.png");
+const HAIR_PMX = process.env.V14D_HAIR_PMX || PMX;
 const IMPORT_DIR = path.join(OUT, "import-koleda");
 if (!fs.existsSync(path.join(IMPORT_DIR, PMX_NAME))) linkTree(KOLEDA_DIR, IMPORT_DIR);
 const MASK_LINK = path.join(IMPORT_DIR, "Textures", MASK_NAME);
@@ -63,7 +67,7 @@ if (!fs.existsSync(path.join(NEG_RENAME_DIR, "KoledaRenamedCopy.pmx"))) {
 const NEG_NOMASK_DIR = path.join(OUT, "import-nomask");
 if (!fs.existsSync(path.join(NEG_NOMASK_DIR, PMX_NAME))) { fs.mkdirSync(NEG_NOMASK_DIR, { recursive: true }); try { fs.linkSync(PMX, path.join(NEG_NOMASK_DIR, PMX_NAME)); } catch { fs.copyFileSync(PMX, path.join(NEG_NOMASK_DIR, PMX_NAME)); } }
 
-const report = { origin: ORIGIN, base: BASE, assets: { pmx: PMX, vmd: VMD, mask: STATE2_MASK, maskSha256: sha256(STATE2_MASK), vmdSha256: fs.existsSync(VMD) ? sha256(VMD) : null }, gates: {}, pageErrors: [], httpBad: [], failedReqs: [], screenshots: {} };
+const report = { origin: ORIGIN, base: BASE, assets: { pmx: PMX, vmd: VMD, mask: STATE2_MASK, hairTexture: HAIR_TEX, hairTextureSha256: fs.existsSync(HAIR_TEX) ? sha256(HAIR_TEX) : null, maskSha256: sha256(STATE2_MASK), vmdSha256: fs.existsSync(VMD) ? sha256(VMD) : null }, gates: {}, pageErrors: [], httpBad: [], failedReqs: [], screenshots: {} };
 const fail = (gate, msg) => {
   console.error("ASSERT-FAIL[" + gate + "]: " + msg);
   report.gates[gate] = report.gates[gate] || { status: "pass", failures: [] };
@@ -410,30 +414,67 @@ try {
  report.gates.G3 = report.gates.G3 || { status: "pass", failures: [] };
  report.gates.G3.canvasSize = { width: v1Pix.width, height: v1Pix.height };
  report.gates.G3.origCanvas = oPng; report.gates.G3.v1Canvas = vPng;
-  // HairA/HairB 逐槽身份：同一 full-frame、同一相机的 engine pick material-ID+
-  // depth pass。PNG 中 R=modelId、G=materialId；metadata 是同一 PMX 材质列表推导的
-  // 1-based 映射。后续 analyze 只接受对应 materialId 的前景像素，矩形 ROI 不再猜槽。
-  const hairMaterialMask = await page.evaluate(() => window.__rezeStageProbe?.captureMaterialMask?.() || null);
-  if (!hairMaterialMask || hairMaterialMask.error || !hairMaterialMask.png) {
-    fail("G3", "HairA/HairB 材质身份掩码采集失败: " + JSON.stringify(hairMaterialMask));
-  } else if (hairMaterialMask.width !== v1Pix.width || hairMaterialMask.height !== v1Pix.height) {
-    fail("G3", "材质身份掩码尺寸与画布不一致: " + JSON.stringify({ mask: [hairMaterialMask.width, hairMaterialMask.height], canvas: [v1Pix.width, v1Pix.height] }));
+  // HairA/HairB 逐槽身份与 triUV：captureHairTriUv 在同一停帧中同时导出
+  // engine pick material-ID+depth 前景掩码、每槽局部 triId/插值 UV 和三角形 UV 表。
+  // 页面 evaluate 内显式把 typed arrays 转成普通数组，避免跨 Playwright 边界后
+  // 变成带数字键的对象；analyze 只接受这份同帧证据，不再用矩形 ROI 猜槽。
+  const hairTriUvCapture = await page.evaluate(async () => {
+    const raw = await window.__rezeStageProbe?.captureHairTriUv?.();
+    if (!raw || raw.error) return raw;
+    const byMaterial = Object.fromEntries(Object.entries(raw.byMaterial || {}).map(([name, info]) => [name, {
+      ...info,
+      triId: Array.from(info.triId || []),
+      uv: Array.from(info.uv || []),
+      triMask: Array.from(info.triMask || []),
+      triangleUvs: Array.from(info.triangleUvs || []),
+    }]));
+    return { ...raw, byMaterial };
+  });
+  if (!hairTriUvCapture || hairTriUvCapture.error || !hairTriUvCapture.materialMaskPng) {
+    fail("G3", "HairA/HairB 同材质同三角形同 UV 证据采集失败: " + JSON.stringify(hairTriUvCapture));
+  } else if (hairTriUvCapture.width !== v1Pix.width || hairTriUvCapture.height !== v1Pix.height) {
+    fail("G3", "triUV 证据尺寸与画布不一致: " + JSON.stringify({ capture: [hairTriUvCapture.width, hairTriUvCapture.height], canvas: [v1Pix.width, v1Pix.height] }));
   } else {
-    const maskPng = saveDataUrl(hairMaterialMask.png, "g3-hair-material-mask.png");
+    const maskPng = saveDataUrl(hairTriUvCapture.materialMaskPng, "g3-hair-material-mask.png");
     const maskMeta = path.join(OUT, "g3-hair-material-mask.json");
     fs.writeFileSync(maskMeta, JSON.stringify({
-      source: hairMaterialMask.source,
-      width: hairMaterialMask.width,
-      height: hairMaterialMask.height,
-      materialIdByName: hairMaterialMask.materialIdByName,
+      source: hairTriUvCapture.source,
+      width: hairTriUvCapture.width,
+      height: hairTriUvCapture.height,
+      materialIdByName: hairTriUvCapture.materialIdByName,
+    }, null, 2));
+    const triUvMeta = path.join(OUT, "g3-hair-tri-uv.json");
+    fs.writeFileSync(triUvMeta, JSON.stringify({
+      source: hairTriUvCapture.source,
+      width: hairTriUvCapture.width,
+      height: hairTriUvCapture.height,
+      materialIdByName: hairTriUvCapture.materialIdByName,
+      camera: hairTriUvCapture.camera || null,
+      byMaterial: hairTriUvCapture.byMaterial,
     }, null, 2));
     report.gates.G3.hairSlotIdentity = {
-      source: hairMaterialMask.source,
+      source: hairTriUvCapture.source,
       mask: maskPng,
       metadata: maskMeta,
-      materialIdByName: hairMaterialMask.materialIdByName,
-      hairA: { materialName: "HairA", materialId: hairMaterialMask.materialIdByName?.HairA ?? null },
-      hairB: { materialName: "HairB", materialId: hairMaterialMask.materialIdByName?.HairB ?? null },
+      triUv: triUvMeta,
+      materialIdByName: hairTriUvCapture.materialIdByName,
+      hairA: { materialName: "HairA", materialId: hairTriUvCapture.materialIdByName?.HairA ?? null },
+      hairB: { materialName: "HairB", materialId: hairTriUvCapture.materialIdByName?.HairB ?? null },
+    };
+    report.gates.G3.hairTriUv = {
+      source: hairTriUvCapture.source,
+      width: hairTriUvCapture.width,
+      height: hairTriUvCapture.height,
+      materialMask: maskPng,
+      json: triUvMeta,
+      slots: Object.fromEntries(Object.entries(hairTriUvCapture.byMaterial || {}).map(([name, info]) => [name, {
+        materialId: info.materialId,
+        materialIndex: info.materialIndex,
+        firstIndex: info.firstIndex,
+        indexCount: info.indexCount,
+        triangleCount: info.triangleCount,
+        triMaskSamples: (info.triMask || []).reduce((sum, value) => sum + (value ? 1 : 0), 0),
+      }])),
     };
   }
   // P1-1 Scene invariance：original 与 V1 的场景文档源（settingsRef：world/sun/bloom/
@@ -459,14 +500,57 @@ try {
     if (!vtOk) fail("G3", "sceneSnapshot 缺 viewTransform（exposure/gamma/look=tone mapping），实际 " + JSON.stringify(vt));
     else note("G3", "viewTransform exposure=" + vt.exposure + " gamma=" + vt.gamma + " look=" + vt.look + "（original/V1 一致）");
  }
- // 硬阻断：区域差异分析以退出码判定（皮肤收敛 + 非皮肤/背景稳定），不允许只算 verdict 强过。
- const { execSync } = await import("node:child_process");
- try {
-   execSync("node scripts/analyze-reze-k3-v1-diff.mjs", { cwd: process.cwd(), stdio: "pipe" });
-   note("G3", "区域差异硬阻断 PASS");
- } catch (err) {
-   fail("G3", "区域差异分析硬阻断失败: " + (err.stdout || err.message || err).toString().slice(0, 400));
- }
+  // 硬阻断：区域差异分析以退出码判定（皮肤收敛 + 非皮肤/背景稳定 + HairA/HairB
+  // 同材质 triUV 逐像素目标），不允许只算 verdict 强过。
+  const { execSync } = await import("node:child_process");
+  const analyzerEnv = { ...process.env, V14D_HAIR_TEX: HAIR_TEX, V14D_HAIR_PMX: HAIR_PMX };
+  const parseVisualReport = (text) => {
+    const marker = text.indexOf("===VISUAL-GATE");
+    const body = text.slice(text.indexOf("{"), marker >= 0 ? marker : text.length).trim();
+    try { return body.startsWith("{") ? JSON.parse(body) : null; } catch { return null; }
+  };
+  const runAnalyzer = (args = []) => {
+    try {
+      const stdout = execSync(["node", "scripts/analyze-reze-k3-v1-diff.mjs", ...args].join(" "), { cwd: process.cwd(), encoding: "utf8", env: analyzerEnv, stdio: ["ignore", "pipe", "pipe"] });
+      return { exit: 0, stdout, stderr: "" };
+    } catch (error) {
+      return { exit: Number(error?.status ?? 1), stdout: String(error?.stdout ?? ""), stderr: String(error?.stderr ?? "") };
+    }
+  };
+  const normalAnalysis = runAnalyzer();
+  try {
+    if (normalAnalysis.exit !== 0) throw new Error((normalAnalysis.stdout || normalAnalysis.stderr || "analyzer failed").slice(0, 400));
+    note("G3", "区域差异硬阻断 PASS");
+  } catch (err) { fail("G3", "区域差异分析硬阻断失败: " + (err.message || err).toString().slice(0, 400)); }
+  const normalVisualReport = parseVisualReport(normalAnalysis.stdout);
+  report.gates.G3.visualDiff = {
+    exit: normalAnalysis.exit,
+    report: path.join(OUT, "visual-diff.json"),
+    hairA: normalVisualReport?.regions?.hairA?.targetConvergence || null,
+    hairB: normalVisualReport?.regions?.hairB?.targetConvergence || null,
+  };
+  // 真实错槽/错目标负测：交换 HairA/HairB 的 target/triUV 来源。它必须让正式
+  // Gate 以 exit=1 阻断，但 negativeVerdict.status 仍要是 rejected，且 analysisFailures
+  // 为空，证明失败来自语义绑定而非缺文件/样本或配置异常。
+  const swapAnalysis = runAnalyzer(["--neg-swap-slot-target"]);
+  const swapVisualReport = parseVisualReport(swapAnalysis.stdout);
+  const swapNegative = swapVisualReport?.negativeVerdict || null;
+  const swapRejected = swapAnalysis.exit !== 0
+    && swapNegative?.status === "rejected"
+    && swapNegative?.formalTargetGate?.hairA === false
+    && swapNegative?.formalTargetGate?.hairB === false
+    && swapNegative?.semanticMismatch === true
+    && Array.isArray(swapNegative?.analysisFailures)
+    && swapNegative.analysisFailures.length === 0;
+  report.gates.G3.swapSlotTarget = {
+    analyzerExit: swapAnalysis.exit,
+    analyzer: swapNegative,
+    analyzerFailures: swapVisualReport?.failures ?? null,
+    stderr: swapAnalysis.stderr.slice(0, 1000),
+    rejected: swapRejected,
+  };
+  if (!swapRejected) fail("G3", "错槽/错目标负测协议失败：必须 analyzer exit 非零、negativeVerdict=rejected、两槽正式 Gate=false 且 analysisFailures=[]；实际 " + JSON.stringify(report.gates.G3.swapSlotTarget));
+  else note("G3", "错槽/错目标负测 PASS（正式 Gate 非零阻断，语义拒绝非配置异常）");
   // Stage 2C-M1 修正轮：头发前刘海/后长发独立近景（前/后视角摆拍）。
   // 用 cameraOrbit 探针暂停待机 VMD 后摆拍头部特写，分别采 original/V1 纯画布；
   // 近景图是屏幕空间视觉证据（人读 + 差异图），机器分区判定由 analyze 的 UV 锚点口径给出。
@@ -492,8 +576,9 @@ try {
   // 恢复全身取景 + V1 绑定（供 G4/G5 后续 Gate）。
   await page.click(sel.variantBtn("original")); await waitRebuilt();
   await page.click(sel.variantBtn("v1")); await waitRebuilt();
-  // wrongTint 负测（Stage 2C-M1 修正轮）：注入错误青绿 tint 的头发 graph，采 V1 画布，
-  // 跑 analyze --neg-wrongtint；同一收敛 Gate 必须非零退出（错误颜色被判不收敛）。
+  // wrongTint 负测（Stage 2C-M1 修正轮）：注入错误 tint 的头发 graph，采 V1 画布，
+  // 跑 analyze --neg-wrongtint；按既有协议这是“预期拒绝”，所以 analyzer 必须 exit=0，
+  // 但 negativeVerdict.status=rejected 且两槽正式目标 Gate=false。
   note("G3", "wrongTint 负测：注入错误 tint 画布");
   const negTint = await page.evaluate(async () => {
     const r = await window.__rezeStageProbe.applyBadSkinGraph("wrongTint");
@@ -503,22 +588,9 @@ try {
   await page.waitForTimeout(400);
   const negTintPix = await captureStagePixels();
   if (!negTintPix.error) saveDataUrl(negTintPix.dataUrl, "g3-v1-canvas-wrongtint.png");
-  let wrongTintExit = 0;
-  let wrongTintStdout = "";
-  let wrongTintStderr = "";
-  try {
-    wrongTintStdout = execSync("node scripts/analyze-reze-k3-v1-diff.mjs --neg-wrongtint", { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  } catch (error) {
-    wrongTintExit = Number(error?.status ?? 1);
-    wrongTintStdout = String(error?.stdout ?? "");
-    wrongTintStderr = String(error?.stderr ?? "");
-  }
-  const parseVisualReport = (text) => {
-    const marker = text.indexOf("===VISUAL-GATE");
-    const body = text.slice(text.indexOf("{"), marker >= 0 ? marker : text.length).trim();
-    try { return body.startsWith("{") ? JSON.parse(body) : null; } catch { return null; }
-  };
-  const wrongTintAnalysis = parseVisualReport(wrongTintStdout);
+  const wrongTintResult = runAnalyzer(["--neg-wrongtint"]);
+  const wrongTintExit = wrongTintResult.exit;
+  const wrongTintAnalysis = parseVisualReport(wrongTintResult.stdout);
   const negativeVerdict = wrongTintAnalysis?.negativeVerdict ?? null;
   const formalReject = negativeVerdict?.status === "rejected"
     && negativeVerdict?.formalTargetGate?.hairA === false
@@ -531,7 +603,7 @@ try {
     analyzerExit: wrongTintExit,
     analyzer: negativeVerdict,
     analyzerFailures: wrongTintAnalysis?.failures ?? null,
-    stderr: wrongTintStderr.slice(0, 1000),
+    stderr: wrongTintResult.stderr.slice(0, 1000),
     rejected: wrongTintRejected,
   };
   if (!wrongTintRejected) {

@@ -40,6 +40,66 @@ export function v14dHairTargetDisplay(rgb) {
 }
 
 /**
+ * 对已经解码为线性 RGB 的 hair_d 纹理做 WebGPU 语义的双线性采样。
+ * 纹理对象形状为 { width, height, linear }，linear 按行优先保存 RGB。
+ * UV 采用 PMX/引擎同一坐标方向；越界按 repeat 后在纹理边界取样。
+ */
+export function sampleHairTextureLinear(texture, u, v) {
+  if (!texture || !Number.isInteger(texture.width) || !Number.isInteger(texture.height)
+    || texture.width <= 0 || texture.height <= 0 || !texture.linear) {
+    throw new Error("invalid hair texture sampler");
+  }
+  const wrap = (value) => {
+    const w = value - Math.floor(value);
+    return w < 0 ? w + 1 : w;
+  };
+  const x = wrap(u) * texture.width - 0.5;
+  const y = wrap(v) * texture.height - 0.5;
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+  const clamp = (value, max) => Math.max(0, Math.min(max - 1, value));
+  const at = (px, py, channel) => texture.linear[(clamp(py, texture.height) * texture.width + clamp(px, texture.width)) * 3 + channel];
+  return [0, 1, 2].map((channel) =>
+    at(x0, y0, channel) * (1 - fx) * (1 - fy)
+    + at(x0 + 1, y0, channel) * fx * (1 - fy)
+    + at(x0, y0 + 1, channel) * (1 - fx) * fy
+    + at(x0 + 1, y0 + 1, channel) * fx * fy,
+  );
+}
+
+/** 权威 V14D 头发目标：同一 UV 的线性 hair_d 样本 × authority tint，再转显示字节。 */
+export function v14dHairTargetDisplayFromLinear(linearRgb) {
+  return [
+    linearToSrgbByte(linearRgb[0] * V14D_HAIR_TINT_LINEAR[0]),
+    linearToSrgbByte(linearRgb[1] * V14D_HAIR_TINT_LINEAR[1]),
+    linearToSrgbByte(linearRgb[2] * V14D_HAIR_TINT_LINEAR[2]),
+  ];
+}
+
+/**
+ * 计算屏幕像素 UV 在该局部三角形 UV 中的重心坐标。
+ * triangleUvs 为 [u0,v0,u1,v1,u2,v2]，返回 null 表示退化三角形。
+ */
+export function barycentricForTriangleUv(u, v, triangleUvs) {
+  if (!triangleUvs || triangleUvs.length < 6) return null;
+  const ax = triangleUvs[0], ay = triangleUvs[1];
+  const bx = triangleUvs[2], by = triangleUvs[3];
+  const cx = triangleUvs[4], cy = triangleUvs[5];
+  const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+  if (!Number.isFinite(den) || Math.abs(den) < 1e-12) return null;
+  const w0 = ((by - cy) * (u - cx) + (cx - bx) * (v - cy)) / den;
+  const w1 = ((cy - ay) * (u - cx) + (ax - cx) * (v - cy)) / den;
+  return [w0, w1, 1 - w0 - w1];
+}
+
+export function barycentricInside(values, epsilon = 1e-4) {
+  return Array.isArray(values) && values.length === 3
+    && values.every((value) => Number.isFinite(value) && value >= -epsilon && value <= 1 + epsilon);
+}
+
+/**
  * 解析 PMX 二进制，抽出 HairA/HairB 两个材质区间顶点的 UV，统计单位格归属。
  * 只读、不修改 PMX。header/权重布局与 docs/handoff/evidence/pmx_audit.py 同口径
  * （globals[0..7]=encoding/addUV/vertex/texture/material/bone/morph/rigid index size；
