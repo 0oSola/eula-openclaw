@@ -319,3 +319,12 @@
 - 允许用法：权威克莱妲 Brows/Lashes 的 V1 迁移；任何 BaseColor 无乘色节点的槽可复用同口径。正式 Gate 由 G2 draw-call/graph 绑定证据 + missing/swap 负测承担，不产生颜色变化故不适用逐槽像素收敛 Gate。
 - 禁止用法：不得给需变色槽套恒等 tint 冒充迁移；不得用 renderClass=hair 渲染眉毛睫毛；不得复制恒等 tint 字面量形成双权威（必须只从 v14dAuthority.js 读）。
 - 路由影响：只影响 V14D V1 变体的 Brows/Lashes 分组绑定；不影响原始模式、Face/BodySkin/HairA/HairB、灯光/星空/相机、PMX/VMD/骨骼/物理。完整定义见 workflow/concepts/v14d-brows-lashes-identity-tint.zh-CN.md。
+
+# V14D 生产绘制调用几何源快照
+
+- 英文机器名：v14d-production-draw-call-source-snapshot；引擎方法 getProductionDrawCallSourceSnapshot(captureId, frame)。
+- 含义：reze-engine 在同一 JavaScript realm 内，以只读方式返回生产 material-ID pick 与正常生产 draw call 共同使用的 ModelInstance GPU 顶点、索引、joints、weights、skin matrix buffer、draw range、bind group、pipeline、HDR/mask resolve texture 及 Morph/蒙皮来源。快照句柄只给同 realm 的诊断 pass 消费；落盘 audit 只保存身份、范围、格式、非零统计、索引完整性和 sameAsEngine 核对结果。
+- 允许用法：显式 acceptance probe 的 captureHairTriUv 使用 production-draw-call source 生成同帧 triId+UV；核对 Brows/Lashes 等目标槽的真实生产几何来源、pick/main draw range 和绑定关系；用 captureId/frame 把 pixel、material mask、triUV 与 source audit 关联。
+- 禁止用法：不得用 model.getVertices() CPU base、旧的无 COPY_SRC 读回、材质计数、矩形 ROI、屏幕平移、mask 膨胀或 depthBias 冒充生产源；不得把 GPU 句柄序列化到 JSON、localStorage、共享配置或后端；不得用该诊断 seam 改视觉公式、alpha、灯光、相机默认值、PMX/VMD 或 Morph 数据。
+- 路由影响：由 web/scripts/patch-reze-engine.mjs 注入 reze-engine src/dist/d.ts 的接口和合法 COPY_SRC usage；web/src/features/stage/v14dColorBaseline.ts 执行只读读回与统计；RezeWebGpuStage.tsx 仅在显式验收 probe 中选择 sourceMode=production-draw-call，默认生产入口不调用。机器错误分类为 interface-unavailable、invalid-capture-request、snapshot-rejected、buffer-readback-failed、buffer-readback-incomplete。
+- 验收证据：正常回放的 Brows 为 production/triUV=257/257、overlapRatio=1、centroidShiftPx=0；Lashes 为 9320/9320、overlapRatio=1、centroidShiftPx=0。--neg-wrong-source 与 --neg-mat-swap 均必须 exit=1 且 negativeVerdict.status=rejected。完整定义见 workflow/concepts/v14d-production-draw-call-source-snapshot.zh-CN.md。

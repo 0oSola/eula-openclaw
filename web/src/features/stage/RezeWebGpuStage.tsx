@@ -58,6 +58,8 @@ import {
   readV14dFaceExpandedTriUv,
   readV14dFaceExpandedTriUvDepth,
   readV14dFaceTriUvMask,
+  readV14dProductionDrawCallSourceSnapshot,
+  readV14dProductionSourceTriUv,
   readV14dColorBaselineResolveTargets,
   srgbToLinear,
   validateV14dColorBaselineScene,
@@ -72,6 +74,7 @@ import {
   type V14dAnimationEvidence,
   type V14dAnimationProgressEvidence,
   type V14dColorBaselineResult,
+  type V14dHairTriUvSourceMode,
   type V14dNormalizedImage,
 } from "@/features/stage/v14dColorBaseline";
 import {
@@ -337,6 +340,15 @@ type RezeStageProps = {
 };
 
 const DEFAULT_SETTINGS = REZE_DESIGN_SCENE_DEFAULTS;
+
+function serializeV14dCaptureError(error: unknown, fallbackCode: string, fallbackClass: string) {
+  const diagnostic = error as { code?: unknown; failureClass?: unknown } | null;
+  return {
+    error: error instanceof Error ? error.message : String(error),
+    errorCode: typeof diagnostic?.code === "string" ? diagnostic.code : fallbackCode,
+    errorClass: typeof diagnostic?.failureClass === "string" ? diagnostic.failureClass : fallbackClass,
+  };
+}
 
 const MATERIAL_GRAPHS: Record<string, ShaderGraph> = {
   "默认": DEFAULT_GRAPH,
@@ -3100,22 +3112,23 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         modelRef.current?.pause();
         clearVmdCompletionFallback();
         const s = settingsRef.current;
-        // 近景对准头发：克莱妲头部中心约 y=11.8（全身 targetY=11.4 略低于头），距离收窄到 3.6。
-        // 修正轮校准：模型面向 -Z（alpha=π 看正面、alpha=0 看背面），头部中心 y≈11.8，
-        // 距离 3.6、beta 略仰（0.42π）让取景居中头发而非躯干。近景为诊断辅助证据，
+        // front/back 保留既有头发近景取景（targetY≈11.8、距离 3.6）；它只服务验收辅助证据，
         // 机器分区判定由 analyze 的 UV 锚点口径（startIndex/indexCount）独立支撑。
-        // Stage 2C-M2a 修正轮新增 face 姿态：对准脸部（眉眼），与 front 同一头部中心
-        // y≈11.8、同一正面朝向 alpha=π，但距离更近（2.6）、平视（beta=0.5π）放大脸部，
+        // Stage 2C-M2a 修正轮新增 face 姿态：对准脸部（眉眼），目标点 [0.38,16.8,-1.1]
+        // 来自 frame120 生产几何取景证据；正面 alpha=π、半径 2.5、平视 beta=π/2 放大脸部，
         // 让眉毛/睫毛这两小槽在画面中具备足够前景像素（全身取景下 triUV 采样为 0，
         // front 头发取景会压到画面顶部），供逐槽 identity-target 与 Lashes 透明边缘
         // Gate 的逐像素收敛判定。
-        engine.setCameraTarget(new Vec3(s.cameraTargetX, 11.8, s.cameraTargetZ));
+        const diagnosticFaceTarget = new Vec3(0.38, 16.8, -1.1);
+        const diagnosticTarget = pose === "face"
+          ? diagnosticFaceTarget
+          : new Vec3(s.cameraTargetX, 11.8, s.cameraTargetZ);
+        engine.setCameraTarget(diagnosticTarget);
         if (pose === "front") {
           engine.setCameraDistance(3.6); engine.setCameraAlpha(Math.PI); engine.setCameraBeta(Math.PI * 0.42);
         } else if (pose === "face") {
-          // face 与 front 同一已验证头部取景（front 近景真实命中头发/眉毛，画面含头部）；
-          // 仅语义命名不同（face 供 Brows/Lashes 逐槽原子 Gate，front 供头发近景）。
-          engine.setCameraDistance(3.6); engine.setCameraAlpha(Math.PI); engine.setCameraBeta(Math.PI * 0.42);
+          // face 使用 frame120 已验证的眉眼取景；仅验收探针调用，生产默认入口不暴露。
+          engine.setCameraDistance(2.5); engine.setCameraAlpha(Math.PI); engine.setCameraBeta(Math.PI / 2);
         } else if (pose === "back") {
           engine.setCameraDistance(3.6); engine.setCameraAlpha(0); engine.setCameraBeta(Math.PI * 0.42);
         } else {
@@ -3210,14 +3223,15 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
        * 局部三角形 ID、插值 UV 与该槽的三角形 UV 表。调用方必须把三者按同一
        * 画布像素索引配对；不能退化为槽位均值或矩形 ROI 目标。
        */
-      async captureHairTriUv(materialNames?: readonly string[], options?: { useForegroundDepth?: boolean; nearClipOverride?: number }) {
+      async captureHairTriUv(materialNames?: readonly string[], options?: { useForegroundDepth?: boolean; nearClipOverride?: number; sourceMode?: V14dHairTriUvSourceMode }) {
         const canvas = canvasRef.current;
         const engine = engineRef.current;
         const model = modelRef.current;
-        if (!canvas || !engine || !model) return { error: "no canvas/engine/model" };
+        if (!canvas || !engine || !model) return serializeV14dCaptureError("no canvas/engine/model", "runtime-unavailable", "runtime");
         const runtimeState = captureV14dHairRuntimeState(model, engine);
-        const captureId = ++hairTriUvCaptureIdRef.current;
+        const captureId = String(++hairTriUvCaptureIdRef.current);
         let captureSuspended = false;
+        let cameraNearBeforeCapture: number | null = null;
         const readCaptureProgress = () => {
           const progress = model.getAnimationProgress?.();
           const currentSeconds = Number(progress?.current);
@@ -3263,7 +3277,11 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           });
           const missing = targetEntries.filter((entry) => entry.materialIndex < 0 || entry.materialId === null);
           if (missing.length > 0) {
-            return { error: "missing target material: " + missing.map((entry) => entry.name).join(", ") };
+            return serializeV14dCaptureError(
+              "missing target material: " + missing.map((entry) => entry.name).join(", "),
+              "target-material-missing",
+              "missing-input",
+            );
           }
 
           // renderFrame 后再次等待 GPU 队列，确保 canvas 显示字节与后续诊断 pass
@@ -3274,7 +3292,8 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           if (options?.useForegroundDepth) {
             const cam0 = (engine as unknown as { camera?: { near: number } }).camera;
             const nco = options?.nearClipOverride;
-            if (cam0 && typeof nco === "number" && Number.isFinite(nco)) {
+            if (cam0 && typeof nco === "number" && Number.isFinite(nco) && Number.isFinite(cam0.near)) {
+              cameraNearBeforeCapture = cam0.near;
               cam0.near = nco;
               (engine as unknown as { updateCameraUniforms?: () => void }).updateCameraUniforms?.();
             }
@@ -3282,17 +3301,26 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           engine.renderFrame(0);
           await flushV14dDiagnosticBarrier(engine);
           const progressAfterRender = readCaptureProgress();
-          if (!progressAfterRender) return { error: "capture VMD progress unavailable", captureId };
+          if (!progressAfterRender) return {
+            ...serializeV14dCaptureError("capture VMD progress unavailable", "capture-state-unavailable", "capture-state"),
+            captureId,
+          };
           const canvasDataUrl = canvas.toDataURL("image/png");
 
           const width = canvas.width;
           const height = canvas.height;
+          const sourceMode = options?.sourceMode ?? "production-draw-call";
+          const productionSource = await readV14dProductionDrawCallSourceSnapshot(
+            engine,
+            captureId,
+            progressAfterRender.currentFrame,
+          );
           const materialMask = await readV14dColorBaselineMaterialMask(engine, width, height);
           const maskCanvas = document.createElement("canvas");
           maskCanvas.width = width;
           maskCanvas.height = height;
           const maskContext = maskCanvas.getContext("2d");
-          if (!maskContext) return { error: "material mask canvas unavailable" };
+          if (!maskContext) return serializeV14dCaptureError("material mask canvas unavailable", "material-mask-unavailable", "readback");
           const maskImage = maskContext.createImageData(width, height);
           maskImage.data.set(materialMask.data);
           maskContext.putImageData(maskImage, 0, 0);
@@ -3336,13 +3364,15 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             // 设置，避免循环内每材质重复 renderFrame。
             let triUv;
             try {
-              triUv = options?.useForegroundDepth
-                ? await readV14dFaceExpandedTriUvDepth(engine, width, height, src)
-                : await readV14dFaceExpandedTriUv(engine, width, height, src);
+              triUv = sourceMode === "production-draw-call"
+                ? await readV14dProductionSourceTriUv(productionSource, width, height, [entry.name])
+                : options?.useForegroundDepth
+                  ? await readV14dFaceExpandedTriUvDepth(engine, width, height, src)
+                  : await readV14dFaceExpandedTriUv(engine, width, height, src);
             } catch (error) {
-              return { error: error instanceof Error ? error.message : String(error) };
+              return serializeV14dCaptureError(error, "triuv-readback-failed", "readback");
             }
-            if (options?.useForegroundDepth) resolvedForegroundDepth = true;
+            if (sourceMode === "production-draw-call" || options?.useForegroundDepth) resolvedForegroundDepth = true;
             const triangleUvs = new Float32Array(triangleCount * 6);
             for (let triangle = 0; triangle < triangleCount; triangle += 1) {
               for (let corner = 0; corner < 3; corner += 1) {
@@ -3361,6 +3391,8 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
               triId: triUv.triId,
               uv: triUv.uv,
               triMask: triUv.faceMask,
+              triUvSource: sourceMode,
+              depthBias: "depthBias" in triUv ? triUv.depthBias : { constant: 0, slopeScale: 0 },
               triangleUvs,
             };
           }
@@ -3370,7 +3402,11 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             || Math.abs(progressAfterRead.currentSeconds - progressAfterRender.currentSeconds) > V14D_COLOR_BASELINE_EPSILON
             || Math.abs(progressAfterRead.currentFrame - progressAfterRender.currentFrame) > V14D_COLOR_BASELINE_EPSILON) {
             return {
-              error: "capture VMD time advanced while reading atomic hair evidence",
+              ...serializeV14dCaptureError(
+                "capture VMD time advanced while reading atomic hair evidence",
+                "capture-time-advanced",
+                "capture-state",
+              ),
               captureId,
               captureProgressBeforeRead: progressAfterRender,
               captureProgressAfterRead: progressAfterRead,
@@ -3386,6 +3422,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             fps: progressAfterRead.fps,
             fpsProvenance: progressAfterRead.fpsProvenance,
           };
+          const materialMaskEvidence = { ...pixelEvidence };
           const triUvEvidence = { ...pixelEvidence };
           const camera = engine as unknown as {
             camera?: {
@@ -3395,8 +3432,11 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           };
           return {
             source: resolvedForegroundDepth
-              ? "engine-pick-material-id-depth+expanded-tri-uv-foreground-depth"
+              ? sourceMode === "production-draw-call"
+                ? "engine-pick-material-id-depth+production-draw-call-source-tri-uv"
+                : "engine-pick-material-id-depth+expanded-tri-uv-foreground-depth"
               : "engine-pick-material-id-depth+expanded-tri-uv",
+            sourceMode,
             captureId,
             width,
             height,
@@ -3406,8 +3446,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             captureState: progressAfterRead,
             captureProgressBeforeRead: progressAfterRender,
             captureProgressAfterRead: progressAfterRead,
+            productionSource: productionSource.audit,
             captureEvidence: {
               pixel: pixelEvidence,
+              materialMask: materialMaskEvidence,
               triUv: triUvEvidence,
             },
             camera: camera.camera
@@ -3419,15 +3461,15 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             byMaterial,
           };
         } catch (error) {
-          return { error: error instanceof Error ? error.message : String(error) };
+          return serializeV14dCaptureError(error, "capture-failed", "capture");
         } finally {
           // Stage 2C-M2a：恢复 nearClipOverride 改过的相机 near 并同步 uniform。
           // 放在整个采集完成后（而非循环内），保证 canvas/material-mask/全部目标槽
           // triUV 共用同一放大深度投影；恢复后不影响后续生产渲染（near 回原值）。
           if (options?.useForegroundDepth) {
             const camR = (engine as unknown as { camera?: { near: number } }).camera;
-            if (camR) {
-              camR.near = 0.05;
+            if (camR && cameraNearBeforeCapture !== null) {
+              camR.near = cameraNearBeforeCapture;
               (engine as unknown as { updateCameraUniforms?: () => void }).updateCameraUniforms?.();
             }
           }

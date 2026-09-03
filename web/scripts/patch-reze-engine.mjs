@@ -86,10 +86,17 @@ if (process.argv.includes("--self-test")) {
   fs.cpSync(cleanRoot, fixtureRoot, { recursive: true });
   // fixture 初始必须未打 State2 补丁（helper 不存在 / 走旧路径）。
   const cleanSlotsSrc = path.join(cleanRoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
+  const cleanEngineSrc = path.join(cleanRoot, "node_modules", "reze-engine", "src", "engine.ts");
+  const cleanEngineDist = path.join(cleanRoot, "node_modules", "reze-engine", "dist", "engine.js");
+  const cleanEngineDts = path.join(cleanRoot, "node_modules", "reze-engine", "dist", "engine.d.ts");
   const fixSlotsSrc = path.join(fixtureRoot, "node_modules", "reze-engine", "src", "graph", "slots.ts");
   const fixSlotsDist = path.join(fixtureRoot, "node_modules", "reze-engine", "dist", "graph", "slots.js");
   const fixSrc0 = fs.readFileSync(cleanSlotsSrc, "utf8");
   ok(fixSrc0.indexOf("V14D_STATE2_HELPERS_WGSL") < 0 && fixSrc0.indexOf("includeState2Mask") < 0, "断点C fixture 初始未打 State2 补丁（helper 不存在，走旧路径）");
+  ok(!fs.readFileSync(cleanEngineSrc, "utf8").includes("getProductionDrawCallSourceSnapshot")
+    && !fs.readFileSync(cleanEngineDist, "utf8").includes("getProductionDrawCallSourceSnapshot")
+    && !fs.readFileSync(cleanEngineDts, "utf8").includes("getProductionDrawCallSourceSnapshot"),
+  "生产源快照 fixture 初始未注入（src/dist/d.ts 均无接口）");
   // 2) 子进程调用同一脚本生产控制流：重写 rootDir 指向 fixture。
   const fakeScript = path.join(tmp, "patch-run.mjs");
   const redirected = selfSrc.replace('const rootDir = path.resolve(__dirname, "..");', 'const rootDir = ' + JSON.stringify(fixtureRoot) + ';');
@@ -163,6 +170,19 @@ if (process.argv.includes("--self-test")) {
   const pmxAnchorContent = fs.readFileSync(pmxAnchorFile, "utf8").split("// Debug: log problematic string lengths").join("// Debug: log problematic string lengths BROKEN");
   fs.writeFileSync(pmxAnchorFile, pmxAnchorContent, "utf8");
 
+  const productionSourceAnchorRoot = copyCleanFixture("production-source-anchor-miss");
+  const productionSourceAnchorFile = path.join(productionSourceAnchorRoot, "node_modules", "reze-engine", "src", "engine.ts");
+  const productionSourceAnchorContent = fs.readFileSync(productionSourceAnchorFile, "utf8")
+    .split("  markVertexBufferDirty(modelNameOrModel?: string | Model): void {")
+    .join("  markVertexBufferDirty_BROKEN(modelNameOrModel?: string | Model): void {");
+  fs.writeFileSync(productionSourceAnchorFile, productionSourceAnchorContent, "utf8");
+
+  const productionSourceDuplicateRoot = copyCleanFixture("production-source-duplicate-marker");
+  const productionSourceDuplicateFile = path.join(productionSourceDuplicateRoot, "node_modules", "reze-engine", "src", "engine.ts");
+  fs.appendFileSync(productionSourceDuplicateFile, String.fromCharCode(10)
+    + "// duplicate getProductionDrawCallSourceSnapshot(captureId: string, frame: number) marker"
+    + String.fromCharCode(10), "utf8");
+
   // 首次运行必须真正 exit 0；fixture 内任一严格校验失败都让 self-test 变红。
   const first = runPatch();
   const firstExit = first.exit;
@@ -185,13 +205,15 @@ if (process.argv.includes("--self-test")) {
   expectRejected("断点A 缺失 fixture（clean seed）", makeRunner("missing-a", missingARoot));
   expectRejected("断点B 缺失 fixture（clean seed）", makeRunner("missing-b", missingBRoot));
   expectRejected("PMX 长度补丁 anchor-miss fixture（clean seed）", makeRunner("pmx-anchor-miss", pmxAnchorRoot));
+  expectRejected("生产源快照 anchor-miss fixture（clean seed）", makeRunner("production-source-anchor-miss", productionSourceAnchorRoot));
+  expectRejected("生产源快照重复 marker fixture（clean seed）", makeRunner("production-source-duplicate-marker", productionSourceDuplicateRoot));
   fs.rmSync(tmp, { recursive: true, force: true });
   // 3) 真实 node_modules 前后 SHA256 不变。
   const realShaAfter = hashTargetSet(realRoot);
   const shaSame = JSON.stringify(realShaBefore) === JSON.stringify(realShaAfter);
   ok(shaSame, "self-test 不触碰真实 web/node_modules（全部生产 target SHA256 前后一致）");
   if (fails.length) { console.error("===PATCH-SELF-TEST-FAIL===" + String.fromCharCode(10) + fails.join(String.fromCharCode(10))); process.exit(1); }
-  console.log("===PATCH-SELF-TEST-OK=== 真实隔离 fixture fresh-patch 首次/二次全 target 幂等通过；anchor-miss、missing-file、重复 marker、断点A缺失、断点B缺失、PMX anchor-miss 负测全部拒绝；真实 node_modules 全 target SHA256 不变");
+  console.log("===PATCH-SELF-TEST-OK=== 真实隔离 fixture fresh-patch 首次/二次全 target 幂等通过；anchor-miss、missing-file、重复 marker、断点A缺失、断点B缺失、PMX anchor-miss、生产源快照 anchor-miss/重复 marker 负测全部拒绝；真实 node_modules 全 target SHA256 不变");
   process.exit(0);
 }
 
@@ -332,6 +354,519 @@ const overrideTargets = [
 ];
 
 applyPatchManifest(overrideTargets, "materialDiffuseOverrides");
+
+// ─── 补丁：生产 draw-call 源快照的合法 GPUBuffer 读回能力（默认只增加 usage） ───
+// 诊断接口需要验证生产 draw-call 实际绑定的顶点、索引、蒙皮属性与 skin matrix
+// 缓冲。WebGPU 的 copyBufferToBuffer 要求源缓冲声明 COPY_SRC；旧探针未满足该
+// 合约时，映射到的零值不能证明生产 vertexBuffer 为空。只扩展 buffer usage，不改
+// 任何视觉公式、顶点布局、数据内容或生产渲染分支。
+const productionSourceBufferTargets = [
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: [
+      "    const vertexBuffer = this.device.createBuffer({",
+      "      label: `${name}: vertex buffer`,",
+      "      size: vertices.byteLength,",
+      "      // STORAGE so the morph compute pass can write morphed positions in place.",
+      "      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,",
+      "    })",
+    ].join("\n"),
+    replacement: [
+      "    const vertexBuffer = this.device.createBuffer({",
+      "      label: `${name}: vertex buffer`,",
+      "      size: vertices.byteLength,",
+      "      // STORAGE so the morph compute pass can write morphed positions in place.",
+      "      // COPY_SRC is required only by the opt-in production source snapshot.",
+      "      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,",
+      "    })",
+    ].join("\n"),
+    doneMarker: "      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,",
+    label: "src/engine.ts 生产顶点源 COPY_SRC",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: [
+      "        const vertexBuffer = this.device.createBuffer({",
+      "            label: `${name}: vertex buffer`,",
+      "            size: vertices.byteLength,",
+      "            // STORAGE so the morph compute pass can write morphed positions in place.",
+      "            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,",
+      "        });",
+    ].join("\n"),
+    replacement: [
+      "        const vertexBuffer = this.device.createBuffer({",
+      "            label: `${name}: vertex buffer`,",
+      "            size: vertices.byteLength,",
+      "            // STORAGE so the morph compute pass can write morphed positions in place.",
+      "            // COPY_SRC is required only by the opt-in production source snapshot.",
+      "            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,",
+      "        });",
+    ].join("\n"),
+    doneMarker: "            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,",
+    label: "dist/engine.js 生产顶点源 COPY_SRC",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: [
+      "    const jointsBuffer = this.device.createBuffer({",
+      "      label: `${name}: joints buffer`,",
+      "      size: skinning.joints.byteLength,",
+      "      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,",
+      "    })",
+    ].join("\n"),
+    replacement: [
+      "    const jointsBuffer = this.device.createBuffer({",
+      "      label: `${name}: joints buffer`,",
+      "      size: skinning.joints.byteLength,",
+      "      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+      "    })",
+    ].join("\n"),
+    doneMarker: "      label: `${name}: joints buffer`,\n      size: skinning.joints.byteLength,\n      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+    label: "src/engine.ts 生产 joints 源 COPY_SRC",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: [
+      "        const jointsBuffer = this.device.createBuffer({",
+      "            label: `${name}: joints buffer`,",
+      "            size: skinning.joints.byteLength,",
+      "            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,",
+      "        });",
+    ].join("\n"),
+    replacement: [
+      "        const jointsBuffer = this.device.createBuffer({",
+      "            label: `${name}: joints buffer`,",
+      "            size: skinning.joints.byteLength,",
+      "            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+      "        });",
+    ].join("\n"),
+    doneMarker: "            label: `${name}: joints buffer`,\n            size: skinning.joints.byteLength,\n            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+    label: "dist/engine.js 生产 joints 源 COPY_SRC",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: [
+      "    const weightsBuffer = this.device.createBuffer({",
+      "      label: `${name}: weights buffer`,",
+      "      size: skinning.weights.byteLength,",
+      "      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,",
+      "    })",
+    ].join("\n"),
+    replacement: [
+      "    const weightsBuffer = this.device.createBuffer({",
+      "      label: `${name}: weights buffer`,",
+      "      size: skinning.weights.byteLength,",
+      "      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+      "    })",
+    ].join("\n"),
+    doneMarker: "      label: `${name}: weights buffer`,\n      size: skinning.weights.byteLength,\n      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+    label: "src/engine.ts 生产 weights 源 COPY_SRC",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: [
+      "        const weightsBuffer = this.device.createBuffer({",
+      "            label: `${name}: weights buffer`,",
+      "            size: skinning.weights.byteLength,",
+      "            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,",
+      "        });",
+    ].join("\n"),
+    replacement: [
+      "        const weightsBuffer = this.device.createBuffer({",
+      "            label: `${name}: weights buffer`,",
+      "            size: skinning.weights.byteLength,",
+      "            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+      "        });",
+    ].join("\n"),
+    doneMarker: "            label: `${name}: weights buffer`,\n            size: skinning.weights.byteLength,\n            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+    label: "dist/engine.js 生产 weights 源 COPY_SRC",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: [
+      "    const skinMatrixBuffer = this.device.createBuffer({",
+      "      label: `${name}: skin matrices`,",
+      "      size: Math.max(256, matrixSize),",
+      "      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,",
+      "    })",
+    ].join("\n"),
+    replacement: [
+      "    const skinMatrixBuffer = this.device.createBuffer({",
+      "      label: `${name}: skin matrices`,",
+      "      size: Math.max(256, matrixSize),",
+      "      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+      "    })",
+    ].join("\n"),
+    doneMarker: "      label: `${name}: skin matrices`,\n      size: Math.max(256, matrixSize),\n      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+    label: "src/engine.ts 生产 skin matrix 源 COPY_SRC",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: [
+      "        const skinMatrixBuffer = this.device.createBuffer({",
+      "            label: `${name}: skin matrices`,",
+      "            size: Math.max(256, matrixSize),",
+      "            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,",
+      "        });",
+    ].join("\n"),
+    replacement: [
+      "        const skinMatrixBuffer = this.device.createBuffer({",
+      "            label: `${name}: skin matrices`,",
+      "            size: Math.max(256, matrixSize),",
+      "            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+      "        });",
+    ].join("\n"),
+    doneMarker: "            label: `${name}: skin matrices`,\n            size: Math.max(256, matrixSize),\n            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+    label: "dist/engine.js 生产 skin matrix 源 COPY_SRC",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: [
+      "    const indexBuffer = this.device.createBuffer({",
+      "      label: `${name}: index buffer`,",
+      "      size: indices.byteLength,",
+      "      usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,",
+      "    })",
+    ].join("\n"),
+    replacement: [
+      "    const indexBuffer = this.device.createBuffer({",
+      "      label: `${name}: index buffer`,",
+      "      size: indices.byteLength,",
+      "      usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+      "    })",
+    ].join("\n"),
+    doneMarker: "      label: `${name}: index buffer`,\n      size: indices.byteLength,\n      usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+    label: "src/engine.ts 生产 index 源 COPY_SRC",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: [
+      "        const indexBuffer = this.device.createBuffer({",
+      "            label: `${name}: index buffer`,",
+      "            size: indices.byteLength,",
+      "            usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,",
+      "        });",
+    ].join("\n"),
+    replacement: [
+      "        const indexBuffer = this.device.createBuffer({",
+      "            label: `${name}: index buffer`,",
+      "            size: indices.byteLength,",
+      "            usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+      "        });",
+    ].join("\n"),
+    doneMarker: "            label: `${name}: index buffer`,\n            size: indices.byteLength,\n            usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,",
+    label: "dist/engine.js 生产 index 源 COPY_SRC",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: [
+      "    const weightsBuffer = this.device.createBuffer({",
+      "      label: `${name}: morph weights`,",
+      "      size: Math.max(data.morphCount * 4, 4),",
+      "      usage: RO,",
+      "    })",
+    ].join("\n"),
+    replacement: [
+      "    const weightsBuffer = this.device.createBuffer({",
+      "      label: `${name}: morph weights`,",
+      "      size: Math.max(data.morphCount * 4, 4),",
+      "      usage: RO | GPUBufferUsage.COPY_SRC,",
+      "    })",
+    ].join("\n"),
+    doneMarker: "      label: `${name}: morph weights`,\n      size: Math.max(data.morphCount * 4, 4),\n      usage: RO | GPUBufferUsage.COPY_SRC,",
+    label: "src/engine.ts GPU morph 权重源 COPY_SRC",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: [
+      "        const weightsBuffer = this.device.createBuffer({",
+      "            label: `${name}: morph weights`,",
+      "            size: Math.max(data.morphCount * 4, 4),",
+      "            usage: RO,",
+      "        });",
+    ].join("\n"),
+    replacement: [
+      "        const weightsBuffer = this.device.createBuffer({",
+      "            label: `${name}: morph weights`,",
+      "            size: Math.max(data.morphCount * 4, 4),",
+      "            usage: RO | GPUBufferUsage.COPY_SRC,",
+      "        });",
+    ].join("\n"),
+    doneMarker: "            label: `${name}: morph weights`,\n            size: Math.max(data.morphCount * 4, 4),\n            usage: RO | GPUBufferUsage.COPY_SRC,",
+    label: "dist/engine.js GPU morph 权重源 COPY_SRC",
+  },
+];
+applyPatchManifest(productionSourceBufferTargets, "production-source-diagnostic");
+
+// ─── 补丁：reze-engine 生产 draw-call 几何源快照接口（默认关闭、只读） ───
+// 这是本票唯一的引擎 seam：调用方必须显式提供 captureId/frame，接口返回生产
+// material-ID pick 与 HDR draw 使用的同一组 ModelInstance GPU buffer、draw range、
+// per-instance bind group 和 morph/skin 来源。返回 GPU 资源句柄供同一 JS realm 的
+// 诊断 pass 使用；接口不触发渲染、不写入 buffer，也不改变任何生产状态。
+const PRODUCTION_SOURCE_TYPES_SRC = [
+  "export type ProductionDrawCallSource = {",
+  "  materialName: string",
+  "  materialIndex: number",
+  "  count: number",
+  "  firstIndex: number",
+  "  drawIndex: number",
+  "  pickDrawCallIndex: number",
+  "  mainBindGroup: GPUBindGroup",
+  "  pickBindGroup: GPUBindGroup",
+  "  mainPipeline: GPURenderPipeline | null",
+  "  groupId: string | null",
+  "  graphName: string | null",
+  "}",
+  "",
+  "export type ProductionPickDrawCallSource = {",
+  "  materialName: string",
+  "  materialIndex: number",
+  "  count: number",
+  "  firstIndex: number",
+  "  drawIndex: number",
+  "  pickDrawCallIndex: number",
+  "  bindGroup: GPUBindGroup",
+  "}",
+  "",
+  "export type ProductionDrawCallSourceSnapshot = {",
+  "  schemaVersion: 1",
+  "  captureId: string",
+  "  frame: number",
+  "  source: \"reze-engine-production-draw-call\"",
+  "  device: GPUDevice",
+  "  pick: {",
+  "    pipeline: GPURenderPipeline",
+  "    perFrameBindGroup: GPUBindGroup",
+  "    perFrameBindGroupLayout: GPUBindGroupLayout",
+  "    perInstanceBindGroupLayout: GPUBindGroupLayout",
+  "    perMaterialBindGroupLayout: GPUBindGroupLayout",
+  "  }",
+  "  renderTargets: { hdrResolveTexture: GPUTexture; maskResolveTexture: GPUTexture; hdrFormat: GPUTextureFormat }",
+  "  instances: Array<{",
+  "    name: string",
+  "    visible: boolean",
+  "    buffers: { vertex: GPUBuffer; index: GPUBuffer; joints: GPUBuffer; weights: GPUBuffer; skinMatrices: GPUBuffer }",
+  "    bufferBytes: { vertex: number; index: number; joints: number; weights: number; skinMatrices: number }",
+  "    geometry: { vertexCount: number; indexCount: number; vertexStrideBytes: 32; indexFormat: \"uint32\"; jointsFormat: \"uint16x4\"; weightsFormat: \"unorm8x4\" }",
+  "    sourceIdentity: { vertex: string; index: string; joints: string; weights: string; skinMatrices: string }",
+  "    transforms: {",
+  "      skinMatrixSource: \"model.getSkinMatrices -> skinMatrixBuffer\"",
+  "      matrixCount: number",
+  "      morphMode: \"gpu-compute-in-place\" | \"cpu-upload\"",
+  "      morphSource: string",
+  "      morphWeightsBuffer: GPUBuffer | null",
+  "      morphWeightsByteLength: number",
+  "      morphWeightsNonZeroCount: number",
+  "      morphDispatchPending: boolean",
+  "    }",
+  "    pickPerInstanceBindGroup: GPUBindGroup",
+  "    drawCalls: ProductionDrawCallSource[]",
+  "    pickDrawCalls: ProductionPickDrawCallSource[]",
+  "  }>",
+  "}",
+].join("\n");
+
+const PRODUCTION_SOURCE_TYPES_DIST = [
+  "export type ProductionDrawCallSource = {",
+  "    materialName: string;",
+  "    materialIndex: number;",
+  "    count: number;",
+  "    firstIndex: number;",
+  "    drawIndex: number;",
+  "    pickDrawCallIndex: number;",
+  "    mainBindGroup: GPUBindGroup;",
+  "    pickBindGroup: GPUBindGroup;",
+  "    mainPipeline: GPURenderPipeline | null;",
+  "    groupId: string | null;",
+  "    graphName: string | null;",
+  "};",
+  "export type ProductionPickDrawCallSource = {",
+  "    materialName: string;",
+  "    materialIndex: number;",
+  "    count: number;",
+  "    firstIndex: number;",
+  "    drawIndex: number;",
+  "    pickDrawCallIndex: number;",
+  "    bindGroup: GPUBindGroup;",
+  "};",
+  "export type ProductionDrawCallSourceSnapshot = {",
+  "    schemaVersion: 1;",
+  "    captureId: string;",
+  "    frame: number;",
+  "    source: \"reze-engine-production-draw-call\";",
+  "    device: GPUDevice;",
+  "    pick: { pipeline: GPURenderPipeline; perFrameBindGroup: GPUBindGroup; perFrameBindGroupLayout: GPUBindGroupLayout; perInstanceBindGroupLayout: GPUBindGroupLayout; perMaterialBindGroupLayout: GPUBindGroupLayout };",
+  "    renderTargets: { hdrResolveTexture: GPUTexture; maskResolveTexture: GPUTexture; hdrFormat: GPUTextureFormat };",
+  "    instances: Array<{ name: string; visible: boolean; buffers: { vertex: GPUBuffer; index: GPUBuffer; joints: GPUBuffer; weights: GPUBuffer; skinMatrices: GPUBuffer }; bufferBytes: { vertex: number; index: number; joints: number; weights: number; skinMatrices: number }; geometry: { vertexCount: number; indexCount: number; vertexStrideBytes: 32; indexFormat: \"uint32\"; jointsFormat: \"uint16x4\"; weightsFormat: \"unorm8x4\" }; sourceIdentity: { vertex: string; index: string; joints: string; weights: string; skinMatrices: string }; transforms: { skinMatrixSource: \"model.getSkinMatrices -> skinMatrixBuffer\"; matrixCount: number; morphMode: \"gpu-compute-in-place\" | \"cpu-upload\"; morphSource: string; morphWeightsBuffer: GPUBuffer | null; morphWeightsByteLength: number; morphWeightsNonZeroCount: number; morphDispatchPending: boolean }; pickPerInstanceBindGroup: GPUBindGroup; drawCalls: ProductionDrawCallSource[]; pickDrawCalls: ProductionPickDrawCallSource[] }>;",
+  "};",
+].join("\n");
+
+const PRODUCTION_SOURCE_METHOD_SRC = [
+  "  getProductionDrawCallSourceSnapshot(captureId: string, frame: number): ProductionDrawCallSourceSnapshot {",
+  "    if (typeof captureId !== \"string\" || captureId.length === 0) throw new Error(\"captureId must be non-empty\")",
+  "    if (!Number.isFinite(frame)) throw new Error(\"frame must be finite\")",
+  "    const instances = [...this.modelInstances.values()].map((inst) => {",
+  "      const materials = inst.model.getMaterials()",
+  "      const materialIndexByName = new Map(materials.map((material, index) => [material.name, index]))",
+  "      const vertices = inst.model.getVertices()",
+  "      const indices = inst.model.getIndices()",
+  "      const skinning = inst.model.getSkinning()",
+  "      const matrixCount = inst.model.getSkeleton().bones.length",
+  "      const materialDraws = inst.drawCalls.filter((draw) => !!draw.baseBindGroupEntries)",
+  "      const findMain = (count: number, firstIndex: number) => { const drawIndex = materialDraws.findIndex((draw) => draw.count === count && draw.firstIndex === firstIndex); return drawIndex < 0 ? null : { draw: materialDraws[drawIndex], drawIndex } }",
+  "      if (materialDraws.length > 0 && inst.pickDrawCalls.length === 0) throw new Error(\"production pick draw calls unavailable: Engine was created without onRaycast\")",
+  "      const pickDrawCalls = inst.pickDrawCalls.map((pick, pickIndex) => {",
+  "        const match = findMain(pick.count, pick.firstIndex)",
+  "        if (!match) throw new Error(\"production pick draw range has no matching material draw: \" + pick.firstIndex)",
+  "        const materialIndex = materialIndexByName.get(match.draw.materialName)",
+  "        if (materialIndex === undefined) throw new Error(\"production draw material missing: \" + match.draw.materialName)",
+  "        return { materialName: match.draw.materialName, materialIndex, count: pick.count, firstIndex: pick.firstIndex, drawIndex: match.drawIndex, pickDrawCallIndex: pickIndex, bindGroup: pick.bindGroup }",
+  "      })",
+  "      const drawCalls = materialDraws.map((draw, drawIndex) => {",
+  "        const pickDrawCallIndex = inst.pickDrawCalls.findIndex((candidate) => candidate.count === draw.count && candidate.firstIndex === draw.firstIndex)",
+  "        if (pickDrawCallIndex < 0) throw new Error(\"material draw has no matching production pick draw: \" + draw.materialName)",
+  "        const pick = inst.pickDrawCalls[pickDrawCallIndex]",
+  "        const materialIndex = materialIndexByName.get(draw.materialName)",
+  "        if (materialIndex === undefined) throw new Error(\"production draw material missing: \" + draw.materialName)",
+  "        const install = draw.groupId ? inst.styleGroups.get(draw.groupId) : undefined",
+  "        return { materialName: draw.materialName, materialIndex, count: draw.count, firstIndex: draw.firstIndex, drawIndex, pickDrawCallIndex, mainBindGroup: draw.bindGroup, pickBindGroup: pick.bindGroup, mainPipeline: install?.pipeline ?? null, groupId: draw.groupId, graphName: install?.group?.graph?.name ?? null }",
+  "      })",
+  "      const morphWeights = inst.gpuMorph?.weightsData ?? null",
+  "      const morphWeightsNonZeroCount = morphWeights ? morphWeights.reduce((count, weight) => count + (Math.abs(weight) > 0.0001 ? 1 : 0), 0) : 0",
+  "      return {",
+  "        name: inst.name,",
+  "        visible: inst.model.visible,",
+  "        buffers: { vertex: inst.vertexBuffer, index: inst.indexBuffer, joints: inst.jointsBuffer, weights: inst.weightsBuffer, skinMatrices: inst.skinMatrixBuffer },",
+  "        bufferBytes: { vertex: vertices.byteLength, index: indices.byteLength, joints: skinning.joints.byteLength, weights: skinning.weights.byteLength, skinMatrices: Math.max(256, matrixCount * 16 * 4) },",
+  "        geometry: { vertexCount: vertices.length / 8, indexCount: indices.length, vertexStrideBytes: 32, indexFormat: \"uint32\", jointsFormat: \"uint16x4\", weightsFormat: \"unorm8x4\" },",
+  "        sourceIdentity: { vertex: inst.name + \".vertexBuffer\", index: inst.name + \".indexBuffer\", joints: inst.name + \".jointsBuffer\", weights: inst.name + \".weightsBuffer\", skinMatrices: inst.name + \".skinMatrixBuffer\" },",
+  "        transforms: { skinMatrixSource: \"model.getSkinMatrices -> skinMatrixBuffer\", matrixCount, morphMode: inst.gpuMorph ? \"gpu-compute-in-place\" : \"cpu-upload\", morphSource: inst.gpuMorph ? \"GPU morph compute writes vertexBuffer\" : \"model vertices queue.writeBuffer -> vertexBuffer\", morphWeightsBuffer: inst.gpuMorph?.weightsBuffer ?? null, morphWeightsByteLength: inst.gpuMorph ? Math.max(4, inst.gpuMorph.weightsData.byteLength) : 0, morphWeightsNonZeroCount, morphDispatchPending: !!inst.gpuMorph?.dispatchNeeded },",
+  "        pickPerInstanceBindGroup: inst.pickPerInstanceBindGroup,",
+  "        drawCalls,",
+  "        pickDrawCalls,",
+  "      }",
+  "    })",
+  "    return {",
+  "      schemaVersion: 1,",
+  "      captureId,",
+  "      frame,",
+  "      source: \"reze-engine-production-draw-call\",",
+  "      device: this.device,",
+  "      pick: { pipeline: this.pickPipeline, perFrameBindGroup: this.pickPerFrameBindGroup, perFrameBindGroupLayout: this.pickPerFrameBindGroupLayout, perInstanceBindGroupLayout: this.pickPerInstanceBindGroupLayout, perMaterialBindGroupLayout: this.pickPerMaterialBindGroupLayout },",
+  "      renderTargets: { hdrResolveTexture: this.hdrResolveTexture, maskResolveTexture: this.maskResolveTexture, hdrFormat: this.hdrFormat },",
+  "      instances,",
+  "    }",
+  "  }",
+].join("\n");
+
+const PRODUCTION_SOURCE_METHOD_DIST = [
+  "    getProductionDrawCallSourceSnapshot(captureId, frame) {",
+  "        if (typeof captureId !== \"string\" || captureId.length === 0)",
+  "            throw new Error(\"captureId must be non-empty\");",
+  "        if (!Number.isFinite(frame))",
+  "            throw new Error(\"frame must be finite\");",
+  "        const instances = [...this.modelInstances.values()].map((inst) => {",
+  "            const materials = inst.model.getMaterials();",
+  "            const materialIndexByName = new Map(materials.map((material, index) => [material.name, index]));",
+  "            const vertices = inst.model.getVertices();",
+  "            const indices = inst.model.getIndices();",
+  "            const skinning = inst.model.getSkinning();",
+  "            const matrixCount = inst.model.getSkeleton().bones.length;",
+  "            const materialDraws = inst.drawCalls.filter((draw) => !!draw.baseBindGroupEntries);",
+  "            const findMain = (count, firstIndex) => { const drawIndex = materialDraws.findIndex((draw) => draw.count === count && draw.firstIndex === firstIndex); return drawIndex < 0 ? null : { draw: materialDraws[drawIndex], drawIndex }; };",
+  "            if (materialDraws.length > 0 && inst.pickDrawCalls.length === 0)",
+  "                throw new Error(\"production pick draw calls unavailable: Engine was created without onRaycast\");",
+  "            const pickDrawCalls = inst.pickDrawCalls.map((pick, pickIndex) => {",
+  "                const match = findMain(pick.count, pick.firstIndex);",
+  "                if (!match)",
+  "                    throw new Error(\"production pick draw range has no matching material draw: \" + pick.firstIndex);",
+  "                const materialIndex = materialIndexByName.get(match.draw.materialName);",
+  "                if (materialIndex === undefined)",
+  "                    throw new Error(\"production draw material missing: \" + match.draw.materialName);",
+  "                return { materialName: match.draw.materialName, materialIndex, count: pick.count, firstIndex: pick.firstIndex, drawIndex: match.drawIndex, pickDrawCallIndex: pickIndex, bindGroup: pick.bindGroup };",
+  "            });",
+  "            const drawCalls = materialDraws.map((draw, drawIndex) => {",
+  "                const pickDrawCallIndex = inst.pickDrawCalls.findIndex((candidate) => candidate.count === draw.count && candidate.firstIndex === draw.firstIndex);",
+  "                if (pickDrawCallIndex < 0)",
+  "                    throw new Error(\"material draw has no matching production pick draw: \" + draw.materialName);",
+  "                const pick = inst.pickDrawCalls[pickDrawCallIndex];",
+  "                const materialIndex = materialIndexByName.get(draw.materialName);",
+  "                if (materialIndex === undefined)",
+  "                    throw new Error(\"production draw material missing: \" + draw.materialName);",
+  "                const install = draw.groupId ? inst.styleGroups.get(draw.groupId) : undefined;",
+  "                return { materialName: draw.materialName, materialIndex, count: draw.count, firstIndex: draw.firstIndex, drawIndex, pickDrawCallIndex, mainBindGroup: draw.bindGroup, pickBindGroup: pick.bindGroup, mainPipeline: install?.pipeline ?? null, groupId: draw.groupId, graphName: install?.group?.graph?.name ?? null };",
+  "            });",
+  "            const morphWeights = inst.gpuMorph?.weightsData ?? null;",
+  "            const morphWeightsNonZeroCount = morphWeights ? morphWeights.reduce((count, weight) => count + (Math.abs(weight) > 0.0001 ? 1 : 0), 0) : 0;",
+  "            return {",
+  "                name: inst.name,",
+  "                visible: inst.model.visible,",
+  "                buffers: { vertex: inst.vertexBuffer, index: inst.indexBuffer, joints: inst.jointsBuffer, weights: inst.weightsBuffer, skinMatrices: inst.skinMatrixBuffer },",
+  "                bufferBytes: { vertex: vertices.byteLength, index: indices.byteLength, joints: skinning.joints.byteLength, weights: skinning.weights.byteLength, skinMatrices: Math.max(256, matrixCount * 16 * 4) },",
+  "                geometry: { vertexCount: vertices.length / 8, indexCount: indices.length, vertexStrideBytes: 32, indexFormat: \"uint32\", jointsFormat: \"uint16x4\", weightsFormat: \"unorm8x4\" },",
+  "                sourceIdentity: { vertex: inst.name + \".vertexBuffer\", index: inst.name + \".indexBuffer\", joints: inst.name + \".jointsBuffer\", weights: inst.name + \".weightsBuffer\", skinMatrices: inst.name + \".skinMatrixBuffer\" },",
+  "                transforms: { skinMatrixSource: \"model.getSkinMatrices -> skinMatrixBuffer\", matrixCount, morphMode: inst.gpuMorph ? \"gpu-compute-in-place\" : \"cpu-upload\", morphSource: inst.gpuMorph ? \"GPU morph compute writes vertexBuffer\" : \"model vertices queue.writeBuffer -> vertexBuffer\", morphWeightsBuffer: inst.gpuMorph?.weightsBuffer ?? null, morphWeightsByteLength: inst.gpuMorph ? Math.max(4, inst.gpuMorph.weightsData.byteLength) : 0, morphWeightsNonZeroCount, morphDispatchPending: !!inst.gpuMorph?.dispatchNeeded },",
+  "                pickPerInstanceBindGroup: inst.pickPerInstanceBindGroup,",
+  "                drawCalls,",
+  "                pickDrawCalls,",
+  "            };",
+  "        });",
+  "        return {",
+  "            schemaVersion: 1,",
+  "            captureId,",
+  "            frame,",
+  "            source: \"reze-engine-production-draw-call\",",
+  "            device: this.device,",
+  "            pick: { pipeline: this.pickPipeline, perFrameBindGroup: this.pickPerFrameBindGroup, perFrameBindGroupLayout: this.pickPerFrameBindGroupLayout, perInstanceBindGroupLayout: this.pickPerInstanceBindGroupLayout, perMaterialBindGroupLayout: this.pickPerMaterialBindGroupLayout },",
+  "            renderTargets: { hdrResolveTexture: this.hdrResolveTexture, maskResolveTexture: this.maskResolveTexture, hdrFormat: this.hdrFormat },",
+  "            instances,",
+  "        };",
+  "    }",
+].join("\n");
+
+const productionSourceTypeTargets = [
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: "type DrawCallType = \"opaque\" | \"transparent\" | \"ground\" | \"opaque-outline\" | \"transparent-outline\"\n",
+    replacement: PRODUCTION_SOURCE_TYPES_SRC + "\n" + "type DrawCallType = \"opaque\" | \"transparent\" | \"ground\" | \"opaque-outline\" | \"transparent-outline\"\n",
+    doneMarker: "export type ProductionDrawCallSourceSnapshot =",
+    label: "src/engine.ts 生产源快照类型",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.d.ts"),
+    anchor: "type DrawCallType = \"opaque\" | \"transparent\" | \"ground\" | \"opaque-outline\" | \"transparent-outline\";\n",
+    replacement: PRODUCTION_SOURCE_TYPES_DIST + "\n" + "type DrawCallType = \"opaque\" | \"transparent\" | \"ground\" | \"opaque-outline\" | \"transparent-outline\";\n",
+    doneMarker: "export type ProductionDrawCallSourceSnapshot =",
+    label: "dist/engine.d.ts 生产源快照类型",
+  },
+];
+applyPatchManifest(productionSourceTypeTargets, "production-source-interface");
+
+const productionSourceMethodTargets = [
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "engine.ts"),
+    anchor: "  markVertexBufferDirty(modelNameOrModel?: string | Model): void {\n",
+    replacement: PRODUCTION_SOURCE_METHOD_SRC + "\n\n" + "  markVertexBufferDirty(modelNameOrModel?: string | Model): void {\n",
+    doneMarker: "getProductionDrawCallSourceSnapshot(captureId: string, frame: number)",
+    label: "src/engine.ts 生产源快照实现",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.js"),
+    anchor: "    markVertexBufferDirty(modelNameOrModel) {\n",
+    replacement: PRODUCTION_SOURCE_METHOD_DIST + "\n\n" + "    markVertexBufferDirty(modelNameOrModel) {\n",
+    doneMarker: "getProductionDrawCallSourceSnapshot(captureId, frame)",
+    label: "dist/engine.js 生产源快照实现",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "engine.d.ts"),
+    anchor: "    markVertexBufferDirty(modelNameOrModel?: string | Model): void;\n",
+    replacement: "    getProductionDrawCallSourceSnapshot(captureId: string, frame: number): ProductionDrawCallSourceSnapshot;\n" + "    markVertexBufferDirty(modelNameOrModel?: string | Model): void;\n",
+    doneMarker: "getProductionDrawCallSourceSnapshot(captureId: string, frame: number): ProductionDrawCallSourceSnapshot;",
+    label: "dist/engine.d.ts 生产源快照声明",
+  },
+];
+applyPatchManifest(productionSourceMethodTargets, "production-source-interface");
+
 // 上方注入循环后立即进行统一严格校验定义；predev/prebuild 与 --verify 共用。
 // ─── 统一严格校验（predev/prebuild 与 --verify 共用）：全部 marker 满足预期计数。 ──
 // 不只在 --verify 才计数；普通 predev/prebuild 也必须拦截重复/缺失 marker，
@@ -426,6 +961,15 @@ function strictVerifyAll() {
   const compSrc = path.join(rootDir, "node_modules", "reze-engine", "src", "shaders", "passes", "composite.ts");
   const compDist = path.join(rootDir, "node_modules", "reze-engine", "dist", "shaders", "passes", "composite.js");
   const checks = [
+    { label: "src/engine.ts 生产源快照类型", file: engineSrc, marker: "export type ProductionDrawCallSourceSnapshot =" },
+    { label: "dist/engine.d.ts 生产源快照类型", file: engineDistDts, marker: "export type ProductionDrawCallSourceSnapshot =" },
+    { label: "src/engine.ts 生产源快照实现", file: engineSrc, marker: "getProductionDrawCallSourceSnapshot(captureId: string, frame: number): ProductionDrawCallSourceSnapshot" },
+    { label: "dist/engine.js 生产源快照实现", file: engineDistJs, marker: "getProductionDrawCallSourceSnapshot(captureId, frame)" },
+    { label: "dist/engine.d.ts 生产源快照声明", file: engineDistDts, marker: "getProductionDrawCallSourceSnapshot(captureId: string, frame: number): ProductionDrawCallSourceSnapshot;" },
+    { label: "src/engine.ts 顶点源 COPY_SRC", file: engineSrc, marker: "usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC," },
+    { label: "dist/engine.js 顶点源 COPY_SRC", file: engineDistJs, marker: "usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC," },
+    { label: "src/engine.ts GPU morph 权重源 COPY_SRC", file: engineSrc, marker: "usage: RO | GPUBufferUsage.COPY_SRC," },
+    { label: "dist/engine.js GPU morph 权重源 COPY_SRC", file: engineDistJs, marker: "usage: RO | GPUBufferUsage.COPY_SRC," },
     { label: "src/engine.ts 实现", file: engineSrc, marker: "__mdoStart = texs.length" },
     { label: "dist/engine.js 实现", file: engineDistJs, marker: "__mdoStart = texs.length" },
     { label: "dist/engine.d.ts 类型", file: engineDistDts, marker: "materialDiffuseOverrides?: Record<string, string>;" },

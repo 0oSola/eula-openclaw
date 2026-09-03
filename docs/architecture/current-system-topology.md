@@ -1,6 +1,6 @@
 # 当前系统拓扑与架构蓝图
 
-更新时间：2026-09-01
+更新时间：2026-09-03
 
 本文用于两类场景：
 
@@ -1658,6 +1658,16 @@ Pet 进入 `camera-adjust` 后，renderer 的捕获阶段和 Electron `webConten
 ### 16.7 主舞台到 Desktop Pet 的 Reze 材质与场景自动同步（2026-08-05）
 
 主站 `/companion` 的共享配置自动同步不再只写入 `selected_model_path` 和 `render_pipeline`。当当前管线为 `reze-k3` 或 `reze-design` 时，防抖后的 PUT 请求必须同时写入 `reze_stage_document`，其中包含当前 `materialPresets`、调色预设、背景效果以及合并后的 `scene` 调试参数，但明确剔除 `scene.cameraDistance`：相机距离属于每个窗口的本地构图状态，不属于跨窗口共享配置。材质选择、调色、背景特效或场景滑杆变化后，都会经过同一个配置载荷构造器同步到 FastAPI 的 `companion_shared_config`，Desktop Pet 的“从主站同步”再读取同一份文档并应用到其 WebGPU 引擎。切换到非 Reze 管线时写入 `reze_stage_document: null`，防止 Pet 继续保留旧的 Reze 材质与场景文档。手动“保存到桌面 Pet”与自动同步共用该载荷构造器；客户端超时边界仍只用于手动保存，自动同步失败不得阻断主站交互。
+
+### Stage 2C-M2a.2 生产绘制调用几何源与可审计快照（codex/reze-production-vertex-snapshot，2026-09-03）
+
+Stage 2C-M2a.2 收口 reze-engine 生产 material-ID/HDR pick 与 triUV 诊断之间的几何来源契约。旧诊断把 model.getVertices() 的 CPU 基础顶点作为 triUV 展开源，而生产 draw call 实际使用 modelInstances[name].vertexBuffer、indexBuffer、jointsBuffer、weightsBuffer 和 skinMatrixBuffer；GPU Morph 还会原地写入生产 vertexBuffer。两条路径因此可能在同一 VMD 帧使用不同几何。旧的“production instance.vertexBuffer 全零”读回也不具备证据效力，因为源 GPUBuffer 没有 COPY_SRC usage，违反 WebGPU copyBufferToBuffer 前提。
+
+patch-reze-engine.mjs 现在只向 reze-engine 的 src/engine.ts、dist/engine.js 和 dist/engine.d.ts 注入一个默认被动、只读的 getProductionDrawCallSourceSnapshot(captureId, frame) seam，并给生产 vertex/index/joints/weights/skin-matrix 与 GPU Morph weights buffer 补齐合法 COPY_SRC usage。快照返回实际生产 GPU 句柄、production draw 与 pick draw 的 count/firstIndex、drawIndex/pickDrawCallIndex、main/pick bind group、主管线与 graph、pick pipeline/layout、HDR/mask resolve texture、蒙皮矩阵和 Morph 来源；它不渲染、不写回、不改变默认生产状态，GPU 句柄只在同一 JavaScript realm 内供诊断 pass 使用。
+
+v14dColorBaseline.ts 的 readV14dProductionDrawCallSourceSnapshot 对上述句柄做只读 GPU 读回，并输出可序列化 audit：buffer 字节/值统计、非零位置顶点数、位置包围盒、有限值/NaN/Infinity、索引范围完整性、draw/pick range 与绑定身份、skin matrix/Morph 状态以及 HDR/mask resolve texture sameAsEngine。RezeWebGpuStage.tsx 的 captureHairTriUv 在显式 acceptance probe 中默认选择 sourceMode=production-draw-call；readV14dProductionSourceTriUv 复用生产顶点布局、索引、蒙皮 buffer、per-frame/per-instance/per-material pick bind group 和原始 draw range，先做生产顺序 depth prepass，再以 equal 深度测试输出 triId+插值 UV，depthBias.constant/slopeScale 固定为 0。pixel、materialMask、triUV 和 source audit 通过同一 captureId/frame 关联。
+
+该诊断契约的机器失败分类为 interface-unavailable、invalid-capture-request、snapshot-rejected、buffer-readback-failed 和 buffer-readback-incomplete。--neg-wrong-source 只允许用来证明 cpu-base 错源会被检出，不能成为正常 fallback；--neg-mat-swap 用来证明材质槽交换会被同像素身份 Gate 拒绝。验收近景 cameraOrbit("face") 只属于显式 probe，为 frame120 目标材质提供可见像素，不改默认生产相机；实现不得用屏幕平移、mask 膨胀、depthBias 或放宽阈值制造重叠。完整概念定义见 workflow/concepts/v14d-production-draw-call-source-snapshot.zh-CN.md。
 
 ## 17. 文档维护规则
 

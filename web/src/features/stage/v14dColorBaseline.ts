@@ -478,6 +478,7 @@ export type V14dColorBaselineResult = {
 
 export type V14dColorBaselineEngine = {
   device?: GPUDevice;
+  getProductionDrawCallSourceSnapshot?: (captureId: string, frame: number) => V14dProductionDrawCallSourceSnapshot;
   hdrResolveTexture?: GPUTexture;
   maskResolveTexture?: GPUTexture;
   hdrFormat?: GPUTextureFormat;
@@ -489,7 +490,9 @@ export type V14dColorBaselineEngine = {
     jointsBuffer: GPUBuffer;
     weightsBuffer: GPUBuffer;
     indexBuffer: GPUBuffer;
+    skinMatrixBuffer: GPUBuffer;
     pickPerInstanceBindGroup: GPUBindGroup;
+    drawCalls?: Array<{ count: number; firstIndex: number; bindGroup: GPUBindGroup }>;
     pickDrawCalls: Array<{
       count: number;
       firstIndex: number;
@@ -498,8 +501,204 @@ export type V14dColorBaselineEngine = {
   }>;
 };
 
+/**
+ * reze-engine 的只读生产源快照。资源句柄只在同一 JS realm 内供诊断 pass 使用，
+ * 不得序列化到生产状态；快照本身不触发渲染、不写入 buffer。
+ */
+export type V14dProductionDrawCallSourceSnapshot = {
+  schemaVersion: 1;
+  captureId: string;
+  frame: number;
+  source: "reze-engine-production-draw-call";
+  device: GPUDevice;
+  pick: {
+    pipeline: GPURenderPipeline;
+    perFrameBindGroup: GPUBindGroup;
+    perFrameBindGroupLayout: GPUBindGroupLayout;
+    perInstanceBindGroupLayout: GPUBindGroupLayout;
+    perMaterialBindGroupLayout: GPUBindGroupLayout;
+  };
+  renderTargets: {
+    hdrResolveTexture: GPUTexture;
+    maskResolveTexture: GPUTexture;
+    hdrFormat: GPUTextureFormat;
+  };
+  instances: Array<{
+    name: string;
+    visible: boolean;
+    buffers: {
+      vertex: GPUBuffer;
+      index: GPUBuffer;
+      joints: GPUBuffer;
+      weights: GPUBuffer;
+      skinMatrices: GPUBuffer;
+    };
+    bufferBytes: { vertex: number; index: number; joints: number; weights: number; skinMatrices: number };
+    geometry: {
+      vertexCount: number;
+      indexCount: number;
+      vertexStrideBytes: 32;
+      indexFormat: "uint32";
+      jointsFormat: "uint16x4";
+      weightsFormat: "unorm8x4";
+    };
+    sourceIdentity: { vertex: string; index: string; joints: string; weights: string; skinMatrices: string };
+    transforms: {
+      skinMatrixSource: "model.getSkinMatrices -> skinMatrixBuffer";
+      matrixCount: number;
+      morphMode: "gpu-compute-in-place" | "cpu-upload";
+      morphSource: string;
+      morphWeightsBuffer: GPUBuffer | null;
+      morphWeightsByteLength: number;
+      morphWeightsNonZeroCount: number;
+      morphDispatchPending: boolean;
+    };
+    pickPerInstanceBindGroup: GPUBindGroup;
+    drawCalls: Array<{
+      materialName: string;
+      materialIndex: number;
+      count: number;
+      firstIndex: number;
+      drawIndex: number;
+      pickDrawCallIndex: number;
+      mainBindGroup: GPUBindGroup;
+      pickBindGroup: GPUBindGroup;
+      mainPipeline: GPURenderPipeline | null;
+      groupId: string | null;
+      graphName: string | null;
+    }>;
+    pickDrawCalls: Array<{
+      materialName: string;
+      materialIndex: number;
+      count: number;
+      firstIndex: number;
+      drawIndex: number;
+      pickDrawCallIndex: number;
+      bindGroup: GPUBindGroup;
+    }>;
+  }>;
+};
+
+export type V14dProductionSourceFloatStats = {
+  byteLength: number;
+  valueCount: number;
+  finiteValueCount: number;
+  nonZeroValueCount: number;
+  nanCount: number;
+  infCount: number;
+  maxAbs: number;
+};
+
+export type V14dProductionSourceBufferStats = V14dProductionSourceFloatStats & {
+  format: string;
+  nonZeroPositionVertexCount?: number;
+  positionBounds?: { min: [number, number, number]; max: [number, number, number] } | null;
+};
+
+export type V14dProductionSourceAudit = {
+  schemaVersion: 1;
+  captureId: string;
+  frame: number;
+  source: "reze-engine-production-draw-call";
+  pickPipeline: { source: "engine.pickPipeline"; sameAsEngine: boolean };
+  instances: Array<{
+    name: string;
+    visible: boolean;
+    geometry: V14dProductionDrawCallSourceSnapshot["instances"][number]["geometry"];
+    sourceIdentity: V14dProductionDrawCallSourceSnapshot["instances"][number]["sourceIdentity"];
+    bufferIdentity: {
+      vertex: boolean;
+      index: boolean;
+      joints: boolean;
+      weights: boolean;
+      skinMatrices: boolean;
+      pickInstanceBindGroup: boolean;
+    };
+    buffers: {
+      vertex: V14dProductionSourceBufferStats;
+      index: V14dProductionSourceBufferStats;
+      joints: V14dProductionSourceBufferStats;
+      weights: V14dProductionSourceBufferStats;
+      skinMatrices: V14dProductionSourceBufferStats;
+      morphWeights: V14dProductionSourceBufferStats | null;
+    };
+    transforms: Omit<V14dProductionDrawCallSourceSnapshot["instances"][number]["transforms"], "morphWeightsBuffer"> & {
+      morphWeightsReadback: boolean;
+    };
+    drawCalls: Array<Omit<V14dProductionDrawCallSourceSnapshot["instances"][number]["drawCalls"][number], "mainBindGroup" | "pickBindGroup" | "mainPipeline"> & {
+      rangeMatchesPick: boolean;
+      mainBindGroupMatchesEngine: boolean;
+      pickBindGroupMatchesEngine: boolean;
+      mainPipelinePresent: boolean;
+    }>;
+    pickDrawCalls: Array<Omit<V14dProductionDrawCallSourceSnapshot["instances"][number]["pickDrawCalls"][number], "bindGroup">>;
+    indexIntegrity: {
+      allDrawRangesInBounds: boolean;
+      maxReferencedVertexIndex: number;
+      referencedVertexIndicesInBounds: boolean;
+    };
+  }>;
+  renderTargets: {
+    hdrResolveTexture: { source: "engine.hdrResolveTexture"; sameAsEngine: boolean; format: GPUTextureFormat };
+    maskResolveTexture: { source: "engine.maskResolveTexture"; sameAsEngine: boolean };
+  };
+};
+
+export type V14dProductionSourceErrorCode =
+  | "interface-unavailable"
+  | "invalid-capture-request"
+  | "snapshot-rejected"
+  | "buffer-readback-failed"
+  | "buffer-readback-incomplete";
+
+export type V14dProductionSourceFailureClass =
+  | "missing-source"
+  | "invalid-request"
+  | "snapshot"
+  | "readback";
+
+export class V14dProductionSourceError extends Error {
+  readonly code: V14dProductionSourceErrorCode;
+  readonly failureClass: V14dProductionSourceFailureClass;
+
+  constructor(code: V14dProductionSourceErrorCode, failureClass: V14dProductionSourceFailureClass, message: string) {
+    super(message);
+    this.name = "V14dProductionSourceError";
+    this.code = code;
+    this.failureClass = failureClass;
+  }
+}
+
+export type V14dProductionSourceReadback = {
+  snapshot: V14dProductionDrawCallSourceSnapshot;
+  audit: V14dProductionSourceAudit;
+};
+
+export type V14dProductionSourceTriUvReadback = {
+  triId: Int32Array;
+  uv: Float32Array;
+  faceMask: Uint8Array;
+  width: number;
+  height: number;
+  source: "production-draw-call-buffers";
+  depthBias: { constant: 0; slopeScale: 0 };
+};
+
+export type V14dHairTriUvSourceMode = "production-draw-call" | "cpu-base";
+
 function readEnginePrivateFields(engine: unknown): V14dColorBaselineEngine {
   return (engine ?? {}) as V14dColorBaselineEngine;
+}
+
+function asProductionSourceError(
+  error: unknown,
+  code: V14dProductionSourceErrorCode,
+  failureClass: V14dProductionSourceFailureClass,
+  prefix: string,
+): V14dProductionSourceError {
+  if (error instanceof V14dProductionSourceError) return error;
+  const detail = error instanceof Error ? error.message : String(error);
+  return new V14dProductionSourceError(code, failureClass, prefix + detail);
 }
 
 function alignTo(value: number, alignment: number): number {
@@ -513,6 +712,297 @@ function halfToFloat(bits: number): number {
   if (exponent === 0) return sign * (fraction / 0x400) * 2 ** -14;
   if (exponent === 0x1f) return fraction === 0 ? sign * Infinity : Number.NaN;
   return sign * (1 + fraction / 0x400) * 2 ** (exponent - 15);
+}
+
+type V14dProductionBufferKey = "vertex" | "index" | "joints" | "weights" | "skinMatrices" | "morphWeights";
+
+type V14dProductionBufferBytes = Record<V14dProductionBufferKey, Uint8Array | null>;
+
+function makeFloatStats(
+  bytes: Uint8Array,
+  format: string,
+  positionStride?: number,
+): V14dProductionSourceBufferStats {
+  const copy = bytes.slice();
+  const values = new Float32Array(copy.buffer);
+  let finiteValueCount = 0;
+  let nonZeroValueCount = 0;
+  let nanCount = 0;
+  let infCount = 0;
+  let maxAbs = 0;
+  let nonZeroPositionVertexCount = 0;
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  if (positionStride) {
+    for (let i = 0; i + 2 < values.length; i += positionStride) {
+      const x = values[i];
+      const y = values[i + 1];
+      const z = values[i + 2];
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+      if (Math.abs(x) > 1e-7 || Math.abs(y) > 1e-7 || Math.abs(z) > 1e-7) nonZeroPositionVertexCount += 1;
+      minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
+      maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
+    }
+  }
+  for (const value of values) {
+    if (Number.isNaN(value)) { nanCount += 1; continue; }
+    if (!Number.isFinite(value)) { infCount += 1; continue; }
+    finiteValueCount += 1;
+    if (Math.abs(value) > 1e-7) nonZeroValueCount += 1;
+    maxAbs = Math.max(maxAbs, Math.abs(value));
+  }
+  return {
+    format,
+    byteLength: bytes.byteLength,
+    valueCount: values.length,
+    finiteValueCount,
+    nonZeroValueCount,
+    nanCount,
+    infCount,
+    maxAbs,
+    ...(positionStride
+      ? {
+          nonZeroPositionVertexCount,
+          positionBounds: Number.isFinite(minX)
+            ? { min: [minX, minY, minZ] as [number, number, number], max: [maxX, maxY, maxZ] as [number, number, number] }
+            : null,
+        }
+      : {}),
+  };
+}
+
+function makeIntegerStats(bytes: Uint8Array, format: string, elementBytes: 1 | 2 | 4): V14dProductionSourceBufferStats {
+  const copy = bytes.slice();
+  const values = elementBytes === 4
+    ? new Uint32Array(copy.buffer)
+    : elementBytes === 2
+      ? new Uint16Array(copy.buffer)
+      : new Uint8Array(copy.buffer);
+  let nonZeroValueCount = 0;
+  let maxAbs = 0;
+  for (const value of values) {
+    if (value !== 0) nonZeroValueCount += 1;
+    maxAbs = Math.max(maxAbs, value);
+  }
+  return {
+    format,
+    byteLength: bytes.byteLength,
+    valueCount: values.length,
+    finiteValueCount: values.length,
+    nonZeroValueCount,
+    nanCount: 0,
+    infCount: 0,
+    maxAbs,
+  };
+}
+
+async function readV14dProductionBufferBytes(
+  device: GPUDevice,
+  instance: V14dProductionDrawCallSourceSnapshot["instances"][number],
+): Promise<V14dProductionBufferBytes> {
+  const specs: Array<{ key: V14dProductionBufferKey; buffer: GPUBuffer; byteLength: number }> = [
+    { key: "vertex", buffer: instance.buffers.vertex, byteLength: instance.bufferBytes.vertex },
+    { key: "index", buffer: instance.buffers.index, byteLength: instance.bufferBytes.index },
+    { key: "joints", buffer: instance.buffers.joints, byteLength: instance.bufferBytes.joints },
+    { key: "weights", buffer: instance.buffers.weights, byteLength: instance.bufferBytes.weights },
+    { key: "skinMatrices", buffer: instance.buffers.skinMatrices, byteLength: instance.bufferBytes.skinMatrices },
+  ];
+  if (instance.transforms.morphWeightsBuffer) {
+    specs.push({
+      key: "morphWeights",
+      buffer: instance.transforms.morphWeightsBuffer,
+      byteLength: Math.max(4, instance.transforms.morphWeightsByteLength),
+    });
+  }
+  const readbacks = specs.map((spec) => ({
+    ...spec,
+    readback: device.createBuffer({
+      label: "V14D production source readback " + instance.name + " " + spec.key,
+      size: Math.max(4, alignTo(spec.byteLength, 4)),
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    }),
+  }));
+  try {
+    const encoder = device.createCommandEncoder({ label: "V14D production source buffer encoder" });
+    for (const item of readbacks) {
+      encoder.copyBufferToBuffer(item.buffer, 0, item.readback, 0, item.byteLength);
+    }
+    device.queue.submit([encoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    const output: V14dProductionBufferBytes = {
+      vertex: null, index: null, joints: null, weights: null, skinMatrices: null, morphWeights: null,
+    };
+    for (const item of readbacks) {
+      await item.readback.mapAsync(GPUMapMode.READ);
+      output[item.key] = new Uint8Array(item.readback.getMappedRange()).slice(0, item.byteLength);
+      item.readback.unmap();
+    }
+    return output;
+  } finally {
+    for (const item of readbacks) {
+      if (item.readback.mapState === "mapped") item.readback.unmap();
+      item.readback.destroy();
+    }
+  }
+}
+
+/**
+ * 读取 reze-engine 生产 draw-call 的真实 GPU 源，并返回可落盘的审计摘要。
+ *
+ * 这是默认关闭的诊断 seam：只有调用方显式提供 captureId/frame 才会执行。
+ * 快照中的 GPUBuffer/bind group 句柄只用于同一 JS realm 的后续诊断 pass；
+ * audit 则只包含可序列化身份、范围、来源与非零统计。
+ */
+export async function readV14dProductionDrawCallSourceSnapshot(
+  engine: unknown,
+  captureId: string,
+  frame: number,
+): Promise<V14dProductionSourceReadback> {
+  const fields = readEnginePrivateFields(engine);
+  if (typeof fields.getProductionDrawCallSourceSnapshot !== "function") {
+    throw new V14dProductionSourceError(
+      "interface-unavailable",
+      "missing-source",
+      "reze-engine 未暴露生产 draw-call 源快照接口；请先运行 patch-reze-engine.mjs",
+    );
+  }
+  if (typeof captureId !== "string" || captureId.length === 0) {
+    throw new V14dProductionSourceError("invalid-capture-request", "invalid-request", "production source captureId 不能为空");
+  }
+  if (!Number.isFinite(frame)) {
+    throw new V14dProductionSourceError("invalid-capture-request", "invalid-request", "production source frame 必须是有限数");
+  }
+  let snapshot: V14dProductionDrawCallSourceSnapshot;
+  try {
+    snapshot = fields.getProductionDrawCallSourceSnapshot(captureId, frame);
+  } catch (error) {
+    throw asProductionSourceError(error, "snapshot-rejected", "snapshot", "production source snapshot 被引擎拒绝：");
+  }
+  const auditInstances: V14dProductionSourceAudit["instances"] = [];
+  for (const instance of snapshot.instances) {
+    let bytes: V14dProductionBufferBytes;
+    try {
+      bytes = await readV14dProductionBufferBytes(snapshot.device, instance);
+    } catch (error) {
+      throw asProductionSourceError(error, "buffer-readback-failed", "readback", "production source buffer 读回失败：");
+    }
+    const vertex = bytes.vertex;
+    const index = bytes.index;
+    const joints = bytes.joints;
+    const weights = bytes.weights;
+    const skinMatrices = bytes.skinMatrices;
+    const morphWeights = bytes.morphWeights;
+    if (!vertex || !index || !joints || !weights || !skinMatrices) {
+      throw new V14dProductionSourceError(
+        "buffer-readback-incomplete",
+        "readback",
+        "production source buffer 读回不完整：" + instance.name,
+      );
+    }
+    const engineInstance = fields.modelInstances?.get(instance.name);
+    const bufferIdentity = {
+      vertex: engineInstance?.vertexBuffer === instance.buffers.vertex,
+      index: engineInstance?.indexBuffer === instance.buffers.index,
+      joints: engineInstance?.jointsBuffer === instance.buffers.joints,
+      weights: engineInstance?.weightsBuffer === instance.buffers.weights,
+      skinMatrices: engineInstance?.skinMatrixBuffer === instance.buffers.skinMatrices,
+      pickInstanceBindGroup: engineInstance?.pickPerInstanceBindGroup === instance.pickPerInstanceBindGroup,
+    };
+    const indexCopy = index.slice();
+    const indexData = new Uint32Array(indexCopy.buffer);
+    let allDrawRangesInBounds = true;
+    let maxReferencedVertexIndex = -1;
+    let referencedVertexIndicesInBounds = true;
+    for (const draw of instance.pickDrawCalls) {
+      if (draw.firstIndex < 0 || draw.count < 0 || draw.firstIndex + draw.count > indexData.length) {
+        allDrawRangesInBounds = false;
+        continue;
+      }
+      for (let i = draw.firstIndex; i < draw.firstIndex + draw.count; i += 1) {
+        const vertexIndex = indexData[i];
+        maxReferencedVertexIndex = Math.max(maxReferencedVertexIndex, vertexIndex);
+        if (vertexIndex >= instance.geometry.vertexCount) referencedVertexIndicesInBounds = false;
+      }
+    }
+    const { morphWeightsBuffer: _morphWeightsBuffer, ...transformAudit } = instance.transforms;
+    auditInstances.push({
+      name: instance.name,
+      visible: instance.visible,
+      geometry: instance.geometry,
+      sourceIdentity: instance.sourceIdentity,
+      bufferIdentity,
+      buffers: {
+        vertex: makeFloatStats(vertex, "float32x8(position3+normal3+uv2)", 8),
+        index: makeIntegerStats(index, "uint32", 4),
+        joints: makeIntegerStats(joints, "uint16x4", 2),
+        weights: makeIntegerStats(weights, "unorm8x4", 1),
+        skinMatrices: makeFloatStats(skinMatrices, "float32x16-per-bone"),
+        morphWeights: morphWeights ? makeFloatStats(morphWeights, "float32-per-morph") : null,
+      },
+      transforms: {
+        ...transformAudit,
+        morphWeightsReadback: !!morphWeights,
+      },
+      drawCalls: instance.drawCalls.map((draw) => {
+        const engineDraw = engineInstance?.drawCalls?.[draw.drawIndex];
+        const pickSource = instance.pickDrawCalls[draw.pickDrawCallIndex];
+        return {
+        materialName: draw.materialName,
+        materialIndex: draw.materialIndex,
+        count: draw.count,
+        firstIndex: draw.firstIndex,
+        drawIndex: draw.drawIndex,
+        pickDrawCallIndex: draw.pickDrawCallIndex,
+        groupId: draw.groupId,
+        graphName: draw.graphName,
+        mainPipelinePresent: !!draw.mainPipeline,
+        rangeMatchesPick: !!pickSource
+          && pickSource.drawIndex === draw.drawIndex
+          && pickSource.pickDrawCallIndex === draw.pickDrawCallIndex
+          && pickSource.count === draw.count
+          && pickSource.firstIndex === draw.firstIndex,
+        mainBindGroupMatchesEngine: engineDraw?.bindGroup === draw.mainBindGroup,
+        pickBindGroupMatchesEngine: pickSource?.bindGroup === draw.pickBindGroup,
+      };
+      }),
+      pickDrawCalls: instance.pickDrawCalls.map((draw) => ({
+        materialName: draw.materialName,
+        materialIndex: draw.materialIndex,
+        count: draw.count,
+        firstIndex: draw.firstIndex,
+        drawIndex: draw.drawIndex,
+        pickDrawCallIndex: draw.pickDrawCallIndex,
+      })),
+      indexIntegrity: { allDrawRangesInBounds, maxReferencedVertexIndex, referencedVertexIndicesInBounds },
+    });
+  }
+  const renderTargets = {
+    hdrResolveTexture: {
+      source: "engine.hdrResolveTexture" as const,
+      sameAsEngine: fields.hdrResolveTexture === snapshot.renderTargets.hdrResolveTexture,
+      format: snapshot.renderTargets.hdrFormat,
+    },
+    maskResolveTexture: {
+      source: "engine.maskResolveTexture" as const,
+      sameAsEngine: fields.maskResolveTexture === snapshot.renderTargets.maskResolveTexture,
+    },
+  };
+  return {
+    snapshot,
+    audit: {
+      schemaVersion: 1,
+      captureId: snapshot.captureId,
+      frame: snapshot.frame,
+      source: snapshot.source,
+      pickPipeline: { source: "engine.pickPipeline", sameAsEngine: fields.pickPipeline === snapshot.pick.pipeline },
+      instances: auditInstances,
+      renderTargets,
+    },
+  };
 }
 
 const BLIT_SHADER = `
@@ -791,6 +1281,282 @@ export async function readV14dColorBaselineMaterialMask(
   } finally {
     if (buffer.mapState === "mapped") buffer.unmap();
     buffer.destroy();
+    depth.destroy();
+    target.destroy();
+  }
+}
+
+// 与 reze-engine pick 管线完全相同的生产顶点布局：位置/法线/UV 为 float32x8，
+// joints 为 uint16x4，weights 为 unorm8x4。这个布局是本票的关键不变量；
+// 不能复用旧的 uint32/float32 诊断布局，否则读到的并不是生产属性。
+const PRODUCTION_SOURCE_VERTEX_BUFFERS: GPUVertexBufferLayout[] = [
+  {
+    arrayStride: 32,
+    attributes: [
+      { shaderLocation: 0, offset: 0, format: "float32x3" },
+      { shaderLocation: 1, offset: 12, format: "float32x3" },
+      { shaderLocation: 2, offset: 24, format: "float32x2" },
+    ],
+  },
+  {
+    arrayStride: 8,
+    attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" }],
+  },
+  {
+    arrayStride: 4,
+    attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" }],
+  },
+];
+
+const PRODUCTION_SOURCE_DEPTH_WGSL = /* wgsl */ `
+struct CameraUniforms {
+  view: mat4x4f,
+  projection: mat4x4f,
+  viewPos: vec3f,
+  _padding: f32,
+};
+@group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
+
+@vertex fn vs(
+  @location(0) position: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) uv: vec2f,
+  @location(3) joints0: vec4<u32>,
+  @location(4) weights0: vec4<f32>,
+) -> @builtin(position) vec4f {
+  let pos4 = vec4f(position, 1.0);
+  let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
+  let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
+  let nw = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
+  var sp = vec4f(0.0);
+  for (var i = 0u; i < 4u; i++) { sp += (skinMats[joints0[i]] * pos4) * nw[i]; }
+  return camera.projection * camera.view * vec4f(sp.xyz, 1.0);
+}
+`;
+
+const PRODUCTION_SOURCE_TRI_UV_WGSL = /* wgsl */ `
+struct CameraUniforms {
+  view: mat4x4f,
+  projection: mat4x4f,
+  viewPos: vec3f,
+  _padding: f32,
+};
+struct TriMeta {
+  triId: u32,
+  materialId: u32,
+  _p0: u32,
+  _p1: u32,
+};
+struct PickId {
+  modelId: f32,
+  materialId: f32,
+  _p1: f32,
+  _p2: f32,
+};
+@group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
+@group(2) @binding(0) var<uniform> pickId: PickId;
+@group(3) @binding(0) var<uniform> tri: TriMeta;
+
+struct VSOut {
+  @builtin(position) pos: vec4f,
+  @location(0) uv: vec2f,
+  @interpolate(flat) @location(1) triId: u32,
+};
+
+@vertex fn vs(
+  @location(0) position: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) uv: vec2f,
+  @location(3) joints0: vec4<u32>,
+  @location(4) weights0: vec4<f32>,
+) -> VSOut {
+  let pos4 = vec4f(position, 1.0);
+  let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
+  let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
+  let nw = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
+  var sp = vec4f(0.0);
+  for (var i = 0u; i < 4u; i++) { sp += (skinMats[joints0[i]] * pos4) * nw[i]; }
+  var out: VSOut;
+  out.pos = camera.projection * camera.view * vec4f(sp.xyz, 1.0);
+  out.uv = uv;
+  out.triId = tri.triId;
+  return out;
+}
+
+@fragment fn fs(in: VSOut) -> @location(0) vec4f {
+  return vec4f(in.uv.x, in.uv.y, f32(in.triId), pickId.materialId);
+}
+`;
+
+/**
+ * 从 production draw-call 的真实 GPU buffer 直接生成 triId+UV。
+ *
+ * pass1 按引擎 pickDrawCalls 原顺序、原 firstIndex/count 写入前景深度；
+ * pass2 仍使用同一 vertex/index/joints/weights/skinMatrix buffer，仅把目标
+ * draw-call 拆成三索引小 draw，并以 uniform 携带局部 triId。这样位置、蒙皮、
+ * morph 后 vertexBuffer 和索引解释都与生产 pick 相同；本 pass 没有 depthBias。
+ */
+export async function readV14dProductionSourceTriUv(
+  source: V14dProductionSourceReadback,
+  width: number,
+  height: number,
+  materialNames: readonly string[],
+): Promise<V14dProductionSourceTriUvReadback> {
+  const snapshot = source.snapshot;
+  const device = snapshot.device;
+  const targetNames = new Set(materialNames);
+  const triLayout = device.createBindGroupLayout({
+    label: "V14D production source tri metadata layout",
+    entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } }],
+  });
+  const depthLayout = device.createPipelineLayout({
+    label: "V14D production source depth layout",
+    bindGroupLayouts: [snapshot.pick.perFrameBindGroupLayout, snapshot.pick.perInstanceBindGroupLayout],
+  });
+  const triPipelineLayout = device.createPipelineLayout({
+    label: "V14D production source tri UV layout",
+    bindGroupLayouts: [snapshot.pick.perFrameBindGroupLayout, snapshot.pick.perInstanceBindGroupLayout, snapshot.pick.perMaterialBindGroupLayout, triLayout],
+  });
+  const depthModule = device.createShaderModule({ label: "V14D production source depth shader", code: PRODUCTION_SOURCE_DEPTH_WGSL });
+  const triModule = device.createShaderModule({ label: "V14D production source tri UV shader", code: PRODUCTION_SOURCE_TRI_UV_WGSL });
+  const depthPipeline = device.createRenderPipeline({
+    label: "V14D production source depth pipeline",
+    layout: depthLayout,
+    vertex: { module: depthModule, buffers: PRODUCTION_SOURCE_VERTEX_BUFFERS },
+    primitive: { cullMode: "none" },
+    depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less-equal" },
+  });
+  const triPipeline = device.createRenderPipeline({
+    label: "V14D production source tri UV pipeline",
+    layout: triPipelineLayout,
+    vertex: { module: triModule, buffers: PRODUCTION_SOURCE_VERTEX_BUFFERS },
+    fragment: { module: triModule, targets: [{ format: "rgba32float" }] },
+    primitive: { cullMode: "none" },
+    depthStencil: { format: "depth24plus", depthWriteEnabled: false, depthCompare: "equal" },
+  });
+  const depth = device.createTexture({
+    label: "V14D production source depth",
+    size: [width, height],
+    format: "depth24plus",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  const target = device.createTexture({
+    label: "V14D production source tri UV target",
+    size: [width, height],
+    format: "rgba32float",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
+  const rowPitch = alignTo(width * 16, 256);
+  const readback = device.createBuffer({
+    label: "V14D production source tri UV readback",
+    size: rowPitch * height,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  const triResources: Array<{ buffer: GPUBuffer; bindGroup: GPUBindGroup }> = [];
+  try {
+    const encoder = device.createCommandEncoder({ label: "V14D production source tri UV encoder" });
+    const p1 = encoder.beginRenderPass({
+      label: "V14D production source depth prepass",
+      colorAttachments: [],
+      depthStencilAttachment: {
+        view: depth.createView(),
+        depthClearValue: 1.0,
+        depthLoadOp: "clear",
+        depthStoreOp: "store",
+      },
+    });
+    p1.setPipeline(depthPipeline);
+    p1.setBindGroup(0, snapshot.pick.perFrameBindGroup);
+    for (const instance of snapshot.instances) {
+      if (!instance.visible) continue;
+      p1.setVertexBuffer(0, instance.buffers.vertex);
+      p1.setVertexBuffer(1, instance.buffers.joints);
+      p1.setVertexBuffer(2, instance.buffers.weights);
+      p1.setIndexBuffer(instance.buffers.index, "uint32");
+      p1.setBindGroup(1, instance.pickPerInstanceBindGroup);
+      for (const draw of instance.pickDrawCalls) {
+        p1.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0);
+      }
+    }
+    p1.end();
+
+    const p2 = encoder.beginRenderPass({
+      label: "V14D production source tri UV pass",
+      colorAttachments: [{ view: target.createView(), clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: "clear", storeOp: "store" }],
+      depthStencilAttachment: { view: depth.createView(), depthLoadOp: "load", depthStoreOp: "store" },
+    });
+    p2.setPipeline(triPipeline);
+    p2.setBindGroup(0, snapshot.pick.perFrameBindGroup);
+    for (const instance of snapshot.instances) {
+      if (!instance.visible) continue;
+      p2.setVertexBuffer(0, instance.buffers.vertex);
+      p2.setVertexBuffer(1, instance.buffers.joints);
+      p2.setVertexBuffer(2, instance.buffers.weights);
+      p2.setIndexBuffer(instance.buffers.index, "uint32");
+      p2.setBindGroup(1, instance.pickPerInstanceBindGroup);
+      for (const draw of instance.pickDrawCalls) {
+        if (!targetNames.has(draw.materialName)) continue;
+        const triangleCount = Math.floor(draw.count / 3);
+        for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+          const triBuffer = device.createBuffer({
+            label: "V14D production source tri metadata " + instance.name + " " + draw.materialName + " " + triangle,
+            size: 16,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+          });
+          device.queue.writeBuffer(triBuffer, 0, new Uint32Array([triangle, draw.materialIndex, 0, 0]));
+          const triBindGroup = device.createBindGroup({
+            label: "V14D production source tri metadata bind group",
+            layout: triLayout,
+            entries: [{ binding: 0, resource: { buffer: triBuffer } }],
+          });
+          triResources.push({ buffer: triBuffer, bindGroup: triBindGroup });
+          p2.setBindGroup(2, draw.bindGroup);
+          p2.setBindGroup(3, triBindGroup);
+          p2.drawIndexed(3, 1, draw.firstIndex + triangle * 3, 0, 0);
+        }
+      }
+    }
+    p2.end();
+    encoder.copyTextureToBuffer(
+      { texture: target },
+      { buffer: readback, bytesPerRow: rowPitch, rowsPerImage: height },
+      { width, height, depthOrArrayLayers: 1 },
+    );
+    device.queue.submit([encoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    await readback.mapAsync(GPUMapMode.READ);
+    const mapped = new Float32Array(readback.getMappedRange().slice(0));
+    const rowFloats = rowPitch / 4;
+    const triId = new Int32Array(width * height).fill(-1);
+    const uv = new Float32Array(width * height * 2);
+    const faceMask = new Uint8Array(width * height);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const i = y * width + x;
+        const offset = y * rowFloats + x * 4;
+        if (mapped[offset + 3] > 0.5) {
+          uv[i * 2] = mapped[offset];
+          uv[i * 2 + 1] = mapped[offset + 1];
+          triId[i] = Math.round(mapped[offset + 2]);
+          faceMask[i] = 1;
+        }
+      }
+    }
+    return {
+      triId,
+      uv,
+      faceMask,
+      width,
+      height,
+      source: "production-draw-call-buffers",
+      depthBias: { constant: 0, slopeScale: 0 },
+    };
+  } finally {
+    if (readback.mapState === "mapped") readback.unmap();
+    readback.destroy();
+    for (const resource of triResources) resource.buffer.destroy();
     depth.destroy();
     target.destroy();
   }
