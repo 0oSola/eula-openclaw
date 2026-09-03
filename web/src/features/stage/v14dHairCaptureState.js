@@ -23,12 +23,42 @@ function isRenderLoopRunning(engine) {
 
 export const V14D_HAIR_CAPTURE_TIME_EPSILON = 1e-6;
 
+/**
+ * Hair 正式 Gate 的固定采集口径。该值是验收契约，不接受通过环境变量或
+ * “original/V1 彼此相等”来替换；两侧必须各自落在这个绝对权威姿态。
+ */
+export const V14D_HAIR_AUTHORITATIVE_CAPTURE = Object.freeze({
+  currentSeconds: 4,
+  currentFrame: 120,
+  fps: 30,
+  animationName: "koleda-v14d-authoritative-pose-f120.vmd",
+});
+
 function finite(value) {
   return Number.isFinite(Number(value));
 }
 
 function closeEnough(a, b, epsilon) {
   return finite(a) && finite(b) && Math.abs(Number(a) - Number(b)) <= epsilon;
+}
+
+function validateAuthoritativeEvidence(evidence, label, issues, epsilon) {
+  if (!closeEnough(evidence?.currentSeconds, V14D_HAIR_AUTHORITATIVE_CAPTURE.currentSeconds, epsilon)) {
+    issues.push(label + ": currentSeconds is not authoritative (expected " + V14D_HAIR_AUTHORITATIVE_CAPTURE.currentSeconds + ")");
+  }
+  if (!closeEnough(evidence?.currentFrame, V14D_HAIR_AUTHORITATIVE_CAPTURE.currentFrame, epsilon)) {
+    issues.push(label + ": currentFrame is not authoritative (expected " + V14D_HAIR_AUTHORITATIVE_CAPTURE.currentFrame + ")");
+  }
+  const rawAnimationName = evidence?.animationName;
+  const animationName = typeof rawAnimationName === "string" ? rawAnimationName.trim() : "";
+  if (!animationName) {
+    issues.push(label + ": animationName is empty");
+  } else if (rawAnimationName !== V14D_HAIR_AUTHORITATIVE_CAPTURE.animationName) {
+    issues.push(label + ": animationName is not authoritative (expected " + V14D_HAIR_AUTHORITATIVE_CAPTURE.animationName + ")");
+  }
+  if (evidence?.fps != null && !closeEnough(evidence.fps, V14D_HAIR_AUTHORITATIVE_CAPTURE.fps, epsilon)) {
+    issues.push(label + ": fps is not authoritative (expected " + V14D_HAIR_AUTHORITATIVE_CAPTURE.fps + ")");
+  }
 }
 
 /**
@@ -68,6 +98,10 @@ export function validateV14dHairCapturePair({ original, v1, epsilon = V14D_HAIR_
     ...originalAtomic.issues.map((issue) => "original: " + issue),
     ...v1Atomic.issues.map((issue) => "v1: " + issue),
   ];
+  validateAuthoritativeEvidence(original?.pixel, "original.pixel", issues, epsilon);
+  validateAuthoritativeEvidence(original?.triUv, "original.triUv", issues, epsilon);
+  validateAuthoritativeEvidence(v1?.pixel, "v1.pixel", issues, epsilon);
+  validateAuthoritativeEvidence(v1?.triUv, "v1.triUv", issues, epsilon);
   if (!closeEnough(original?.pixel?.currentSeconds, v1?.pixel?.currentSeconds, epsilon)) {
     issues.push("original/v1 currentSeconds mismatch");
   }

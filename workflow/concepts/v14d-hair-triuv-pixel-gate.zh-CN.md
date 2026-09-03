@@ -2,8 +2,8 @@
 
 - 中文名称：头发同材质同三角形同 UV 逐像素门禁
 - 英文机器名：v14d-hair-triuv-pixel-gate
-- 所属阶段：Stage 2C-M1.1
-- 关联票据：codex/v14d-hairab-triuv-gate
+- 所属阶段：Stage 2C-M1.1 / Stage 2C-M1.2
+- 关联票据：codex/v14d-hairab-triuv-gate、codex/v14d-hair-gate-contract
 
 ## 概念定义
 
@@ -21,6 +21,14 @@ ROI 只限制屏幕空间范围，不能赋予材质身份，也不能把整槽�
 Hair 正式屏幕样本必须来自同一个原子 `captureHairTriUv` probe：probe 在采集边界内停止 render-loop、暂停 VMD、flush 并执行一次固定帧渲染，在恢复前同时返回 canvas 显示字节（`canvasDataUrl`）、material-ID/depth、triId、插值 UV、`triangleUvs` 以及 `captureEvidence`。其中 pixel 与 triUV 证据必须共享 `captureId`、`width/height`、`currentSeconds` 和 `currentFrame`；读回前后若 VMD 时间推进，probe 直接拒绝。调用方不得在 probe 外提前抓 Hair 正式 `v1Pix`，尺寸相同不能替代同帧证明。
 
 original 与 V1 是两次独立但同口径的原子采集：每次变体重建后加载同一权威 `koleda-v14d-authoritative-pose-f120.vmd`，pause+seek 到 `4s / frame 120 / 30 FPS`，再比较两侧 `origMae/v1Mae`；`validateV14dHairCapturePair` 硬断言两侧时间、帧、动画名和各自 pixel/triUV 配对一致。采集结束或异常时按快照恢复原时间、播放/暂停和 render-loop 状态。
+
+### Stage 2C-M1.2 绝对姿态与独立命令契约
+
+`V14D_HAIR_AUTHORITATIVE_CAPTURE` 是正式 Hair 采集的固定权威口径：`currentSeconds=4`、`currentFrame=120`、`fps=30`、`animationName=koleda-v14d-authoritative-pose-f120.vmd`。`validateV14dHairCapturePair` 先逐侧验证 pixel↔triUV 的 `captureId/currentSeconds/currentFrame/画布尺寸` 原子配对，再对 original 与 V1 的每个证据执行上述绝对值和非空动画名校验；双方同时 frame0、同时错误秒数、双方空名或相同错名都必须拒绝，不能因两侧彼此相等而通过。若证据显式携带 `fps`，也必须为 30。
+
+G3 的 `gate-report.json` 必须保存 requested 与 original/V1 actual 的 seconds、frame、fps、animationName，并保存两侧 captureId 和 pixel↔triUV pair 结果。`g3-hair-original-atomic.json` 至少保存 original 的 `captureEvidence`、`captureState`、采集前后进度和 HairA/HairB 材质样本/解析计数摘要；正式 triUV 大数组只保存在 analyzer 必需的 V1 产物中，不要求为审计复制另一份大数组。
+
+`analyze-reze-k3-v1-diff.mjs` 的 Hair 默认输入是原子产物 `g3-hair-original-canvas.png` 与 `g3-hair-v1-canvas.png`；`g3-original-canvas.png`、`g3-v1-canvas.png` 仅用于 Face/BodySkin/场景稳定性 lane。显式 `V14D_HAIR_ORIG_CANVAS` / `V14D_HAIR_V1_CANVAS` 仍可用于诊断夹具，但 accept 不为正式 analyzer 注入这两个覆盖。正式独立命令必须在 `web/` cwd、无 `V14D_HAIR_*` 环境运行：正常 exit=0，`--neg-swap-slot-target` exit=1 且两槽 `naturalMetricGate=false`、输入有效、`analysisFailures=[]`，`--neg-wrongtint` exit=0 且 `negativeVerdict.status=rejected`。
 
 ## 解决的问题
 

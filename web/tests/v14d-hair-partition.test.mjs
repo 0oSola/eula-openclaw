@@ -289,6 +289,81 @@ test("Hair 原子采集 Gate：时间推进或跨帧配对必须拒绝，健康�
   assert.ok(pair.issues.includes("original/v1 currentFrame mismatch"));
 });
 
+test("Hair 固定帧绝对 Gate：只接受 4 秒/120 帧/权威动画名", () => {
+  const AUTHORITATIVE = {
+    currentSeconds: 4,
+    currentFrame: 120,
+    fps: 30,
+    animationName: "koleda-v14d-authoritative-pose-f120.vmd",
+  };
+  const evidence = (captureId, overrides = {}) => ({
+    captureId,
+    width: 8,
+    height: 8,
+    ...AUTHORITATIVE,
+    ...overrides,
+  });
+  const pair = (overrides = {}) => ({
+    original: {
+      pixel: evidence("original-capture", overrides.originalPixel),
+      triUv: evidence("original-capture", overrides.originalTriUv),
+    },
+    v1: {
+      pixel: evidence("v1-capture", overrides.v1Pixel),
+      triUv: evidence("v1-capture", overrides.v1TriUv),
+    },
+  });
+  const healthy = validateV14dHairCapturePair(pair());
+  assert.equal(healthy.ok, true, JSON.stringify(healthy));
+
+  const bothFrameZero = validateV14dHairCapturePair({
+    ...pair({
+      originalPixel: { currentSeconds: 0, currentFrame: 0 },
+      originalTriUv: { currentSeconds: 0, currentFrame: 0 },
+      v1Pixel: { currentSeconds: 0, currentFrame: 0 },
+      v1TriUv: { currentSeconds: 0, currentFrame: 0 },
+    }),
+  });
+  assert.equal(bothFrameZero.ok, false, "双方同时 frame0 不能因彼此相等而通过");
+
+  const bothWrongSeconds = validateV14dHairCapturePair({
+    ...pair({
+      originalPixel: { currentSeconds: 3.5, currentFrame: 105 },
+      originalTriUv: { currentSeconds: 3.5, currentFrame: 105 },
+      v1Pixel: { currentSeconds: 3.5, currentFrame: 105 },
+      v1TriUv: { currentSeconds: 3.5, currentFrame: 105 },
+    }),
+  });
+  assert.equal(bothWrongSeconds.ok, false, "双方同时错误秒数不能通过");
+
+  const wrongFps = validateV14dHairCapturePair({
+    ...pair({ originalPixel: { fps: 24 } }),
+  });
+  assert.equal(wrongFps.ok, false, "显式 fps 错配必须拒绝");
+
+  for (const animationName of ["", "wrong-pose.vmd"]) {
+    const wrongName = validateV14dHairCapturePair({
+      ...pair({
+        originalPixel: { animationName },
+        originalTriUv: { animationName },
+        v1Pixel: { animationName },
+        v1TriUv: { animationName },
+      }),
+    });
+    assert.equal(wrongName.ok, false, "双方动画名=" + JSON.stringify(animationName) + " 不能通过");
+  }
+
+  const captureIdMismatch = validateV14dHairCapturePair({
+    ...pair({ originalTriUv: { captureId: "different-triuv" } }),
+  });
+  assert.equal(captureIdMismatch.ok, false, "pixel↔triUV captureId 错配必须拒绝");
+
+  const captureTimeMismatch = validateV14dHairCapturePair({
+    ...pair({ v1TriUv: { currentSeconds: 4 + 1 / 30, currentFrame: 121 } }),
+  });
+  assert.equal(captureTimeMismatch.ok, false, "pixel↔triUV 时间/帧错配必须拒绝");
+});
+
 test("逐像素目标：线性 hair_d 样本只经 authority tint 后转回显示字节", () => {
   const target = v14dHairTargetDisplayFromLinear([1, 1, 1]);
   assert.deepEqual(target, V14D_HAIR_TINT.map((value) => linearToSrgbByte(value)));
@@ -307,6 +382,21 @@ test("patch 源码只从 v14dAuthority.js 生成头发 tint，不再内含旧硬
   assert.match(patchSource, /v14dAuthority\.js/);
   assert.match(patchSource, /V14D_HAIR_TINT_LITERAL/);
   assert.doesNotMatch(patchSource, /\[0\.84\s*,\s*0\.85\s*,\s*0\.96/);
+});
+
+test("Hair analyzer 默认使用原子画布，legacy 画布只留给场景 lane", () => {
+  const analyzerSource = fs.readFileSync(path.join(process.cwd(), "scripts", "analyze-reze-k3-v1-diff.mjs"), "utf8");
+  assert.match(analyzerSource, /const FORMAL_HAIR_ORIG = path\.join\(OUT, ["']g3-hair-original-canvas\.png["']\)/);
+  assert.match(analyzerSource, /const FORMAL_HAIR_V1 = path\.join\(OUT, ["']g3-hair-v1-canvas\.png["']\)/);
+  assert.match(analyzerSource, /process\.env\.V14D_HAIR_ORIG_CANVAS \|\| FORMAL_HAIR_ORIG/);
+  assert.match(analyzerSource, /process\.env\.V14D_HAIR_V1_CANVAS \|\| FORMAL_HAIR_V1/);
+  assert.match(analyzerSource, /const ORIG = path\.join\(OUT, ["']g3-original-canvas\.png["']\)/);
+  assert.match(analyzerSource, /const V1 = path\.join\(OUT, ["']g3-v1-canvas\.png["']\)/);
+  assert.match(analyzerSource, /nonSkinStats\(r, hairOrigImage, hairActual\)/);
+
+  const acceptSource = fs.readFileSync(path.join(process.cwd(), "scripts", "accept-reze-k3-v1-stage.mjs"), "utf8");
+  assert.match(acceptSource, /delete analyzerEnv\.V14D_HAIR_ORIG_CANVAS/);
+  assert.match(acceptSource, /delete analyzerEnv\.V14D_HAIR_V1_CANVAS/);
 });
 
 // 真实 PMX 分区解析（资产存在时）：HairA/HairB UV 网格非空且分区不坍缩。

@@ -27,6 +27,8 @@ import {
 const OUT = path.resolve(".scratch/reze-k3-v1-stage");
 const ORIG = path.join(OUT, "g3-original-canvas.png");
 const V1 = path.join(OUT, "g3-v1-canvas.png");
+const FORMAL_HAIR_ORIG = path.join(OUT, "g3-hair-original-canvas.png");
+const FORMAL_HAIR_V1 = path.join(OUT, "g3-hair-v1-canvas.png");
 // 同变体连拍（original 第二帧，可选）：用于把 original↔V1 的衣服/装备差异与同变体
 // 待机微动帧间噪声区分（Stage 2C-M1 噪声基线，防把微动误判为材质泄漏）。
 const ORIG_B = path.join(OUT, "g3-original-canvas-b.png");
@@ -42,8 +44,10 @@ const V1_ACTUAL = NEG_WRONGTINT ? path.join(OUT, "g3-v1-canvas-wrongtint.png") :
 // Hair 正式目标使用 probe 原子返回的同一冻结姿态画布；继承的 Face/BodySkin/
 // 场景稳定性仍使用原有 A/B 画布。两条 lane 共享尺寸与同一验收运行，但不把
 // 不同姿态的像素混入 Hair origMae/v1Mae。
-const HAIR_ORIG = process.env.V14D_HAIR_ORIG_CANVAS || ORIG;
-const HAIR_V1 = process.env.V14D_HAIR_V1_CANVAS || V1;
+// Hair 正式 lane 默认只消费原子 probe 产物；legacy g3-original/g3-v1 只服务
+// Face/BodySkin/场景稳定性 lane。环境覆盖保留给显式诊断/夹具，不改变正式默认。
+const HAIR_ORIG = process.env.V14D_HAIR_ORIG_CANVAS || FORMAL_HAIR_ORIG;
+const HAIR_V1 = process.env.V14D_HAIR_V1_CANVAS || FORMAL_HAIR_V1;
 const REPORT_JSON = NEG_WRONGTINT
   ? path.join(OUT, "visual-diff-wrongtint.json")
   : NEG_SWAP_SLOT_TARGET
@@ -54,6 +58,10 @@ if (NEG_WRONGTINT && NEG_SWAP_SLOT_TARGET) {
   process.exit(1);
 }
 if (!fs.existsSync(ORIG) || !fs.existsSync(V1)) { console.error("missing canvas pngs"); process.exit(1); }
+if (!fs.existsSync(HAIR_ORIG) || !fs.existsSync(HAIR_V1)) {
+  console.error("missing formal hair canvas pngs: " + HAIR_ORIG + " / " + HAIR_V1);
+  process.exit(1);
+}
 if (NEG_WRONGTINT && !fs.existsSync(V1_ACTUAL)) { console.error("missing wrongtint canvas " + V1_ACTUAL); process.exit(1); }
 
 async function loadRaw(p) { const { data, info } = await sharp(p).ensureAlpha().raw().toBuffer({ resolveWithObject: true }); return { data, width: info.width, height: info.height }; }
@@ -158,14 +166,14 @@ function skinStats(r) {
 // 模型在待机 VMD 循环中持续微动，含 specular/RMO 的衣服对高光角极敏感，同变体连拍
 // pctOver2 即达 ~15%（帧间噪声），与 original↔V1 几乎相同，故 pctOver2 无法区分
 // 真实改写与帧间微动；真实成片材质改写由 meanMeanDiff/maxMeanDiff 捕获（皮肤对照 25-36）。
-function nonSkinStats(r) {
+function nonSkinStats(r, imgA = a, imgB = b) {
   const { x0, y0, x1, y1 } = bounds(r);
   let n = 0, sumAbs = 0, md = [0, 0, 0], over2 = 0;
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
     const i = (y * W + x) * 4;
-    if (a.data[i + 3] < 8) continue;
-    if (isSkin(a.data[i], a.data[i + 1], a.data[i + 2])) continue;
-    const d0 = a.data[i] - b.data[i], d1 = a.data[i + 1] - b.data[i + 1], d2 = a.data[i + 2] - b.data[i + 2];
+    if (imgA.data[i + 3] < 8) continue;
+    if (isSkin(imgA.data[i], imgA.data[i + 1], imgA.data[i + 2])) continue;
+    const d0 = imgA.data[i] - imgB.data[i], d1 = imgA.data[i + 1] - imgB.data[i + 1], d2 = imgA.data[i + 2] - imgB.data[i + 2];
     const ad = (Math.abs(d0) + Math.abs(d1) + Math.abs(d2)) / 3;
     sumAbs += ad; if (ad > 2) over2++;
     md[0] += d0; md[1] += d1; md[2] += d2; n++;
@@ -770,7 +778,7 @@ for (const [name, r] of Object.entries(regions)) {
     // 双判定（非「hairChanged=true」冒充）。变化判定与皮肤同判别力；收敛判定用
     // 同 UV 目标误差（targetMae/drop，目标=srgb(hair_d)×tint 的线性合成转回显示字节）。
     const slot = name === "hairA" ? "hairA" : name === "hairB" ? "hairB" : null;
-    const st = slot ? hairSlotDiffStats(r, hairMaterialIds[slot]) : nonSkinStats(r); out.regions[name] = st;
+    const st = slot ? hairSlotDiffStats(r, hairMaterialIds[slot]) : nonSkinStats(r, hairOrigImage, hairActual); out.regions[name] = st;
     if (slot) out.regions[name].identity = { materialName: slot === "hairA" ? "HairA" : "HairB", materialId: hairMaterialIds[slot], source: "engine-pick-material-id-depth" };
     if (st.error) {
       failures.push(name + " 逐槽材质身份样本不可用: " + st.error);

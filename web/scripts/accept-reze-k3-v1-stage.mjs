@@ -6,7 +6,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { validateV14dHairCapturePair } from "../src/features/stage/v14dHairCaptureState.js";
+import {
+  validateV14dHairCapturePair,
+  V14D_HAIR_AUTHORITATIVE_CAPTURE,
+} from "../src/features/stage/v14dHairCaptureState.js";
 
 const CHROME_EXE = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const ORIGIN = process.env.V14D_CAPTURE_ORIGIN || "http://127.0.0.1:3114";
@@ -53,9 +56,12 @@ const HAIR_TEX = process.env.V14D_HAIR_TEX
   || path.join(KOLEDA_DIR, "Textures", "c_KoledaSSR01_slg_hair_d.png");
 const HAIR_PMX = process.env.V14D_HAIR_PMX || PMX;
 const HAIR_CAPTURE_VMD_URL = "/__probe__/koleda-v14d-authoritative-pose-f120.vmd";
-const HAIR_CAPTURE_FPS = Number(process.env.V14D_HAIR_CAPTURE_FPS || 30);
-const HAIR_CAPTURE_FRAME = Number(process.env.V14D_HAIR_CAPTURE_FRAME || 120);
-const HAIR_CAPTURE_SECONDS = Number(process.env.V14D_HAIR_CAPTURE_SECONDS || (HAIR_CAPTURE_FRAME / HAIR_CAPTURE_FPS));
+// Hair 正式 Gate 的姿态不可由环境变量改写；环境变量只允许切换外部资产，
+// 不能把另一秒/帧或另一动画伪装成权威样本。
+const HAIR_CAPTURE_FPS = V14D_HAIR_AUTHORITATIVE_CAPTURE.fps;
+const HAIR_CAPTURE_FRAME = V14D_HAIR_AUTHORITATIVE_CAPTURE.currentFrame;
+const HAIR_CAPTURE_SECONDS = V14D_HAIR_AUTHORITATIVE_CAPTURE.currentSeconds;
+const HAIR_CAPTURE_ANIMATION_NAME = V14D_HAIR_AUTHORITATIVE_CAPTURE.animationName;
 const IMPORT_DIR = path.join(OUT, "import-koleda");
 if (!fs.existsSync(path.join(IMPORT_DIR, PMX_NAME))) linkTree(KOLEDA_DIR, IMPORT_DIR);
 const MASK_LINK = path.join(IMPORT_DIR, "Textures", MASK_NAME);
@@ -298,6 +304,65 @@ async function captureHairAtomic() {
   });
 }
 function saveDataUrl(du, name) { if (!du || !du.startsWith("data:image/png")) return null; const f = path.join(OUT, name); fs.writeFileSync(f, Buffer.from(du.split(",")[1], "base64")); report.screenshots[name.replace(/\.png$/, "")] = f; return f; }
+function summarizeHairAtomicCapture(capture) {
+  if (!capture || capture.error) return { error: capture?.error || "missing atomic hair capture" };
+  const materials = Object.fromEntries(Object.entries(capture.byMaterial || {}).map(([name, info]) => {
+    const triMask = Array.isArray(info.triMask) ? info.triMask : [];
+    const triId = Array.isArray(info.triId) ? info.triId : [];
+    const uv = Array.isArray(info.uv) ? info.uv : [];
+    return [name, {
+      materialId: info.materialId ?? null,
+      materialIndex: info.materialIndex ?? null,
+      firstIndex: info.firstIndex ?? null,
+      indexCount: info.indexCount ?? null,
+      triangleCount: info.triangleCount ?? null,
+      triMaskSamples: triMask.reduce((sum, value) => sum + (value ? 1 : 0), 0),
+      triIdSamples: triId.reduce((sum, value) => sum + (Number.isInteger(Number(value)) && Number(value) >= 0 ? 1 : 0), 0),
+      uvSamples: Math.floor(uv.length / 2),
+      triangleUvsLength: Array.isArray(info.triangleUvs) ? info.triangleUvs.length : 0,
+    }];
+  }));
+  return {
+    source: capture.source || null,
+    captureId: capture.captureId ?? capture.captureEvidence?.pixel?.captureId ?? null,
+    width: capture.width ?? null,
+    height: capture.height ?? null,
+    captureState: capture.captureState || null,
+    captureProgressBeforeRead: capture.captureProgressBeforeRead || null,
+    captureProgressAfterRead: capture.captureProgressAfterRead || null,
+    captureEvidence: capture.captureEvidence || null,
+    materialIdByName: capture.materialIdByName || null,
+    materials,
+  };
+}
+function captureEvidenceWithDerivedFps(capture) {
+  const evidence = capture?.captureEvidence || {};
+  const source = evidence.pixel || capture?.captureState || {};
+  const seconds = Number(source.currentSeconds);
+  const frame = Number(source.currentFrame);
+  const fps = Number.isFinite(seconds) && Number.isFinite(frame) && seconds !== 0 ? frame / seconds : null;
+  const addFps = (sample) => fps === null ? { ...(sample || {}) } : { ...(sample || {}), fps };
+  return { pixel: addFps(evidence.pixel), triUv: addFps(evidence.triUv) };
+}
+function hairCaptureAudit(capture, atomicPair) {
+  const evidence = capture?.captureEvidence || {};
+  const pixel = evidence.pixel || {};
+  const triUv = evidence.triUv || {};
+  const seconds = Number(pixel.currentSeconds ?? capture?.captureState?.currentSeconds);
+  const frame = Number(pixel.currentFrame ?? capture?.captureState?.currentFrame);
+  return {
+    actual: {
+      seconds: Number.isFinite(seconds) ? seconds : null,
+      frame: Number.isFinite(frame) ? frame : null,
+      fps: Number.isFinite(seconds) && Number.isFinite(frame) && seconds !== 0 ? frame / seconds : null,
+      animationName: pixel.animationName ?? capture?.captureState?.animationName ?? null,
+    },
+    captureId: capture?.captureId ?? pixel.captureId ?? null,
+    pixelCaptureId: pixel.captureId ?? null,
+    triUvCaptureId: triUv.captureId ?? null,
+    pixelTriUvPair: atomicPair,
+  };
+}
 
 // ── G1：用户路径与切换 ───────────────────────────────────────────────
 try {
@@ -455,7 +520,8 @@ try {
   report.gates.G3 = report.gates.G3 || { status: "pass", failures: [] };
   report.gates.G3.legacyCanvas = { original: legacyOriginalPng, originalB: legacyOriginalBPng, v1: legacyV1Png };
 
-  // Hair 原子 lane：original/V1 各在变体重建后重新加载同一权威 VMD，并固定到同一秒/帧。
+  // Hair 原子 lane：original/V1 各在变体重建后重新加载同一权威 VMD，并固定到
+  // 不可覆盖的 4 秒/120 帧/30 FPS/权威动画名。
   await page.click(sel.variantBtn("original")); await waitRebuilt();
   const originalSetup = await prepareHairCapture();
   const originalAtomic = await captureHairAtomic();
@@ -475,19 +541,44 @@ try {
   await shot("g3-v1-full");
   const capturePair = validateV14dHairCapturePair({
     original: {
-      pixel: originalAtomic?.captureEvidence?.pixel,
-      triUv: originalAtomic?.captureEvidence?.triUv,
+      ...captureEvidenceWithDerivedFps(originalAtomic),
     },
     v1: {
-      pixel: hairTriUvCapture?.captureEvidence?.pixel,
-      triUv: hairTriUvCapture?.captureEvidence?.triUv,
+      ...captureEvidenceWithDerivedFps(hairTriUvCapture),
     },
   });
+  const originalHairAudit = hairCaptureAudit(originalAtomic, capturePair.original);
+  const v1HairAudit = hairCaptureAudit(hairTriUvCapture, capturePair.v1);
+  const originalAtomicMeta = path.join(OUT, "g3-hair-original-atomic.json");
+  const v1AtomicMeta = path.join(OUT, "g3-hair-v1-atomic-summary.json");
+  // original probe 也必须留下可审计证据，即使后续 V1 证据失败；只保存
+  // captureEvidence/captureState 与材质解析计数摘要，不复制正式 triUV 大数组。
+  fs.writeFileSync(originalAtomicMeta, JSON.stringify(summarizeHairAtomicCapture(originalAtomic), null, 2));
+  fs.writeFileSync(v1AtomicMeta, JSON.stringify(summarizeHairAtomicCapture(hairTriUvCapture), null, 2));
   report.gates.G3 = report.gates.G3 || { status: "pass", failures: [] };
   report.gates.G3.hairCaptureTime = {
-    requested: { seconds: HAIR_CAPTURE_SECONDS, frame: HAIR_CAPTURE_FRAME, fps: HAIR_CAPTURE_FPS },
+    requested: {
+      seconds: HAIR_CAPTURE_SECONDS,
+      frame: HAIR_CAPTURE_FRAME,
+      fps: HAIR_CAPTURE_FPS,
+      animationName: HAIR_CAPTURE_ANIMATION_NAME,
+    },
     originalSetup,
     v1Setup,
+    actual: { original: originalHairAudit.actual, v1: v1HairAudit.actual },
+    captureIds: {
+      original: {
+        captureId: originalHairAudit.captureId,
+        pixel: originalHairAudit.pixelCaptureId,
+        triUv: originalHairAudit.triUvCaptureId,
+      },
+      v1: {
+        captureId: v1HairAudit.captureId,
+        pixel: v1HairAudit.pixelCaptureId,
+        triUv: v1HairAudit.triUvCaptureId,
+      },
+    },
+    pixelTriUvPairs: { original: capturePair.original, v1: capturePair.v1 },
     original: originalAtomic?.captureState || null,
     v1: hairTriUvCapture?.captureState || null,
     pair: capturePair,
@@ -526,6 +617,8 @@ try {
       mask: maskPng,
       metadata: maskMeta,
       triUv: triUvMeta,
+      originalAtomic: originalAtomicMeta,
+      v1AtomicSummary: v1AtomicMeta,
       materialIdByName: hairTriUvCapture.materialIdByName,
       hairA: { materialName: "HairA", materialId: hairTriUvCapture.materialIdByName?.HairA ?? null },
       hairB: { materialName: "HairB", materialId: hairTriUvCapture.materialIdByName?.HairB ?? null },
@@ -576,9 +669,11 @@ try {
     ...process.env,
     V14D_HAIR_TEX: HAIR_TEX,
     V14D_HAIR_PMX: HAIR_PMX,
-    V14D_HAIR_ORIG_CANVAS: path.join(OUT, "g3-hair-original-canvas.png"),
-    V14D_HAIR_V1_CANVAS: path.join(OUT, "g3-hair-v1-canvas.png"),
   };
+  // 让 accept 与独立 analyzer 完全走正式默认 Hair 原子画布；即使外层环境
+  // 曾设置过旧覆盖，也不能让完整 Gate 靠 V14D_HAIR_*_CANVAS 绕过默认契约。
+  delete analyzerEnv.V14D_HAIR_ORIG_CANVAS;
+  delete analyzerEnv.V14D_HAIR_V1_CANVAS;
   const parseVisualReport = (text) => {
     const marker = text.indexOf("===VISUAL-GATE");
     const body = text.slice(text.indexOf("{"), marker >= 0 ? marker : text.length).trim();
