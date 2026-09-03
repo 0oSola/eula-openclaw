@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -22,6 +23,10 @@ import {
   V14D_HAIR_TINT_LINEAR,
 } from "../src/features/stage/v14dHairPartition.js";
 import { V14D_HAIR_TINT } from "../src/features/stage/v14dAuthority.js";
+import {
+  captureV14dHairRuntimeState,
+  restoreV14dHairRuntimeState,
+} from "../src/features/stage/v14dHairCaptureState.js";
 
 // 最小 fake style groups（hair/face/body 分组 + 一个无关分组），驱动纯函数负测。
 // includeV1=false 返回原始 K3 分组（供 buildV14dSkinVariantStyleGroups 的输入）；
@@ -155,7 +160,98 @@ test("线性 hair_d 双线性采样：四个角的中心值按 WebGPU texel-cent
   };
   const sample = sampleHairTextureLinear(texture, 0.5, 0.5);
   assert.deepEqual(sample.map((value) => Number(value.toFixed(6))), [0.5, 0.5, 0.25]);
-  assert.deepEqual(sampleHairTextureLinear(texture, 0, 0), [0, 0, 0]);
+  assert.deepEqual(sampleHairTextureLinear(texture, 0, 0), [0.5, 0.5, 0.25]);
+});
+
+test("线性 hair_d 双线性采样：REPEAT 在左右/上下边界与越界坐标保持首尾接缝", () => {
+  const texture = {
+    width: 2,
+    height: 2,
+    linear: new Float32Array([
+      0, 0, 0,
+      1, 0, 0,
+      0, 1, 0,
+      1, 1, 1,
+    ]),
+  };
+  const rounded = (uv) => sampleHairTextureLinear(texture, uv[0], uv[1]).map((value) => Number(value.toFixed(6)));
+  assert.deepEqual(rounded([0.01, 0.01]), [0.48, 0.48, 0.2304]);
+  assert.deepEqual(rounded([0.99, 0.99]), [0.52, 0.52, 0.2704]);
+  assert.deepEqual(rounded([1, 1]), [0.5, 0.5, 0.25]);
+  assert.deepEqual(rounded([-1, -1]), [0.5, 0.5, 0.25]);
+  assert.deepEqual(rounded([1.01, 1.01]), rounded([0.01, 0.01]));
+  assert.deepEqual(rounded([-0.99, -0.99]), rounded([0.01, 0.01]));
+});
+
+test("Hair triUV 负测：错槽仍保留合法样本，失败必须来自自然目标指标", (t) => {
+  const reportPath = path.join(process.cwd(), ".scratch", "reze-k3-v1-stage", "visual-diff-swap-slot-target.json");
+  const analyzerPath = path.join(process.cwd(), "scripts", "analyze-reze-k3-v1-diff.mjs");
+  if (!fs.existsSync(reportPath) || !fs.existsSync(analyzerPath)) {
+    t.skip("真实 /companion triUV 证据尚未生成");
+    return;
+  }
+  const run = spawnSync(process.execPath, [analyzerPath, "--neg-swap-slot-target"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assert.equal(run.status, 1, run.stdout + run.stderr);
+  const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  for (const slot of ["hairA", "hairB"]) {
+    const metric = report.regions[slot].targetConvergence;
+    assert.ok(metric.samples >= 30, slot + " 当前槽样本必须存在");
+    assert.ok(metric.targetSamples >= 30, slot + " 错槽目标样本必须存在");
+    assert.equal(metric.rejectedNoTriUv, 0);
+    assert.equal(metric.rejectedInvalidTri, 0);
+    assert.equal(metric.rejectedBarycentric, 0);
+    assert.equal(metric.targetBinding.inputsValid, true);
+    assert.equal(metric.metricGate, false, slot + " 必须由自然指标失败");
+    assert.ok(metric.metricFailureReasons.some((reason) => /v1Mae|drop|P95/i.test(reason)), slot + " 缺少自然指标失败证据");
+  }
+  assert.equal(report.negativeVerdict.status, "rejected");
+  assert.deepEqual(report.negativeVerdict.analysisFailures, []);
+});
+
+test("Hair triUV 采集状态：暂停非零时间与播放状态均恢复，未运行循环不被启动", () => {
+  const makeModel = (progress) => {
+    const state = { ...progress };
+    return {
+      state,
+      getAnimationProgress: () => ({ ...state }),
+      playCalls: 0,
+      pauseCalls: 0,
+      stopCalls: 0,
+      seekCalls: [],
+      play() { this.playCalls += 1; state.playing = true; state.paused = false; },
+      pause() { this.pauseCalls += 1; state.playing = false; state.paused = true; },
+      stop() { this.stopCalls += 1; state.playing = false; state.paused = false; },
+      seek(seconds) { this.seekCalls.push(seconds); state.current = seconds; },
+    };
+  };
+  const makeEngine = (running) => ({
+    animationFrameId: running ? 7 : null,
+    runCalls: 0,
+    runRenderLoop() { this.runCalls += 1; this.animationFrameId = 8; },
+  });
+
+  const pausedModel = makeModel({ current: 5.5, duration: 10, animationName: "paused.vmd", looping: true, playing: false, paused: true });
+  const pausedEngine = makeEngine(false);
+  const pausedSnapshot = captureV14dHairRuntimeState(pausedModel, pausedEngine);
+  pausedModel.seek(0); pausedModel.pause();
+  restoreV14dHairRuntimeState(pausedModel, pausedEngine, pausedSnapshot);
+  assert.equal(pausedModel.state.current, 5.5);
+  assert.equal(pausedModel.state.playing, false);
+  assert.equal(pausedModel.state.paused, true);
+  assert.equal(pausedEngine.runCalls, 0);
+
+  const playingModel = makeModel({ current: 2.25, duration: 10, animationName: "playing.vmd", looping: true, playing: true, paused: false });
+  const playingEngine = makeEngine(true);
+  const playingSnapshot = captureV14dHairRuntimeState(playingModel, playingEngine);
+  playingModel.seek(0); playingModel.pause();
+  restoreV14dHairRuntimeState(playingModel, playingEngine, playingSnapshot);
+  assert.equal(playingModel.state.current, 2.25);
+  assert.equal(playingModel.state.playing, true);
+  assert.equal(playingModel.state.paused, false);
+  assert.equal(playingEngine.runCalls, 1);
 });
 
 test("逐像素目标：线性 hair_d 样本只经 authority tint 后转回显示字节", () => {

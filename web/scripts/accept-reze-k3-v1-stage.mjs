@@ -509,6 +509,9 @@ try {
     const body = text.slice(text.indexOf("{"), marker >= 0 ? marker : text.length).trim();
     try { return body.startsWith("{") ? JSON.parse(body) : null; } catch { return null; }
   };
+  const readVisualReportFile = (fileName) => {
+    try { return JSON.parse(fs.readFileSync(path.join(OUT, fileName), "utf8")); } catch { return null; }
+  };
   const runAnalyzer = (args = []) => {
     try {
       const stdout = execSync(["node", "scripts/analyze-reze-k3-v1-diff.mjs", ...args].join(" "), { cwd: process.cwd(), encoding: "utf8", env: analyzerEnv, stdio: ["ignore", "pipe", "pipe"] });
@@ -522,7 +525,10 @@ try {
     if (normalAnalysis.exit !== 0) throw new Error((normalAnalysis.stdout || normalAnalysis.stderr || "analyzer failed").slice(0, 400));
     note("G3", "区域差异硬阻断 PASS");
   } catch (err) { fail("G3", "区域差异分析硬阻断失败: " + (err.message || err).toString().slice(0, 400)); }
-  const normalVisualReport = parseVisualReport(normalAnalysis.stdout);
+  // analyzer stdout 是给人看的精简摘要；regions.*.targetConvergence（含完整
+  // samples/triUV/metricFailureReasons）只在对应 JSON 中。正式验收必须消费完整
+  // 报告，不能因摘要省略字段而把有效证据当成缺失。
+  const normalVisualReport = readVisualReportFile("visual-diff.json") || parseVisualReport(normalAnalysis.stdout);
   report.gates.G3.visualDiff = {
     exit: normalAnalysis.exit,
     report: path.join(OUT, "visual-diff.json"),
@@ -530,26 +536,47 @@ try {
     hairB: normalVisualReport?.regions?.hairB?.targetConvergence || null,
   };
   // 真实错槽/错目标负测：交换 HairA/HairB 的 target/triUV 来源。它必须让正式
-  // Gate 以 exit=1 阻断，但 negativeVerdict.status 仍要是 rejected，且 analysisFailures
-  // 为空，证明失败来自语义绑定而非缺文件/样本或配置异常。
+  // Gate 以 exit=1 阻断，但 negativeVerdict.status 仍要是 rejected，且两槽必须
+  // 保留合法样本、输入证据有效，并由 v1Mae/drop/P95 等自然目标指标失败；不能
+  // 靠预置 targetBinding=false 或缺文件/配置异常伪造拒绝。
   const swapAnalysis = runAnalyzer(["--neg-swap-slot-target"]);
-  const swapVisualReport = parseVisualReport(swapAnalysis.stdout);
+  const swapVisualReport = readVisualReportFile("visual-diff-swap-slot-target.json") || parseVisualReport(swapAnalysis.stdout);
   const swapNegative = swapVisualReport?.negativeVerdict || null;
+  const swapMetrics = {
+    hairA: swapVisualReport?.regions?.hairA?.targetConvergence || null,
+    hairB: swapVisualReport?.regions?.hairB?.targetConvergence || null,
+  };
+  const swapMetricRejected = [swapMetrics.hairA, swapMetrics.hairB].every((metric) =>
+    metric?.metricGate === false
+    && metric.samples >= 30
+    && metric.targetSamples >= 30
+    && metric.targetBinding?.inputsValid === true
+    && metric.rejectedNoTriUv === 0
+    && metric.rejectedInvalidTri === 0
+    && metric.rejectedBarycentric === 0
+    && Array.isArray(metric.metricFailureReasons)
+    && metric.metricFailureReasons.some((reason) => /v1Mae|drop|P95/i.test(reason)),
+  );
   const swapRejected = swapAnalysis.exit !== 0
     && swapNegative?.status === "rejected"
     && swapNegative?.formalTargetGate?.hairA === false
     && swapNegative?.formalTargetGate?.hairB === false
     && swapNegative?.semanticMismatch === true
+    && swapNegative?.naturalMetricGate?.hairA === false
+    && swapNegative?.naturalMetricGate?.hairB === false
+    && swapNegative?.bindingInputsValid?.hairA === true
+    && swapNegative?.bindingInputsValid?.hairB === true
+    && swapMetricRejected
     && Array.isArray(swapNegative?.analysisFailures)
     && swapNegative.analysisFailures.length === 0;
   report.gates.G3.swapSlotTarget = {
     analyzerExit: swapAnalysis.exit,
     analyzer: swapNegative,
-    analyzerFailures: swapVisualReport?.failures ?? null,
+    analysisFailures: swapNegative?.analysisFailures ?? null,
     stderr: swapAnalysis.stderr.slice(0, 1000),
     rejected: swapRejected,
   };
-  if (!swapRejected) fail("G3", "错槽/错目标负测协议失败：必须 analyzer exit 非零、negativeVerdict=rejected、两槽正式 Gate=false 且 analysisFailures=[]；实际 " + JSON.stringify(report.gates.G3.swapSlotTarget));
+  if (!swapRejected) fail("G3", "错槽/错目标负测协议失败：必须 analyzer exit 非零、两槽正式 Gate=false、合法样本与输入证据存在、自然指标失败且 analysisFailures=[]；实际 " + JSON.stringify(report.gates.G3.swapSlotTarget));
   else note("G3", "错槽/错目标负测 PASS（正式 Gate 非零阻断，语义拒绝非配置异常）");
   // Stage 2C-M1 修正轮：头发前刘海/后长发独立近景（前/后视角摆拍）。
   // 用 cameraOrbit 探针暂停待机 VMD 后摆拍头部特写，分别采 original/V1 纯画布；
@@ -590,19 +617,21 @@ try {
   if (!negTintPix.error) saveDataUrl(negTintPix.dataUrl, "g3-v1-canvas-wrongtint.png");
   const wrongTintResult = runAnalyzer(["--neg-wrongtint"]);
   const wrongTintExit = wrongTintResult.exit;
-  const wrongTintAnalysis = parseVisualReport(wrongTintResult.stdout);
+  const wrongTintAnalysis = readVisualReportFile("visual-diff-wrongtint.json") || parseVisualReport(wrongTintResult.stdout);
   const negativeVerdict = wrongTintAnalysis?.negativeVerdict ?? null;
   const formalReject = negativeVerdict?.status === "rejected"
     && negativeVerdict?.formalTargetGate?.hairA === false
     && negativeVerdict?.formalTargetGate?.hairB === false;
   const wrongTintRejected = wrongTintExit === 0 && formalReject && Array.isArray(negativeVerdict?.rejectionReason)
-    && (wrongTintAnalysis?.failures?.length ?? 0) === 0;
+    && (wrongTintAnalysis?.failures?.length ?? 0) === 0
+    && Array.isArray(negativeVerdict?.analysisFailures)
+    && negativeVerdict.analysisFailures.length === 0;
   report.gates.G3.wrongTint = {
     applied: negTint,
     canvasSaved: !negTintPix.error,
     analyzerExit: wrongTintExit,
     analyzer: negativeVerdict,
-    analyzerFailures: wrongTintAnalysis?.failures ?? null,
+    analysisFailures: negativeVerdict?.analysisFailures ?? null,
     stderr: wrongTintResult.stderr.slice(0, 1000),
     rejected: wrongTintRejected,
   };

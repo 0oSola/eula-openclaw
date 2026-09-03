@@ -59,8 +59,11 @@ export function sampleHairTextureLinear(texture, u, v) {
   const y0 = Math.floor(y);
   const fx = x - x0;
   const fy = y - y0;
-  const clamp = (value, max) => Math.max(0, Math.min(max - 1, value));
-  const at = (px, py, channel) => texture.linear[(clamp(py, texture.height) * texture.width + clamp(px, texture.width)) * 3 + channel];
+  const repeatIndex = (value, size) => {
+    const remainder = value % size;
+    return remainder < 0 ? remainder + size : remainder;
+  };
+  const at = (px, py, channel) => texture.linear[(repeatIndex(py, texture.height) * texture.width + repeatIndex(px, texture.width)) * 3 + channel];
   return [0, 1, 2].map((channel) =>
     at(x0, y0, channel) * (1 - fx) * (1 - fy)
     + at(x0 + 1, y0, channel) * fx * (1 - fy)

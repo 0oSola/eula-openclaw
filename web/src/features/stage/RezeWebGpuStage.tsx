@@ -34,6 +34,10 @@ import {
   setRezeVmdCompletionHandler,
 } from "@/features/stage/rezeVmdPlayback.js";
 import {
+  captureV14dHairRuntimeState,
+  restoreV14dHairRuntimeState,
+} from "@/features/stage/v14dHairCaptureState.js";
+import {
   isKoledaMaskMaterialName,
   isKoledaModelIdentifier,
   lockKoledaMorphWeights,
@@ -3195,17 +3199,8 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         const engine = engineRef.current;
         const model = modelRef.current;
         if (!canvas || !engine || !model) return { error: "no canvas/engine/model" };
-        const progressBefore = typeof model.getAnimationProgress === "function"
-          ? model.getAnimationProgress()
-          : null;
-        const wasPlaying = Boolean(progressBefore?.playing);
-        const animationName = progressBefore?.animationName ?? null;
-        const restoreRuntimeLoop = () => {
-          try {
-            if (wasPlaying && animationName) model.play(animationName);
-            engine.runRenderLoop();
-          } catch { /* 采集失败也不能让诊断探针永久停住生产循环 */ }
-        };
+        const runtimeState = captureV14dHairRuntimeState(model, engine);
+        let captureSuspended = false;
         try {
           await flushV14dDiagnosticBarrier(engine);
           const materials = model.getMaterials();
@@ -3232,6 +3227,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
 
           // 所有读取先固定到一个实际相机/实际停帧，避免 triUv 与 production pick
           // 之间因 VMD/渲染循环推进而发生屏幕位移。
+          captureSuspended = true;
           try {
             engine.stopRenderLoop();
             model.pause();
@@ -3245,10 +3241,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           maskCanvas.width = width;
           maskCanvas.height = height;
           const maskContext = maskCanvas.getContext("2d");
-          if (!maskContext) {
-            restoreRuntimeLoop();
-            return { error: "material mask canvas unavailable" };
-          }
+          if (!maskContext) return { error: "material mask canvas unavailable" };
           const maskImage = maskContext.createImageData(width, height);
           maskImage.data.set(materialMask.data);
           maskContext.putImageData(maskImage, 0, 0);
@@ -3302,7 +3295,6 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
               getProjectionMatrix(): { values: Float32Array };
             };
           };
-          restoreRuntimeLoop();
           return {
             source: "engine-pick-material-id-depth+expanded-tri-uv",
             width,
@@ -3318,8 +3310,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             byMaterial,
           };
         } catch (error) {
-          restoreRuntimeLoop();
           return { error: error instanceof Error ? error.message : String(error) };
+        } finally {
+          if (captureSuspended) restoreV14dHairRuntimeState(model, engine, runtimeState);
         }
       },
       // 负测钩子（仅验收开关）：用错误 graph / 编译非法 graph 驱动 V1 styleGroup 应用，

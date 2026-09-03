@@ -34,8 +34,8 @@ const HAIR_MASK = path.join(OUT, "g3-hair-material-mask.png");
 const HAIR_MASK_META = path.join(OUT, "g3-hair-material-mask.json");
 const HAIR_TRI_UV = path.join(OUT, "g3-hair-tri-uv.json");
 const TARGET = process.env.V14D_TARGET || "C:\\w\\rk3-face-v14d\\.scratch\\v14d-face-static-derived\\blender-ref-finalFaceComposite.png";
-// 负测模式（仅 --neg-wrongtint）：读 G3 负测注入后的 wrongTint 画布，其余同正式口径。
-// 该模式要求正式画布已存在（用于对比），产出独立 visual-diff-wrongtint.json，不覆盖正式报告。
+// 负测模式（--neg-wrongtint / --neg-swap-slot-target）：读取 G3 负测画布或交换目标
+// 归属，其余同正式口径。负测要求正式画布已存在，产出独立报告，不覆盖正式报告。
 const NEG_WRONGTINT = process.argv.includes("--neg-wrongtint");
 const NEG_SWAP_SLOT_TARGET = process.argv.includes("--neg-swap-slot-target");
 const V1_ACTUAL = NEG_WRONGTINT ? path.join(OUT, "g3-v1-canvas-wrongtint.png") : V1;
@@ -248,6 +248,7 @@ const THRESHOLDS = {
   // > drop 且 绝对上限」，不用绝对零误差冒充逐像素对齐。
   hairTargetDrop: 0.05,         // (origMae - v1Mae)/origMae 必须 > 0.05（向目标显著下降）
   hairTargetAbsMae: 90,         // V1 对目标的绝对 MAE 上限（显示字节 0-255；含显示链亮度差）
+  hairTargetCanonicalTolerance: 0.001, // active target 相对同像素权威 UV 基准的 MAE 允许误差
   minHairTargetSamples: 30,     // 分区目标判定最小像素数（防近景框内无该槽像素假通过）
   // Stage 2C-M1：HairA/HairB 目标槽必须显著变化（V14D 银白紫乘色 [0.84,0.85,0.96] 真实生效）。
   // 阈值参考皮肤收敛口径（mae>1 且 maxMeanDiff>1），与皮肤/错误颜色负测共用同一判别力。
@@ -530,6 +531,9 @@ async function hairSlotTriUvTargetStats(r, slot, materialId) {
   // 同一材质身份 pass 产生的另一槽样本，不是人为颜色扰动。
   if (NEG_SWAP_SLOT_TARGET) {
     targetStream.length = 0;
+    // 使用另一槽的完整真实 triUV 记录流配给当前槽屏幕样本。
+    // 每条目标记录仍来自合法的 material-ID、triId、UV 和三角形重心校验；
+    // 正式失败不能依赖 targetBinding 布尔值，而要由实际目标误差证明。
     targetStream.push(...collectHairTriUvRecords(targetSlot));
   }
   if (samples.length > 0 && targetStream.length === 0) return { error: "swap target triUV samples unavailable" };
@@ -538,13 +542,23 @@ async function hairSlotTriUvTargetStats(r, slot, materialId) {
   const v1Errors = [];
   const origChannelErrors = [[], [], []];
   const v1ChannelErrors = [[], [], []];
+  const canonicalOrigErrors = [];
+  const canonicalV1Errors = [];
+  const canonicalOrigChannelErrors = [[], [], []];
+  const canonicalV1ChannelErrors = [[], [], []];
   let origAbs = 0;
   let v1Abs = 0;
+  let canonicalOrigAbs = 0;
+  let canonicalV1Abs = 0;
   for (let ordinal = 0; ordinal < samples.length; ordinal += 1) {
     const sample = samples[ordinal];
     const targetSample = targetStream[ordinal % targetStream.length];
     const targetLinear = sampleHairTextureLinear(hairTextureLinear, targetSample.u, targetSample.v);
     const target = v14dHairTargetDisplayFromLinear(targetLinear);
+    // 当前屏幕样本自己的 UV 是不可交换的权威基准。正常模式下它与 target
+    // 完全相同；错槽负测仍计算它，用于证明 active target 的误差确实变差。
+    const canonicalLinear = sampleHairTextureLinear(hairTextureLinear, sample.u, sample.v);
+    const canonicalTarget = v14dHairTargetDisplayFromLinear(canonicalLinear);
     const offset = sample.index * 4;
     const orig = [a.data[offset], a.data[offset + 1], a.data[offset + 2]];
     const v1 = [hairActual.data[offset], hairActual.data[offset + 1], hairActual.data[offset + 2]];
@@ -552,11 +566,19 @@ async function hairSlotTriUvTargetStats(r, slot, materialId) {
     const v1Channels = v1.map((value, channel) => Math.abs(value - target[channel]));
     const origPixel = origChannels.reduce((sum, value) => sum + value, 0) / 3;
     const v1Pixel = v1Channels.reduce((sum, value) => sum + value, 0) / 3;
+    const canonicalOrigChannels = orig.map((value, channel) => Math.abs(value - canonicalTarget[channel]));
+    const canonicalV1Channels = v1.map((value, channel) => Math.abs(value - canonicalTarget[channel]));
+    const canonicalOrigPixel = canonicalOrigChannels.reduce((sum, value) => sum + value, 0) / 3;
+    const canonicalV1Pixel = canonicalV1Channels.reduce((sum, value) => sum + value, 0) / 3;
     origErrors.push(origPixel); v1Errors.push(v1Pixel);
     origAbs += origPixel; v1Abs += v1Pixel;
+    canonicalOrigErrors.push(canonicalOrigPixel); canonicalV1Errors.push(canonicalV1Pixel);
+    canonicalOrigAbs += canonicalOrigPixel; canonicalV1Abs += canonicalV1Pixel;
     for (let channel = 0; channel < 3; channel += 1) {
       origChannelErrors[channel].push(origChannels[channel]);
       v1ChannelErrors[channel].push(v1Channels[channel]);
+      canonicalOrigChannelErrors[channel].push(canonicalOrigChannels[channel]);
+      canonicalV1ChannelErrors[channel].push(canonicalV1Channels[channel]);
     }
     sample.origError = origPixel;
     sample.v1Error = v1Pixel;
@@ -564,9 +586,37 @@ async function hairSlotTriUvTargetStats(r, slot, materialId) {
 
   const origMae = samples.length ? origAbs / samples.length : 0;
   const v1Mae = samples.length ? v1Abs / samples.length : 0;
+  const canonicalOrigMae = samples.length ? canonicalOrigAbs / samples.length : 0;
+  const canonicalV1Mae = samples.length ? canonicalV1Abs / samples.length : 0;
   const drop = origMae > 0 ? (origMae - v1Mae) / origMae : 0;
-  const targetBindingConsistent = !NEG_SWAP_SLOT_TARGET && targetSlot === slot
-    && Number(info.materialId) === materialId;
+  const activeV1P95 = percentile95(v1Errors);
+  const canonicalV1P95 = percentile95(canonicalV1Errors);
+  const targetV1MaePenalty = v1Mae - canonicalV1Mae;
+  const targetMaterialId = Number(hairTriUvInfo(targetSlot)?.materialId);
+  const targetBindingConsistent = targetSlot === slot
+    && Number(info.materialId) === materialId
+    && targetMaterialId === materialId;
+  const targetBindingInputsValid = Number.isInteger(materialId) && materialId > 0
+    && Number.isInteger(Number(info.materialId)) && Number(info.materialId) > 0
+    && Number.isInteger(targetMaterialId) && targetMaterialId > 0
+    && samples.length >= THRESHOLDS.minHairTargetSamples
+    && targetStream.length >= THRESHOLDS.minHairTargetSamples
+    && rejectedNoTriUv === 0
+    && rejectedInvalidTri === 0
+    && rejectedBarycentric === 0;
+  const coverage = +(samples.length / Math.max(1, roiPixels)).toFixed(6);
+  const metricFailureReasons = [];
+  if (samples.length < THRESHOLDS.minHairTargetSamples) metricFailureReasons.push("samples<" + THRESHOLDS.minHairTargetSamples);
+  if (targetStream.length < THRESHOLDS.minHairTargetSamples) metricFailureReasons.push("targetSamples<" + THRESHOLDS.minHairTargetSamples);
+  if (!(coverage > 0)) metricFailureReasons.push("coverage<=0");
+  if (!(v1Mae < origMae)) metricFailureReasons.push("v1Mae>=origMae (" + v1Mae.toFixed(3) + ">=" + origMae.toFixed(3) + ")");
+  if (!(drop > THRESHOLDS.hairTargetDrop)) metricFailureReasons.push("drop<=" + THRESHOLDS.hairTargetDrop + " (" + drop.toFixed(4) + ")");
+  if (!(v1Mae < THRESHOLDS.hairTargetAbsMae)) metricFailureReasons.push("v1Mae>=" + THRESHOLDS.hairTargetAbsMae + " (" + v1Mae.toFixed(3) + ")");
+  if (!origErrors.length || !v1Errors.length || !Number.isFinite(activeV1P95) || !Number.isFinite(canonicalV1P95)) metricFailureReasons.push("P95 unavailable");
+  if (!(targetV1MaePenalty <= THRESHOLDS.hairTargetCanonicalTolerance)) {
+    metricFailureReasons.push("v1Mae>samePixelCanonical (" + v1Mae.toFixed(3) + ">" + canonicalV1Mae.toFixed(3) + ", delta=" + targetV1MaePenalty.toFixed(3) + "); P95=" + roundMetric(activeV1P95) + ">" + roundMetric(canonicalV1P95));
+  }
+  const metricGate = metricFailureReasons.length === 0;
   const metric = {
     slot,
     materialName: hairMaterialName(slot),
@@ -578,9 +628,10 @@ async function hairSlotTriUvTargetStats(r, slot, materialId) {
       materialId,
       triUvMaterialId: Number(info.materialId),
       targetTriUvSourceSlot: targetSlot,
-      targetTriUvMaterialId: Number(hairTriUvInfo(targetSlot)?.materialId),
+      targetTriUvMaterialId: targetMaterialId,
       targetSamples: targetStream.length,
       consistent: targetBindingConsistent,
+      inputsValid: targetBindingInputsValid,
       mode: NEG_SWAP_SLOT_TARGET ? "swapped-negative" : "same-material",
     },
     samples: samples.length,
@@ -591,15 +642,26 @@ async function hairSlotTriUvTargetStats(r, slot, materialId) {
     rejectedNoTriUv,
     rejectedInvalidTri,
     rejectedBarycentric,
-    coverage: +(samples.length / Math.max(1, roiPixels)).toFixed(6),
+    coverage,
     materialCoverage: +(materialForegroundPixels / Math.max(1, roiPixels)).toFixed(6),
     triUvCoverage: +(samples.length / Math.max(1, materialForegroundPixels)).toFixed(6),
     origMae: +origMae.toFixed(3),
     v1Mae: +v1Mae.toFixed(3),
     drop: +drop.toFixed(4),
+    canonicalTarget: {
+      origMae: +canonicalOrigMae.toFixed(3),
+      v1Mae: +canonicalV1Mae.toFixed(3),
+      p95: {
+        orig: roundMetric(percentile95(canonicalOrigErrors)),
+        v1: roundMetric(canonicalV1P95),
+        origByChannel: canonicalOrigChannelErrors.map((values) => roundMetric(percentile95(values))),
+        v1ByChannel: canonicalV1ChannelErrors.map((values) => roundMetric(percentile95(values))),
+      },
+    },
+    targetV1MaePenalty: +targetV1MaePenalty.toFixed(3),
     p95: {
       orig: roundMetric(percentile95(origErrors)),
-      v1: roundMetric(percentile95(v1Errors)),
+      v1: roundMetric(activeV1P95),
       origByChannel: origChannelErrors.map((values) => roundMetric(percentile95(values))),
       v1ByChannel: v1ChannelErrors.map((values) => roundMetric(percentile95(values))),
     },
@@ -612,13 +674,12 @@ async function hairSlotTriUvTargetStats(r, slot, materialId) {
   const changed = hairSlotDiffStats(r, materialId);
   metric.changedMae = changed.mae ?? null;
   metric.changedMaxMeanDiff = changed.maxMeanDiff ?? null;
-  metric.formalGate = samples.length >= THRESHOLDS.minHairTargetSamples
-    && targetStream.length >= THRESHOLDS.minHairTargetSamples
-    && metric.coverage > 0
-    && metric.v1Mae < metric.origMae
-    && metric.drop > THRESHOLDS.hairTargetDrop
-    && metric.v1Mae < THRESHOLDS.hairTargetAbsMae
-    && targetBindingConsistent;
+  // formalGate 只表示真实目标数值是否收敛；材质/triUV 同槽一致性单独以
+  // targetBinding.consistent 暴露，由外层正式 verdict 组合检查。这样 swap 负测
+  // 不能靠预置 false 通过，必须由 v1Mae/drop/P95 等真实目标结果自然拒绝。
+  metric.metricGate = metricGate;
+  metric.metricFailureReasons = metricFailureReasons;
+  metric.formalGate = metricGate;
   metric.artifacts = {
     heatmap: "g3-hair-" + slot + "-triuv-target-heat.png",
     json: "g3-hair-" + slot + "-triuv-target.json",
@@ -712,9 +773,9 @@ for (const [name, r] of Object.entries(regions)) {
         out.verdict[name + "TargetConverged"] = false;
         failures.push(name + " 目标收敛判定样本不足: " + conv.error);
       } else {
-        const converged = conv.formalGate === true;
+        const converged = conv.formalGate === true && conv.targetBinding?.consistent === true;
         out.verdict[name + "TargetConverged"] = converged;
-        if (!converged) failures.push(name + " 未向权威 V14D 头发目标收敛 origMae=" + conv.origMae + " v1Mae=" + conv.v1Mae + " drop=" + conv.drop + " targetBinding=" + (conv.targetBinding?.consistent ? "consistent" : "mismatch") + "（需同材质 triUV、drop>" + THRESHOLDS.hairTargetDrop + " 且 v1Mae<" + THRESHOLDS.hairTargetAbsMae + "）");
+        if (!converged) failures.push(name + " 未向权威 V14D 头发目标收敛 origMae=" + conv.origMae + " v1Mae=" + conv.v1Mae + " drop=" + conv.drop + " targetBinding=" + (conv.targetBinding?.consistent ? "consistent" : "mismatch") + " metricFailures=" + (conv.metricFailureReasons?.join(",") || "none") + "（需同材质 triUV、drop>" + THRESHOLDS.hairTargetDrop + " 且 v1Mae<" + THRESHOLDS.hairTargetAbsMae + "）");
       }
     } else if (r.image) {
       out.verdict[name + "TargetConverged"] = false;
@@ -800,14 +861,29 @@ try {
 } catch (e) { out.hairUvImagesError = String(e); }
 
 // Hair 负测模式：把“预期的正式目标 Gate 拒绝”与“负测失效/配置错误/分析异常”
-// 机器区分。预期拒绝是 analyzer exit 0 + negativeVerdict.status=rejected；只有 HairA
+// 机器区分。wrongTint 的预期拒绝保持 analyzer exit 0；swap-slot-target 则必须
+// analyzer exit 非零。两者都要求 negativeVerdict.status=rejected，且只有 HairA
 // 与 HairB 都由正式逐屏幕 triUV TargetConverged 判据得到 false 才能成立。
 if (NEG_WRONGTINT || NEG_SWAP_SLOT_TARGET) {
   const negA = out.verdict.hairATargetConverged;
   const negB = out.verdict.hairBTargetConverged;
+  const negativeMetrics = {
+    hairA: out.regions.hairA?.targetConvergence ?? null,
+    hairB: out.regions.hairB?.targetConvergence ?? null,
+  };
+  const naturalMetricGate = {
+    hairA: negativeMetrics.hairA?.metricGate === true,
+    hairB: negativeMetrics.hairB?.metricGate === true,
+  };
+  const bindingInputsValid = {
+    hairA: negativeMetrics.hairA?.targetBinding?.inputsValid === true,
+    hairB: negativeMetrics.hairB?.targetBinding?.inputsValid === true,
+  };
   const expectedHairFailure = (message) => message.startsWith("hairA 未向权威 V14D 头发目标收敛")
     || message.startsWith("hairB 未向权威 V14D 头发目标收敛");
   const formalReject = negA === false && negB === false;
+  const naturalMetricReject = naturalMetricGate.hairA === false && naturalMetricGate.hairB === false;
+  const validNegativeInputs = bindingInputsValid.hairA && bindingInputsValid.hairB;
   // 两种负测都把 HairA/HairB 正式目标 Gate=false 视为“语义拒绝”而非分析异常，
   // 因此 analysisFailures 不包含这两条预期失败；但只有 wrongTint 协议把预期失败
   // 从总 failures 移除并以 exit=0 结束。swap-slot-target 必须保留正式 Gate 失败，
@@ -817,26 +893,33 @@ if (NEG_WRONGTINT || NEG_SWAP_SLOT_TARGET) {
     for (let i = failures.length - 1; i >= 0; i -= 1) if (expectedHairFailure(failures[i])) failures.splice(i, 1);
   }
   const mode = NEG_WRONGTINT ? "wrongTint" : "swapSlotTarget";
-  const rejectionReason = formalReject
+  const naturalReasons = [
+    ...(negativeMetrics.hairA?.metricFailureReasons ?? []).map((reason) => "HairA: " + reason),
+    ...(negativeMetrics.hairB?.metricFailureReasons ?? []).map((reason) => "HairB: " + reason),
+  ];
+  const rejectionReason = formalReject && naturalMetricReject && validNegativeInputs
     ? (NEG_WRONGTINT
-      ? ["HairA formal target gate = false", "HairB formal target gate = false"]
+      ? naturalReasons
       : [
           "HairA target/triUV source intentionally swapped to HairB",
           "HairB target/triUV source intentionally swapped to HairA",
-          "HairA formal target gate = false",
-          "HairB formal target gate = false",
+          ...naturalReasons,
         ])
     : [
         ...(negA !== false ? ["HairA formal target gate did not reject: " + negA] : []),
         ...(negB !== false ? ["HairB formal target gate did not reject: " + negB] : []),
+        ...(naturalMetricReject ? [] : ["natural metric Gate did not reject both slots"]),
+        ...(validNegativeInputs ? [] : ["negative input binding/sample evidence invalid"]),
         ...(otherFailures.length > 0 ? ["other analysis failures: " + otherFailures.join(" | ")] : []),
       ];
   out.negativeVerdict = {
     mode,
-    status: formalReject && otherFailures.length === 0 ? "rejected" : "failed",
-    rejected: formalReject,
+    status: formalReject && naturalMetricReject && validNegativeInputs && otherFailures.length === 0 ? "rejected" : "failed",
+    rejected: formalReject && naturalMetricReject && validNegativeInputs,
     semanticMismatch: NEG_SWAP_SLOT_TARGET,
     formalTargetGate: { hairA: negA, hairB: negB },
+    naturalMetricGate,
+    bindingInputsValid,
     rejectionReason,
     analysisFailures: otherFailures,
   };
