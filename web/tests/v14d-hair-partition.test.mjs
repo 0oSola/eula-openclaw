@@ -317,6 +317,47 @@ test("Hair 固定帧绝对 Gate：只接受 4 秒/120 帧/权威动画名", () =
   const healthy = validateV14dHairCapturePair(pair());
   assert.equal(healthy.ok, true, JSON.stringify(healthy));
 
+  const allNullDimensions = validateV14dHairCapturePair({
+    ...pair({
+      originalPixel: { width: null, height: null },
+      originalTriUv: { width: null, height: null },
+      v1Pixel: { width: null, height: null },
+      v1TriUv: { width: null, height: null },
+    }),
+  });
+  assert.equal(allNullDimensions.ok, false, "四份画布尺寸全为 null 必须拒绝");
+
+  const allInfinityDimensions = validateV14dHairCapturePair({
+    ...pair({
+      originalPixel: { width: Number.POSITIVE_INFINITY, height: Number.POSITIVE_INFINITY },
+      originalTriUv: { width: Number.POSITIVE_INFINITY, height: Number.POSITIVE_INFINITY },
+      v1Pixel: { width: Number.POSITIVE_INFINITY, height: Number.POSITIVE_INFINITY },
+      v1TriUv: { width: Number.POSITIVE_INFINITY, height: Number.POSITIVE_INFINITY },
+    }),
+  });
+  assert.equal(allInfinityDimensions.ok, false, "四份画布尺寸全为 Infinity 必须拒绝");
+
+  const invalidDimensions = [
+    ["null", null],
+    ["undefined", undefined],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["0", 0],
+    ["negative", -1],
+    ["non-integer", 1.5],
+  ];
+  const evidenceSlots = ["originalPixel", "originalTriUv", "v1Pixel", "v1TriUv"];
+  for (const [label, value] of invalidDimensions) {
+    for (const slot of evidenceSlots) {
+      for (const dimension of ["width", "height"]) {
+        const invalid = validateV14dHairCapturePair({
+          ...pair({ [slot]: { [dimension]: value } }),
+        });
+        assert.equal(invalid.ok, false, slot + "." + dimension + "=" + label + " 必须拒绝");
+      }
+    }
+  }
+
   const bothFrameZero = validateV14dHairCapturePair({
     ...pair({
       originalPixel: { currentSeconds: 0, currentFrame: 0 },

@@ -19,6 +19,8 @@ G3 报告现在记录 requested/actual seconds、frame、fps、animationName、�
 
 同一 Gate 契约 failure family 的第一次修正闭合了 fps 缺失绕过：原子 probe 生成时直接写入 `fps=30` 与 `fpsProvenance="vmd-standard-fixed-30"`，pixel/triUV 在同一 `captureId` 内共享；accept 删除按 `frame/seconds` 派生 fps 的补造职责。四份证据缺失 fps、同错 24、NaN、Infinity、缺失 provenance 或错误 provenance 均由正式 Gate 拒绝。
 
+同一 failure family 的第二次也是最后一次修正闭合了非法画布尺寸绕过：pixel/triUV 的 width、height 必须各自为有限正整数，且同一原子 pair 内相等；四份证据任一为 null、undefined、NaN、Infinity、0、负数或非整数均由正式 Gate 拒绝。
+
 独立 analyzer 的 Hair 默认输入已改为 `g3-hair-original-canvas.png` / `g3-hair-v1-canvas.png`；legacy `g3-original-canvas.png` / `g3-v1-canvas.png` 只用于 Face/BodySkin/场景稳定性 lane。accept 内部明确删除 Hair 画布环境覆盖，不能依靠 `V14D_HAIR_ORIG_CANVAS` / `V14D_HAIR_V1_CANVAS` 通过正式默认路径。
 
 ## 修改文件
@@ -27,7 +29,7 @@ G3 报告现在记录 requested/actual seconds、frame、fps、animationName、�
 - `web/src/features/stage/RezeWebGpuStage.tsx`：原子 probe 直接生成 fps/provenance 证据。
 - `web/scripts/accept-reze-k3-v1-stage.mjs`：固定 Hair 采集口径，记录报告审计字段，持久化 original/V1 原子摘要，正式 analyzer 不注入 Hair 画布覆盖。
 - `web/scripts/analyze-reze-k3-v1-diff.mjs`：Hair 默认消费原子画布；legacy 画布保留给非 Hair 场景 lane；合并 Hair ROI 也消费正式 Hair 画布。
-- `web/tests/v14d-hair-partition.test.mjs`：先红后绿覆盖健康固定帧、四份 fps 缺失/同错 24/NaN/Infinity、provenance 缺失/错误、双方 frame0、双方错误秒数、双方空/错名及 captureId/时间错配，并检查 producer/report wiring。
+- `web/tests/v14d-hair-partition.test.mjs`：先红后绿覆盖健康固定帧、四份 fps 缺失/同错 24/NaN/Infinity/null、provenance 缺失/错误、四份非法画布尺寸、双方 frame0、双方错误秒数、双方空/错名及 captureId/时间错配，并检查 producer/report wiring。
 - `docs/architecture/current-system-topology.md`、`workflow/concepts/v14d-hair-triuv-pixel-gate.zh-CN.md`、`workflow/workflow-glossary.zh-CN.md`：同步 M1.2 契约、默认产物和边界。
 
 未修改生产 Hair tint/graph、Face/BodySkin、灯光/星空/相机、VMD/物理、PMX、材质槽或拓扑。

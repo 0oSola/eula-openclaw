@@ -43,6 +43,13 @@ function closeEnough(a, b, epsilon) {
   return finite(a) && finite(b) && Math.abs(Number(a) - Number(b)) <= epsilon;
 }
 
+function finitePositiveInteger(value) {
+  return typeof value === "number"
+    && Number.isFinite(value)
+    && Number.isInteger(value)
+    && value > 0;
+}
+
 function validateAuthoritativeEvidence(evidence, label, issues, epsilon) {
   if (!closeEnough(evidence?.currentSeconds, V14D_HAIR_AUTHORITATIVE_CAPTURE.currentSeconds, epsilon)) {
     issues.push(label + ": currentSeconds is not authoritative (expected " + V14D_HAIR_AUTHORITATIVE_CAPTURE.currentSeconds + ")");
@@ -77,9 +84,16 @@ export function validateV14dHairAtomicEvidence({ pixel, triUv, epsilon = V14D_HA
   if (pixelId == null || triUvId == null || pixelId !== triUvId) issues.push("captureId mismatch");
   if (!closeEnough(pixel?.currentSeconds, triUv?.currentSeconds, epsilon)) issues.push("currentSeconds mismatch");
   if (!closeEnough(pixel?.currentFrame, triUv?.currentFrame, epsilon)) issues.push("currentFrame mismatch");
-  if (Number(pixel?.width) !== Number(triUv?.width) || Number(pixel?.height) !== Number(triUv?.height)) {
-    issues.push("canvas size mismatch");
-  }
+  const pixelWidthValid = finitePositiveInteger(pixel?.width);
+  const pixelHeightValid = finitePositiveInteger(pixel?.height);
+  const triUvWidthValid = finitePositiveInteger(triUv?.width);
+  const triUvHeightValid = finitePositiveInteger(triUv?.height);
+  if (!pixelWidthValid) issues.push("pixel width is not a finite positive integer");
+  if (!pixelHeightValid) issues.push("pixel height is not a finite positive integer");
+  if (!triUvWidthValid) issues.push("triUv width is not a finite positive integer");
+  if (!triUvHeightValid) issues.push("triUv height is not a finite positive integer");
+  if (pixelWidthValid && triUvWidthValid && pixel.width !== triUv.width) issues.push("canvas width mismatch");
+  if (pixelHeightValid && triUvHeightValid && pixel.height !== triUv.height) issues.push("canvas height mismatch");
   return { ok: issues.length === 0, issues };
 }
 
