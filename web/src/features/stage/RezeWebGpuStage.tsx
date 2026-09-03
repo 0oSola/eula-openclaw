@@ -796,6 +796,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
   const baselineCapturePromiseRef = useRef<Promise<V14dColorBaselineResult> | null>(null);
   const baselineCaptureFnRef = useRef<(() => Promise<V14dColorBaselineResult>) | null>(null);
   const baselineVmdLoadedRef = useRef(false);
+  const hairTriUvCaptureIdRef = useRef(0);
   const interactionRef = useRef(interaction);
   const backgroundEffectRef = useRef<RezeBackgroundEffect>(backgroundEffect);
   const gradeRef = useRef<RezeGradePreset>(grade);
@@ -3200,8 +3201,28 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         const model = modelRef.current;
         if (!canvas || !engine || !model) return { error: "no canvas/engine/model" };
         const runtimeState = captureV14dHairRuntimeState(model, engine);
+        const captureId = ++hairTriUvCaptureIdRef.current;
         let captureSuspended = false;
+        const readCaptureProgress = () => {
+          const progress = model.getAnimationProgress?.();
+          const currentSeconds = Number(progress?.current);
+          if (!Number.isFinite(currentSeconds)) return null;
+          return {
+            animationName: progress?.animationName ?? null,
+            currentSeconds,
+            currentFrame: currentSeconds * V14D_COLOR_BASELINE_FPS,
+            durationSeconds: Number(progress?.duration) || 0,
+            looping: Boolean(progress?.looping),
+            playing: Boolean(progress?.playing),
+            paused: Boolean(progress?.paused),
+          };
+        };
         try {
+          // 原子采集边界：先停止 render loop/暂停 VMD，再 flush 当前蒙皮矩阵；
+          // 此后 canvas、material mask、triUV 都在同一冻结姿态中生成，直到 finally。
+          captureSuspended = true;
+          engine.stopRenderLoop();
+          model.pause();
           await flushV14dDiagnosticBarrier(engine);
           const materials = model.getMaterials();
           const materialIdByName: Record<string, number> = {};
@@ -3225,14 +3246,13 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             return { error: "missing HairA/HairB material: " + missing.map((entry) => entry.name).join(", ") };
           }
 
-          // 所有读取先固定到一个实际相机/实际停帧，避免 triUv 与 production pick
-          // 之间因 VMD/渲染循环推进而发生屏幕位移。
-          captureSuspended = true;
-          try {
-            engine.stopRenderLoop();
-            model.pause();
-            engine.renderFrame(0);
-          } catch { /* 保持当前姿态，后续读取会如实失败 */ }
+          // renderFrame 后再次等待 GPU 队列，确保 canvas 显示字节与后续诊断 pass
+          // 都观察到这一冻结姿态；任何读回期间的时间推进都会被证据校验拒绝。
+          engine.renderFrame(0);
+          await flushV14dDiagnosticBarrier(engine);
+          const progressAfterRender = readCaptureProgress();
+          if (!progressAfterRender) return { error: "capture VMD progress unavailable", captureId };
+          const canvasDataUrl = canvas.toDataURL("image/png");
 
           const width = canvas.width;
           const height = canvas.height;
@@ -3289,6 +3309,26 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             };
           }
 
+          const progressAfterRead = readCaptureProgress();
+          if (!progressAfterRead
+            || Math.abs(progressAfterRead.currentSeconds - progressAfterRender.currentSeconds) > V14D_COLOR_BASELINE_EPSILON
+            || Math.abs(progressAfterRead.currentFrame - progressAfterRender.currentFrame) > V14D_COLOR_BASELINE_EPSILON) {
+            return {
+              error: "capture VMD time advanced while reading atomic hair evidence",
+              captureId,
+              captureProgressBeforeRead: progressAfterRender,
+              captureProgressAfterRead: progressAfterRead,
+            };
+          }
+          const pixelEvidence = {
+            captureId,
+            width,
+            height,
+            animationName: progressAfterRead.animationName,
+            currentSeconds: progressAfterRead.currentSeconds,
+            currentFrame: progressAfterRead.currentFrame,
+          };
+          const triUvEvidence = { ...pixelEvidence };
           const camera = engine as unknown as {
             camera?: {
               getViewMatrix(): { values: Float32Array };
@@ -3297,10 +3337,19 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           };
           return {
             source: "engine-pick-material-id-depth+expanded-tri-uv",
+            captureId,
             width,
             height,
             materialIdByName,
+            canvasDataUrl,
             materialMaskPng: maskCanvas.toDataURL("image/png"),
+            captureState: progressAfterRead,
+            captureProgressBeforeRead: progressAfterRender,
+            captureProgressAfterRead: progressAfterRead,
+            captureEvidence: {
+              pixel: pixelEvidence,
+              triUv: triUvEvidence,
+            },
             camera: camera.camera
               ? {
                   view: Array.from(camera.camera.getViewMatrix().values),

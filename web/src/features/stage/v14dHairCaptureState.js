@@ -21,6 +21,70 @@ function isRenderLoopRunning(engine) {
   return frameId !== null && frameId !== undefined;
 }
 
+export const V14D_HAIR_CAPTURE_TIME_EPSILON = 1e-6;
+
+function finite(value) {
+  return Number.isFinite(Number(value));
+}
+
+function closeEnough(a, b, epsilon) {
+  return finite(a) && finite(b) && Math.abs(Number(a) - Number(b)) <= epsilon;
+}
+
+/**
+ * 校验一份原子 Hair triUV 证据：像素图和材质/triUV 读回必须来自同一个
+ * captureId、同一 currentSeconds/currentFrame 和同一画布尺寸。
+ * 该函数保持无副作用，供真实验收和时间推进负测共同使用。
+ */
+export function validateV14dHairAtomicEvidence({ pixel, triUv, epsilon = V14D_HAIR_CAPTURE_TIME_EPSILON } = {}) {
+  const issues = [];
+  const pixelId = pixel?.captureId;
+  const triUvId = triUv?.captureId;
+  if (pixelId == null || triUvId == null || pixelId !== triUvId) issues.push("captureId mismatch");
+  if (!closeEnough(pixel?.currentSeconds, triUv?.currentSeconds, epsilon)) issues.push("currentSeconds mismatch");
+  if (!closeEnough(pixel?.currentFrame, triUv?.currentFrame, epsilon)) issues.push("currentFrame mismatch");
+  if (Number(pixel?.width) !== Number(triUv?.width) || Number(pixel?.height) !== Number(triUv?.height)) {
+    issues.push("canvas size mismatch");
+  }
+  return { ok: issues.length === 0, issues };
+}
+
+/**
+ * 校验 original/V1 两份原子证据使用同一冻结 VMD 时间/帧。
+ * 这是跨变体 A/B 的必要条件，不由“尺寸相同”替代。
+ */
+export function validateV14dHairCapturePair({ original, v1, epsilon = V14D_HAIR_CAPTURE_TIME_EPSILON } = {}) {
+  const originalAtomic = validateV14dHairAtomicEvidence({
+    pixel: original?.pixel,
+    triUv: original?.triUv,
+    epsilon,
+  });
+  const v1Atomic = validateV14dHairAtomicEvidence({
+    pixel: v1?.pixel,
+    triUv: v1?.triUv,
+    epsilon,
+  });
+  const issues = [
+    ...originalAtomic.issues.map((issue) => "original: " + issue),
+    ...v1Atomic.issues.map((issue) => "v1: " + issue),
+  ];
+  if (!closeEnough(original?.pixel?.currentSeconds, v1?.pixel?.currentSeconds, epsilon)) {
+    issues.push("original/v1 currentSeconds mismatch");
+  }
+  if (!closeEnough(original?.pixel?.currentFrame, v1?.pixel?.currentFrame, epsilon)) {
+    issues.push("original/v1 currentFrame mismatch");
+  }
+  const originalName = original?.pixel?.animationName;
+  const v1Name = v1?.pixel?.animationName;
+  if (originalName && v1Name && originalName !== v1Name) issues.push("original/v1 animationName mismatch");
+  return {
+    ok: issues.length === 0,
+    issues,
+    original: originalAtomic,
+    v1: v1Atomic,
+  };
+}
+
 export function captureV14dHairRuntimeState(model, engine) {
   const progress = readProgress(model);
   const currentSeconds = Number(progress?.current);

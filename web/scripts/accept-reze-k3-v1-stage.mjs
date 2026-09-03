@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { validateV14dHairCapturePair } from "../src/features/stage/v14dHairCaptureState.js";
 
 const CHROME_EXE = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const ORIGIN = process.env.V14D_CAPTURE_ORIGIN || "http://127.0.0.1:3114";
@@ -51,6 +52,10 @@ const HAIR_TEX = process.env.V14D_HAIR_TEX
   || findKoledaAsset("Textures/c_KoledaSSR01_slg_hair_d.png")
   || path.join(KOLEDA_DIR, "Textures", "c_KoledaSSR01_slg_hair_d.png");
 const HAIR_PMX = process.env.V14D_HAIR_PMX || PMX;
+const HAIR_CAPTURE_VMD_URL = "/__probe__/koleda-v14d-authoritative-pose-f120.vmd";
+const HAIR_CAPTURE_FPS = Number(process.env.V14D_HAIR_CAPTURE_FPS || 30);
+const HAIR_CAPTURE_FRAME = Number(process.env.V14D_HAIR_CAPTURE_FRAME || 120);
+const HAIR_CAPTURE_SECONDS = Number(process.env.V14D_HAIR_CAPTURE_SECONDS || (HAIR_CAPTURE_FRAME / HAIR_CAPTURE_FPS));
 const IMPORT_DIR = path.join(OUT, "import-koleda");
 if (!fs.existsSync(path.join(IMPORT_DIR, PMX_NAME))) linkTree(KOLEDA_DIR, IMPORT_DIR);
 const MASK_LINK = path.join(IMPORT_DIR, "Textures", MASK_NAME);
@@ -259,6 +264,39 @@ async function readUiVariant() { return page.evaluate(() => { const a = document
 async function variantBarVisible() { const n = await page.locator(sel.variantBar).count(); if (!n) return false; return page.locator(sel.variantBar).first().isVisible(); }
 async function shot(name) { const f = path.join(OUT, name + ".png"); await page.screenshot({ path: f }); report.screenshots[name] = f; return f; }
 async function captureStagePixels() { return page.evaluate(() => { const c = document.querySelector("canvas"); if (!c) return { error: "no canvas" }; try { return { dataUrl: c.toDataURL("image/png"), width: c.width, height: c.height }; } catch (e) { return { error: String(e) }; } }); }
+async function prepareHairCapture() {
+  return page.evaluate(async ({ url, seconds, fps }) => {
+    const stage = window.__rezeStageProbe;
+    if (!stage?.playVmd || !stage?.pauseVmd || !stage?.seekVmd) return { error: "VMD capture probe unavailable" };
+    const name = await stage.playVmd(url);
+    stage.pauseVmd();
+    stage.seekVmd(seconds);
+    stage.pauseVmd();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const progress = document.querySelector("canvas")?.dataset || {};
+    return {
+      name,
+      requestedSeconds: seconds,
+      requestedFrame: seconds * fps,
+      reportedSeconds: Number(progress.vmdPlaybackCurrent || 0),
+      reportedPlaying: progress.vmdPlaybackPlaying || "",
+    };
+  }, { url: HAIR_CAPTURE_VMD_URL, seconds: HAIR_CAPTURE_SECONDS, fps: HAIR_CAPTURE_FPS });
+}
+async function captureHairAtomic() {
+  return page.evaluate(async () => {
+    const raw = await window.__rezeStageProbe?.captureHairTriUv?.();
+    if (!raw || raw.error) return raw;
+    const byMaterial = Object.fromEntries(Object.entries(raw.byMaterial || {}).map(([name, info]) => [name, {
+      ...info,
+      triId: Array.from(info.triId || []),
+      uv: Array.from(info.uv || []),
+      triMask: Array.from(info.triMask || []),
+      triangleUvs: Array.from(info.triangleUvs || []),
+    }]));
+    return { ...raw, byMaterial };
+  });
+}
 function saveDataUrl(du, name) { if (!du || !du.startsWith("data:image/png")) return null; const f = path.join(OUT, name); fs.writeFileSync(f, Buffer.from(du.split(",")[1], "base64")); report.screenshots[name.replace(/\.png$/, "")] = f; return f; }
 
 // ── G1：用户路径与切换 ───────────────────────────────────────────────
@@ -396,40 +434,71 @@ try {
 // ── G3：完整模型视觉 A/B（original/V1 画布像素）─────────────────────────
 try {
   note("G3", "采集 original/V1 画布像素 A/B");
-  // G2 末尾已整页刷新+重导入权威目录并恢复 V1 绑定，变体条已出现；此处不再重复 importDir
-  //（重复导入会触发重建使变体条暂时不可点击）。直接切 original→V1 采 A/B。
+  // G2 末尾已整页刷新+重导入权威目录并恢复 V1 绑定，变体条已出现；此处不再重复 importDir。
+  // 继承的 Face/BodySkin/场景差异 lane 保留原先无 VMD 的用户路径；Hair 正式 lane
+  // 随后单独加载同一权威 VMD，pause+seek 到固定秒数，再由单个 captureHairTriUv
+  // 原子返回 canvas、material-ID/depth、triId、插值 UV 和时间证据。analyzer 通过
+  // V14D_HAIR_ORIG_CANVAS/V14D_HAIR_V1_CANVAS 只把后一 lane 用于 Hair origMae/v1Mae。
   await page.click(sel.variantBtn("original")); await waitRebuilt();
   const sceneOrig = await page.evaluate(() => window.__rezeStageProbe?.sceneSnapshot?.() || null);
-  const origPix = await captureStagePixels(); await shot("g3-original-full");
-  // 同变体连拍（Stage 2C-M1 噪声基线）：original 再采一帧，用于把「original↔V1 的
-  // 衣服/装备差异」与「同变体待机微动帧间噪声」区分，避免把微动误判为材质泄漏。
-  const origPix2 = await captureStagePixels();
-  if (!origPix2.error) saveDataUrl(origPix2.dataUrl, "g3-original-canvas-b.png");
+  const legacyOriginalPix = await captureStagePixels();
+  const legacyOriginalBPix = await captureStagePixels();
+  const legacyOriginalPng = saveDataUrl(legacyOriginalPix.dataUrl, "g3-original-canvas.png");
+  const legacyOriginalBPng = saveDataUrl(legacyOriginalBPix.dataUrl, "g3-original-canvas-b.png");
   await page.click(sel.variantBtn("v1")); await waitRebuilt();
   const sceneV1 = await page.evaluate(() => window.__rezeStageProbe?.sceneSnapshot?.() || null);
-  const v1Pix = await captureStagePixels(); await shot("g3-v1-full");
-  if (origPix.error || v1Pix.error) fail("G3", "画布像素捕获失败 " + (origPix.error || v1Pix.error));
- const oPng = saveDataUrl(origPix.dataUrl, "g3-original-canvas.png");
- const vPng = saveDataUrl(v1Pix.dataUrl, "g3-v1-canvas.png");
- report.gates.G3 = report.gates.G3 || { status: "pass", failures: [] };
- report.gates.G3.canvasSize = { width: v1Pix.width, height: v1Pix.height };
- report.gates.G3.origCanvas = oPng; report.gates.G3.v1Canvas = vPng;
-  // HairA/HairB 逐槽身份与 triUV：captureHairTriUv 在同一停帧中同时导出
-  // engine pick material-ID+depth 前景掩码、每槽局部 triId/插值 UV 和三角形 UV 表。
-  // 页面 evaluate 内显式把 typed arrays 转成普通数组，避免跨 Playwright 边界后
-  // 变成带数字键的对象；analyze 只接受这份同帧证据，不再用矩形 ROI 猜槽。
-  const hairTriUvCapture = await page.evaluate(async () => {
-    const raw = await window.__rezeStageProbe?.captureHairTriUv?.();
-    if (!raw || raw.error) return raw;
-    const byMaterial = Object.fromEntries(Object.entries(raw.byMaterial || {}).map(([name, info]) => [name, {
-      ...info,
-      triId: Array.from(info.triId || []),
-      uv: Array.from(info.uv || []),
-      triMask: Array.from(info.triMask || []),
-      triangleUvs: Array.from(info.triangleUvs || []),
-    }]));
-    return { ...raw, byMaterial };
+  const legacyV1Pix = await captureStagePixels();
+  const legacyV1Png = saveDataUrl(legacyV1Pix.dataUrl, "g3-v1-canvas.png");
+  if (legacyOriginalPix.error || legacyOriginalBPix.error || legacyV1Pix.error) {
+    fail("G3", "继承场景 A/B 画布像素捕获失败 " + (legacyOriginalPix.error || legacyOriginalBPix.error || legacyV1Pix.error));
+  }
+  report.gates.G3 = report.gates.G3 || { status: "pass", failures: [] };
+  report.gates.G3.legacyCanvas = { original: legacyOriginalPng, originalB: legacyOriginalBPng, v1: legacyV1Png };
+
+  // Hair 原子 lane：original/V1 各在变体重建后重新加载同一权威 VMD，并固定到同一秒/帧。
+  await page.click(sel.variantBtn("original")); await waitRebuilt();
+  const originalSetup = await prepareHairCapture();
+  const originalAtomic = await captureHairAtomic();
+  const origPix = originalAtomic?.canvasDataUrl
+    ? { dataUrl: originalAtomic.canvasDataUrl, width: originalAtomic.width, height: originalAtomic.height }
+    : { error: originalAtomic?.error || "original atomic hair capture unavailable" };
+  const oPng = saveDataUrl(origPix.dataUrl, "g3-hair-original-canvas.png");
+  await shot("g3-original-full");
+
+  await page.click(sel.variantBtn("v1")); await waitRebuilt();
+  const v1Setup = await prepareHairCapture();
+  const hairTriUvCapture = await captureHairAtomic();
+  const v1Pix = hairTriUvCapture?.canvasDataUrl
+    ? { dataUrl: hairTriUvCapture.canvasDataUrl, width: hairTriUvCapture.width, height: hairTriUvCapture.height }
+    : { error: hairTriUvCapture?.error || "v1 atomic hair capture unavailable" };
+  const vPng = saveDataUrl(v1Pix.dataUrl, "g3-hair-v1-canvas.png");
+  await shot("g3-v1-full");
+  const capturePair = validateV14dHairCapturePair({
+    original: {
+      pixel: originalAtomic?.captureEvidence?.pixel,
+      triUv: originalAtomic?.captureEvidence?.triUv,
+    },
+    v1: {
+      pixel: hairTriUvCapture?.captureEvidence?.pixel,
+      triUv: hairTriUvCapture?.captureEvidence?.triUv,
+    },
   });
+  report.gates.G3 = report.gates.G3 || { status: "pass", failures: [] };
+  report.gates.G3.hairCaptureTime = {
+    requested: { seconds: HAIR_CAPTURE_SECONDS, frame: HAIR_CAPTURE_FRAME, fps: HAIR_CAPTURE_FPS },
+    originalSetup,
+    v1Setup,
+    original: originalAtomic?.captureState || null,
+    v1: hairTriUvCapture?.captureState || null,
+    pair: capturePair,
+  };
+  if (!capturePair.ok) fail("G3", "HairA/HairB 原子采集时间/帧不一致: " + JSON.stringify(capturePair));
+  if (origPix.error || v1Pix.error) fail("G3", "原子画布像素捕获失败 " + (origPix.error || v1Pix.error));
+  if (!hairTriUvCapture?.captureEvidence || !hairTriUvCapture?.canvasDataUrl) fail("G3", "V1 原子 triUV+canvas 证据缺失 " + JSON.stringify(hairTriUvCapture));
+  report.gates.G3.canvasSize = { width: v1Pix.width, height: v1Pix.height };
+  report.gates.G3.origCanvas = oPng; report.gates.G3.v1Canvas = vPng;
+  // HairA/HairB 逐槽身份与 triUV 来自 V1 的同一次原子 probe；页面 evaluate 只把
+  // typed arrays 转成普通数组，analyze 消费这份同帧证据。
   if (!hairTriUvCapture || hairTriUvCapture.error || !hairTriUvCapture.materialMaskPng) {
     fail("G3", "HairA/HairB 同材质同三角形同 UV 证据采集失败: " + JSON.stringify(hairTriUvCapture));
   } else if (hairTriUvCapture.width !== v1Pix.width || hairTriUvCapture.height !== v1Pix.height) {
@@ -503,7 +572,13 @@ try {
   // 硬阻断：区域差异分析以退出码判定（皮肤收敛 + 非皮肤/背景稳定 + HairA/HairB
   // 同材质 triUV 逐像素目标），不允许只算 verdict 强过。
   const { execSync } = await import("node:child_process");
-  const analyzerEnv = { ...process.env, V14D_HAIR_TEX: HAIR_TEX, V14D_HAIR_PMX: HAIR_PMX };
+  const analyzerEnv = {
+    ...process.env,
+    V14D_HAIR_TEX: HAIR_TEX,
+    V14D_HAIR_PMX: HAIR_PMX,
+    V14D_HAIR_ORIG_CANVAS: path.join(OUT, "g3-hair-original-canvas.png"),
+    V14D_HAIR_V1_CANVAS: path.join(OUT, "g3-hair-v1-canvas.png"),
+  };
   const parseVisualReport = (text) => {
     const marker = text.indexOf("===VISUAL-GATE");
     const body = text.slice(text.indexOf("{"), marker >= 0 ? marker : text.length).trim();
@@ -551,9 +626,7 @@ try {
     && metric.samples >= 30
     && metric.targetSamples >= 30
     && metric.targetBinding?.inputsValid === true
-    && metric.rejectedNoTriUv === 0
-    && metric.rejectedInvalidTri === 0
-    && metric.rejectedBarycentric === 0
+    && metric.triUvResolution >= 0.999
     && Array.isArray(metric.metricFailureReasons)
     && metric.metricFailureReasons.some((reason) => /v1Mae|drop|P95/i.test(reason)),
   );

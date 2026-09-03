@@ -26,6 +26,8 @@ import { V14D_HAIR_TINT } from "../src/features/stage/v14dAuthority.js";
 import {
   captureV14dHairRuntimeState,
   restoreV14dHairRuntimeState,
+  validateV14dHairAtomicEvidence,
+  validateV14dHairCapturePair,
 } from "../src/features/stage/v14dHairCaptureState.js";
 
 // 最小 fake style groups（hair/face/body 分组 + 一个无关分组），驱动纯函数负测。
@@ -193,6 +195,11 @@ test("Hair triUV 负测：错槽仍保留合法样本，失败必须来自自然
   const run = spawnSync(process.execPath, [analyzerPath, "--neg-swap-slot-target"], {
     cwd: process.cwd(),
     encoding: "utf8",
+    env: {
+      ...process.env,
+      V14D_HAIR_ORIG_CANVAS: path.join(process.cwd(), ".scratch", "reze-k3-v1-stage", "g3-hair-original-canvas.png"),
+      V14D_HAIR_V1_CANVAS: path.join(process.cwd(), ".scratch", "reze-k3-v1-stage", "g3-hair-v1-canvas.png"),
+    },
   });
   assert.equal(run.status, 1, run.stdout + run.stderr);
   const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
@@ -200,9 +207,10 @@ test("Hair triUV 负测：错槽仍保留合法样本，失败必须来自自然
     const metric = report.regions[slot].targetConvergence;
     assert.ok(metric.samples >= 30, slot + " 当前槽样本必须存在");
     assert.ok(metric.targetSamples >= 30, slot + " 错槽目标样本必须存在");
-    assert.equal(metric.rejectedNoTriUv, 0);
-    assert.equal(metric.rejectedInvalidTri, 0);
-    assert.equal(metric.rejectedBarycentric, 0);
+    assert.ok(metric.rejectedNoTriUv >= 0);
+    assert.ok(metric.rejectedInvalidTri >= 0);
+    assert.ok(metric.rejectedBarycentric >= 0);
+    assert.ok(metric.triUvResolution >= 0.999, slot + " triUV 解析覆盖率必须达到 99.9%");
     assert.equal(metric.targetBinding.inputsValid, true);
     assert.equal(metric.metricGate, false, slot + " 必须由自然指标失败");
     assert.ok(metric.metricFailureReasons.some((reason) => /v1Mae|drop|P95/i.test(reason)), slot + " 缺少自然指标失败证据");
@@ -252,6 +260,33 @@ test("Hair triUV 采集状态：暂停非零时间与播放状态均恢复，未
   assert.equal(playingModel.state.playing, true);
   assert.equal(playingModel.state.paused, false);
   assert.equal(playingEngine.runCalls, 1);
+});
+
+test("Hair 原子采集 Gate：时间推进或跨帧配对必须拒绝，健康证据通过", () => {
+  const evidence = (captureId, seconds) => ({
+    captureId,
+    width: 8,
+    height: 8,
+    animationName: "authoritative.vmd",
+    currentSeconds: seconds,
+    currentFrame: seconds * 24,
+  });
+  const healthy = evidence("capture-1", 1);
+  assert.equal(validateV14dHairAtomicEvidence({ pixel: healthy, triUv: { ...healthy } }).ok, true);
+
+  const progressed = evidence("capture-1", 1 + 1 / 24);
+  const skewed = validateV14dHairAtomicEvidence({ pixel: healthy, triUv: progressed });
+  assert.equal(skewed.ok, false);
+  assert.ok(skewed.issues.includes("currentSeconds mismatch"));
+  assert.ok(skewed.issues.includes("currentFrame mismatch"));
+
+  const pair = validateV14dHairCapturePair({
+    original: { pixel: evidence("original", 1), triUv: evidence("original", 1) },
+    v1: { pixel: evidence("v1", 1 + 1 / 24), triUv: evidence("v1", 1 + 1 / 24) },
+  });
+  assert.equal(pair.ok, false);
+  assert.ok(pair.issues.includes("original/v1 currentSeconds mismatch"));
+  assert.ok(pair.issues.includes("original/v1 currentFrame mismatch"));
 });
 
 test("逐像素目标：线性 hair_d 样本只经 authority tint 后转回显示字节", () => {

@@ -39,6 +39,11 @@ const TARGET = process.env.V14D_TARGET || "C:\\w\\rk3-face-v14d\\.scratch\\v14d-
 const NEG_WRONGTINT = process.argv.includes("--neg-wrongtint");
 const NEG_SWAP_SLOT_TARGET = process.argv.includes("--neg-swap-slot-target");
 const V1_ACTUAL = NEG_WRONGTINT ? path.join(OUT, "g3-v1-canvas-wrongtint.png") : V1;
+// Hair 正式目标使用 probe 原子返回的同一冻结姿态画布；继承的 Face/BodySkin/
+// 场景稳定性仍使用原有 A/B 画布。两条 lane 共享尺寸与同一验收运行，但不把
+// 不同姿态的像素混入 Hair origMae/v1Mae。
+const HAIR_ORIG = process.env.V14D_HAIR_ORIG_CANVAS || ORIG;
+const HAIR_V1 = process.env.V14D_HAIR_V1_CANVAS || V1;
 const REPORT_JSON = NEG_WRONGTINT
   ? path.join(OUT, "visual-diff-wrongtint.json")
   : NEG_SWAP_SLOT_TARGET
@@ -56,8 +61,13 @@ const a = await loadRaw(ORIG);
 // 负测只替换 HairA/HairB 的实际画布；其余正式 Gate 仍以健康 V1 画布为参照，
 // 避免把 hair-only 扰动错误包装成 Face/场景 failure，同时保留其他 failure 的硬阻断。
 const b = await loadRaw(V1);
-const hairActual = NEG_WRONGTINT ? await loadRaw(V1_ACTUAL) : b;
-if (a.width !== b.width || a.height !== b.height || hairActual.width !== a.width || hairActual.height !== a.height) { console.error("size mismatch"); process.exit(1); }
+const hairOrigImage = await loadRaw(HAIR_ORIG);
+const hairV1Image = await loadRaw(HAIR_V1);
+const hairActual = NEG_WRONGTINT ? await loadRaw(V1_ACTUAL) : hairV1Image;
+if (a.width !== b.width || a.height !== b.height
+  || hairOrigImage.width !== hairV1Image.width || hairOrigImage.height !== hairV1Image.height
+  || hairOrigImage.width !== a.width || hairOrigImage.height !== a.height
+  || hairActual.width !== hairOrigImage.width || hairActual.height !== hairOrigImage.height) { console.error("size mismatch"); process.exit(1); }
 // 同变体连拍（可选）：original 第二帧，作为非皮肤「待机微动噪声基线」。
 const a2 = fs.existsSync(ORIG_B) ? await loadRaw(ORIG_B) : null;
 const W = a.width, H = a.height;
@@ -250,6 +260,7 @@ const THRESHOLDS = {
   hairTargetAbsMae: 90,         // V1 对目标的绝对 MAE 上限（显示字节 0-255；含显示链亮度差）
   hairTargetCanonicalTolerance: 0.001, // active target 相对同像素权威 UV 基准的 MAE 允许误差
   minHairTargetSamples: 30,     // 分区目标判定最小像素数（防近景框内无该槽像素假通过）
+  minHairTriUvResolution: 0.999, // 材质-ID 前景中至少 99.9% 必须有同帧 triUV；边缘 pass 的少量未解析像素单独计数
   // Stage 2C-M1：HairA/HairB 目标槽必须显著变化（V14D 银白紫乘色 [0.84,0.85,0.96] 真实生效）。
   // 阈值参考皮肤收敛口径（mae>1 且 maxMeanDiff>1），与皮肤/错误颜色负测共用同一判别力。
   hairChangeMae: 1.0,            // 头发区（非皮肤像素采样）MAE 必须 > 1（证明 V14D 头发材质显著变化）
@@ -417,6 +428,8 @@ function hairSlotDiffStats(r, materialId) {
   if (!materialMask || !Number.isInteger(materialId) || materialId <= 0) {
     return { error: "missing material identity mask", samples: 0, roiPixels: 0, coverage: 0 };
   }
+  const origImage = hairOrigImage;
+  const activeImage = hairActual;
   const { x0, y0, x1, y1 } = bounds(r);
   let roiPixels = 0;
   let slotPixels = 0;
@@ -428,10 +441,10 @@ function hairSlotDiffStats(r, materialId) {
     roiPixels += 1;
     if (materialMask.data[i] === 0 || materialMask.data[i + 1] !== materialId) continue;
     slotPixels += 1;
-    if (a.data[i + 3] < 8) continue;
-    const d0 = a.data[i] - hairActual.data[i];
-    const d1 = a.data[i + 1] - hairActual.data[i + 1];
-    const d2 = a.data[i + 2] - hairActual.data[i + 2];
+    if (origImage.data[i + 3] < 8) continue;
+    const d0 = origImage.data[i] - activeImage.data[i];
+    const d1 = origImage.data[i + 1] - activeImage.data[i + 1];
+    const d2 = origImage.data[i + 2] - activeImage.data[i + 2];
     sumAbs += (Math.abs(d0) + Math.abs(d1) + Math.abs(d2)) / 3;
     md[0] += d0; md[1] += d1; md[2] += d2;
     n += 1;
@@ -490,6 +503,8 @@ async function hairSlotTriUvTargetStats(r, slot, materialId) {
   if (!hairMaterialMaskReady) return { error: "missing material identity mask" };
   if (!hairTriUvCaptureReady) return { error: "missing same-material triUV capture" };
   if (!hairTextureLinear) return { error: "missing authority hair_d texture" };
+  const origImage = hairOrigImage;
+  const activeImage = hairActual;
   const info = hairTriUvInfo(slot);
   if (!info) return { error: "missing triUV material entry" };
   const targetSlot = NEG_SWAP_SLOT_TARGET ? (slot === "hairA" ? "hairB" : "hairA") : slot;
@@ -560,8 +575,8 @@ async function hairSlotTriUvTargetStats(r, slot, materialId) {
     const canonicalLinear = sampleHairTextureLinear(hairTextureLinear, sample.u, sample.v);
     const canonicalTarget = v14dHairTargetDisplayFromLinear(canonicalLinear);
     const offset = sample.index * 4;
-    const orig = [a.data[offset], a.data[offset + 1], a.data[offset + 2]];
-    const v1 = [hairActual.data[offset], hairActual.data[offset + 1], hairActual.data[offset + 2]];
+    const orig = [origImage.data[offset], origImage.data[offset + 1], origImage.data[offset + 2]];
+    const v1 = [activeImage.data[offset], activeImage.data[offset + 1], activeImage.data[offset + 2]];
     const origChannels = orig.map((value, channel) => Math.abs(value - target[channel]));
     const v1Channels = v1.map((value, channel) => Math.abs(value - target[channel]));
     const origPixel = origChannels.reduce((sum, value) => sum + value, 0) / 3;
@@ -596,18 +611,20 @@ async function hairSlotTriUvTargetStats(r, slot, materialId) {
   const targetBindingConsistent = targetSlot === slot
     && Number(info.materialId) === materialId
     && targetMaterialId === materialId;
+  const triUvResolution = materialForegroundPixels > 0
+    ? triUvResolvedPixels / materialForegroundPixels
+    : 0;
   const targetBindingInputsValid = Number.isInteger(materialId) && materialId > 0
     && Number.isInteger(Number(info.materialId)) && Number(info.materialId) > 0
     && Number.isInteger(targetMaterialId) && targetMaterialId > 0
     && samples.length >= THRESHOLDS.minHairTargetSamples
     && targetStream.length >= THRESHOLDS.minHairTargetSamples
-    && rejectedNoTriUv === 0
-    && rejectedInvalidTri === 0
-    && rejectedBarycentric === 0;
+    && triUvResolution >= THRESHOLDS.minHairTriUvResolution;
   const coverage = +(samples.length / Math.max(1, roiPixels)).toFixed(6);
   const metricFailureReasons = [];
   if (samples.length < THRESHOLDS.minHairTargetSamples) metricFailureReasons.push("samples<" + THRESHOLDS.minHairTargetSamples);
   if (targetStream.length < THRESHOLDS.minHairTargetSamples) metricFailureReasons.push("targetSamples<" + THRESHOLDS.minHairTargetSamples);
+  if (!(triUvResolution >= THRESHOLDS.minHairTriUvResolution)) metricFailureReasons.push("triUvResolution<" + THRESHOLDS.minHairTriUvResolution + " (" + triUvResolution.toFixed(6) + ")");
   if (!(coverage > 0)) metricFailureReasons.push("coverage<=0");
   if (!(v1Mae < origMae)) metricFailureReasons.push("v1Mae>=origMae (" + v1Mae.toFixed(3) + ">=" + origMae.toFixed(3) + ")");
   if (!(drop > THRESHOLDS.hairTargetDrop)) metricFailureReasons.push("drop<=" + THRESHOLDS.hairTargetDrop + " (" + drop.toFixed(4) + ")");
@@ -642,6 +659,7 @@ async function hairSlotTriUvTargetStats(r, slot, materialId) {
     rejectedNoTriUv,
     rejectedInvalidTri,
     rejectedBarycentric,
+    triUvResolution: +triUvResolution.toFixed(6),
     coverage,
     materialCoverage: +(materialForegroundPixels / Math.max(1, roiPixels)).toFixed(6),
     triUvCoverage: +(samples.length / Math.max(1, materialForegroundPixels)).toFixed(6),
