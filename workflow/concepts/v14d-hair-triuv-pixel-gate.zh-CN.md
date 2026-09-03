@@ -18,15 +18,15 @@ ROI 只限制屏幕空间范围，不能赋予材质身份，也不能把整槽�
 
 ### 原子同帧采集契约
 
-Hair 正式屏幕样本必须来自同一个原子 `captureHairTriUv` probe：probe 在采集边界内停止 render-loop、暂停 VMD、flush 并执行一次固定帧渲染，在恢复前同时返回 canvas 显示字节（`canvasDataUrl`）、material-ID/depth、triId、插值 UV、`triangleUvs` 以及 `captureEvidence`。其中 pixel 与 triUV 证据必须共享 `captureId`、`width/height`、`currentSeconds` 和 `currentFrame`；读回前后若 VMD 时间推进，probe 直接拒绝。调用方不得在 probe 外提前抓 Hair 正式 `v1Pix`，尺寸相同不能替代同帧证明。
+Hair 正式屏幕样本必须来自同一个原子 `captureHairTriUv` probe：probe 在采集边界内停止 render-loop、暂停 VMD、flush 并执行一次固定帧渲染，在恢复前同时返回 canvas 显示字节（`canvasDataUrl`）、material-ID/depth、triId、插值 UV、`triangleUvs` 以及 `captureEvidence`。其中 pixel 与 triUV 证据必须共享 `captureId`、`width/height`、`currentSeconds`、`currentFrame`、`fps=30` 和 `fpsProvenance="vmd-standard-fixed-30"`；帧率与来源必须由 probe 直接写入，不能由调用方按秒数/帧号事后推导。读回前后若 VMD 时间推进，probe 直接拒绝。调用方不得在 probe 外提前抓 Hair 正式 `v1Pix`，尺寸相同不能替代同帧证明。
 
 original 与 V1 是两次独立但同口径的原子采集：每次变体重建后加载同一权威 `koleda-v14d-authoritative-pose-f120.vmd`，pause+seek 到 `4s / frame 120 / 30 FPS`，再比较两侧 `origMae/v1Mae`；`validateV14dHairCapturePair` 硬断言两侧时间、帧、动画名和各自 pixel/triUV 配对一致。采集结束或异常时按快照恢复原时间、播放/暂停和 render-loop 状态。
 
 ### Stage 2C-M1.2 绝对姿态与独立命令契约
 
-`V14D_HAIR_AUTHORITATIVE_CAPTURE` 是正式 Hair 采集的固定权威口径：`currentSeconds=4`、`currentFrame=120`、`fps=30`、`animationName=koleda-v14d-authoritative-pose-f120.vmd`。`validateV14dHairCapturePair` 先逐侧验证 pixel↔triUV 的 `captureId/currentSeconds/currentFrame/画布尺寸` 原子配对，再对 original 与 V1 的每个证据执行上述绝对值和非空动画名校验；双方同时 frame0、同时错误秒数、双方空名或相同错名都必须拒绝，不能因两侧彼此相等而通过。若证据显式携带 `fps`，也必须为 30。
+`V14D_HAIR_AUTHORITATIVE_CAPTURE` 是正式 Hair 采集的固定权威口径：`currentSeconds=4`、`currentFrame=120`、`fps=30`、`fpsProvenance="vmd-standard-fixed-30"`、`animationName=koleda-v14d-authoritative-pose-f120.vmd`。`validateV14dHairCapturePair` 先逐侧验证 pixel↔triUV 的 `captureId/currentSeconds/currentFrame/画布尺寸` 原子配对，再对 original 与 V1 的四份证据执行上述绝对值、有限数 fps、合法来源和非空精确动画名校验；fps 或来源缺失、NaN、Infinity、24、错误来源，以及双方同时 frame0、同时错误秒数、双方空名或相同错名都必须拒绝，不能因两侧彼此相等而通过。
 
-G3 的 `gate-report.json` 必须保存 requested 与 original/V1 actual 的 seconds、frame、fps、animationName，并保存两侧 captureId 和 pixel↔triUV pair 结果。`g3-hair-original-atomic.json` 至少保存 original 的 `captureEvidence`、`captureState`、采集前后进度和 HairA/HairB 材质样本/解析计数摘要；正式 triUV 大数组只保存在 analyzer 必需的 V1 产物中，不要求为审计复制另一份大数组。
+G3 的 `gate-report.json` 必须保存 requested 与 original/V1 actual 的 seconds、frame、fps、animationName，并逐侧保存 pixel/triUV 的 fps 与 `fpsProvenance`、两侧 captureId 和 pixel↔triUV pair 结果；硬 Gate 消费原子证据中的这些字段，而不是只把它们作为展示字段。`g3-hair-original-atomic.json` 至少保存 original 的 `captureEvidence`、`captureState`、采集前后进度和 HairA/HairB 材质样本/解析计数摘要；正式 triUV 大数组只保存在 analyzer 必需的 V1 产物中，不要求为审计复制另一份大数组。
 
 `analyze-reze-k3-v1-diff.mjs` 的 Hair 默认输入是原子产物 `g3-hair-original-canvas.png` 与 `g3-hair-v1-canvas.png`；`g3-original-canvas.png`、`g3-v1-canvas.png` 仅用于 Face/BodySkin/场景稳定性 lane。显式 `V14D_HAIR_ORIG_CANVAS` / `V14D_HAIR_V1_CANVAS` 仍可用于诊断夹具，但 accept 不为正式 analyzer 注入这两个覆盖。正式独立命令必须在 `web/` cwd、无 `V14D_HAIR_*` 环境运行：正常 exit=0，`--neg-swap-slot-target` exit=1 且两槽 `naturalMetricGate=false`、输入有效、`analysisFailures=[]`，`--neg-wrongtint` exit=0 且 `negativeVerdict.status=rejected`。
 
@@ -51,7 +51,7 @@ G3 的 `gate-report.json` 必须保存 requested 与 original/V1 actual 的 seco
 - 正式目标必须使用 hair_d 同 UV、`REPEAT` modulo 寻址的线性双线性采样，再应用 v14dAuthority.js 导出的 V14D_HAIR_TINT；不能使用槽位 targetMean。
 - HairA 与 HairB 分别计算 samples、coverage、origMae、v1Mae、drop 和 p95；每槽样本与 coverage 必须非零，且 v1Mae 小于 origMae、drop 达到冻结阈值。
 - 目标来源槽、triUV 来源槽、材质 ID 必须一致；任何绑定不一致都使正式 Gate 为 false。
-- `captureId`、`currentSeconds`、`currentFrame` 和画布尺寸必须在同一次原子采集的 pixel/triUV 证据中一致；original/V1 还必须固定到同一权威动画名、秒数和帧。
+- `captureId`、`currentSeconds`、`currentFrame`、`fps=30`、`fpsProvenance="vmd-standard-fixed-30"` 和画布尺寸必须在同一次原子采集的 pixel/triUV 证据中一致；original/V1 还必须固定到同一权威动画名、秒数和帧。
 - `targetBinding.inputsValid` 只证明样本、triUV、材质 ID 和目标流合法；`metricGate` 才表示目标误差收敛，正式 verdict 必须同时组合绑定一致性与数值 Gate，不能用配置布尔值代替误差证据。
 - 错槽负测为每个屏幕样本保留自身 UV 的同像素 canonical target 作权威基准，并把交换后的真实目标误差、v1Mae/drop/P95 penalty 写入报告；canonical target 只用于负测判别，不改变正常模式的目标公式。
 - v14dAuthority.js 是 V14D_HAIR_TINT 的唯一权威来源。patch-reze-engine.mjs 只动态加载、验证并序列化该导出，不手写旧常量。

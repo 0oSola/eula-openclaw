@@ -294,6 +294,7 @@ test("Hair 固定帧绝对 Gate：只接受 4 秒/120 帧/权威动画名", () =
     currentSeconds: 4,
     currentFrame: 120,
     fps: 30,
+    fpsProvenance: "vmd-standard-fixed-30",
     animationName: "koleda-v14d-authoritative-pose-f120.vmd",
   };
   const evidence = (captureId, overrides = {}) => ({
@@ -340,6 +341,59 @@ test("Hair 固定帧绝对 Gate：只接受 4 秒/120 帧/权威动画名", () =
     ...pair({ originalPixel: { fps: 24 } }),
   });
   assert.equal(wrongFps.ok, false, "显式 fps 错配必须拒绝");
+
+  const fpsMissing = validateV14dHairCapturePair({
+    ...pair({
+      originalPixel: { fps: undefined },
+      originalTriUv: { fps: undefined },
+      v1Pixel: { fps: undefined },
+      v1TriUv: { fps: undefined },
+    }),
+  });
+  assert.equal(fpsMissing.ok, false, "四份 fps 全缺失必须拒绝");
+  assert.equal(fpsMissing.issues.filter((issue) => issue.includes("fps")).length, 4);
+
+  const bothWrongFps = validateV14dHairCapturePair({
+    ...pair({
+      originalPixel: { fps: 24 },
+      originalTriUv: { fps: 24 },
+      v1Pixel: { fps: 24 },
+      v1TriUv: { fps: 24 },
+    }),
+  });
+  assert.equal(bothWrongFps.ok, false, "四份 fps 同为错误 24 必须拒绝");
+  assert.equal(bothWrongFps.issues.filter((issue) => issue.includes("fps")).length, 4);
+
+  for (const [slot, fps, label] of [
+    ["originalPixel", Number.NaN, "NaN"],
+    ["originalTriUv", Number.POSITIVE_INFINITY, "Infinity"],
+    ["v1Pixel", Number.NaN, "NaN"],
+    ["v1TriUv", Number.POSITIVE_INFINITY, "Infinity"],
+    ["v1Pixel", null, "null"],
+  ]) {
+    const invalidFps = validateV14dHairCapturePair({
+      ...pair({ [slot]: { fps } }),
+    });
+    assert.equal(invalidFps.ok, false, slot + " 的 " + label + " fps 必须拒绝");
+  }
+
+  const provenanceMissing = validateV14dHairCapturePair({
+    ...pair({
+      originalPixel: { fpsProvenance: undefined },
+      originalTriUv: { fpsProvenance: undefined },
+      v1Pixel: { fpsProvenance: undefined },
+      v1TriUv: { fpsProvenance: undefined },
+    }),
+  });
+  assert.equal(provenanceMissing.ok, false, "四份 fps provenance 全缺失必须拒绝");
+  assert.equal(provenanceMissing.issues.filter((issue) => issue.includes("fpsProvenance")).length, 4);
+
+  for (const slot of ["originalPixel", "originalTriUv", "v1Pixel", "v1TriUv"]) {
+    const wrongProvenance = validateV14dHairCapturePair({
+      ...pair({ [slot]: { fpsProvenance: "derived-from-frame-seconds" } }),
+    });
+    assert.equal(wrongProvenance.ok, false, slot + " 的错误 fps provenance 必须拒绝");
+  }
 
   for (const animationName of ["", "wrong-pose.vmd"]) {
     const wrongName = validateV14dHairCapturePair({
@@ -397,6 +451,17 @@ test("Hair analyzer 默认使用原子画布，legacy 画布只留给场景 lane
   const acceptSource = fs.readFileSync(path.join(process.cwd(), "scripts", "accept-reze-k3-v1-stage.mjs"), "utf8");
   assert.match(acceptSource, /delete analyzerEnv\.V14D_HAIR_ORIG_CANVAS/);
   assert.match(acceptSource, /delete analyzerEnv\.V14D_HAIR_V1_CANVAS/);
+});
+
+test("Hair 原子 probe 生成 fps 与可审计来源，accept 不再事后补造 fps", () => {
+  const stageSource = fs.readFileSync(path.join(process.cwd(), "src", "features", "stage", "RezeWebGpuStage.tsx"), "utf8");
+  assert.match(stageSource, /const fps = V14D_HAIR_AUTHORITATIVE_CAPTURE\.fps/);
+  assert.match(stageSource, /fpsProvenance:\s*V14D_HAIR_AUTHORITATIVE_CAPTURE\.fpsProvenance/);
+
+  const acceptSource = fs.readFileSync(path.join(process.cwd(), "scripts", "accept-reze-k3-v1-stage.mjs"), "utf8");
+  assert.doesNotMatch(acceptSource, /captureEvidenceWithDerivedFps/);
+  assert.match(acceptSource, /captureEvidence:\s*\{\s*original:/s);
+  assert.match(acceptSource, /fpsProvenance/);
 });
 
 // 真实 PMX 分区解析（资产存在时）：HairA/HairB UV 网格非空且分区不坍缩。

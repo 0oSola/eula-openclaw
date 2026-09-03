@@ -31,6 +31,7 @@ export const V14D_HAIR_AUTHORITATIVE_CAPTURE = Object.freeze({
   currentSeconds: 4,
   currentFrame: 120,
   fps: 30,
+  fpsProvenance: "vmd-standard-fixed-30",
   animationName: "koleda-v14d-authoritative-pose-f120.vmd",
 });
 
@@ -56,8 +57,11 @@ function validateAuthoritativeEvidence(evidence, label, issues, epsilon) {
   } else if (rawAnimationName !== V14D_HAIR_AUTHORITATIVE_CAPTURE.animationName) {
     issues.push(label + ": animationName is not authoritative (expected " + V14D_HAIR_AUTHORITATIVE_CAPTURE.animationName + ")");
   }
-  if (evidence?.fps != null && !closeEnough(evidence.fps, V14D_HAIR_AUTHORITATIVE_CAPTURE.fps, epsilon)) {
+  if (!Number.isFinite(evidence?.fps) || evidence.fps !== V14D_HAIR_AUTHORITATIVE_CAPTURE.fps) {
     issues.push(label + ": fps is not authoritative (expected " + V14D_HAIR_AUTHORITATIVE_CAPTURE.fps + ")");
+  }
+  if (evidence?.fpsProvenance !== V14D_HAIR_AUTHORITATIVE_CAPTURE.fpsProvenance) {
+    issues.push(label + ": fpsProvenance is not authoritative (expected " + V14D_HAIR_AUTHORITATIVE_CAPTURE.fpsProvenance + ")");
   }
 }
 

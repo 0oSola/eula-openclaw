@@ -59,6 +59,7 @@ const HAIR_CAPTURE_VMD_URL = "/__probe__/koleda-v14d-authoritative-pose-f120.vmd
 // Hair 正式 Gate 的姿态不可由环境变量改写；环境变量只允许切换外部资产，
 // 不能把另一秒/帧或另一动画伪装成权威样本。
 const HAIR_CAPTURE_FPS = V14D_HAIR_AUTHORITATIVE_CAPTURE.fps;
+const HAIR_CAPTURE_FPS_PROVENANCE = V14D_HAIR_AUTHORITATIVE_CAPTURE.fpsProvenance;
 const HAIR_CAPTURE_FRAME = V14D_HAIR_AUTHORITATIVE_CAPTURE.currentFrame;
 const HAIR_CAPTURE_SECONDS = V14D_HAIR_AUTHORITATIVE_CAPTURE.currentSeconds;
 const HAIR_CAPTURE_ANIMATION_NAME = V14D_HAIR_AUTHORITATIVE_CAPTURE.animationName;
@@ -335,15 +336,6 @@ function summarizeHairAtomicCapture(capture) {
     materials,
   };
 }
-function captureEvidenceWithDerivedFps(capture) {
-  const evidence = capture?.captureEvidence || {};
-  const source = evidence.pixel || capture?.captureState || {};
-  const seconds = Number(source.currentSeconds);
-  const frame = Number(source.currentFrame);
-  const fps = Number.isFinite(seconds) && Number.isFinite(frame) && seconds !== 0 ? frame / seconds : null;
-  const addFps = (sample) => fps === null ? { ...(sample || {}) } : { ...(sample || {}), fps };
-  return { pixel: addFps(evidence.pixel), triUv: addFps(evidence.triUv) };
-}
 function hairCaptureAudit(capture, atomicPair) {
   const evidence = capture?.captureEvidence || {};
   const pixel = evidence.pixel || {};
@@ -354,8 +346,9 @@ function hairCaptureAudit(capture, atomicPair) {
     actual: {
       seconds: Number.isFinite(seconds) ? seconds : null,
       frame: Number.isFinite(frame) ? frame : null,
-      fps: Number.isFinite(seconds) && Number.isFinite(frame) && seconds !== 0 ? frame / seconds : null,
-      animationName: pixel.animationName ?? capture?.captureState?.animationName ?? null,
+      fps: Number.isFinite(pixel.fps) ? pixel.fps : null,
+      fpsProvenance: typeof pixel.fpsProvenance === "string" ? pixel.fpsProvenance : null,
+      animationName: pixel.animationName ?? null,
     },
     captureId: capture?.captureId ?? pixel.captureId ?? null,
     pixelCaptureId: pixel.captureId ?? null,
@@ -541,10 +534,10 @@ try {
   await shot("g3-v1-full");
   const capturePair = validateV14dHairCapturePair({
     original: {
-      ...captureEvidenceWithDerivedFps(originalAtomic),
+      ...(originalAtomic?.captureEvidence || {}),
     },
     v1: {
-      ...captureEvidenceWithDerivedFps(hairTriUvCapture),
+      ...(hairTriUvCapture?.captureEvidence || {}),
     },
   });
   const originalHairAudit = hairCaptureAudit(originalAtomic, capturePair.original);
@@ -561,6 +554,7 @@ try {
       seconds: HAIR_CAPTURE_SECONDS,
       frame: HAIR_CAPTURE_FRAME,
       fps: HAIR_CAPTURE_FPS,
+      fpsProvenance: HAIR_CAPTURE_FPS_PROVENANCE,
       animationName: HAIR_CAPTURE_ANIMATION_NAME,
     },
     originalSetup,
@@ -579,6 +573,10 @@ try {
       },
     },
     pixelTriUvPairs: { original: capturePair.original, v1: capturePair.v1 },
+    captureEvidence: {
+      original: originalAtomic?.captureEvidence || null,
+      v1: hairTriUvCapture?.captureEvidence || null,
+    },
     original: originalAtomic?.captureState || null,
     v1: hairTriUvCapture?.captureState || null,
     pair: capturePair,

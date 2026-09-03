@@ -36,6 +36,7 @@ import {
 import {
   captureV14dHairRuntimeState,
   restoreV14dHairRuntimeState,
+  V14D_HAIR_AUTHORITATIVE_CAPTURE,
 } from "@/features/stage/v14dHairCaptureState.js";
 import {
   isKoledaMaskMaterialName,
@@ -3207,10 +3208,13 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           const progress = model.getAnimationProgress?.();
           const currentSeconds = Number(progress?.current);
           if (!Number.isFinite(currentSeconds)) return null;
+          const fps = V14D_HAIR_AUTHORITATIVE_CAPTURE.fps;
           return {
             animationName: progress?.animationName ?? null,
             currentSeconds,
-            currentFrame: currentSeconds * V14D_COLOR_BASELINE_FPS,
+            currentFrame: currentSeconds * fps,
+            fps,
+            fpsProvenance: V14D_HAIR_AUTHORITATIVE_CAPTURE.fpsProvenance,
             durationSeconds: Number(progress?.duration) || 0,
             looping: Boolean(progress?.looping),
             playing: Boolean(progress?.playing),
@@ -3327,6 +3331,8 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             animationName: progressAfterRead.animationName,
             currentSeconds: progressAfterRead.currentSeconds,
             currentFrame: progressAfterRead.currentFrame,
+            fps: progressAfterRead.fps,
+            fpsProvenance: progressAfterRead.fpsProvenance,
           };
           const triUvEvidence = { ...pixelEvidence };
           const camera = engine as unknown as {
