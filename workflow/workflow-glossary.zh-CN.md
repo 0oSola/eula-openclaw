@@ -302,7 +302,7 @@
 # 头发同材质同三角形同 UV 逐像素门禁
 
 - 英文机器名：v14d-hair-triuv-pixel-gate。
-- 含义：HairA/HairB 每个正式屏幕样本同时绑定引擎 materialId、同槽局部 triId、插值 UV 和权威 hair_d 线性双线性采样目标，再应用 v14dAuthority.js 的 V14D_HAIR_TINT 转为显示字节比较；ROI 不能替代材质/三角形身份，旧 targetMean 只保留为历史 checkpoint。
+- 含义：HairA/HairB 每个正式屏幕样本同时绑定引擎 materialId、同槽局部 triId、插值 UV 和权威 hair_d 线性双线性采样目标，再应用 v14dAuthority.js 的 V14D_HAIR_TINT 转为显示字节比较；纹理四邻域按 WebGPU `REPEAT` 在宽/高方向 modulo wrap，不能在边缘 clamp。`targetBinding.inputsValid` 证明输入合法，`metricGate` 证明误差自然收敛；错槽负测使用自身 UV 的同像素 canonical target 与 v1Mae/drop/P95 证据，不能写入强制失败字段。ROI 不能替代材质/三角形身份，旧 targetMean 只保留为历史 checkpoint。
 - 允许用法：Stage 2C-M1.1 的 HairA/HairB BaseColor 逐槽 Gate、同帧 triUV 证据、错槽/错目标语义负测和 wrongTint 预期拒绝协议。
-- 禁止用法：不得用整槽均值、矩形 ROI、材质计数恒等式或视角相关高光结果冒充逐像素 BaseColor 目标；不得扩大到 PMX/VMD/骨骼/物理/播放或其他材质槽。
+- 禁止用法：不得用整槽均值、矩形 ROI、材质计数恒等式、`targetBinding.consistent=false` 自证或视角相关高光结果冒充逐像素 BaseColor 目标；不得让 captureHairTriUv 采集后无条件启动 render-loop；不得扩大到 PMX/VMD/骨骼/物理/播放或其他材质槽。
 - 路由影响：由 web/scripts/analyze-reze-k3-v1-diff.mjs 与 web/scripts/accept-reze-k3-v1-stage.mjs 消费，采集只在显式 acceptance probe 下启用；完整定义见 workflow/concepts/v14d-hair-triuv-pixel-gate.zh-CN.md。
