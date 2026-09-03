@@ -31,7 +31,7 @@ V14D 眉毛与睫毛恒等乘色迁移（Brows/Lashes identity tint）。
 
 ## 证据或计算口径
 - 权威取证：`web/scripts/forensic-v14d-brows-lashes.py` 对权威 .blend（SHA256 1139617c…）headless 自省，输出 `web/.scratch/v14d-brows-lashes/brows-lashes-forensic.json`。关键事实：BaseColor 与 Alpha 均直连 `c_Koleda_slg_face_d.png`（sRGB 1024×1024、hasData=true、alphaMode=STRAIGHT）；blendMethod=HASHED、surfaceRenderMethod=DITHERED、alphaThreshold=0.5、useBackfaceCulling=false；无 MIX/RGB tint 节点。
-- 验收：G2 真实 draw-call/graph 绑定（两槽各 1/1 命中 "V14D Brows Lashes V1 Composite"）+ missing/swap 负测；G3 脸部特写（original/V1 对照）证明恒等 tint 不破坏渲染。
+- 验收现状（Stage 2C-M2a 第一次验收修正，诚实标注）：G2 真实 draw-call/graph 绑定（两槽各 1/1 命中 "V14D Brows Lashes V1 Composite"）+ missing 负测已可检出；但 swapBrowsLashes 仅交换 materials 数组顺序、不构成错槽拒绝，逐槽原子同帧 material-ID+triUV+pixel 正式 Gate、Lashes 透明边缘专门机器 Gate、动态 Morph 稳定性 Gate 均未闭合。G3 脸部特写（original/V1 对照）仅证明恒等 tint 不破坏渲染，不是正式 Gate。
 
 ## 正例
 - Brows/Lashes 在 V1 下经独立 graph 编译、绑定证据 1/1，且画面颜色与 original 一致（恒等正确）。
@@ -54,4 +54,11 @@ V14D 眉毛与睫毛恒等乘色迁移（Brows/Lashes identity tint）。
 
 ## 与现有概念的关系
 - 与 `reze-k3-skin-variant`（V1 切换总开关/资格/持久化）共用同一接线与回退路径。
-- 与 `v14d-hair-triuv-pixel-gate`（HairA/HairB 逐像素目标收敛）不同：本概念不产生颜色变化，逐槽像素收敛 Gate 不适用，正式 Gate 由绑定证据 + 负测承担。
+- 与 `v14d-hair-triuv-pixel-gate`（HairA/HairB 逐像素目标收敛）的差异仅在于「恒等 tint 不需要 changed=true 这一颜色变化判据」；但逐槽原子同帧 material-ID+triUV+pixel 的 identity-target 收敛 Gate（对同槽 canonical target 计算逐像素误差/覆盖/P95，并以 wrongTint、错槽目标自然拒绝）仍是必须闭合的正式 Gate，当前未实现。不能用「恒等不适用」免除该 Gate。
+
+## 未闭合 Gate 清单（Stage 2C-M2a 第一次验收修正诚实登记）
+
+1. **逐槽原子同帧 identity-target Gate（未实现）**：Brows/Lashes 各自需 materialId + 原子同帧 pixel/triUV/target 证据，对同槽 canonical target（face_d 同 UV 双线性采样 ×恒等 tint→显示字节）计算逐像素误差/覆盖/P95，阈值须由权威 Blender/健康证据标定；wrongTint、错槽目标扰动须真实自然拒绝。
+2. **Lashes 透明边缘专门机器 Gate（未实现）**：基于 Lashes materialId + triUV + face_d alpha/权威 alphaThreshold=0.5，输出正式样本、核心/边缘/透明区分母、生产可见性与 target alpha/cutout 一致性、边缘颜色/fringe 误差；wrongAlpha/错误裁切阈值/错误 alpha 模式须真实浏览器链非零拒绝；覆盖黑框/白边/整槽消失三类风险。
+3. **动态 Morph 稳定性 Gate（未实现）**：开眼/闭眼/表情两状态以上，逐槽证明不闪烁、不错常显、不整槽丢失，并配可被拒绝的负测（不改 PMX/VMD/Morph 数据）。
+4. **负测判别力（部分缺失）**：swapBrowsLashes 当前仅交换数组顺序（无效）；wrongBrowsLashesTint 仅纯函数层存在、accept 未实跑调用；缺 Brows/Lashes 专用 wrongAlpha/wrongGraph/compile 失败负测。

@@ -6,9 +6,14 @@
 - 含义：`/companion` reze-k3 舞台中克莱妲部分 PMX 材质槽的可选 V14D
   实时合成模式；`original`=原始 Reze K3，`v1`=Reze K3 V1（V14D）。
   持久化按 用户+模型+reze-k3 管线 三维隔离，默认 original。
-  截至 Stage 2C-M1（2026-09-03）已迁移 **Face、BodySkin、HairA、HairB**
-  四槽；其余 11 个待迁移槽（Brows、Lashes、Emotions、Eyes、EyeWhite、
-  EyeShadow、Eyes+、UpperTeeth、LowerTeeth、Tongue、FingerNails）尚未迁移。
+  截至 Stage 2C-M2a 第一次验收修正（2026-09-03）：**Face、BodySkin、HairA、
+  HairB** 四槽已完成正式逐槽 Gate；**Brows、Lashes** 两槽已完成 V1 分组绑定
+  与恒等 tint 实现（接入同一切换、绑定证据 1/1、missing/swap 负测可检出），
+  但逐槽原子同帧 material-ID+triUV+pixel 正式 Gate、Lashes 透明边缘专门
+  Gate、动态 Morph Gate 尚未闭合（见「V14D Brows/Lashes 恒等 tint 迁移」节与
+  概念文档），验收未通过、不计入完成迁移。其余 9 个待迁移槽（Emotions、
+  Eyes、EyeWhite、EyeShadow、Eyes+、UpperTeeth、LowerTeeth、Tongue、
+  FingerNails）尚未迁移。单一当前权威以此节与 topology 的 Stage 2C-M2a 段为准。
   HairA/HairB 口径：hair_d（sRGB）× 银白紫乘色 [0.84,0.85,0.96]，经引擎
   独立 `V14D_HAIR_HELPER_WGSL` 常量 + `includeV14dHairHelper` 注入（不连带
   State2 mask/binding 5），graph.name "V14D Hair V1 Composite" 覆写。

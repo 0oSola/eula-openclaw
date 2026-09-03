@@ -81,6 +81,30 @@ test("negative wrongBrowsLashesTint: identity tint changed to red-green offset",
   assert.deepEqual(bl.graph.nodes[0].inputs.color, [1.35, 0.25, 0.25]);
 });
 
+test("negative swapBrowsLashes: two distinct-identity cloned graphs cross-bound to wrong slot", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const bad = perturbV14dSkinVariantStyleGroups(v1, "swapBrowsLashes");
+  // 合并分组被移除，换成两个独立身份的克隆分组。
+  assert.ok(!bad.find((g) => g.id === "v14d-skin-variant-brows-lashes"));
+  const browsG = bad.find((g) => g.id === "v14d-skin-variant-brows-lashes-brows");
+  const lashesG = bad.find((g) => g.id === "v14d-skin-variant-brows-lashes-lashes");
+  assert.ok(browsG && lashesG, "swap 应生成两个独立身份 graph 分组");
+  // 交叉绑定：brows 归属的 graph 绑定到 Lashes 材质，反之亦然。
+  assert.deepEqual(browsG.materials, ["Lashes"]);
+  assert.deepEqual(lashesG.materials, ["Brows"]);
+  assert.ok(browsG.graph.name.includes("(swapped-slot brows)"));
+  assert.ok(lashesG.graph.name.includes("(swapped-slot lashes)"));
+  assert.notEqual(browsG.graph.name, lashesG.graph.name, "两 graph 必须有独立身份（非仅数组顺序）");
+});
+
+test("negative wrongBrowsLashesAlpha: alphaMode flipped to opaque", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const bad = perturbV14dSkinVariantStyleGroups(v1, "wrongBrowsLashesAlpha");
+  const bl = bad.find((g) => g.id === "v14d-skin-variant-brows-lashes");
+  assert.equal(bl.alphaMode, "opaque");
+  assert.equal(bl.graph.name, "V14D Brows Lashes V1 Composite", "graph 保持恒等 tint（单变量只改 alpha 口径）");
+});
+
 test("negative wrongGraph: all graph names replaced with non-authoritative", () => {
   const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
   const bad = perturbV14dSkinVariantStyleGroups(v1, "wrongGraph");

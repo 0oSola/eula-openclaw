@@ -1114,6 +1114,47 @@ struct VSOut {
 }
 `;
 
+// Stage 2C-M2a 修正轮（Brows/Lashes 逐槽原子 triUV 取证）：带前景深度剔除的
+// 展开三角形 pass 专用顶点/片段着色器。
+//
+// 背景：readV14dFaceExpandedTriUv 的无深度 pass 可见性由绘制顺序决定；眉毛/睫毛是
+// 紧贴脸部的小槽，脸部特写取景下刘海/侧发在屏幕上覆盖眉睫区，无深度 pass 会把
+// 目标槽三角形投到这些被遮挡像素上，造成 triUV 落进 face_d 的头发纹理区
+// （实测 Lashes triUvResolution=0.026、v1Mae=120，样本被 UV 合理性检查拒绝）。
+// 生产材质 ID pick pass（readV14dColorBaselineMaterialMask）用真实深度管线，
+// 同一帧下 Lashes 前景 152 像素全部有效。因此本 pass：
+//   pass1 用生产 pick 深度管线（less 写深度）渲染全部材质，得到与生产完全一致的
+//         场景前景深度；
+//   pass2 仅画目标槽的 CPU 蒙皮展开几何（equal 深度测试、不写深度），输出插值 UV
+//         与槽内局部三角形 ID。
+// 被其他材质遮挡的目标槽像素在 pass2 被剔除，与生产可见性口径完全一致。
+const FACE_EXPANDED_DEPTH_WGSL = /* wgsl */ `
+struct CameraUniforms {
+  view: mat4x4f,
+  projection: mat4x4f,
+  viewPos: vec3f,
+  _padding: f32,
+};
+@group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(1) @binding(0) var<storage, read> skinMats: array<mat4x4f>;
+
+@vertex fn vs(
+  @location(0) position: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) uv: vec2f,
+  @location(3) joints0: vec4<u32>,
+  @location(4) weights0: vec4<f32>,
+) -> @builtin(position) vec4f {
+  let pos4 = vec4f(position, 1.0);
+  let weightSum = weights0.x + weights0.y + weights0.z + weights0.w;
+  let invWeightSum = select(1.0, 1.0 / weightSum, weightSum > 0.0001);
+  let nw = select(vec4f(1.0, 0.0, 0.0, 0.0), weights0 * invWeightSum, weightSum > 0.0001);
+  var sp = vec4f(0.0);
+  for (var i = 0u; i < 4u; i++) { sp += (skinMats[joints0[i]] * pos4) * nw[i]; }
+  return camera.projection * camera.view * vec4f(sp.xyz, 1.0);
+}
+`;
+
 export type V14dFaceExpandedSource = {
   vertices: Float32Array;
   indices: Uint32Array;
@@ -1152,6 +1193,262 @@ export async function flushV14dDiagnosticBarrier(engine: unknown): Promise<void>
   await fields.device.queue.onSubmittedWorkDone();
 }
 
+
+/**
+ * Stage 2C-M2a 修正轮：Brows/Lashes 逐槽原子 triUV 取证（带真实前景深度剔除）。
+ *
+ * 与 readV14dFaceExpandedTriUv（无深度、仅 faceStatic 使用的诊断 pass）不同，本 pass
+ * 的可见性不由绘制顺序决定：
+ *   pass1 复用生产 pick 深度管线（less 写深度）渲染全部材质，得到与生产完全一致的
+ *         场景前景深度；
+ *   pass2 仅画目标槽的 CPU 蒙皮展开几何（equal 深度测试、不写深度），输出插值 UV 与
+ *         槽内局部三角形 ID；被其他材质（刘海/侧发/脸）遮挡的目标槽像素被剔除。
+ * 眉毛/睫毛是紧贴脸部的小槽，脸部特写取景下头发在屏幕上覆盖眉睫区，无深度 pass
+ * 会把目标槽三角形投到这些被遮挡像素上，triUV 落进 face_d 的头发纹理区导致
+ * identity-target Gate 误判。本 pass 与生产材质 ID pick（152 像素 Lashes 前景）口径
+ * 完全一致。仅在 Brows/Lashes 验收探针（captureHairTriUv useForegroundDepth）下调用，
+ * 不改变生产渲染路径；faceStatic 原有调用点保持无深度行为。
+ */
+export async function readV14dFaceExpandedTriUvDepth(
+  engine: unknown,
+  width: number,
+  height: number,
+  src: V14dFaceExpandedSource,
+): Promise<V14dFaceTriUvReadback> {
+  const fields = readEnginePrivateFields(engine);
+  if (!fields.device || !fields.pickPipeline || !fields.pickPerFrameBindGroup || !fields.modelInstances) {
+    throw new Error("reze-engine 未暴露诊断所需的展开 Face 深度剔除管线字段。");
+  }
+  const device = fields.device;
+  const perFrameLayout = (fields as unknown as { pickPerFrameBindGroupLayout?: GPUBindGroupLayout }).pickPerFrameBindGroupLayout!;
+  const perInstanceLayout = (fields as unknown as { pickPerInstanceBindGroupLayout?: GPUBindGroupLayout }).pickPerInstanceBindGroupLayout!;
+
+  const faceTriCount = Math.floor(src.faceIndexCount / 3);
+  const expandedVertCount = faceTriCount * 3;
+  const stride32 = 8 + 4 + 4 + 1;
+  const interleaved = new ArrayBuffer(expandedVertCount * stride32 * 4);
+  const f32 = new Float32Array(interleaved);
+  const u32 = new Uint32Array(interleaved);
+  for (let t = 0; t < faceTriCount; t += 1) {
+    for (let k = 0; k < 3; k += 1) {
+      const vi = src.indices[src.faceFirstIndex + t * 3 + k];
+      const dst = (t * 3 + k) * stride32;
+      for (let c = 0; c < 8; c += 1) f32[dst + c] = src.vertices[vi * 8 + c];
+      for (let c = 0; c < 4; c += 1) u32[dst + 8 + c] = src.joints[vi * 4 + c];
+      for (let c = 0; c < 4; c += 1) f32[dst + 12 + c] = src.weights[vi * 4 + c] / 255;
+      u32[dst + 16] = t;
+    }
+  }
+
+  // Stage 2C-M2a 修正轮：pass2 用 CPU 蒙皮展开为世界坐标（调用方 flushV14dDiagnosticBarrier
+  // 已把同一姿态写回 GPU 的 pass1 skinMats）。pass2 的 FACE_EXPANDED_WGSL 只做 MVP、
+  // 不再 GPU 蒙皮；pass1 的 FACE_EXPANDED_DEPTH_WGSL 用 GPU skinMats 蒙皮。
+  // 两段共享 flush 后的同一姿态；CPU/GPU 蒙皮浮点微差在 depth24+near=1.0 下为亚像素级。
+  if (src.skinMatrices) {
+    const sm = src.skinMatrices;
+    for (let t = 0; t < faceTriCount; t += 1) {
+      for (let k = 0; k < 3; k += 1) {
+        const vi = src.indices[src.faceFirstIndex + t * 3 + k];
+        const dst = (t * 3 + k) * stride32;
+        const bx = src.vertices[vi * 8], by = src.vertices[vi * 8 + 1], bz = src.vertices[vi * 8 + 2];
+        let wx = 0, wy = 0, wz = 0;
+        for (let j = 0; j < 4; j += 1) {
+          const bi = u32[dst + 8 + j];
+          const w = f32[dst + 12 + j];
+          if (w <= 0) continue;
+          const o = bi * 16;
+          wx += w * (sm[o] * bx + sm[o + 4] * by + sm[o + 8] * bz + sm[o + 12]);
+          wy += w * (sm[o + 1] * bx + sm[o + 5] * by + sm[o + 9] * bz + sm[o + 13]);
+          wz += w * (sm[o + 2] * bx + sm[o + 6] * by + sm[o + 10] * bz + sm[o + 14]);
+        }
+        f32[dst] = wx; f32[dst + 1] = wy; f32[dst + 2] = wz;
+      }
+    }
+  }
+
+  const expandedBuffer = device.createBuffer({
+    label: "V14D face expanded depth vertex buffer",
+    size: interleaved.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(expandedBuffer, 0, interleaved);
+
+  // pass2 展开几何用 GPU 蒙皮（skinMats），与 pass1 逐顶点一致：顶点缓冲携带
+  // 原始 PMX 位置 + joints/weights，shader 里做蒙皮（注释见上方根因修复 2）。
+  const expandedLayout = device.createPipelineLayout({ bindGroupLayouts: [perFrameLayout, perInstanceLayout] });
+  const expandedModule = device.createShaderModule({ label: "V14D face expanded depth shader", code: FACE_EXPANDED_WGSL });
+  const expandedBuffers: GPUVertexBufferLayout[] = [
+    {
+      arrayStride: stride32 * 4,
+      attributes: [
+        { shaderLocation: 0, offset: 0, format: "float32x3" },
+        { shaderLocation: 1, offset: 12, format: "float32x3" },
+        { shaderLocation: 2, offset: 24, format: "float32x2" },
+        { shaderLocation: 3, offset: 32, format: "uint32x4" },
+        { shaderLocation: 4, offset: 48, format: "float32x4" },
+        { shaderLocation: 5, offset: 64, format: "uint32" },
+      ],
+    },
+  ];
+  const expandedModuleInfo = await expandedModule.getCompilationInfo();
+  const expandedErrors = expandedModuleInfo.messages.filter((m) => m.type === "error");
+  if (expandedErrors.length > 0) {
+    throw new Error("V14D face expanded depth shader 编译失败: " + expandedErrors.map((m) => m.message).join("; "));
+  }
+  device.pushErrorScope("validation");
+  const expandedPipeline = device.createRenderPipeline({
+    label: "V14D face expanded depth pipeline",
+    layout: expandedLayout,
+    vertex: { module: expandedModule, buffers: expandedBuffers },
+    fragment: { module: expandedModule, targets: [{ format: "rgba32float" }] },
+    primitive: { cullMode: "none" },
+    // Stage 2C-M2a：用 less-equal 而非 equal。生产 pick 的 prepass 以 less-equal 写
+    // 深度，目标槽自身前景像素的深度等于该值；但展开几何与 pick 走不同 shader，
+    // 浮点光栅化微差会让严格 equal 把目标槽自身前景也剔除（实测两槽 0 命中）。
+    // less-equal 保留目标槽前景与「未被更近物体遮挡」的语义：若有更近遮挡物，
+    // 展开几何深度更大仍被剔除；prepass 已用生产 pick 管线渲染全部材质，故遮挡
+    // 剔除口径与生产 material-ID pick 一致。
+    // Stage 2C-M2a 修正轮（实验）：CPU 蒙皮 pass2 与 GPU 蒙皮 pass1 存在浮点微差，
+    // 目标槽自身前景像素在 less-equal 下被判为「比 pass1 略远」而剔除（实测 overlap=0）。
+    // 给 pass2 一个向相机方向的恒定深度偏移（depthBias 负值 → 深度略减 → 更接近前景），
+    // 补偿两套蒙皮的微差，让目标槽自身前景通过剔除，同时仍被真正更近的遮挡物挡住。
+    // 实测 depthBias=-2/slope=-2 后 Lashes 命中质心 (840,240) 已贴近 mask (827,249)，
+    // 但仍因光栅化最近邻错位 overlap=0；加大偏移使目标槽前景稳定压过 pass1 深度。
+    depthStencil: { format: "depth24plus", depthWriteEnabled: false, depthCompare: "less-equal", depthBias: -8, depthBiasSlopeScale: -4.0 },
+  });
+  const pipelineError = await device.popErrorScope();
+  if (pipelineError) {
+    throw new Error("V14D face expanded depth pipeline 创建失败: " + pipelineError.message);
+  }
+
+  // Stage 2C-M2a 修正轮（根因修复）：pass1 不能用 fields.pickPipeline——该管线带
+  // rgba8unorm fragment target，在 colorAttachments: [] 的 depth-only pass 中触发
+  // WebGPU 校验失败，使整个 command encoder 作废（pass1/pass2/copy 全被丢弃，
+  // 实测 _debugHitCount=0 且 _debugPrepassDepthCount=全画布像素数）。
+  // 改为专用 depth-only 管线：顶点布局与 pick 的 fullVertexBuffers 完全一致
+  //（reze-engine engine.ts：buffer0 f32x3/f32x3/f32x2@stride32、buffer1 uint16x4@stride8、
+  //  buffer2 unorm8x4@stride4），布局只有 [perFrame, perInstance] 两组，
+  // 深度 less-equal 写（与 pick 同口径）。
+  const prepassModule = device.createShaderModule({ label: "V14D face prepass depth shader", code: FACE_EXPANDED_DEPTH_WGSL });
+  const prepassModuleInfo = await prepassModule.getCompilationInfo();
+  const prepassErrors = prepassModuleInfo.messages.filter((m) => m.type === "error");
+  if (prepassErrors.length > 0) {
+    throw new Error("V14D face prepass depth shader 编译失败: " + prepassErrors.map((m) => m.message).join("; "));
+  }
+  const prepassLayout = device.createPipelineLayout({ bindGroupLayouts: [perFrameLayout, perInstanceLayout] });
+  const prepassBuffers: GPUVertexBufferLayout[] = [
+    {
+      arrayStride: 32,
+      attributes: [
+        { shaderLocation: 0, offset: 0, format: "float32x3" },
+        { shaderLocation: 1, offset: 12, format: "float32x3" },
+        { shaderLocation: 2, offset: 24, format: "float32x2" },
+      ],
+    },
+    { arrayStride: 8, attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" }] },
+    { arrayStride: 4, attributes: [{ shaderLocation: 4, offset: 0, format: "unorm8x4" }] },
+  ];
+  device.pushErrorScope("validation");
+  const prepassPipeline = device.createRenderPipeline({
+    label: "V14D face prepass depth pipeline",
+    layout: prepassLayout,
+    vertex: { module: prepassModule, buffers: prepassBuffers },
+    primitive: { cullMode: "none" },
+    depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less-equal" },
+  });
+  const prepassPipelineError = await device.popErrorScope();
+  if (prepassPipelineError) {
+    throw new Error("V14D face prepass depth pipeline 创建失败: " + prepassPipelineError.message);
+  }
+
+  const depth = device.createTexture({
+    label: "V14D face expanded depth",
+    size: [width, height],
+    format: "depth24plus",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  const target = device.createTexture({ label: "V14D face expanded depth target", size: [width, height], format: "rgba32float", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+  const rowPitch = alignTo(width * 16, 256);
+  const buffer = device.createBuffer({ label: "V14D face expanded depth readback", size: rowPitch * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+
+  try {
+    const encoder = device.createCommandEncoder({ label: "V14D face expanded depth encoder" });
+    // pass1：生产 pick 深度管线渲染全部材质，写场景前景深度（与 material-ID pick 同口径）。
+    const p1 = encoder.beginRenderPass({
+      label: "V14D face expanded depth prepass",
+      colorAttachments: [],
+      depthStencilAttachment: {
+        view: depth.createView(),
+        depthClearValue: 1.0,
+        depthLoadOp: "clear",
+        depthStoreOp: "store",
+      },
+    });
+    p1.setPipeline(prepassPipeline);
+    p1.setBindGroup(0, fields.pickPerFrameBindGroup);
+    for (const instance of fields.modelInstances.values()) {
+      if (!instance.model.visible) continue;
+      p1.setVertexBuffer(0, instance.vertexBuffer);
+      p1.setVertexBuffer(1, instance.jointsBuffer);
+      p1.setVertexBuffer(2, instance.weightsBuffer);
+      p1.setIndexBuffer(instance.indexBuffer, "uint32");
+      p1.setBindGroup(1, instance.pickPerInstanceBindGroup);
+      for (const draw of instance.pickDrawCalls) {
+        p1.drawIndexed(draw.count, 1, draw.firstIndex, 0, 0);
+      }
+    }
+    p1.end();
+    // pass2：仅目标槽展开几何，equal 深度测试剔除被遮挡像素，输出 uv/triId。
+    const p2 = encoder.beginRenderPass({
+      label: "V14D face expanded depth uv pass",
+      colorAttachments: [{ view: target.createView(), clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: "clear", storeOp: "store" }],
+      depthStencilAttachment: {
+        view: depth.createView(),
+        depthLoadOp: "load",
+        depthStoreOp: "store",
+      },
+    });
+    p2.setPipeline(expandedPipeline);
+    p2.setBindGroup(0, fields.pickPerFrameBindGroup);
+    for (const instance of fields.modelInstances.values()) {
+      if (!instance.model.visible) continue;
+      p2.setVertexBuffer(0, expandedBuffer);
+      p2.setBindGroup(1, instance.pickPerInstanceBindGroup);
+      p2.draw(expandedVertCount, 1, 0, 0);
+    }
+    p2.end();
+    encoder.copyTextureToBuffer({ texture: target }, { buffer, bytesPerRow: rowPitch, rowsPerImage: height }, { width, height, depthOrArrayLayers: 1 });
+    device.queue.submit([encoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    await buffer.mapAsync(GPUMapMode.READ);
+    const mapped = buffer.getMappedRange();
+    const mapped32 = new Float32Array(mapped.slice(0));
+    const rowFloats = rowPitch / 4;
+    const triId = new Int32Array(width * height).fill(-1);
+    const uv = new Float32Array(width * height * 2);
+    const faceMask = new Uint8Array(width * height);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const i = y * width + x;
+        const off = y * rowFloats + x * 4;
+        const a = mapped32[off + 3];
+        if (a > 0.5) {
+          uv[i * 2] = mapped32[off];
+          uv[i * 2 + 1] = mapped32[off + 1];
+          triId[i] = Math.round(mapped32[off + 2]);
+          faceMask[i] = 1;
+        }
+      }
+    }
+    return { triId, uv, faceMask, width, height };
+  } finally {
+    if (buffer.mapState === "mapped") buffer.unmap();
+    buffer.destroy();
+    target.destroy();
+    depth.destroy();
+    expandedBuffer.destroy();
+  }
+}
 
 export async function readV14dFaceExpandedTriUv(
   engine: unknown,

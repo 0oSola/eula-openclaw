@@ -24,7 +24,8 @@ export type BadSkinGraphKind =
   | "missingBrows"
   | "missingLashes"
   | "swapBrowsLashes"
-  | "wrongBrowsLashesTint";
+  | "wrongBrowsLashesTint"
+  | "wrongBrowsLashesAlpha";
 
 export declare function perturbV14dSkinVariantStyleGroups(
   groups: readonly RezeStyleGroup[],

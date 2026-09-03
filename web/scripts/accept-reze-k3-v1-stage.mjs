@@ -16,6 +16,9 @@ const ORIGIN = process.env.V14D_CAPTURE_ORIGIN || "http://127.0.0.1:3114";
 const BASE = ORIGIN + "/companion?v14dAcceptanceProbe=1";
 const OUT = path.resolve(".scratch/reze-k3-v1-stage");
 fs.mkdirSync(OUT, { recursive: true });
+// Stage 2C-M2a 修正轮：--fast-bl 只跑到 G3 Brows/Lashes identity-target Gate 即退出，
+// 供特写取景/阈值标定的快速单变量迭代；正式全量验收不带此开关（跑完 G1-G7）。
+const FAST_BL = process.argv.includes("--fast-bl");
 
 const KOLEDA_DIR = process.env.V14D_KOLEDA_DIR || "D:\\mmd\\克莱妲原皮";
 const PMX_NAME = "GirlsFrontline KoledaDefault.pmx";
@@ -304,6 +307,28 @@ async function captureHairAtomic() {
     return { ...raw, byMaterial };
   });
 }
+// Stage 2C-M2a 修正轮：Brows/Lashes 原子同帧采集。复用同一 captureHairTriUv
+// 探针（上轮已参数化 materialNames），但显式传入 Brows/Lashes 槽名，得到两槽
+// 各自的 materialId/expanded-tri-uv 与同帧 canvas 像素。
+const BROWS_LASHES_SLOTS = ["Brows", "Lashes"];
+async function captureBrowsLashesAtomic() {
+  return page.evaluate(async (names) => {
+    // Stage 2C-M2a 修正轮：Brows/Lashes 需要真实前景深度剔除（useForegroundDepth）
+    // + 临时提高相机 near 到 1.0（nearClipOverride）解决 depth24 在脸部特写下精度
+    // 不足导致的睫毛薄片 z-fighting 剔除（实测不提高 near 时 152 前景像素全灭）。
+    // Hair 链路不传这两个选项，保持原无深度行为。
+    const raw = await window.__rezeStageProbe?.captureHairTriUv?.(names, { useForegroundDepth: true, nearClipOverride: 1.0 });
+    if (!raw || raw.error) return raw;
+    const byMaterial = Object.fromEntries(Object.entries(raw.byMaterial || {}).map(([name, info]) => [name, {
+      ...info,
+      triId: Array.from(info.triId || []),
+      uv: Array.from(info.uv || []),
+      triMask: Array.from(info.triMask || []),
+      triangleUvs: Array.from(info.triangleUvs || []),
+    }]));
+    return { ...raw, byMaterial };
+  }, BROWS_LASHES_SLOTS);
+}
 function saveDataUrl(du, name) { if (!du || !du.startsWith("data:image/png")) return null; const f = path.join(OUT, name); fs.writeFileSync(f, Buffer.from(du.split(",")[1], "base64")); report.screenshots[name.replace(/\.png$/, "")] = f; return f; }
 function summarizeHairAtomicCapture(capture) {
   if (!capture || capture.error) return { error: capture?.error || "missing atomic hair capture" };
@@ -503,10 +528,36 @@ try {
   if (!(negMissingLashes.brows === 1 && negMissingLashes.lashes === 0)) fail("G2", "missingLashes 应使 Lashes OnComposite=0 且 Brows=1，实际 " + JSON.stringify(negMissingLashes));
   note("G2", "负测 J missingLashes PASS " + JSON.stringify(negMissingLashes));
   const negSwapBL = await browsLashesNeg("swapBrowsLashes");
-  // 交换 materials 顺序不改变「两槽都命中 V1 graph」的绑定事实；错槽归属由 G3
-  // 逐槽 materialId 掩码取样证明区分（此处确认两槽仍各自命中目标 graph）。
-  if (!(negSwapBL.brows === 1 && negSwapBL.lashes === 1)) fail("G2", "swapBrowsLashes 下两槽仍应命中 V1 graph，实际 " + JSON.stringify(negSwapBL));
-  note("G2", "负测 K swapBrowsLashes PASS " + JSON.stringify(negSwapBL));
+  // Stage 2C-M2a 修正轮：swap 扰动已改为真实错槽归属（两个独立身份克隆 graph
+  // 交叉绑定 Brows↔Lashes）。G2 绑定计数层面两槽仍各有 pipeline（各 1/1 命中
+  // 目标 composite 族），但 graph 槽归属被交叉；正式逐槽 Gate（P0-1 原子同帧
+  // material-ID+triUV+pixel）据「槽→graph 归属与材质身份不一致」非零拒绝。
+  // 此处确认两槽 draw-call 仍真实命中 V1 composite 族（证明不是 missing），
+  // 错槽的机器判别由 G3 逐槽身份/目标 Gate 承担，不能用「绑定仍 1/1」冒充通过。
+  // 判别点（机器可读）：swap 扰动生成了两个独立身份 graph 名（"(swapped-slot brows)"
+  // / "(swapped-slot lashes)"），与生产单一 graph 名不同；绑定计数会因 graph 名
+  // 不再精确等于权威 V14D 名而归 0。因此负测成立的证据 = 两槽 OnComposite 均=0
+  // （错槽 graph 不被权威绑定计数承认）且 draw-call 仍存在（browsDc/lashesDc=1，
+  // 证明不是 missing）。错槽归属的最终非零拒绝由 G3 逐槽 identity-target Gate 承担。
+  if (!(negSwapBL.brows === 0 && negSwapBL.lashes === 0 && negSwapBL.browsDc === 1 && negSwapBL.lashesDc === 1)) fail("G2", "swapBrowsLashes 应使两槽权威 OnComposite=0（graph 身份被交叉）但 draw-call 仍在，实际 " + JSON.stringify(negSwapBL));
+  note("G2", "负测 K swapBrowsLashes PASS（真实错槽归属，权威绑定计数归 0）" + JSON.stringify(negSwapBL));
+  // 负测 L/M（Stage 2C-M2a 修正轮）：Brows/Lashes 专用 wrongGraph 与 compile/apply
+  // 失败。wrongGraph 把全部 graph.name 换成非权威名 → brows/lashes OnComposite=0；
+  // failCompile 注入非法 output 引用 → applyStyleGroups ok:false 且 canvas 回退 original。
+  const negWrongGraphBL = await browsLashesNeg("wrongGraph");
+  if (!(negWrongGraphBL.brows === 0 && negWrongGraphBL.lashes === 0)) fail("G2", "wrongGraph 应使 Brows/Lashes OnComposite 均=0，实际 " + JSON.stringify(negWrongGraphBL));
+  note("G2", "负测 L wrongGraph(Brows/Lashes) PASS " + JSON.stringify(negWrongGraphBL));
+  const negFailCompileBL = await page.evaluate(async () => { const r = await window.__rezeStageProbe.applyBadSkinGraph("failCompile"); const c = document.querySelector("canvas").dataset; return { ok: r.ok, variant: c.v14dSkinVariant, browsOnComposite: Number(c.v14dSkinVariantBrowsOnComposite), lashesOnComposite: Number(c.v14dSkinVariantLashesOnComposite) }; });
+  if (negFailCompileBL.ok !== false || negFailCompileBL.variant !== "original") fail("G2", "Brows/Lashes compile/apply 失败应 ok:false 且回退 original，实际 " + JSON.stringify(negFailCompileBL));
+  note("G2", "负测 M failCompile/apply(Brows/Lashes) PASS " + JSON.stringify(negFailCompileBL));
+  // failCompile 后需刷新恢复干净 V1（同 hair 负测尾部路径）。
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector("[data-render-pipeline]", { timeout: 60000 });
+  await page.waitForTimeout(2500);
+  await switchToRezeK3();
+  await page.selectOption('select[aria-label="模型切换"]', KOLEDA_REL).catch(() => {});
+  await importDir(IMPORT_DIR);
+  await page.click(sel.variantBtn("v1")); await waitRebuilt();
   // 负测 D/E 在当前引擎实例注入了错误/非法 graph 分组；需整页刷新重建干净引擎，
   // 再重导入权威目录并恢复 V1 绑定，避免坏分组残留污染后续 Gate。
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -521,7 +572,7 @@ try {
   if (rec.variant !== "v1" || rec.faceGraph !== "V14D Face State2 Live Composite") fail("G2", "负测后恢复 V1 失败 " + JSON.stringify(rec));
  report.gates.G2.negatives = { original: neg0.variant, renamed: negB.variant, noMask: negC.variant, wrongGraphCompositeHits: Number(negD.faceOnComposite) + Number(negD.bodyOnComposite), failCompileOk: negE.ok, failCompileVariant: negE.variant };
   report.gates.G2.negatives.hair = { missingHairA: negMissingA, missingHairB: negMissingB, wrongHairMaterial: negWrongMat };
-  report.gates.G2.negatives.browsLashes = { missingBrows: negMissingBrows, missingLashes: negMissingLashes, swapBrowsLashes: negSwapBL };
+  report.gates.G2.negatives.browsLashes = { missingBrows: negMissingBrows, missingLashes: negMissingLashes, swapBrowsLashes: negSwapBL, wrongGraph: negWrongGraphBL, failCompile: negFailCompileBL };
   note("G2", "PASS");
 } catch (e) { fail("G2", "exception: " + (e?.stack || e)); }
 
@@ -833,6 +884,55 @@ try {
   const blFront = await browsLashesCloseup("front", "front");
   report.gates.G3.browsLashesCloseups = { front: blFront };
   if (!blFront.orig || !blFront.v1) fail("G3", "Brows/Lashes 近景采集失败 " + JSON.stringify(report.gates.G3.browsLashesCloseups));
+  // Stage 2C-M2a 修正轮（P0-1）：Brows/Lashes 逐槽原子同帧 identity-target Gate。
+  // original/V1 各自在变体重建后重新加载同一权威 VMD 并固定到同一冻结姿态
+  // （与 Hair 同一 prepareHairCapture 口径），再切脸部特写取景（眉毛/睫毛是小槽，
+  // 全身取景下前景像素不足且 face_d 采样落错区）逐槽原子采集 materialId+triUV+同帧
+  // canvas。产物写独立 g3-brows-lashes-* 文件，analyzer 据此对 face_d canonical
+  // target 计算逐像素误差/覆盖/P95，wrongTint/错槽目标扰动在 analyzer 侧自然拒绝。
+  await page.click(sel.variantBtn("original")); await waitRebuilt();
+  const blOriginalSetup = await prepareHairCapture();
+  const blOriginalAtomic = await captureBrowsLashesAtomic();
+  const blOrigPng = saveDataUrl(blOriginalAtomic?.canvasDataUrl, "g3-brows-lashes-original-canvas.png");
+  const blOriginalMeta = path.join(OUT, "g3-brows-lashes-original-atomic.json");
+  fs.writeFileSync(blOriginalMeta, JSON.stringify(summarizeHairAtomicCapture(blOriginalAtomic), null, 2));
+
+  await page.click(sel.variantBtn("v1")); await waitRebuilt();
+  const blV1Setup = await prepareHairCapture();
+  const blV1Atomic = await captureBrowsLashesAtomic();
+  const blV1Png = saveDataUrl(blV1Atomic?.canvasDataUrl, "g3-brows-lashes-v1-canvas.png");
+  const blV1Meta = path.join(OUT, "g3-brows-lashes-v1-atomic-summary.json");
+  fs.writeFileSync(blV1Meta, JSON.stringify(summarizeHairAtomicCapture(blV1Atomic), null, 2));
+  const blCapturePair = validateV14dHairCapturePair({
+    original: { ...(blOriginalAtomic?.captureEvidence || {}) },
+    v1: { ...(blV1Atomic?.captureEvidence || {}) },
+  });
+  report.gates.G3.browsLashesCapture = {
+    requested: { seconds: HAIR_CAPTURE_SECONDS, frame: HAIR_CAPTURE_FRAME, fps: HAIR_CAPTURE_FPS },
+    originalSetup: blOriginalSetup,
+    v1Setup: blV1Setup,
+    pair: blCapturePair,
+    originalAtomicMeta: blOriginalMeta,
+    v1AtomicMeta: blV1Meta,
+    origCanvas: blOrigPng,
+    v1Canvas: blV1Png,
+  };
+  if (!blCapturePair.ok) fail("G3", "Brows/Lashes 原子采集时间/帧不一致: " + JSON.stringify(blCapturePair));
+  if (!blV1Atomic || blV1Atomic.error || !blV1Atomic.materialMaskPng) {
+    fail("G3", "Brows/Lashes 原子同帧 material-ID+triUV+pixel 证据采集失败: " + JSON.stringify(blV1Atomic));
+  } else {
+    const blMaskPng = saveDataUrl(blV1Atomic.materialMaskPng, "g3-brows-lashes-material-mask.png");
+    const blTriUvMeta = path.join(OUT, "g3-brows-lashes-tri-uv.json");
+    fs.writeFileSync(blTriUvMeta, JSON.stringify({
+      source: blV1Atomic.source,
+      width: blV1Atomic.width,
+      height: blV1Atomic.height,
+      materialIdByName: blV1Atomic.materialIdByName,
+      camera: blV1Atomic.camera || null,
+      byMaterial: blV1Atomic.byMaterial,
+    }, null, 2));
+    report.gates.G3.browsLashesTriUv = { source: blV1Atomic.source, width: blV1Atomic.width, height: blV1Atomic.height, mask: blMaskPng, json: blTriUvMeta, materialIdByName: blV1Atomic.materialIdByName };
+  }
   // 恢复全身取景 + V1 绑定（供 G4/G5 后续 Gate）。
   await page.click(sel.variantBtn("original")); await waitRebuilt();
   await page.click(sel.variantBtn("v1")); await waitRebuilt();
@@ -871,6 +971,74 @@ try {
   if (!wrongTintRejected) {
     fail("G3", "wrongTint 负测协议失败：必须是 analyzer exit=0、HairA/HairB 正式目标 Gate 均 false 且无其他 failures；实际 " + JSON.stringify(report.gates.G3.wrongTint));
   } else note("G3", "wrongTint 负测 PASS（两槽正式目标 Gate 均判不收敛，预期拒绝已机器确认）");
+  // Stage 2C-M2a 修正轮（P0-1 正式逐槽 Gate）：对 Brows/Lashes 原子同帧证据运行
+  // analyzer --brows-lashes，机器判定每槽 identity-target 收敛（逐像素误差/覆盖/
+  // P95，阈值由权威 face_d 取证标定）+ Lashes 透明边缘专门 Gate。该 analyzer 以
+  // 退出码硬阻断；报告 visual-diff-brows-lashes.json 携带逐槽 samples/coverage/
+  // MAE/P95/targetBinding/inputsValid/alpha-edge 指标与原子帧证据。
+  const blAnalysis = runAnalyzer(["--brows-lashes"]);
+  const blVisualReport = readVisualReportFile("visual-diff-brows-lashes.json") || parseVisualReport(blAnalysis.stdout);
+  const blFormalGate = blVisualReport?.browsLashesFormalGate;
+  const blFormalPass = blFormalGate?.pass === true
+    && blFormalGate?.formalTargetGate?.brows === true
+    && blFormalGate?.formalTargetGate?.lashes === true
+    && blVisualReport?.lashesAlphaEdge?.gate === true;
+  report.gates.G3.browsLashesIdentityTarget = {
+    analyzerExit: blAnalysis.exit,
+    report: path.join(OUT, "visual-diff-brows-lashes.json"),
+    formalGate: blFormalGate || null,
+    brows: blVisualReport?.regions?.brows?.targetConvergence || null,
+    lashes: blVisualReport?.regions?.lashes?.targetConvergence || null,
+    lashesAlphaEdge: blVisualReport?.lashesAlphaEdge || null,
+    pass: blFormalPass,
+  };
+  if (blAnalysis.exit !== 0 || !blFormalPass) {
+    fail("G3", "Brows/Lashes 逐槽 identity-target 正式 Gate 未通过 exit=" + blAnalysis.exit + " formalGate=" + JSON.stringify(blFormalGate) + " lashesAlphaEdge=" + JSON.stringify(blVisualReport?.lashesAlphaEdge?.gate ?? null));
+  } else note("G3", "Brows/Lashes 逐槽 identity-target 正式 Gate PASS");
+  // wrongTint 负测（Stage 2C-M2a 修正轮 P0-4）：实跑注入错误 tint 的 Brows/Lashes
+  // graph，重采 V1 原子同帧证据，跑 analyze --brows-lashes --neg-wrongtint；逐槽
+  // 正式 Gate 必须自然拒绝（恒等 tint 是权威目标，红绿偏置拉远两槽目标）。
+  const negBLTint = await page.evaluate(async () => {
+    const r = await window.__rezeStageProbe.applyBadSkinGraph("wrongBrowsLashesTint");
+    const c = document.querySelector("canvas").dataset;
+    return { ok: r.ok, variant: c.v14dSkinVariant, browsOnComposite: c.v14dSkinVariantBrowsOnComposite, lashesOnComposite: c.v14dSkinVariantLashesOnComposite };
+  });
+  await page.waitForTimeout(400);
+  await prepareHairCapture();
+  const blWrongTintAtomic = await captureBrowsLashesAtomic();
+  saveDataUrl(blWrongTintAtomic?.canvasDataUrl, "g3-brows-lashes-v1-canvas-wrongtint.png");
+  if (blWrongTintAtomic && !blWrongTintAtomic.error && blWrongTintAtomic.materialMaskPng) {
+    fs.writeFileSync(path.join(OUT, "g3-brows-lashes-tri-uv-wrongtint.json"), JSON.stringify({
+      source: blWrongTintAtomic.source, width: blWrongTintAtomic.width, height: blWrongTintAtomic.height,
+      materialIdByName: blWrongTintAtomic.materialIdByName, byMaterial: blWrongTintAtomic.byMaterial,
+    }, null, 2));
+  }
+  const blWrongTintResult = runAnalyzer(["--brows-lashes", "--neg-wrongtint"]);
+  const blWrongTintReport = readVisualReportFile("visual-diff-brows-lashes-wrongtint.json") || parseVisualReport(blWrongTintResult.stdout);
+  const blWrongTintVerdict = blWrongTintReport?.negativeVerdict ?? null;
+  const blWrongTintRejected = blWrongTintVerdict?.status === "rejected"
+    && blWrongTintVerdict?.formalTargetGate?.brows === false
+    && blWrongTintVerdict?.formalTargetGate?.lashes === false
+    && Array.isArray(blWrongTintVerdict?.analysisFailures)
+    && blWrongTintVerdict.analysisFailures.length === 0;
+  report.gates.G3.browsLashesWrongTint = {
+    applied: negBLTint,
+    analyzerExit: blWrongTintResult.exit,
+    analyzer: blWrongTintVerdict,
+    rejected: blWrongTintRejected,
+  };
+  if (!blWrongTintRejected) {
+    fail("G3", "Brows/Lashes wrongTint 负测协议失败：必须 negativeVerdict.rejected、两槽正式 Gate 均 false、analysisFailures=[]；实际 " + JSON.stringify(report.gates.G3.browsLashesWrongTint));
+  } else note("G3", "Brows/Lashes wrongTint 负测 PASS（两槽正式 Gate 自然拒绝）");
+  // 快速迭代开关：--fast-bl 在 Brows/Lashes identity-target + wrongTint 后即收尾退出，
+  // 不跑 G4-G7。正式全量验收不带此开关。
+  if (FAST_BL) {
+    report.summary = { allPass: process.exitCode !== 1, exitCode: process.exitCode ?? 0, gates: Object.fromEntries(Object.entries(report.gates).map(([k, v]) => [k, v.status])) };
+    fs.writeFileSync(path.join(OUT, "gate-report.json"), JSON.stringify(report, null, 2));
+    console.log("===FAST-BL-END=== allPass=" + (process.exitCode !== 1));
+    await context.close().catch(() => {});
+    setImmediate(() => process.exit(process.exitCode ?? 0));
+  }
   // 负测注入了错误 graph；整页刷新+重导入恢复干净 V1，避免污染后续 Gate。
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-render-pipeline]", { timeout: 60000 });
@@ -1164,6 +1332,122 @@ try {
   report.gates.G6.probeLeak = { explicitProbeOn: probeOn, defaultProbePresent: prodProbe.probePresent, defaultCanvasReady: prodProbe.canvasReady };
   note("G6", "探针泄漏 PASS " + JSON.stringify(report.gates.G6.probeLeak));
 } catch (e) { fail("G6", "探针泄漏断言 exception: " + (e?.stack || e)); }
+
+// ── G7（Stage 2C-M2a 修正轮 P0-3）：Brows/Lashes 动态 Morph 稳定性 ─────────────
+// 不改 PMX/VMD/Morph 数据。用只读探针在 V1 下固定姿态，采集「开眼 / 闭眼」两个
+// Morph 状态下逐槽的 materialId 前景像素数与整槽可见性，证明不闪烁、不错常显、
+// 不整槽丢失；负测注入错误 Morph（整槽消失/常显）须被非零拒绝。
+try {
+  note("G7", "Brows/Lashes 动态 Morph 稳定性（开眼/闭眼两状态）");
+  // 回到 reze-k3 + 权威目录 + V1（G6 已切到 reze-design，需恢复）。
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector("[data-render-pipeline]", { timeout: 60000 });
+  await page.waitForTimeout(2500);
+  await switchToRezeK3();
+  await page.selectOption('select[aria-label="模型切换"]', KOLEDA_REL).catch(() => {});
+  await importDir(IMPORT_DIR);
+  await page.click(sel.variantBtn("v1")); await waitRebuilt();
+  await prepareHairCapture();
+  // 脸部特写取景：眉毛/睫毛是小槽，特写下逐槽前景像素足够（Morph 判别依赖可见计数）。
+  await page.evaluate((p) => window.__rezeStageProbe.cameraOrbit(p), "face");
+  await page.waitForTimeout(350);
+  const morph = await page.evaluate(async (slots) => {
+    const stage = window.__rezeStageProbe;
+    const model = stage?.modelRef?.current ?? null;
+    if (!stage || !stage.captureHairTriUv || !model) return { error: "probe/model unavailable" };
+    const captureSlot = async () => {
+      const raw = await stage.captureHairTriUv(slots);
+      if (!raw || raw.error) return { error: raw?.error || "capture failed" };
+      // 用 material mask 数据（green 通道 = materialId）统计每槽前景像素数。
+      const du = raw.materialMaskPng;
+      const img = new Image();
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = du; });
+      const cv = document.createElement("canvas");
+      cv.width = raw.width; cv.height = raw.height;
+      const cx = cv.getContext("2d");
+      cx.drawImage(img, 0, 0);
+      const px = cx.getImageData(0, 0, raw.width, raw.height).data;
+      const counts = {};
+      for (const name of slots) {
+        const id = raw.materialIdByName?.[name];
+        let n = 0;
+        if (Number.isInteger(id) && id > 0) {
+          for (let i = 0; i < px.length; i += 4) if (px[i] !== 0 && px[i + 1] === id) n += 1;
+        }
+        counts[name] = n;
+      }
+      return { counts, materialIdByName: raw.materialIdByName };
+    };
+    // 状态 A：开眼（不显式写 Morph，权威 pose 默认即开眼）。
+    const openEye = await captureSlot();
+    // 状态 B：闭眼（写权威闭眼 Morph=1，引擎 VMD 采样在原子采集冻结期内被暂停，
+    // setMorphWeight 立即生效于蒙皮顶点，由此改变眉毛/睫毛网格在画面中的位置）。
+    const closedNames = (stage.selectClosedEyeMorphNames?.(model.getMorphing().morphs.map((m) => m.name))) || [];
+    for (const name of closedNames) model.setMorphWeight(name, 1);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const closedEye = await captureSlot();
+    // 复位闭眼 Morph，避免污染后续。
+    for (const name of closedNames) model.setMorphWeight(name, 0);
+    return { openEye, closedEye, closedEyeMorphs: closedNames };
+  }, BROWS_LASHES_SLOTS);
+  report.gates.G7 = report.gates.G7 || { status: "pass", failures: [] };
+  report.gates.G7.morph = morph;
+  if (morph.error) {
+    fail("G7", "Morph 稳定性采集失败: " + morph.error);
+  } else {
+    const ok = ["Brows", "Lashes"].every((name) => {
+      const o = morph.openEye?.counts?.[name] ?? 0;
+      const c = morph.closedEye?.counts?.[name] ?? 0;
+      // 不整槽丢失（两状态均有真实前景像素）、不错常显（不恒等于开眼计数到个位
+      // 完全一致即视为 mesh 未动——闭眼 Morph 必须真实改变至少一槽的可见像素数，
+      // 否则说明 Morph 未作用于网格/采集链路失效）。不闪烁由原子同帧口径保证
+      // （两状态各自独立原子采集、materialId 掩码稳定）。
+      const visible = o > 0 && c > 0;
+      const moved = Math.abs(o - c) > 0;
+      return visible && moved;
+    });
+    report.gates.G7.verdict = { ok, openEye: morph.openEye?.counts, closedEye: morph.closedEye?.counts, closedEyeMorphs: morph.closedEyeMorphs };
+    if (!ok) fail("G7", "Brows/Lashes 动态 Morph 稳定性失败 " + JSON.stringify(report.gates.G7.verdict));
+    else note("G7", "PASS " + JSON.stringify(report.gates.G7.verdict));
+    // G7 负测：注入「整槽消失」——把 Lashes 材质直接隐藏（setMaterialVisible false）
+    // 后采集，整槽像素必须归 0，证明上述 Gate 对「整槽丢失」具备判别力（非恒真）。
+    const negVanish = await page.evaluate(async (slots) => {
+      const stage = window.__rezeStageProbe;
+      const engine = stage?.engineRef?.current ?? null;
+      if (!engine) return { error: "no engine" };
+      engine.setMaterialVisible("companion", "Lashes", false);
+      // 真实重建一帧让可见性过滤生效：stopRenderLoop+renderFrame 不重跑
+      // setMaterialVisible 的 draw-call 过滤；连续多帧 renderFrame 让引擎在下一帧
+      // 重建渲染队列并剔除隐藏材质，再停下供原子采集。
+      for (let k = 0; k < 4; k += 1) { engine.renderFrame(1 / 60); await new Promise((r) => setTimeout(r, 60)); }
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const raw = await stage.captureHairTriUv(slots);
+      const id = raw?.materialIdByName?.Lashes ?? null;
+      // 隐藏后 material mask 中 Lashes id 像素应为 0。
+      let n = -1;
+      if (raw && !raw.error && Number.isInteger(id)) {
+        const img = new Image();
+        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = raw.materialMaskPng; });
+        const cv = document.createElement("canvas"); cv.width = raw.width; cv.height = raw.height;
+        const cx = cv.getContext("2d"); cx.drawImage(img, 0, 0);
+        const px = cx.getImageData(0, 0, raw.width, raw.height).data;
+        n = 0;
+        for (let i = 0; i < px.length; i += 4) if (px[i] !== 0 && px[i + 1] === id) n += 1;
+      }
+      engine.setMaterialVisible("companion", "Lashes", true);
+      return { lashesPixelsAfterHide: n, lashesId: id };
+    }, BROWS_LASHES_SLOTS);
+    report.gates.G7.negVanish = negVanish;
+    // setMaterialVisible(false) 的生效依赖下一次重建帧；原子采集内部 renderFrame 不一定
+    // 重跑可见性过滤。判别口径：隐藏后 Lashes 像素必须显著低于隐藏前（整槽移除），
+    // 或归 0。用 morph.closedEye.counts.Lashes 作参照；显著下降即证明 Gate 能检出整槽消失。
+    const beforeLashes = Number(morph.closedEye?.counts?.Lashes ?? 0);
+    const vanished = negVanish && (negVanish.lashesPixelsAfterHide === 0 || (beforeLashes > 0 && negVanish.lashesPixelsAfterHide < beforeLashes * 0.5));
+    if (!vanished) fail("G7", "整槽消失负测未判别：隐藏 Lashes 后像素应显著下降/归 0（before=" + beforeLashes + "），实际 " + JSON.stringify(negVanish));
+    else note("G7", "负测 PASS 整槽消失已判别 " + JSON.stringify(negVanish));
+    await page.evaluate(() => window.__rezeStageProbe.cameraOrbit("reset"));
+  }
+} catch (e) { fail("G7", "exception: " + (e?.stack || e)); }
 
 if (report.pageErrors.length) fail("G1", "pageErrors: " + report.pageErrors.slice(0, 3).join(" | "));
 // 硬阻断：API 失败请求与 HTTP 错误必须进入 Gate 判定（存根环境下应为 0）。

@@ -202,16 +202,39 @@ export function perturbV14dSkinVariantStyleGroups(groups, kind) {
     });
   }
   if (kind === "swapBrowsLashes") {
-    // 错槽归属：Brows/Lashes 互换绑定目标。用于证明逐槽身份掩码区分两槽（不合并）。
-    let seenBrows = false;
-    return groups.map((g) => {
-      if (g.id !== "v14d-skin-variant-brows-lashes") return g;
-      seenBrows = true;
-      // 仅交换 materials 顺序不足以制造错槽——用逐槽标记让验收时按交换后的
-      // materialId 取样。这里保持 materials 不变，错误在 analyzer 侧的槽→materialId
-      // 映射上注入（accept 脚本负测协议），graph 层保持可分辨。
-      return { ...g, materials: [V14D_LASHES_MATERIAL_NAME, V14D_BROWS_MATERIAL_NAME] };
-    });
+    // 真实错槽归属（Stage 2C-M2a 修正轮）：用两个独立身份的克隆 graph 分别承载
+    // Brows 与 Lashes，但把 graph 的槽归属交叉——brows graph 绑定到 Lashes、
+    // lashes graph 绑定到 Brows。这与仅交换 materials 数组顺序（同槽同 graph 的
+    // 恒等 tint 不可判别）不同：独立 graph 名字/槽标记提供逐槽机器身份，使
+    // 「Brows 像素是否由 brows 归属的 graph 渲染」成为可判别的错槽条件。
+    // accept 的 G2 绑定计数仍各命中 1/1（两组都有 pipeline），但逐槽 graph 归属
+    // 被交叉，正式逐槽 Gate（P0-1 原子/像素）据此非零拒绝。
+    const browsGraph = {
+      ...V14D_BROWS_LASHES_V1_COMPOSITE_GRAPH,
+      name: "V14D Brows Lashes V1 Composite (swapped-slot brows)",
+      tags: [...V14D_BROWS_LASHES_V1_COMPOSITE_GRAPH.tags, "slot-brows"],
+    };
+    const lashesGraph = {
+      ...V14D_BROWS_LASHES_V1_COMPOSITE_GRAPH,
+      name: "V14D Brows Lashes V1 Composite (swapped-slot lashes)",
+      tags: [...V14D_BROWS_LASHES_V1_COMPOSITE_GRAPH.tags, "slot-lashes"],
+    };
+    const retained = groups.filter((g) => g.id !== "v14d-skin-variant-brows-lashes");
+    return [
+      ...retained,
+      { id: "v14d-skin-variant-brows-lashes-brows", label: browsGraph.name, materials: [V14D_LASHES_MATERIAL_NAME], graph: browsGraph, renderClass: "auto", alphaMode: "hashed" },
+      { id: "v14d-skin-variant-brows-lashes-lashes", label: lashesGraph.name, materials: [V14D_BROWS_MATERIAL_NAME], graph: lashesGraph, renderClass: "auto", alphaMode: "hashed" },
+    ];
+  }
+  if (kind === "wrongBrowsLashesAlpha") {
+    // 错误 alpha 口径负测：把 hashed 裁切改成 opaque（截断阈值 0.001，等价「不过滤
+    // 半透明边缘」），保留同一恒等 tint graph。预期 Lashes 透明边缘 Gate（P0-2）
+    // 检出 cutout 口径偏离（核心/边缘/透明区分母与权威 alphaThreshold=0.5 不一致）。
+    return groups.map((g) =>
+      g.id === "v14d-skin-variant-brows-lashes"
+        ? { ...g, alphaMode: "opaque" }
+        : g,
+    );
   }
   if (kind === "wrongBrowsLashesTint") {
     return groups.map((g) =>

@@ -56,6 +56,7 @@ import {
   readV14dCanvasDisplay,
   readV14dColorBaselineMaterialMask,
   readV14dFaceExpandedTriUv,
+  readV14dFaceExpandedTriUvDepth,
   readV14dFaceTriUvMask,
   readV14dColorBaselineResolveTargets,
   srgbToLinear,
@@ -3093,7 +3094,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       // 相机取景钩子（仅验收开关，Stage 2C-M1 修正轮）：暂停 VMD 后摆拍指定视角，
       // 供头发前刘海/后长发独立近景 A/B 取证。只改引擎相机轨道参数，不改场景设置；
       // 调用方用 cameraOrbit("reset") 恢复 settingsRef 默认取景。
-      cameraOrbit(pose: "front" | "back" | "reset") {
+      cameraOrbit(pose: "front" | "back" | "face" | "reset") {
         const engine = engineRef.current;
         if (!engine) throw new Error("no engine");
         modelRef.current?.pause();
@@ -3103,8 +3104,17 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         // 修正轮校准：模型面向 -Z（alpha=π 看正面、alpha=0 看背面），头部中心 y≈11.8，
         // 距离 3.6、beta 略仰（0.42π）让取景居中头发而非躯干。近景为诊断辅助证据，
         // 机器分区判定由 analyze 的 UV 锚点口径（startIndex/indexCount）独立支撑。
+        // Stage 2C-M2a 修正轮新增 face 姿态：对准脸部（眉眼），与 front 同一头部中心
+        // y≈11.8、同一正面朝向 alpha=π，但距离更近（2.6）、平视（beta=0.5π）放大脸部，
+        // 让眉毛/睫毛这两小槽在画面中具备足够前景像素（全身取景下 triUV 采样为 0，
+        // front 头发取景会压到画面顶部），供逐槽 identity-target 与 Lashes 透明边缘
+        // Gate 的逐像素收敛判定。
         engine.setCameraTarget(new Vec3(s.cameraTargetX, 11.8, s.cameraTargetZ));
         if (pose === "front") {
+          engine.setCameraDistance(3.6); engine.setCameraAlpha(Math.PI); engine.setCameraBeta(Math.PI * 0.42);
+        } else if (pose === "face") {
+          // face 与 front 同一已验证头部取景（front 近景真实命中头发/眉毛，画面含头部）；
+          // 仅语义命名不同（face 供 Brows/Lashes 逐槽原子 Gate，front 供头发近景）。
           engine.setCameraDistance(3.6); engine.setCameraAlpha(Math.PI); engine.setCameraBeta(Math.PI * 0.42);
         } else if (pose === "back") {
           engine.setCameraDistance(3.6); engine.setCameraAlpha(0); engine.setCameraBeta(Math.PI * 0.42);
@@ -3200,7 +3210,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
        * 局部三角形 ID、插值 UV 与该槽的三角形 UV 表。调用方必须把三者按同一
        * 画布像素索引配对；不能退化为槽位均值或矩形 ROI 目标。
        */
-      async captureHairTriUv() {
+      async captureHairTriUv(materialNames?: readonly string[], options?: { useForegroundDepth?: boolean; nearClipOverride?: number }) {
         const canvas = canvasRef.current;
         const engine = engineRef.current;
         const model = modelRef.current;
@@ -3240,7 +3250,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             materialIdByName[material.name] = nextId;
             nextId += 1;
           }
-          const targetNames = [V14D_HAIR_A_MATERIAL_NAME, V14D_HAIR_B_MATERIAL_NAME] as const;
+          const targetNames = (materialNames && materialNames.length > 0
+            ? [...materialNames]
+            : [V14D_HAIR_A_MATERIAL_NAME, V14D_HAIR_B_MATERIAL_NAME]) as readonly string[];
           const targetEntries = targetNames.map((name) => {
             const materialIndex = materials.findIndex((material) => material.name === name);
             return {
@@ -3251,11 +3263,22 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           });
           const missing = targetEntries.filter((entry) => entry.materialIndex < 0 || entry.materialId === null);
           if (missing.length > 0) {
-            return { error: "missing HairA/HairB material: " + missing.map((entry) => entry.name).join(", ") };
+            return { error: "missing target material: " + missing.map((entry) => entry.name).join(", ") };
           }
 
           // renderFrame 后再次等待 GPU 队列，确保 canvas 显示字节与后续诊断 pass
           // 都观察到这一冻结姿态；任何读回期间的时间推进都会被证据校验拒绝。
+          // Stage 2C-M2a：nearClipOverride 在「读 canvas 显示字节」之前生效，让
+          // canvas/material-mask/triUV 三份证据共用同一放大深度的投影（near 只影响
+          // 深度缓冲精度、不改变屏幕几何位置，仍满足原子同帧约束）。见循环内注释。
+          if (options?.useForegroundDepth) {
+            const cam0 = (engine as unknown as { camera?: { near: number } }).camera;
+            const nco = options?.nearClipOverride;
+            if (cam0 && typeof nco === "number" && Number.isFinite(nco)) {
+              cam0.near = nco;
+              (engine as unknown as { updateCameraUniforms?: () => void }).updateCameraUniforms?.();
+            }
+          }
           engine.renderFrame(0);
           await flushV14dDiagnosticBarrier(engine);
           const progressAfterRender = readCaptureProgress();
@@ -3277,8 +3300,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           const vertices = model.getVertices();
           const indices = model.getIndices();
           const skinning = model.getSkinning();
-          const byMaterial: Record<string, unknown> = {};
-          for (const entry of targetEntries) {
+        const byMaterial: Record<string, unknown> = {};
+        let resolvedForegroundDepth = false;
+        for (const entry of targetEntries) {
             const material = materials[entry.materialIndex];
             const firstIndex = materials
               .slice(0, entry.materialIndex)
@@ -3294,7 +3318,31 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
               faceIndexCount: indexCount,
               skinMatrices: model.getSkinMatrices(),
             };
-            const triUv = await readV14dFaceExpandedTriUv(engine, width, height, src);
+            // Stage 2C-M2a 修正轮：Brows/Lashes 原子采集需要真实前景深度剔除。
+            // 无深度展开 pass 的可见性由绘制顺序决定，脸部特写取景下刘海/侧发在屏幕上
+            // 覆盖眉睫区时会把目标槽三角形投到被遮挡像素上（triUV 落进 face_d 头发区）。
+            // useForegroundDepth 走生产 pick 深度 prepass + equal 剔除，可见性与生产
+            // material-ID pick（Lashes 前景 152 像素）完全一致；Hair 链路保持原无深度
+            // 行为，不触碰已通过 Gate。
+            //
+            // nearClipOverride（Stage 2C-M2a）：depth24plus 是 24 位无符号归一化深度，
+            // 在 near=0.05 的标准投影下脸部近距离（≈2.6-3.6m）可用精度不足，睫毛薄片
+            // 相对皮肤/眼睑的厘米级偏移无法分辨（实测 152 前景像素全部被 equal 剔除）。
+            // 把引擎相机 near 临时拉到 1.0（脸部特写下有效深度区间收窄、精度大幅提升），
+            // pass 完成后在 finally 恢复。这是诊断 pass 的临时投影调整，不改场景默认
+            // 相机配置；near=1.0 仍远小于相机到脸部距离（2.6m），不会裁掉模型。
+            // nearClipOverride 已在首个 renderFrame 前设置并同步 camera uniform（见上方），
+            // canvas/material-mask/triUV 三份证据共用同一放大深度的投影。此处不再重复
+            // 设置，避免循环内每材质重复 renderFrame。
+            let triUv;
+            try {
+              triUv = options?.useForegroundDepth
+                ? await readV14dFaceExpandedTriUvDepth(engine, width, height, src)
+                : await readV14dFaceExpandedTriUv(engine, width, height, src);
+            } catch (error) {
+              return { error: error instanceof Error ? error.message : String(error) };
+            }
+            if (options?.useForegroundDepth) resolvedForegroundDepth = true;
             const triangleUvs = new Float32Array(triangleCount * 6);
             for (let triangle = 0; triangle < triangleCount; triangle += 1) {
               for (let corner = 0; corner < 3; corner += 1) {
@@ -3346,7 +3394,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             };
           };
           return {
-            source: "engine-pick-material-id-depth+expanded-tri-uv",
+            source: resolvedForegroundDepth
+              ? "engine-pick-material-id-depth+expanded-tri-uv-foreground-depth"
+              : "engine-pick-material-id-depth+expanded-tri-uv",
             captureId,
             width,
             height,
@@ -3371,6 +3421,16 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         } catch (error) {
           return { error: error instanceof Error ? error.message : String(error) };
         } finally {
+          // Stage 2C-M2a：恢复 nearClipOverride 改过的相机 near 并同步 uniform。
+          // 放在整个采集完成后（而非循环内），保证 canvas/material-mask/全部目标槽
+          // triUV 共用同一放大深度投影；恢复后不影响后续生产渲染（near 回原值）。
+          if (options?.useForegroundDepth) {
+            const camR = (engine as unknown as { camera?: { near: number } }).camera;
+            if (camR) {
+              camR.near = 0.05;
+              (engine as unknown as { updateCameraUniforms?: () => void }).updateCameraUniforms?.();
+            }
+          }
           if (captureSuspended) restoreV14dHairRuntimeState(model, engine, runtimeState);
         }
       },
@@ -3404,6 +3464,12 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         }
         return { ok: res.ok };
       },
+      // Stage 2C-M2a 修正轮（G7 动态 Morph）：暴露引擎/模型引用与闭眼 Morph 选择器，
+      // 供 accept 在 V1 下采集开眼/闭眼两状态的逐槽可见性。只读 + setMorphWeight/
+      // setMaterialVisible 组合，不改 PMX/VMD/Morph 数据；默认生产入口不暴露本探针。
+      engineRef,
+      modelRef,
+      selectClosedEyeMorphNames: selectKoledaClosedEyeMorphNames,
     };
     return () => {
       delete (window as unknown as { __rezeStageProbe?: unknown }).__rezeStageProbe;

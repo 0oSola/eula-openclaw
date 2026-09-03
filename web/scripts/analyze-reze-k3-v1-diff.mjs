@@ -24,6 +24,23 @@ import {
   v14dHairTargetDisplay,
   v14dHairTargetDisplayFromLinear,
 } from "../src/features/stage/v14dHairPartition.js";
+import {
+  V14D_BROWS_LASHES_ALPHA_THRESHOLD,
+  V14D_BROWS_LASHES_SLOTS,
+  V14D_BROWS_LASHES_TEXTURE_NAME,
+  v14dBrowsLashesTargetDisplayFromLinear,
+} from "../src/features/stage/v14dBrowsLashesTarget.js";
+
+// Stage 2C-M2a 修正轮：Brows/Lashes 逐槽 identity-target Gate（独立 lane）。
+// --brows-lashes 只消费 Brows/Lashes 原子同帧证据与 face_d 权威目标，输出独立
+// 报告 visual-diff-brows-lashes.json；--neg-wrongtint / --neg-swap-slot-target
+// 在该 lane 内分别读 wrongtint 画布/交换 Brows↔Lashes target/triUV 归属。
+const NEG_BROWS_LASHES = process.argv.includes("--brows-lashes");
+if (NEG_BROWS_LASHES) {
+  const mod = await import("./analyze-v14d-brows-lashes.mjs");
+  const code = await mod.runBrowsLashesAnalysis(process.argv);
+  process.exit(code);
+}
 
 const V14D_HAIR_FORMAL_GATE_AUTHORITY = "material-id+atomic-triuv+slot-changed+target-convergence";
 
