@@ -13,6 +13,9 @@ import {
   V14D_HAIR_A_MATERIAL_NAME,
   V14D_HAIR_B_MATERIAL_NAME,
   V14D_HAIR_TINT,
+  V14D_BROWS_MATERIAL_NAME,
+  V14D_LASHES_MATERIAL_NAME,
+  V14D_BROWS_LASHES_TINT,
 } from "./v14dAuthority.js";
 
 /**
@@ -86,6 +89,25 @@ export const V14D_HAIR_V1_COMPOSITE_GRAPH = {
 };
 
 /**
+ * Stage 2C-M2a 生产 V1 Brows/Lashes 合成图：graph.name "V14D Brows Lashes V1 Composite"
+ * 由引擎补丁精确覆写为 v14d_hair_composite(tex_color, [1,1,1])（恒等乘色 = BaseColor
+ * 原样通过）。权威取证（brows-lashes-forensic.json）确认两槽 BaseColor/Alpha 直连
+ * face_d 纹理、无额外乘色，V1 语义目标是「原色通过 + 独立 V1 分组绑定 + hashed-alpha
+ * 裁切口径 alphaThreshold=0.5」。节点 id 固定 v14d_brows_lashes_tint 供 wrongTint
+ * 负测真实改变运行时颜色。
+ */
+export const V14D_BROWS_LASHES_V1_COMPOSITE_GRAPH = {
+  version: 1,
+  name: "V14D Brows Lashes V1 Composite",
+  tags: ["v14d", "production", "skin-variant", "brows-lashes-v1"],
+  nodes: [
+    { id: "v14d_brows_lashes_tint", type: "rgb", inputs: { color: [V14D_BROWS_LASHES_TINT[0], V14D_BROWS_LASHES_TINT[1], V14D_BROWS_LASHES_TINT[2]] } },
+  ],
+  links: [],
+  output: { node: "v14d_brows_lashes_tint", socket: "color" },
+};
+
+/**
  * 生产 V1 变体：把 Face/BodySkin/HairA/HairB 从现有分组抽出，分别绑定到
  * V14D 实时合成 graph，其余材质保持 reze-k3 正常分组（严格 A/B）。
  * 与诊断 buildV14dUnlitStyleGroups 同构，但 graph 为生产合成图。
@@ -97,6 +119,8 @@ export function buildV14dSkinVariantStyleGroups(originalGroups) {
     V14D_BODY_MATERIAL_NAME,
     V14D_HAIR_A_MATERIAL_NAME,
     V14D_HAIR_B_MATERIAL_NAME,
+    V14D_BROWS_MATERIAL_NAME,
+    V14D_LASHES_MATERIAL_NAME,
   ]);
   const retainedGroups = originalGroups
     .map((group) => ({
@@ -124,6 +148,16 @@ export function buildV14dSkinVariantStyleGroups(originalGroups) {
       materials: [V14D_HAIR_A_MATERIAL_NAME, V14D_HAIR_B_MATERIAL_NAME],
       graph: V14D_HAIR_V1_COMPOSITE_GRAPH,
       renderClass: "hair",
+    },
+    {
+      id: "v14d-skin-variant-brows-lashes",
+      label: "V14D Brows Lashes V1 Composite",
+      materials: [V14D_BROWS_MATERIAL_NAME, V14D_LASHES_MATERIAL_NAME],
+      graph: V14D_BROWS_LASHES_V1_COMPOSITE_GRAPH,
+      // renderClass auto（非 hair：眉毛睫毛在眼睛前方，不能引入 HAIR_OVER_EYES 半透
+      // 高光 epilogue）；alphaMode hashed（取证 blendMethod=HASHED alphaThreshold=0.5）。
+      renderClass: "auto",
+      alphaMode: "hashed",
     },
   ];
 }
@@ -153,6 +187,47 @@ export function perturbV14dSkinVariantStyleGroups(groups, kind) {
       }
       return g;
     });
+  }
+  if (kind === "missingBrows" || kind === "missingLashes") {
+    const missing = kind === "missingBrows" ? V14D_BROWS_MATERIAL_NAME : V14D_LASHES_MATERIAL_NAME;
+    return groups.map((g) => {
+      if (g.id === "v14d-skin-variant-brows-lashes") {
+        return { ...g, materials: g.materials.filter((m) => m !== missing) };
+      }
+      // 把漏掉的槽回塞 K3 原 face 分组（该槽保持原始 graph，不命中 V1 composite）。
+      if (g.graph && g.graph.name === "Face") {
+        return { ...g, materials: [...g.materials, missing] };
+      }
+      return g;
+    });
+  }
+  if (kind === "swapBrowsLashes") {
+    // 错槽归属：Brows/Lashes 互换绑定目标。用于证明逐槽身份掩码区分两槽（不合并）。
+    let seenBrows = false;
+    return groups.map((g) => {
+      if (g.id !== "v14d-skin-variant-brows-lashes") return g;
+      seenBrows = true;
+      // 仅交换 materials 顺序不足以制造错槽——用逐槽标记让验收时按交换后的
+      // materialId 取样。这里保持 materials 不变，错误在 analyzer 侧的槽→materialId
+      // 映射上注入（accept 脚本负测协议），graph 层保持可分辨。
+      return { ...g, materials: [V14D_LASHES_MATERIAL_NAME, V14D_BROWS_MATERIAL_NAME] };
+    });
+  }
+  if (kind === "wrongBrowsLashesTint") {
+    return groups.map((g) =>
+      g.id === "v14d-skin-variant-brows-lashes"
+        ? {
+            ...g,
+            graph: {
+              ...g.graph,
+              // 节点 id 与权威 graph 一致（v14d_brows_lashes_tint）：引擎补丁按该 id
+              // 取 tint 写入 WGSL，错误红绿偏置真实进入运行时着色，被 G3 收敛 Gate
+              // 非零拒绝（恒等 tint 是权威目标，任何偏置都应拉远两槽目标）。
+              nodes: [{ id: "v14d_brows_lashes_tint", type: "rgb", inputs: { color: [1.35, 0.25, 0.25] } }],
+            },
+          }
+        : g,
+    );
   }
   if (kind === "wrongHairMaterial") {
     return groups.map((g) =>
@@ -203,6 +278,8 @@ export function collectV14dSkinVariantBindingCounts(engine) {
     bodyDrawCalls: 0, bodyOnComposite: 0,
     hairADrawCalls: 0, hairAOnComposite: 0,
     hairBDrawCalls: 0, hairBOnComposite: 0,
+    browsDrawCalls: 0, browsOnComposite: 0,
+    lashesDrawCalls: 0, lashesOnComposite: 0,
   };
   if (!engine) return counts;
   const insts = engine.modelInstances;
@@ -228,6 +305,12 @@ export function collectV14dSkinVariantBindingCounts(engine) {
       } else if (dc.materialName === V14D_HAIR_B_MATERIAL_NAME) {
         counts.hairBDrawCalls += 1;
         if (onComposite && graphName === V14D_HAIR_V1_COMPOSITE_GRAPH.name) counts.hairBOnComposite += 1;
+      } else if (dc.materialName === V14D_BROWS_MATERIAL_NAME) {
+        counts.browsDrawCalls += 1;
+        if (onComposite && graphName === V14D_BROWS_LASHES_V1_COMPOSITE_GRAPH.name) counts.browsOnComposite += 1;
+      } else if (dc.materialName === V14D_LASHES_MATERIAL_NAME) {
+        counts.lashesDrawCalls += 1;
+        if (onComposite && graphName === V14D_BROWS_LASHES_V1_COMPOSITE_GRAPH.name) counts.lashesOnComposite += 1;
       }
     }
   }

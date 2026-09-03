@@ -306,3 +306,11 @@
 - 允许用法：Stage 2C-M1.1/M1.2/M1.3 的 HairA/HairB BaseColor 逐槽 Gate、固定帧同帧 triUV 证据、错槽/错目标语义负测和 wrongTint 预期拒绝协议；独立 analyzer 默认读取 `g3-hair-original-canvas.png` / `g3-hair-v1-canvas.png`。
 - 禁止用法：不得用整槽均值、矩形 ROI、材质计数恒等式、`targetBinding.consistent=false` 自证或视角相关高光结果冒充逐像素 BaseColor 目标；不得让 captureHairTriUv 采集后无条件启动 render-loop；不得扩大到 PMX/VMD/骨骼/物理/播放或其他材质槽。
 - 路由影响：由 web/scripts/analyze-reze-k3-v1-diff.mjs 与 web/scripts/accept-reze-k3-v1-stage.mjs 消费，采集只在显式 acceptance probe 下启用；原子采集时间推进、跨帧配对或 triUV 解析率低于 99.9% 时拒绝；`--self-test-hair-gate` 可在无渲染产物时验证正式组合与负测判定契约；完整定义见 workflow/concepts/v14d-hair-triuv-pixel-gate.zh-CN.md。
+
+# V14D Brows/Lashes 恒等 tint 迁移
+
+- 英文机器名：v14d-brows-lashes-identity-tint（概念 id）；常量 V14D_BROWS_MATERIAL_NAME / V14D_LASHES_MATERIAL_NAME / V14D_BROWS_LASHES_TINT，graph V14D_BROWS_LASHES_V1_COMPOSITE_GRAPH（"V14D Brows Lashes V1 Composite"，节点 id v14d_brows_lashes_tint）。
+- 含义：把权威克莱妲 Brows/Lashes 两槽从原 K3 face 分组抽出绑定到独立 V14D graph。权威取证确认两槽 BaseColor/Alpha 直连 face_d 纹理、无乘色节点，V1 目标 = 原色通过 + 独立绑定；实现复用 v14d_hair_composite helper 以恒等 tint [1,1,1] 达成原样通过。renderClass=auto（非 hair），alphaMode=hashed（alphaThreshold=0.5）。
+- 允许用法：权威克莱妲 Brows/Lashes 的 V1 迁移；任何 BaseColor 无乘色节点的槽可复用同口径。正式 Gate 由 G2 draw-call/graph 绑定证据 + missing/swap 负测承担，不产生颜色变化故不适用逐槽像素收敛 Gate。
+- 禁止用法：不得给需变色槽套恒等 tint 冒充迁移；不得用 renderClass=hair 渲染眉毛睫毛；不得复制恒等 tint 字面量形成双权威（必须只从 v14dAuthority.js 读）。
+- 路由影响：只影响 V14D V1 变体的 Brows/Lashes 分组绑定；不影响原始模式、Face/BodySkin/HairA/HairB、灯光/星空/相机、PMX/VMD/骨骼/物理。完整定义见 workflow/concepts/v14d-brows-lashes-identity-tint.zh-CN.md。

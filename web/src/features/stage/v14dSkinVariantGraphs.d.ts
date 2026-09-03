@@ -8,6 +8,7 @@ export declare const V14D_FACE_V1_COMPOSITE_GRAPH: ShaderGraph;
 export declare const V14D_BODY_V1_COMPOSITE_GRAPH: ShaderGraph;
 export declare const V14D_BODY_LIVE_COMPOSITE_GRAPH: ShaderGraph;
 export declare const V14D_HAIR_V1_COMPOSITE_GRAPH: ShaderGraph;
+export declare const V14D_BROWS_LASHES_V1_COMPOSITE_GRAPH: ShaderGraph;
 
 export declare function buildV14dSkinVariantStyleGroups(
   originalGroups: readonly RezeStyleGroup[],
@@ -19,7 +20,11 @@ export type BadSkinGraphKind =
   | "missingHairA"
   | "missingHairB"
   | "wrongHairMaterial"
-  | "wrongTint";
+  | "wrongTint"
+  | "missingBrows"
+  | "missingLashes"
+  | "swapBrowsLashes"
+  | "wrongBrowsLashesTint";
 
 export declare function perturbV14dSkinVariantStyleGroups(
   groups: readonly RezeStyleGroup[],
@@ -35,6 +40,10 @@ export type V14dSkinVariantBindingCounts = {
   hairAOnComposite: number;
   hairBDrawCalls: number;
   hairBOnComposite: number;
+  browsDrawCalls: number;
+  browsOnComposite: number;
+  lashesDrawCalls: number;
+  lashesOnComposite: number;
 };
 
 export declare function collectV14dSkinVariantBindingCounts(

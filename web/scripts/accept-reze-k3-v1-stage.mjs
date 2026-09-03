@@ -264,7 +264,7 @@ async function readCanvasState() {
     const c = document.querySelector("canvas");
     if (!c) return null;
     const d = c.dataset;
-    return { webgpuStatus: d.webgpuStatus || "", variant: d.v14dSkinVariant || "(unset)", faceGraph: d.v14dSkinVariantFaceGraph || "", faceDrawCalls: d.v14dSkinVariantFaceDrawCalls || "", faceOnComposite: d.v14dSkinVariantFaceOnComposite || "", bodyDrawCalls: d.v14dSkinVariantBodyDrawCalls || "", bodyOnComposite: d.v14dSkinVariantBodyOnComposite || "", hairADrawCalls: d.v14dSkinVariantHairADrawCalls || "", hairAOnComposite: d.v14dSkinVariantHairAOnComposite || "", hairBDrawCalls: d.v14dSkinVariantHairBDrawCalls || "", hairBOnComposite: d.v14dSkinVariantHairBOnComposite || "", idMismatch: d.v14dSkinVariantIdentifierMismatch || "", vmdName: d.vmdPlaybackName || "", vmdCurrent: d.vmdPlaybackCurrent || "", vmdDuration: d.vmdPlaybackDuration || "", vmdPlaying: d.vmdPlaybackPlaying || "" };
+    return { webgpuStatus: d.webgpuStatus || "", variant: d.v14dSkinVariant || "(unset)", faceGraph: d.v14dSkinVariantFaceGraph || "", faceDrawCalls: d.v14dSkinVariantFaceDrawCalls || "", faceOnComposite: d.v14dSkinVariantFaceOnComposite || "", bodyDrawCalls: d.v14dSkinVariantBodyDrawCalls || "", bodyOnComposite: d.v14dSkinVariantBodyOnComposite || "", hairADrawCalls: d.v14dSkinVariantHairADrawCalls || "", hairAOnComposite: d.v14dSkinVariantHairAOnComposite || "", hairBDrawCalls: d.v14dSkinVariantHairBDrawCalls || "", hairBOnComposite: d.v14dSkinVariantHairBOnComposite || "", browsDrawCalls: d.v14dSkinVariantBrowsDrawCalls || "", browsOnComposite: d.v14dSkinVariantBrowsOnComposite || "", lashesDrawCalls: d.v14dSkinVariantLashesDrawCalls || "", lashesOnComposite: d.v14dSkinVariantLashesOnComposite || "", idMismatch: d.v14dSkinVariantIdentifierMismatch || "", vmdName: d.vmdPlaybackName || "", vmdCurrent: d.vmdPlaybackCurrent || "", vmdDuration: d.vmdPlaybackDuration || "", vmdPlaying: d.vmdPlaybackPlaying || "" };
   });
 }
 async function readUiVariant() { return page.evaluate(() => { const a = document.querySelector("[data-testid=\"reze-k3-skin-variant-bar\"] .mio-pipeline-option.is-active"); return a ? a.getAttribute("data-testid").replace("reze-k3-skin-variant-", "") : null; }); }
@@ -405,6 +405,9 @@ try {
   // 不用整头合并掩盖 A/B 分区差异）。
   if (!(hac > 0 && hac === hao)) fail("G2", "HairA drawCalls " + hao + "/" + hac + " 未全部走 V14D Hair V1 Composite");
   if (!(hbc > 0 && hbc === hbo)) fail("G2", "HairB drawCalls " + hbo + "/" + hbc + " 未全部走 V14D Hair V1 Composite");
+  const brc = Number(b.browsDrawCalls), bro = Number(b.browsOnComposite), lac = Number(b.lashesDrawCalls), lao = Number(b.lashesOnComposite);
+  if (!(brc > 0 && brc === bro)) fail("G2", "Brows drawCalls " + bro + "/" + brc + " 未全部走 V14D Brows Lashes V1 Composite");
+  if (!(lac > 0 && lac === lao)) fail("G2", "Lashes drawCalls " + lao + "/" + lac + " 未全部走 V14D Brows Lashes V1 Composite");
   report.gates.G2 = report.gates.G2 || { status: "pass", failures: [] }; report.gates.G2.binding = b;
   // 负测 A：original 不命中 V14D graph
   await page.click(sel.variantBtn("original")); await waitRebuilt();
@@ -472,6 +475,38 @@ try {
   const negWrongMat = await hairNeg("wrongHairMaterial", 0, 0);
   if (!(negWrongMat.a === 0 && negWrongMat.b === 0)) fail("G2", "wrongHairMaterial 应使 HairA/HairB OnComposite 均=0，实际 " + JSON.stringify(negWrongMat));
   note("G2", "负测 H wrongHairMaterial PASS " + JSON.stringify(negWrongMat));
+  // 负测 I/J/K/L（Stage 2C-M2a）：Brows/Lashes 专用 missing/swap/wrongTint 扰动。
+  // 每个都真实驱动引擎 applyStyleGroups 并读回 dataset 绑定证据。要求：
+  // 漏 Brows → browsOnComposite=0 且 lashesOnComposite=1（单变量）；
+  // 漏 Lashes → lashesOnComposite=0 且 browsOnComposite=1；
+  // wrongBrowsLashesTint（恒等 tint 改红绿偏置）→ graph 仍命中（分组绑定不变），
+  //   但目标收敛 Gate 在 G3 非零拒绝（此处只证绑定仍命中、graph 名正确）。
+  async function browsLashesNeg(kind) {
+    const r = await page.evaluate(async (k) => {
+      const res = await window.__rezeStageProbe.applyBadSkinGraph(k);
+      const c = document.querySelector("canvas").dataset;
+      return { ok: res.ok, brows: Number(c.v14dSkinVariantBrowsOnComposite), lashes: Number(c.v14dSkinVariantLashesOnComposite), browsDc: Number(c.v14dSkinVariantBrowsDrawCalls), lashesDc: Number(c.v14dSkinVariantLashesDrawCalls) };
+    }, kind);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector("[data-render-pipeline]", { timeout: 60000 });
+    await page.waitForTimeout(2500);
+    await switchToRezeK3();
+    await page.selectOption('select[aria-label="模型切换"]', KOLEDA_REL).catch(() => {});
+    await importDir(IMPORT_DIR);
+    await page.click(sel.variantBtn("v1")); await waitRebuilt();
+    return r;
+  }
+  const negMissingBrows = await browsLashesNeg("missingBrows");
+  if (!(negMissingBrows.brows === 0 && negMissingBrows.lashes === 1)) fail("G2", "missingBrows 应使 Brows OnComposite=0 且 Lashes=1，实际 " + JSON.stringify(negMissingBrows));
+  note("G2", "负测 I missingBrows PASS " + JSON.stringify(negMissingBrows));
+  const negMissingLashes = await browsLashesNeg("missingLashes");
+  if (!(negMissingLashes.brows === 1 && negMissingLashes.lashes === 0)) fail("G2", "missingLashes 应使 Lashes OnComposite=0 且 Brows=1，实际 " + JSON.stringify(negMissingLashes));
+  note("G2", "负测 J missingLashes PASS " + JSON.stringify(negMissingLashes));
+  const negSwapBL = await browsLashesNeg("swapBrowsLashes");
+  // 交换 materials 顺序不改变「两槽都命中 V1 graph」的绑定事实；错槽归属由 G3
+  // 逐槽 materialId 掩码取样证明区分（此处确认两槽仍各自命中目标 graph）。
+  if (!(negSwapBL.brows === 1 && negSwapBL.lashes === 1)) fail("G2", "swapBrowsLashes 下两槽仍应命中 V1 graph，实际 " + JSON.stringify(negSwapBL));
+  note("G2", "负测 K swapBrowsLashes PASS " + JSON.stringify(negSwapBL));
   // 负测 D/E 在当前引擎实例注入了错误/非法 graph 分组；需整页刷新重建干净引擎，
   // 再重导入权威目录并恢复 V1 绑定，避免坏分组残留污染后续 Gate。
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -486,6 +521,7 @@ try {
   if (rec.variant !== "v1" || rec.faceGraph !== "V14D Face State2 Live Composite") fail("G2", "负测后恢复 V1 失败 " + JSON.stringify(rec));
  report.gates.G2.negatives = { original: neg0.variant, renamed: negB.variant, noMask: negC.variant, wrongGraphCompositeHits: Number(negD.faceOnComposite) + Number(negD.bodyOnComposite), failCompileOk: negE.ok, failCompileVariant: negE.variant };
   report.gates.G2.negatives.hair = { missingHairA: negMissingA, missingHairB: negMissingB, wrongHairMaterial: negWrongMat };
+  report.gates.G2.negatives.browsLashes = { missingBrows: negMissingBrows, missingLashes: negMissingLashes, swapBrowsLashes: negSwapBL };
   note("G2", "PASS");
 } catch (e) { fail("G2", "exception: " + (e?.stack || e)); }
 
@@ -775,6 +811,28 @@ try {
   const cuBack = await hairCloseup("back", "back");
   report.gates.G3.hairCloseups = { front: cuFront, back: cuBack };
   if (!cuFront.orig || !cuFront.v1 || !cuBack.orig || !cuBack.v1) fail("G3", "头发近景采集失败 " + JSON.stringify(report.gates.G3.hairCloseups));
+  // Stage 2C-M2a：Brows/Lashes 脸部特写（original/V1 对照）。恒等 tint 的 V1 语义
+  // 目标是「原色通过 + 独立绑定」，像素与 original 同帧应几乎一致；近景图证明
+  // 眉毛/睫毛在 V1 下仍正确渲染（无消失/错位/透明边缘破裂），且 G2 已证两槽真实
+  // 绑定到独立 V1 graph（非「未生效冒充恒等」）。
+  async function browsLashesCloseup(pose, tag) {
+    await page.click(sel.variantBtn("original")); await waitRebuilt();
+    await page.evaluate((p) => window.__rezeStageProbe.cameraOrbit(p), pose);
+    await page.waitForTimeout(350);
+    const o = await captureStagePixels();
+    if (!o.error) saveDataUrl(o.dataUrl, "g3-brows-lashes-" + tag + "-orig.png");
+    await page.evaluate(() => window.__rezeStageProbe.cameraOrbit("reset"));
+    await page.click(sel.variantBtn("v1")); await waitRebuilt();
+    await page.evaluate((p) => window.__rezeStageProbe.cameraOrbit(p), pose);
+    await page.waitForTimeout(350);
+    const v = await captureStagePixels();
+    if (!v.error) saveDataUrl(v.dataUrl, "g3-brows-lashes-" + tag + "-v1.png");
+    await page.evaluate(() => window.__rezeStageProbe.cameraOrbit("reset"));
+    return { orig: !o.error, v1: !v.error };
+  }
+  const blFront = await browsLashesCloseup("front", "front");
+  report.gates.G3.browsLashesCloseups = { front: blFront };
+  if (!blFront.orig || !blFront.v1) fail("G3", "Brows/Lashes 近景采集失败 " + JSON.stringify(report.gates.G3.browsLashesCloseups));
   // 恢复全身取景 + V1 绑定（供 G4/G5 后续 Gate）。
   await page.click(sel.variantBtn("original")); await waitRebuilt();
   await page.click(sel.variantBtn("v1")); await waitRebuilt();

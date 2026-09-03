@@ -406,10 +406,16 @@ const STATE2_VERIFY_CHECKS = (() => {
   { label: "dist/graph/slots.js assembleModule hair helper 参数", file: slotsDist, marker: "includeV14dHairHelper = false)" },
   { label: "src/graph/slots.ts assembleModule hair helper 注入", file: slotsSrc, marker: "(includeV14dHairHelper ? V14D_HAIR_HELPER_WGSL : " },
   { label: "dist/graph/slots.js assembleModule hair helper 注入", file: slotsDist, marker: "(includeV14dHairHelper ? V14D_HAIR_HELPER_WGSL : " },
-  { label: "src/graph/compile.ts hair graph 门控", file: compileSrc, marker: 'graph.name === "V14D Hair V1 Composite")' },
-  { label: "dist/graph/compile.js hair graph 门控", file: compileDist, marker: 'graph.name === "V14D Hair V1 Composite");' },
+  { label: "src/graph/compile.ts hair graph 门控", file: compileSrc, marker: 'graph.name === "V14D Hair V1 Composite" || graph.name === "V14D Brows Lashes V1 Composite")' },
+  { label: "dist/graph/compile.js hair graph 门控", file: compileDist, marker: 'graph.name === "V14D Hair V1 Composite" || graph.name === "V14D Brows Lashes V1 Composite");' },
   { label: "src/graph/slots.ts hair override 分支", file: slotsSrc, marker: 'graphName === "V14D Hair V1 Composite"' },
   { label: "dist/graph/slots.js hair override 分支", file: slotsDist, marker: 'graphName === "V14D Hair V1 Composite"' },
+  { label: "src/graph/slots.ts brows-lashes override guard", file: slotsSrc, marker: 'graphName === "V14D Brows Lashes V1 Composite"' },
+  { label: "dist/graph/slots.js brows-lashes override guard", file: slotsDist, marker: 'graphName === "V14D Brows Lashes V1 Composite"' },
+  { label: "src/graph/compile.ts brows-lashes helper 注入门控", file: compileSrc, marker: 'graph.name === "V14D Brows Lashes V1 Composite")' },
+  { label: "dist/graph/compile.js brows-lashes helper 注入门控", file: compileDist, marker: 'graph.name === "V14D Brows Lashes V1 Composite");' },
+  { label: "src/graph/compile.ts brows-lashes tint 读取", file: compileSrc, marker: 'n.id === "v14d_brows_lashes_tint"' },
+  { label: "dist/graph/compile.js brows-lashes tint 读取", file: compileDist, marker: 'n.id === "v14d_brows_lashes_tint"' },
   ];
 })();
 
@@ -1153,6 +1159,8 @@ const COMPILE_STATE2_SRC_A_STATE2_ANCHOR = [
   "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)",
   "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, graph.tags?.includes(\"v14d-state2-face\") ?? false)",
 ].join("\n");
+// Stage 2C-M2a：Brows/Lashes V1 graph 名（compile/slots 覆写与幂等 anchor 共用）。
+const BROWS_LASHES_GRAPH_NAME = "V14D Brows Lashes V1 Composite";
 const COMPILE_STATE2_SRC_FINAL = [
   "  const fsBody = lines.join(\"\\n\")",
   "  const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\")?.inputs?.color as number[] | undefined) ?? " + V14D_HAIR_TINT_LITERAL,
@@ -1201,6 +1209,14 @@ const COMPILE_STATE2_SRC_TINT_UPGRADE_ANCHOR = [
   "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody)",
   "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\", graph.name === \"V14D Hair V1 Composite\")"
 ].join("\n");
+// Stage 2C-M2a anchor：compile 已打 Brows/Lashes（tint 读取扩展 + helper 门控含
+// Brows/Lashes），FINAL target 幂等命中此形态（不再重复替换）。
+const COMPILE_STATE2_SRC_BROWS_LASHES_ANCHOR = [
+  "  const fsBody = lines.join(\"\\n\")",
+  "  const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\" || n.id === \"v14d_brows_lashes_tint\")?.inputs?.color as number[] | undefined) ?? " + V14D_HAIR_TINT_LITERAL,
+  "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody, hairTint)",
+  "  const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\", graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\")"
+].join("\n");
 const COMPILE_STATE2_DIST_TINT_UPGRADE_ANCHOR = [
   "    const fsBody = lines.join(\"\\n\");",
   "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody);",
@@ -1210,6 +1226,13 @@ const COMPILE_STATE2_DIST_HAIR_UPGRADE_ANCHOR = [
   "    const fsBody = lines.join(\"\\n\");",
   "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody);",
   "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\");"
+].join("\n");
+// Stage 2C-M2a anchor（DIST 侧）：compile 已打 Brows/Lashes。
+const COMPILE_STATE2_DIST_BROWS_LASHES_ANCHOR = [
+  "    const fsBody = lines.join(\"\\n\");",
+  "    const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\" || n.id === \"v14d_brows_lashes_tint\")?.inputs?.color) ?? " + V14D_HAIR_TINT_LITERAL + ";",
+  "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody, hairTint);",
+  "    const wgsl = assembleModule(opts.renderClass ?? \"auto\", opts.alphaMode ?? \"opaque\", fsBodyLive, usesStyle.current, (graph.tags?.includes(\"v14d-state2-face\") ?? false) || graph.name === \"V14D Body Skin Composite\", graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\");"
 ].join("\n");
 
 const BASE_BIND_ENTRIES_SRC_ANCHOR = [
@@ -1312,9 +1335,12 @@ const state2CompletenessTargets = [
     anchors: [
       "    if (!isFaceLive && !isBodySkin) return fsBody;",
       "    const isHairV1 = graphName === \"V14D Hair V1 Composite\";",
+      "    const isHairV1 = graphName === \"V14D Hair V1 Composite\" || graphName === \"" + BROWS_LASHES_GRAPH_NAME + "\";",
     ],
     replacement: "    const isHairV1 = graphName === \"V14D Hair V1 Composite\";\n    if (!isFaceLive && !isBodySkin && !isHairV1) return fsBody;",
-    doneMarker: "    const isHairV1 = graphName === \"V14D Hair V1 Composite\";",
+    // Stage 2C-M2a：hair-only 与 Brows/Lashes 已打形态都视为收敛终态，避免与
+    // brows-lashes guard target 互相回退改写（二次运行幂等）。
+    isDone: (content) => content.includes("    const isHairV1 = graphName === \"V14D Hair V1 Composite\";\n    if (!isFaceLive && !isBodySkin && !isHairV1) return fsBody;") || content.includes("graphName === \"" + BROWS_LASHES_GRAPH_NAME + "\";"),
     label: "dist/graph/slots.js hair override 分支（guard）",
   },
   {
@@ -1344,16 +1370,18 @@ const state2CompletenessTargets = [
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "compile.ts"),
-    anchors: [COMPILE_STATE2_SRC_FRESH_ANCHOR, COMPILE_STATE2_SRC_STATE2_ANCHOR, COMPILE_STATE2_SRC_A_ANCHOR, COMPILE_STATE2_SRC_A_STATE2_ANCHOR, COMPILE_STATE2_SRC_HAIR_UPGRADE_ANCHOR, COMPILE_STATE2_SRC_TINT_UPGRADE_ANCHOR],
+    anchors: [COMPILE_STATE2_SRC_FRESH_ANCHOR, COMPILE_STATE2_SRC_STATE2_ANCHOR, COMPILE_STATE2_SRC_A_ANCHOR, COMPILE_STATE2_SRC_A_STATE2_ANCHOR, COMPILE_STATE2_SRC_HAIR_UPGRADE_ANCHOR, COMPILE_STATE2_SRC_TINT_UPGRADE_ANCHOR, COMPILE_STATE2_SRC_BROWS_LASHES_ANCHOR],
     replacement: COMPILE_STATE2_SRC_FINAL,
-    doneMarker: COMPILE_STATE2_SRC_FINAL,
+    // Stage 2C-M2a：FINAL（仅 hair）与 Brows/Lashes 已打形态都视为收敛终态，
+    // 避免 FINAL 把 Brows/Lashes 文本替换回去又被 brows-lashes target 二次改写的循环。
+    isDone: (content) => content.includes(COMPILE_STATE2_SRC_FINAL) || content.includes(COMPILE_STATE2_SRC_BROWS_LASHES_ANCHOR),
     label: "src/graph/compile.ts state2 override + tag 门控接线",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js"),
-    anchors: [COMPILE_STATE2_DIST_FRESH_ANCHOR, COMPILE_STATE2_DIST_STATE2_ANCHOR, COMPILE_STATE2_DIST_A_ANCHOR, COMPILE_STATE2_DIST_A_STATE2_ANCHOR, COMPILE_STATE2_DIST_HAIR_UPGRADE_ANCHOR, COMPILE_STATE2_DIST_TINT_UPGRADE_ANCHOR],
+    anchors: [COMPILE_STATE2_DIST_FRESH_ANCHOR, COMPILE_STATE2_DIST_STATE2_ANCHOR, COMPILE_STATE2_DIST_A_ANCHOR, COMPILE_STATE2_DIST_A_STATE2_ANCHOR, COMPILE_STATE2_DIST_HAIR_UPGRADE_ANCHOR, COMPILE_STATE2_DIST_TINT_UPGRADE_ANCHOR, COMPILE_STATE2_DIST_BROWS_LASHES_ANCHOR],
     replacement: COMPILE_STATE2_DIST_FINAL,
-    doneMarker: COMPILE_STATE2_DIST_FINAL,
+    isDone: (content) => content.includes(COMPILE_STATE2_DIST_FINAL) || content.includes(COMPILE_STATE2_DIST_BROWS_LASHES_ANCHOR),
     label: "dist/graph/compile.js state2 override + tag 门控接线",
   },
   {
@@ -1383,6 +1411,80 @@ const state2CompletenessTargets = [
     replacement: ASSIGN_GROUP_DIST_REPLACEMENT,
     doneMarker: "...dc.baseBindGroupEntries",
     label: "dist/engine.js assignDrawCallGroups 展开 baseEntries",
+  },
+];
+
+// ─── Stage 2C-M2a：Brows/Lashes V1 覆写接线 ───
+// 权威取证（forensic-v14d-brows-lashes.py → brows-lashes-forensic.json）确认
+// Brows/Lashes BaseColor 与 Alpha 直连 face_d 纹理、无额外乘色节点，V1 语义目标 =
+// 原色通过 + 独立分组绑定。复用 v14d_hair_composite helper（乘法 tint），以恒等
+// tint [1,1,1] 实现「原样通过」；负测 wrongBrowsLashesTint 真实改色。
+// 扩展三处幂等收敛：override guard/expr 识别新 graph、compile 门控注入 helper 并传 tint。
+const browsLashesOverrideTargets = [
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
+    anchors: [
+      "  const isHairV1 = graphName === \"V14D Hair V1 Composite\"",
+      "  const isHairV1 = graphName === \"V14D Hair V1 Composite\" || graphName === \"" + BROWS_LASHES_GRAPH_NAME + "\"",
+    ],
+    replacement: "  const isHairV1 = graphName === \"V14D Hair V1 Composite\" || graphName === \"" + BROWS_LASHES_GRAPH_NAME + "\"",
+    doneMarker: "  const isHairV1 = graphName === \"V14D Hair V1 Composite\" || graphName === \"" + BROWS_LASHES_GRAPH_NAME + "\"",
+    label: "src/graph/slots.ts brows-lashes override guard",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
+    anchors: [
+      "    const isHairV1 = graphName === \"V14D Hair V1 Composite\";",
+      "    const isHairV1 = graphName === \"V14D Hair V1 Composite\" || graphName === \"" + BROWS_LASHES_GRAPH_NAME + "\";",
+    ],
+    replacement: "    const isHairV1 = graphName === \"V14D Hair V1 Composite\" || graphName === \"" + BROWS_LASHES_GRAPH_NAME + "\";",
+    doneMarker: "    const isHairV1 = graphName === \"V14D Hair V1 Composite\" || graphName === \"" + BROWS_LASHES_GRAPH_NAME + "\";",
+    label: "dist/graph/slots.js brows-lashes override guard",
+  },
+];
+
+// compile 侧 target 单独成组：必须在 state2CompletenessTargets 内的 compile FINAL
+// target 收敛到最终形态之后再扩展（FINAL 的 anchors 不含 Brows/Lashes 文本）。
+const browsLashesCompileTargets = [
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "compile.ts"),
+    anchors: [
+      "  const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\")?.inputs?.color as number[] | undefined) ?? " + V14D_HAIR_TINT_LITERAL,
+      "  const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\" || n.id === \"v14d_brows_lashes_tint\")?.inputs?.color as number[] | undefined) ?? " + V14D_HAIR_TINT_LITERAL,
+    ],
+    replacement: "  const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\" || n.id === \"v14d_brows_lashes_tint\")?.inputs?.color as number[] | undefined) ?? " + V14D_HAIR_TINT_LITERAL,
+    doneMarker: "n.id === \"v14d_hair_tint\" || n.id === \"v14d_brows_lashes_tint\"",
+    label: "src/graph/compile.ts brows-lashes tint 读取",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js"),
+    anchors: [
+      "    const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\")?.inputs?.color) ?? " + V14D_HAIR_TINT_LITERAL + ";",
+      "    const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\" || n.id === \"v14d_brows_lashes_tint\")?.inputs?.color) ?? " + V14D_HAIR_TINT_LITERAL + ";",
+    ],
+    replacement: "    const hairTint = (graph.nodes?.find((n) => n.id === \"v14d_hair_tint\" || n.id === \"v14d_brows_lashes_tint\")?.inputs?.color) ?? " + V14D_HAIR_TINT_LITERAL + ";",
+    doneMarker: "n.id === \"v14d_hair_tint\" || n.id === \"v14d_brows_lashes_tint\"",
+    label: "dist/graph/compile.js brows-lashes tint 读取",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "compile.ts"),
+    anchors: [
+      "graph.name === \"V14D Hair V1 Composite\")",
+      "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\")",
+    ],
+    replacement: "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\")",
+    doneMarker: "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\")",
+    label: "src/graph/compile.ts brows-lashes helper 注入门控",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js"),
+    anchors: [
+      "graph.name === \"V14D Hair V1 Composite\");",
+      "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\");",
+    ],
+    replacement: "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\");",
+    doneMarker: "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\");",
+    label: "dist/graph/compile.js brows-lashes helper 注入门控",
   },
 ];
 
@@ -1436,6 +1538,10 @@ const state2SlotTargets = [
   },
 ];
 state2Targets.push(...state2CompletenessTargets, ...state2SlotTargets);
+// Stage 2C-M2a：Brows/Lashes override 在 hair 之后收敛（同一 isHairV1 行的二次扩展）。
+state2Targets.push(...browsLashesOverrideTargets);
+// compile 侧在 compile FINAL 之后再扩展（FINAL anchors 不含 Brows/Lashes 文本）。
+state2Targets.push(...browsLashesCompileTargets);
 
 // Stage 2C-M1 修正轮：dist/graph/slots.js 头部 bundle specifier 重定向（node 直跑）。
 // 独立 target：anchor 取文件首个既有 import 行（"./nodes"），幂等（doneMarker 认

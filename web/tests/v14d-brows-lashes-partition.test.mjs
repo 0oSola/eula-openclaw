@@ -1,0 +1,137 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  buildV14dSkinVariantStyleGroups,
+  collectV14dSkinVariantBindingCounts,
+  perturbV14dSkinVariantStyleGroups,
+  V14D_BROWS_LASHES_V1_COMPOSITE_GRAPH,
+} from "../src/features/stage/v14dSkinVariantGraphs.js";
+import {
+  V14D_BROWS_MATERIAL_NAME,
+  V14D_LASHES_MATERIAL_NAME,
+  V14D_BROWS_LASHES_TINT,
+} from "../src/features/stage/v14dAuthority.js";
+
+function fakeGroups() {
+  return [
+    // Emotions 是 face 分组内不参与本票迁移的占位材质：抽出 Face/Brows/Lashes 后
+    // k3-face 分组因仍含 Emotions 而保留，missing 负测才能把漏槽真实回塞到原分组。
+    { id: "k3-face", label: "Face", materials: ["Face", "Brows", "Lashes", "Emotions"], graph: { version: 1, name: "Face", nodes: [], links: [], output: { node: "o", socket: "color" } } },
+    { id: "k3-body", label: "Body", materials: ["BodySkin"], graph: { version: 1, name: "Body", nodes: [], links: [], output: { node: "o", socket: "color" } } },
+    { id: "k3-hair", label: "Hair", materials: ["HairA", "HairB"], graph: { version: 1, name: "Hair", nodes: [], links: [], output: { node: "o", socket: "color" } } },
+    { id: "k3-cloth", label: "Cloth", materials: ["Cth1-Top"], graph: { version: 1, name: "Cloth", nodes: [], links: [], output: { node: "o", socket: "color" } } },
+  ];
+}
+
+test("V1 group: Brows/Lashes extracted to V14D Brows Lashes V1 Composite", () => {
+  const groups = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const bl = groups.find((g) => g.id === "v14d-skin-variant-brows-lashes");
+  assert.ok(bl, "brows-lashes V1 group should exist");
+  assert.deepEqual(bl.materials, ["Brows", "Lashes"]);
+  assert.equal(bl.graph.name, "V14D Brows Lashes V1 Composite");
+  assert.equal(bl.graph, V14D_BROWS_LASHES_V1_COMPOSITE_GRAPH);
+  assert.equal(bl.graph.nodes[0].id, "v14d_brows_lashes_tint");
+  assert.deepEqual(bl.graph.nodes[0].inputs.color, [1.0, 1.0, 1.0]);
+  // hashed-alpha 裁切口径（取证 alphaThreshold=0.5），renderClass auto（非 hair）。
+  assert.equal(bl.renderClass, "auto");
+  assert.equal(bl.alphaMode, "hashed");
+  const k3face = groups.find((g) => g.id === "k3-face");
+  assert.deepEqual(k3face.materials, ["Emotions"], "Face/Brows/Lashes 迁出后 face 分组仅剩未迁移槽");
+});
+
+test("authority constants: Brows/Lashes names + identity tint", () => {
+  assert.equal(V14D_BROWS_MATERIAL_NAME, "Brows");
+  assert.equal(V14D_LASHES_MATERIAL_NAME, "Lashes");
+  assert.deepEqual(V14D_BROWS_LASHES_TINT, [1.0, 1.0, 1.0]);
+});
+
+test("V1 group no regression: Face/BodySkin/HairA/HairB still V1-bound", () => {
+  const groups = buildV14dSkinVariantStyleGroups(fakeGroups());
+  assert.ok(groups.find((g) => g.id === "v14d-skin-variant-face"));
+  assert.ok(groups.find((g) => g.id === "v14d-skin-variant-body"));
+  assert.ok(groups.find((g) => g.id === "v14d-skin-variant-hair"));
+});
+
+test("negative missingBrows: Brows back to face group, Lashes stays V1", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const bad = perturbV14dSkinVariantStyleGroups(v1, "missingBrows");
+  const bl = bad.find((g) => g.id === "v14d-skin-variant-brows-lashes");
+  assert.deepEqual(bl.materials, ["Lashes"]);
+  const k3face = bad.find((g) => g.graph && g.graph.name === "Face");
+  assert.ok(k3face.materials.includes("Brows"));
+  assert.ok(!k3face.materials.includes("Lashes"));
+});
+
+test("negative missingLashes: Lashes back to face group, Brows stays V1", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const bad = perturbV14dSkinVariantStyleGroups(v1, "missingLashes");
+  const bl = bad.find((g) => g.id === "v14d-skin-variant-brows-lashes");
+  assert.deepEqual(bl.materials, ["Brows"]);
+  const k3face = bad.find((g) => g.graph && g.graph.name === "Face");
+  assert.ok(k3face.materials.includes("Lashes"));
+});
+
+test("negative wrongBrowsLashesTint: identity tint changed to red-green offset", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const bad = perturbV14dSkinVariantStyleGroups(v1, "wrongBrowsLashesTint");
+  const bl = bad.find((g) => g.id === "v14d-skin-variant-brows-lashes");
+  assert.equal(bl.graph.name, "V14D Brows Lashes V1 Composite");
+  assert.notDeepEqual(bl.graph.nodes[0].inputs.color, V14D_BROWS_LASHES_TINT);
+  assert.deepEqual(bl.graph.nodes[0].inputs.color, [1.35, 0.25, 0.25]);
+});
+
+test("negative wrongGraph: all graph names replaced with non-authoritative", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const bad = perturbV14dSkinVariantStyleGroups(v1, "wrongGraph");
+  const bl = bad.find((g) => g.id === "v14d-skin-variant-brows-lashes");
+  assert.equal(bl.graph.name, "V14D WRONG Non-Authoritative Graph");
+});
+
+test("binding counts: Brows/Lashes OnComposite increment when V1 graph hit", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const blGroup = v1.find((g) => g.id === "v14d-skin-variant-brows-lashes");
+  const engine = {
+    modelInstances: new Map([
+      ["companion", {
+        drawCalls: [
+          { materialName: "Brows", groupId: "v14d-skin-variant-brows-lashes", baseBindGroupEntries: [{}] },
+          { materialName: "Lashes", groupId: "v14d-skin-variant-brows-lashes", baseBindGroupEntries: [{}] },
+          { materialName: "Face", groupId: "v14d-skin-variant-face", baseBindGroupEntries: [{}] },
+        ],
+        styleGroups: new Map([
+          ["v14d-skin-variant-brows-lashes", { pipeline: {}, group: blGroup }],
+          ["v14d-skin-variant-face", { pipeline: {}, group: v1.find((g) => g.id === "v14d-skin-variant-face") }],
+        ]),
+      }],
+    ]),
+  };
+  const counts = collectV14dSkinVariantBindingCounts(engine);
+  assert.equal(counts.browsDrawCalls, 1);
+  assert.equal(counts.browsOnComposite, 1);
+  assert.equal(counts.lashesDrawCalls, 1);
+  assert.equal(counts.lashesOnComposite, 1);
+  assert.equal(counts.faceDrawCalls, 1);
+  assert.equal(counts.faceOnComposite, 1);
+});
+
+test("binding counts negative: wrong graph name does not count OnComposite", () => {
+  const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
+  const blGroup = v1.find((g) => g.id === "v14d-skin-variant-brows-lashes");
+  const wrongGroup = { ...blGroup, graph: { ...blGroup.graph, name: "Wrong Graph" } };
+  const engine = {
+    modelInstances: new Map([
+      ["companion", {
+        drawCalls: [
+          { materialName: "Brows", groupId: "g", baseBindGroupEntries: [{}] },
+          { materialName: "Lashes", groupId: "g", baseBindGroupEntries: [{}] },
+        ],
+        styleGroups: new Map([["g", { pipeline: {}, group: wrongGroup }]]),
+      }],
+    ]),
+  };
+  const counts = collectV14dSkinVariantBindingCounts(engine);
+  assert.equal(counts.browsDrawCalls, 1);
+  assert.equal(counts.browsOnComposite, 0);
+  assert.equal(counts.lashesOnComposite, 0);
+});

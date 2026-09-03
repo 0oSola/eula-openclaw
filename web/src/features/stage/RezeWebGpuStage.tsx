@@ -2523,6 +2523,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
               canvasRef.current.dataset.v14dSkinVariantHairAOnComposite = String(counts.hairAOnComposite);
               canvasRef.current.dataset.v14dSkinVariantHairBDrawCalls = String(counts.hairBDrawCalls);
               canvasRef.current.dataset.v14dSkinVariantHairBOnComposite = String(counts.hairBOnComposite);
+              canvasRef.current.dataset.v14dSkinVariantBrowsDrawCalls = String(counts.browsDrawCalls);
+              canvasRef.current.dataset.v14dSkinVariantBrowsOnComposite = String(counts.browsOnComposite);
+              canvasRef.current.dataset.v14dSkinVariantLashesDrawCalls = String(counts.lashesDrawCalls);
+              canvasRef.current.dataset.v14dSkinVariantLashesOnComposite = String(counts.lashesOnComposite);
             } catch { /* 证据读取失败不阻断渲染 */ }
           }
           if (!v1Result.ok) {
@@ -3392,6 +3396,10 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             canvasRef.current.dataset.v14dSkinVariantHairAOnComposite = String(counts.hairAOnComposite);
             canvasRef.current.dataset.v14dSkinVariantHairBDrawCalls = String(counts.hairBDrawCalls);
             canvasRef.current.dataset.v14dSkinVariantHairBOnComposite = String(counts.hairBOnComposite);
+            canvasRef.current.dataset.v14dSkinVariantBrowsDrawCalls = String(counts.browsDrawCalls);
+            canvasRef.current.dataset.v14dSkinVariantBrowsOnComposite = String(counts.browsOnComposite);
+            canvasRef.current.dataset.v14dSkinVariantLashesDrawCalls = String(counts.lashesDrawCalls);
+            canvasRef.current.dataset.v14dSkinVariantLashesOnComposite = String(counts.lashesOnComposite);
           } catch { /* 证据读取失败不阻断负测 */ }
         }
         return { ok: res.ok };
