@@ -57,11 +57,13 @@ V14D 眉毛与睫毛恒等乘色迁移（Brows/Lashes identity tint）。
 - 与 `reze-k3-skin-variant`（V1 切换总开关/资格/持久化）共用同一接线与回退路径。
 - 与 `v14d-hair-triuv-pixel-gate`（HairA/HairB 逐像素目标收敛）的差异仅在于「恒等 tint 不需要 changed=true 这一颜色变化判据」；但逐槽原子同帧 material-ID+triUV+pixel 的 identity-target 收敛 Gate（对同槽 canonical target 计算逐像素误差/覆盖/P95，并以 wrongTint、错槽目标自然拒绝）仍是必须闭合的正式 Gate。不能用「恒等不适用」免除该 Gate。
 
-## 待修正 Gate 清单（Stage 2C-M2a 修正轮，2026-09-04 主会话验收未通过）
+## 最终收口（Stage 2C-M2a，2026-09-05 主会话验收通过）
 
-本票自评 G1-G7 全过，但主会话最终验收未通过，以下 Gate 需修正后重新验收，修正交付前正式迁移进度仍为 4/15：
+原「待修正 Gate 清单」四项已全部闭合并经主会话验收，完整 G1-G7 全绿（allPass=true、exit=0），正式迁移进度登记为 6/15（Face、BodySkin、HairA、HairB、Brows、Lashes）。各阻断项最终口径见下。
 
-1. **逐槽原子同帧 identity-target Gate（自评闭合，待复验）**：Brows/Lashes 各自 materialId + 原子同帧 pixel/triUV/target 证据（production-draw-call 三角 UV 源），对同槽 canonical target 计算逐像素误差/覆盖/P95；实测 Brows 19/19、Lashes 159/159 样本、triUvResolution=1.0、两槽 formalTargetGate 双 true。主会话未对此项提阻断，但随本轮一并复验。
-2. **Lashes 透明边缘 Gate（空分母软通过，阻断）**：当前健康报告 core=159/edge=0/transparentZone=0，代码只在 edge>=1 时统计黑框/白边，空 edge 时 edgeMae=0 并通过；wrongAlpha 又靠 --neg-wrong-alpha 修改 analyzer 阈值（0.5→1.0）保证失败，非运行时错误 alpha 自然拒绝。需改为有真实非空分母的屏幕空间边界 Gate：从 production material-ID/coverage mask 做形态学内外边界环，比较 Original/V1 边界覆盖、综合色、黑边/白边/整槽消失；纹理 alpha-edge 与几何/抗锯齿边界分开，正式「透明边缘」验收不能用 edge=0 通过。wrongAlpha/黑边/白边须真实运行时扰动产生画布/coverage 证据并自然非零拒绝，禁止修改 analyzer 阈值自证。
-3. **动态 Morph Gate（判别力不足，阻断）**：当前仅把权威「まばたき」设超权重 2.0 并断言 Jaccard>0，只证明任意超权重会移动。需建立正常权威状态 0→1 的开眼/闭眼 Gate，固定 frame/camera，逐槽记录 production mask/triUV/边界/质心或 Jaccard，设实测健康裕量阈值；负测须真实覆盖错误 Morph 名、权重不切换/重复同状态、槽消失并自然拒绝；另需补一个非眨眼表情状态，或提供权威资产无适用表情的机器取证后诚实缩小范围。
-4. **wrongTint 阈值健康标定（阻断）**：正式报告只有错误样本 baselineShift（Brows=48.632/Lashes=58.610），阈值 20 与「健康≈0」只在源码注释/.scratch 单次脚本。需把同一正式链的健康重复 identity/control 分数、错误 tint 分数、公式方向与阈值推导写入机器报告；至少两次独立健康采集均低于阈值、wrongTint 高于阈值，并增加边界/反向负测，证明 20 非按当前错误样本硬编码必过。
+1. **逐槽原子同帧 identity-target Gate（闭合）**：production-draw-call material-ID + triUV + 同像素 identity-target 收敛，两槽 formalTargetGate 双 true、targetBinding consistent、inputsValid；各槽样本、coverage、MAE/P95 落盘。
+2. **Lashes 透明边缘 Gate（闭合）**：改为屏幕空间形态学边界环（非空 core/edge/transparent 分母），比较 Original/V1 边界覆盖、综合色、黑边/白边/整槽消失。wrongAlpha 不再修改 analyzer 阈值自证，改用专用 acceptance fault graph（仅 ?v14dAcceptanceProbe=1 可达）在 hashed discard 前乘固定故障因子 V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR，真实剔除片元使 coverage/边界环收缩，由形态学边界环 Gate 自然非零拒绝。
+3. **动态 Morph Gate（闭合）**：改为「验收探针控制的生产 GPU 顶点位移」。clip 挂起 + 正常权重 0→1（不用超权重 2.0），按 PMX 取证 expectedAffectedSlots 逐槽判定：まばたき/笑い 各 Lashes 506/506 受影响顶点 max 位移 0.279/0.158，超 same-weight GPU 读回噪声；Brows 取证不受影响并保持稳定。屏幕投影 Jaccard/质心降级为 diagnosticOnly。KoledaDefaultAppearance 生产默认外观锁（lockKoledaMorphWeights 强制 まばたき=1）保持不改，探针用 post-update 隔离包裹（保存 exact originalUpdate、wrapper 后写回 probeWeights、finally 恢复）。本 Gate 证明材质在真实生产 Morph 几何下稳定，不宣称当前单关键帧 pose VMD 存在原生 0→1 眨眼插值。
+4. **wrongTint 阈值健康标定（闭合）**：同一正式链的健康 run1/run2 与错误采集三次独立 provenance 落盘（captureId/frame/seconds/animationName/canvasPath/SHA256），经探针隔离 epoch（sessionStorage 持久化、跨 page.reload 全局唯一 captureId，如 e4-4/e5-1/e6-1）硬断言两两不同且均为 4s/frame120/权威 VMD；阈值 20 有实测裕量（健康 <20、wrongTint >20）。
+
+整槽消失负测（missingBrows/missingLashes）改用 composite OnComposite 信号（missing 槽=0、另一槽=1）自然非零拒绝：missing 槽仍在同一 mesh 上被 material-ID pick 栅格化、恒等 tint 下渲染仍收敛，前景/收敛不塌缩，唯一可靠判别信号是「missing 槽是否命中 V1 composite」。

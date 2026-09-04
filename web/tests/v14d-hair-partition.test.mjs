@@ -528,6 +528,22 @@ test("Hair 原子 probe 生成 fps 与可审计来源，accept 不再事后补�
   assert.match(acceptSource, /fpsProvenance/);
 });
 
+// Stage 2C-M2a 修正轮（P1 provenance）：探针隔离的采集 epoch。跨 page.reload 的两次独立采集
+// 必须用全局唯一 captureId（epoch 前缀），否则 run2/wrong 在新 page 首采时 captureId 碰撞为 "1"，
+// 无法机器证明标定采集独立。此测试锁定实现口径：epoch 仅在显式 acceptance probe 下启用，
+// captureId 由 epoch 前缀 + per-capture 自增序号组成（同 page 内仍保证 pixel↔triUV 原子配对）。
+test("acceptance probe 采集 epoch 使跨 reload captureId 全局唯一（探针隔离）", () => {
+  const stageSource = fs.readFileSync(path.join(process.cwd(), "src", "features", "stage", "RezeWebGpuStage.tsx"), "utf8");
+  // epoch 仅在显式 acceptance probe 下分配（默认生产入口不启用），且持久化在 sessionStorage
+  // （跨 page.reload 存活、不同 tab 隔离）；每次采集实时读取自增，不在组件 useRef 缓存。
+  assert.match(stageSource, /if \(acceptanceProbeEnabled\) \{/);
+  assert.match(stageSource, /sessionStorage\?\.getItem\(KEY\)/);
+  assert.match(stageSource, /sessionStorage\?\.setItem\(KEY, String\(cur \+ 1\)\)/);
+  // captureId = "e<epoch>-<per-capture 自增序号>"（有 epoch 时带前缀），实时读取 window.__v14dCaptureEpoch。
+  assert.match(stageSource, /captureEpoch = acceptanceProbeEnabled \? String\(/);
+  assert.match(stageSource, /captureId = captureEpoch \? "e" \+ captureEpoch \+ "-" \+ seq/);
+});
+
 // 真实 PMX 分区解析（资产存在时）：HairA/HairB UV 网格非空且分区不坍缩。
 const PMX = process.env.V14D_TEST_PMX || "D:\\mmd\\克莱妲原皮\\GirlsFrontline KoledaDefault.pmx";
 test("PMX 分区：HairA/HairB 面区间解析出非空且不重叠坍缩的 UV 网格", (t) => {

@@ -3561,7 +3561,24 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         const model = modelRef.current;
         if (!canvas || !engine || !model) return serializeV14dCaptureError("no canvas/engine/model", "runtime-unavailable", "runtime");
         const runtimeState = captureV14dHairRuntimeState(model, engine);
-        const captureId = String(++hairTriUvCaptureIdRef.current);
+        // 探针隔离的采集 epoch（Stage 2C-M2a P1 provenance）：?v14dAcceptanceProbe=1 下把
+        // 「本页面会话号」持久化在 sessionStorage（同一 tab 跨 page.reload 存活、不同 tab 隔离）。
+        // 首次采集时分配并自增一次；captureId 形如 "e3-2"（epoch3 的第 2 次采集）。每次采集
+        // 都实时读取（不缓存在组件 useRef——Next 在软 reload 下会复用 module 实例，组件内缓存
+        // 会让 epoch 跨 reload 残留为同一值），从而跨 reload 的两次独立采集 captureId 全局唯一，
+        // 修复 wrongTint 标定中 run2/wrong 同碰撞为 "1" 的 provenance 缺陷。
+        // 默认生产入口（无探针开关）不触碰 sessionStorage，captureId 仍为纯自增序号，行为不变。
+        if (acceptanceProbeEnabled) {
+          try {
+            const KEY = "__v14dCaptureEpoch";
+            const cur = Number(window.sessionStorage?.getItem(KEY) ?? "0") || 0;
+            window.sessionStorage?.setItem(KEY, String(cur + 1));
+            (window as unknown as { __v14dCaptureEpoch?: number }).__v14dCaptureEpoch = cur + 1;
+          } catch { /* sessionStorage 不可用时退化为纯自增序号 */ }
+        }
+        const seq = ++hairTriUvCaptureIdRef.current;
+        const captureEpoch = acceptanceProbeEnabled ? String((window as unknown as { __v14dCaptureEpoch?: number }).__v14dCaptureEpoch ?? "") : "";
+        const captureId = captureEpoch ? "e" + captureEpoch + "-" + seq : String(seq);
         let captureSuspended = false;
         let cameraNearBeforeCapture: number | null = null;
         const readCaptureProgress = () => {

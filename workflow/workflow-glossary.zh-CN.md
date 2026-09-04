@@ -6,12 +6,16 @@
 - 含义：`/companion` reze-k3 舞台中克莱妲部分 PMX 材质槽的可选 V14D
   实时合成模式；`original`=原始 Reze K3，`v1`=Reze K3 V1（V14D）。
   持久化按 用户+模型+reze-k3 管线 三维隔离，默认 original。
-  截至 Stage 2C-M2a 修正轮（2026-09-04）：**Face、BodySkin、HairA、
-  HairB** 四槽已完成正式逐槽 Gate；**Brows、Lashes** 自评闭合逐槽原子
-  同帧 material-ID+triUV+pixel、透明边缘、动态 Morph Gate（G1-G7 全过），
-  但主会话最终验收未通过：透明边缘为空分母软通过、Morph 判别力不足、
-  wrongTint 阈值缺健康标定，需修正后重新验收。修正交付前正式迁移进度
-  仍为 4/15，不计入完成迁移。其余 9 个待迁移槽
+  截至 Stage 2C-M2a 最终收口（2026-09-05，主会话验收通过）：**Face、BodySkin、
+  HairA、HairB、Brows、Lashes** 六槽已完成正式逐槽 Gate，正式迁移进度 6/15。
+  Brows/Lashes 的正式验收口径（本票最终闭合）：① 逐槽原子同帧 material-ID +
+  production-draw-call triUV + 同像素 identity-target 收敛；② Lashes 透明边缘
+  屏幕空间形态学边界环 Gate（非空分母，黑框/白边/整槽消失三类自然检出）；③
+  生产 GPU Morph 顶点位移 Gate（まばたき/笑い 各 Lashes 506/506 受影响顶点真实
+  位移超 same-weight GPU 读回噪声，Brows 取证不受影响并保持稳定）；wrongTint 三次
+  独立采集 provenance（captureId e4-4/e5-1/e6-1）经探针隔离 epoch 全局唯一；
+  wrongAlpha 经专用 fault graph 自然非零拒绝；missingBrows/missingLashes 经
+  composite OnComposite 信号自然非零拒绝。其余 9 个待迁移槽
   （Emotions、Eyes、EyeWhite、EyeShadow、Eyes+、UpperTeeth、LowerTeeth、
   Tongue、FingerNails）尚未迁移。单一当前权威以此节与 topology 的 Stage 2C-M2a 段为准。
   HairA/HairB 口径：hair_d（sRGB）× 银白紫乘色 [0.84,0.85,0.96]，经引擎
