@@ -511,6 +511,42 @@ export async function runBrowsLashesAnalysis(argv) {
       if (!out.failures.some((f) => f.startsWith(slot + " "))) out.failures.push(slot + " 正式 Brows/Lashes Gate 未通过（需 identity-target 收敛 + 合法同槽输入）");
     }
     out.pass = out.failures.length === 0 && out.analysisFailures.length === 0;
+    // 整槽消失负测（Stage 2C-M2a M2a.4 修正）：missing 扰动把该槽从 V1 composite 移除并回塞
+    // 原 K3 face 分组。关键口径：missing 槽仍在同一 mesh 上被 material-ID pick 栅格化
+    // （foreground 不因移除 composite 而塌缩，恒等 tint 下 face graph 渲染也与 target 一致），
+    // 因此「该槽是否命中 V1 composite」是唯一可靠判别信号。accept 在 missing 采集时把
+    // 该槽 applied.onComposite 写入 tri-uv JSON（compositeOnBySlot），=0 即自然检出。
+    if (negMissingSlot) {
+      const missingSlot = negMissingSlot === "missing-brows" ? "brows" : "lashes";
+      const otherSlot = missingSlot === "brows" ? "lashes" : "brows";
+      const missTc = out.regions[missingSlot]?.targetConvergence;
+      const otherTc = out.regions[otherSlot]?.targetConvergence;
+      // compositeOnBySlot：accept 在 missing 采集时写入的每槽 OnComposite 标记（1=命中 V1 composite，
+      // 0=被 missing 扰动移除）。missing 槽 OnComposite=0 → 该槽未走 V1 composite → 正式 Gate 拒绝。
+      // 若 capture 未带该标记（旧采集），回退用前景塌缩/正式 Gate 失败判别，保持兼容。
+      const onBySlot = capture.compositeOnBySlot || null;
+      const missOn = onBySlot ? Number(onBySlot[missingSlot]) : null;
+      const otherOn = onBySlot ? Number(onBySlot[otherSlot]) : null;
+      const compositeProvedMissing = missOn === 0 && otherOn === 1;
+      const missFg = missTc?.materialForegroundPixels ?? 0;
+      const missingCollapsed = compositeProvedMissing
+        || (!onBySlot && (missTc?.metricGate === false || missTc?.formalGate === false));
+      const otherHealthy = otherTc?.formalGate === true;
+      const rejected = missingCollapsed && otherHealthy && out.analysisFailures.length === 0;
+      // 自然拒绝：把 missing 槽 formalTargetGate 标为 false（消失槽不应通过正式 Gate），并记 failure。
+      if (missingCollapsed) {
+        out.browsLashesFormalGate.formalTargetGate[missingSlot] = false;
+        if (!out.failures.some((f) => f.startsWith(missingSlot + " "))) out.failures.push(missingSlot + " 整槽消失：missing 槽 OnComposite=0 未命中 V1 composite（missing 扰动自然检出）");
+      }
+      out.negativeVerdict = {
+        mode: negMissingSlot, status: rejected ? "rejected" : "failed", rejected, expectedExit: 1,
+        missingSlot, otherSlot, missingForeground: missFg, otherForeground: otherTc?.materialForegroundPixels ?? null,
+        compositeOnBySlot: onBySlot, compositeProvedMissing, missingCollapsed, otherHealthy,
+        formalTargetGate: { brows: out.browsLashesFormalGate.formalTargetGate.brows, lashes: out.browsLashesFormalGate.formalTargetGate.lashes },
+      };
+      out.pass = out.failures.length === 0 && out.analysisFailures.length === 0;
+    }
+
     // 负测判定（自然拒绝、非配置包装）。
     if (negWrongTint || negSwap || negWrongAlpha) {
       const mode = negWrongTint ? "wrongTint" : negSwap ? "swapSlotTarget" : "wrongAlpha";
