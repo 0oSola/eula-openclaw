@@ -79,7 +79,7 @@ test("negative wrongBrowsLashesTint: identity tint changed to red-green offset",
   assert.equal(bl.graph.name, "V14D Brows Lashes V1 Composite");
   assert.notDeepEqual(bl.graph.nodes[0].inputs.color, V14D_BROWS_LASHES_TINT);
   // Stage 2C-M2a 收尾：K3 显示链抵消暖色偏置，[1.35/2.2/6 红偏置] 无法让逐槽正式
-  // Gate 自然拒绝；负测改用检流红 [0,1,1]（红通道归零）把红通道误差拉超阈值。
+  // Gate 自然拒绝；负测改用检流红 [0,1,1]（红通道归零）；但实测显示链对绝对 MAE 强压缩，恒等 tint 的绝对目标误差口径判别力不足，wrongTint 负测未闭合（见 handoff）。
   assert.deepEqual(bl.graph.nodes[0].inputs.color, [0.0, 1.0, 1.0]);
 });
 

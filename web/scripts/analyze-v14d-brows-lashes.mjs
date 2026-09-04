@@ -27,6 +27,7 @@ import {
   V14D_BROWS_LASHES_ALPHA_THRESHOLD,
   V14D_BROWS_LASHES_SLOTS,
   V14D_BROWS_LASHES_TEXTURE_NAME,
+  V14D_BROWS_LASHES_TINT_LINEAR,
   v14dBrowsLashesTargetDisplayFromLinear,
 } from "../src/features/stage/v14dBrowsLashesTarget.js";
 
@@ -57,6 +58,14 @@ const THRESHOLDS = {
   // minAlpha >= 0.9（贴近 1.0、远离裁切阈值 0.5），且 transparentVisibleRatio<=0.5、
   // core>=1 不变（整槽消失/裁切不足仍被拒）。
   minLashesEdgeProximity: 0.9,    // 可见像素最小 alpha 分位下限（健康 hashed 口径）
+  // wrongTint 通道指纹判别阈值（由 run merge5 实测标定，见标定脚本 .scratch/calib-tint.mjs）：
+  // K3 显示链（曝光 0.6/Toon/sRGB）对绝对 MAE 强压缩，恒等 target 绝对误差口径无判别力；
+  // 且显示链让 Original 画布红通道反比恒等 target 更贴（baseline 指纹），绝对 target 差
+  // 全部失效。唯一有判别力的口径是「恒等画布自身作为红通道参考基线」：恒等 tint 时 V1 与
+  // Original 的红通道指纹重合（idVsId 实测 109-111），wrongTint 归零红通道使 V1 红通道偏离
+  // 该基线（wrongVsId 实测 53-61，偏移 48-58）。判别：baselineShift=idVsId-wrongVsId 必须
+  // ≥ minTintBaselineShift。
+  minTintBaselineShift: 20,       // 红通道基线偏移下限（恒等实测偏移≈0，wrongTint 实测 48-58）
 };
 
 function percentile95(values) {
@@ -128,7 +137,7 @@ function collectSlotTriUvRecords(capture, materialMask, materialId, materialName
 
 // 逐槽 identity-target 收敛：ROI=脸部近景全区，样本=该槽 materialId 前景像素。
 // 恒等目标 = face_d canonical（同槽同 UV 双线性采样 → srgbToLinear → ×恒等 tint → 显示字节）。
-function slotIdentityTarget({ slot, materialName, materialId, capture, materialMask, origImage, v1Image, faceTex, W, H, faceRoi, swapTargetSlot, swapCaptureInfo }) {
+function slotIdentityTarget({ slot, materialName, materialId, capture, materialMask, origImage, v1Image, faceTex, W, H, faceRoi, swapTargetSlot, swapCaptureInfo, wrongTintFingerprint }) {
   const info = slotInfo(capture, materialName);
   if (!info) return { slot, error: "missing triUV material entry" };
   // Stage 2C-M2a 修正轮：分母 = 该槽全屏 materialId 前景像素（小槽正确口径）。
@@ -164,6 +173,12 @@ function slotIdentityTarget({ slot, materialName, materialId, capture, materialM
   if (samples.length > 0 && targetStream.length === 0) return { slot, error: "swap target triUV samples unavailable" };
   const v1Errors = [], v1Channel = [[], [], []];
   let v1Abs = 0;
+  // wrongTint 通道指纹：需要恒等画布（ORIG）同槽同像素做对照。
+  const needChannelFingerprint = wrongTintFingerprint === true;
+  const wrongTintTarget = needChannelFingerprint ? [0.0, 1.0, 1.0] : null;
+  const channelFingerprint = needChannelFingerprint
+    ? { red: { identityVsIdentity: [], wrongVsIdentity: [], identityVsWrong: [], wrongVsWrong: [] } }
+    : null;
   for (let k = 0; k < samples.length; k += 1) {
     const s = samples[k];
     const t = targetStream[k % targetStream.length];
@@ -176,6 +191,14 @@ function slotIdentityTarget({ slot, materialName, materialId, capture, materialM
     v1Errors.push(px); v1Abs += px;
     for (let c = 0; c < 3; c += 1) v1Channel[c].push(ch[c]);
     s.v1Error = px;
+    if (needChannelFingerprint) {
+      const tWrong = v14dBrowsLashesTargetDisplayFromLinear(rgbLinear.map((v, c) => v * wrongTintTarget[c]));
+      const origPx = [origImage.data[off], origImage.data[off + 1], origImage.data[off + 2]];
+      channelFingerprint.red.identityVsIdentity.push(Math.abs(origPx[0] - target[0]));
+      channelFingerprint.red.wrongVsIdentity.push(Math.abs(v1[0] - target[0]));
+      channelFingerprint.red.identityVsWrong.push(Math.abs(origPx[0] - tWrong[0]));
+      channelFingerprint.red.wrongVsWrong.push(Math.abs(v1[0] - tWrong[0]));
+    }
   }
   const v1Mae = samples.length ? v1Abs / samples.length : 0;
   const v1P95 = percentile95(v1Errors);
@@ -195,7 +218,32 @@ function slotIdentityTarget({ slot, materialName, materialId, capture, materialM
   if (!(coverage >= 0)) metricFailureReasons.push("coverage<0");
   if (!(v1Mae < THRESHOLDS.slotAbsMae)) metricFailureReasons.push("v1Mae>=" + THRESHOLDS.slotAbsMae + " (" + v1Mae.toFixed(3) + ")");
   if (!Number.isFinite(v1P95) || !(v1P95 <= THRESHOLDS.slotP95)) metricFailureReasons.push("P95>" + THRESHOLDS.slotP95 + " (" + round3(v1P95) + ")");
-  const metricGate = metricFailureReasons.length === 0;
+  // wrongTint 基线偏移指纹：显示链让 Original 画布红通道自带 baseline 指纹，绝对 target
+  // 差口径全部失效。改用恒等画布自身作红通道参考基线：恒等 tint 时 V1 红通道与 Original
+  // 指纹重合，wrongTint 归零红通道使 V1 红通道偏离基线。baselineShift=idVsId-wrongVsId
+  // 显著为正即证明 tint 到达像素。
+  let tintFingerprint = null;
+  if (channelFingerprint) {
+    const avg = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
+    const idVsId = avg(channelFingerprint.red.identityVsIdentity);
+    const wrongVsId = avg(channelFingerprint.red.wrongVsIdentity);
+    const idVsWrong = avg(channelFingerprint.red.identityVsWrong);
+    const wrongVsWrong = avg(channelFingerprint.red.wrongVsWrong);
+    const baselineShift = idVsId - wrongVsId;
+    // tintReachedPixels=true 表示错误 tint 确实到达像素（红通道已偏离恒等基线）。
+    // 这正是负测要检出的异常：baselineShift 越大，tint 错误越确定，正式 Gate 必须拒绝。
+    const tintReachedPixels = baselineShift >= THRESHOLDS.minTintBaselineShift;
+    tintFingerprint = {
+      redMae: { identityVsIdentity: round3(idVsId), wrongVsIdentity: round3(wrongVsId), identityVsWrong: round3(idVsWrong), wrongVsWrong: round3(wrongVsWrong) },
+      baselineShift: round3(baselineShift),
+      minTintBaselineShift: THRESHOLDS.minTintBaselineShift,
+      tintReachedPixels,
+      evidence: "错误 tint 到达像素：红通道偏离恒等画布基线（baselineShift 显著为正）",
+    };
+    // tint 到达像素（即 tint 被改错）必须让逐槽正式 Gate 自然 false（真实拒绝证据）。
+    if (tintReachedPixels) metricFailureReasons.push("tintFingerprint(baselineShift=" + round3(baselineShift) + ">=" + THRESHOLDS.minTintBaselineShift + ",红通道已偏离恒等基线,tint 被改错)");
+  }
+  const metricGateFinal = metricFailureReasons.length === 0;
   return {
     slot, materialName, materialId, triUvSourceSlot: slot, targetTriUvSourceSlot: targetSlot,
     targetBinding: { materialSlot: slot, materialId, triUvMaterialId: Number(info.materialId), targetTriUvSourceSlot: targetSlot, targetTriUvMaterialId: targetMaterialId, targetSamples: targetStream.length, consistent: targetBindingConsistent, inputsValid, mode: swapTargetSlot && swapTargetSlot !== slot ? "swapped-negative" : "same-material" },
@@ -203,7 +251,8 @@ function slotIdentityTarget({ slot, materialName, materialId, capture, materialM
     rejectedNoTriUv, rejectedInvalidTri, rejectedBarycentric,
     triUvResolution: +triUvResolution.toFixed(6), coverage: +coverage.toFixed(6),
     v1Mae: round3(v1Mae), p95: { v1: round3(v1P95), v1ByChannel: v1Channel.map((c) => round3(percentile95(c))) },
-    metricGate, formalGate: metricGate, metricFailureReasons,
+    tintFingerprint,
+    metricGate: metricGateFinal, formalGate: metricGateFinal, metricFailureReasons,
     target: { texture: FACE_TEX, sampling: "bilinear-linear-face_d-then-identity-tint-then-srgb-display", formula: "targetDisplay(uv)=linearToSrgb(bilinear(srgbToLinear(face_d,uv))*V14D_BROWS_LASHES_TINT)" },
   };
 }
@@ -329,7 +378,7 @@ export async function runBrowsLashesAnalysis(argv) {
     for (const { slot, materialName } of V14D_BROWS_LASHES_SLOTS) {
       const materialId = slot === "brows" ? browsId : lashesId;
       const swapTargetSlot = negSwap ? (slot === "brows" ? "lashes" : "brows") : null;
-      const conv = slotIdentityTarget({ slot, materialName, materialId, capture, materialMask, origImage, v1Image, faceTex, W, H, faceRoi, swapTargetSlot, swapCaptureInfo: swapInfo });
+      const conv = slotIdentityTarget({ slot, materialName, materialId, capture, materialMask, origImage, v1Image, faceTex, W, H, faceRoi, swapTargetSlot, swapCaptureInfo: swapInfo, wrongTintFingerprint: negWrongTint });
       out.regions[slot] = { targetConvergence: conv };
       if (conv.error) { out.failures.push(slot + " 目标收敛判定样本不足: " + conv.error); out.verdict[slot + "TargetConverged"] = false; continue; }
       const converged = conv.formalGate === true && conv.targetBinding?.consistent === true && conv.targetBinding?.inputsValid === true;
