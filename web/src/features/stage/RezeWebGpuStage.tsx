@@ -3052,9 +3052,9 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("v14dAcceptanceProbe") === "1";
   useEffect(() => {
     if (!acceptanceProbeEnabled) return;
-    // acceptance-only display-chain trace: the default production entry never installs it.
-    // It wraps the real Engine methods without changing their arguments or return values,
-    // recording the pipeline/bind-group objects passed to setPipeline/setBindGroup/drawIndexed.
+    // 仅在显式验收开关下启用显示链取证；默认生产入口不会安装。
+    // 包装真实 Engine 方法但不改变参数或返回值，只记录传给
+    // setPipeline/setBindGroup/drawIndexed 的管线与绑定组对象。
     type V14dDisplayTraceDraw = {
       instanceName: string;
       materialName: string | null;
@@ -3070,6 +3070,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       schemaVersion: 1;
       captureId: string | null;
       frame: number | null;
+      requestSerial: number;
       renderSerial: number;
       draws: V14dDisplayTraceDraw[];
       pipelineBinds: { instanceName: string; type: string; pipeline: unknown }[];
@@ -3088,18 +3089,21 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       return id;
     };
     let displayChainTraceCleanup: (() => void) | null = null;
-    let displayChainTraceRequested: { captureId: string; frame: number } | null = null;
+    let displayChainTraceRequested: { captureId: string; frame: number; requestSerial: number } | null = null;
     let displayChainTraceCurrent: V14dDisplayTraceFrame | null = null;
     let displayChainTraceLast: V14dDisplayTraceFrame | null = null;
     let displayChainRenderSerial = 0;
+    let displayChainRequestSerial = 0;
     type V14dDisplayTraceInstallResult =
       | { ok: true; alreadyInstalled?: boolean }
       | { ok: false; error: string };
+    // install/set/capture 三个方法共同构成一个显示链验收探针，不是三个独立的调试分支。
     const serializeDisplayChainTrace = (trace: V14dDisplayTraceFrame | null) => trace
       ? {
           schemaVersion: trace.schemaVersion,
           captureId: trace.captureId,
           frame: trace.frame,
+          requestSerial: trace.requestSerial,
           renderSerial: trace.renderSerial,
           draws: trace.draws.map((draw) => ({
             ...draw,
@@ -3129,6 +3133,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           schemaVersion: 1,
           captureId: requested?.captureId ?? null,
           frame: requested?.frame ?? null,
+          requestSerial: requested?.requestSerial ?? 0,
           renderSerial: ++displayChainRenderSerial,
           draws: [],
           pipelineBinds: [],
@@ -3155,7 +3160,8 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         if (!trace || !pass || typeof pass !== "object") return drawMaterials.call(this, pass, inst, type);
         let pipeline: unknown = null;
         let materialBindGroup: unknown = null;
-        const instance = inst as { name?: string; drawCalls?: { materialName?: string; count?: number; firstIndex?: number; groupId?: string | null }[] };
+        let nextDrawIndex = 0;
+        const instance = inst as { name?: string; drawCalls?: { type?: string; materialName?: string; count?: number; firstIndex?: number; groupId?: string | null }[] };
         const drawCalls = instance.drawCalls ?? [];
         const instanceName = String(instance.name ?? "unknown");
         const wrappedPass = new Proxy(pass as object, {
@@ -3178,7 +3184,15 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             if (property === "drawIndexed") {
               return (count: number, ...args: unknown[]) => {
                 const firstIndex = Number(args[1] ?? 0);
-                const drawIndex = drawCalls.findIndex((draw) => draw.count === count && draw.firstIndex === firstIndex);
+                let drawIndex = -1;
+                for (let index = nextDrawIndex; index < drawCalls.length; index += 1) {
+                  const draw = drawCalls[index];
+                  if (draw.type === type && draw.count === count && draw.firstIndex === firstIndex) {
+                    drawIndex = index;
+                    nextDrawIndex = index + 1;
+                    break;
+                  }
+                }
                 const draw = drawIndex >= 0 ? drawCalls[drawIndex] : null;
                 trace.draws.push({
                   instanceName,
@@ -3212,22 +3226,31 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       return { ok: true, alreadyInstalled: false };
     };
     const setDisplayChainTraceCapture = (captureId: string, frame: number):
-      | { ok: true; captureId: string; frame: number }
+      | { ok: true; captureId: string; frame: number; requestSerial: number }
       | { ok: false; error: string } => {
       if (typeof captureId !== "string" || captureId.length === 0 || !Number.isFinite(frame)) {
         return { ok: false, error: "captureId/frame invalid" };
       }
       const installed = installDisplayChainTrace();
       if (!installed.ok) return installed;
-      displayChainTraceRequested = { captureId, frame };
-      return { ok: true, captureId, frame };
+      const requestSerial = ++displayChainRequestSerial;
+      displayChainTraceRequested = { captureId, frame, requestSerial };
+      return { ok: true, captureId, frame, requestSerial };
     };
-    const captureDisplayChainState = async (options: { captureId: string; frame: number; render?: boolean }) => {
+    const captureDisplayChainState = async (options: { captureId: string; frame: number; render?: boolean; reuseRequestedCapture?: boolean }) => {
       const canvas = canvasRef.current;
       const engine = engineRef.current;
       const model = modelRef.current;
       if (!canvas || !engine || !model) return { error: "canvas/engine/model unavailable" };
-      const request = setDisplayChainTraceCapture(options.captureId, options.frame);
+      const renderSerialBefore = displayChainRenderSerial;
+      const reusableRequest = options.reuseRequestedCapture
+        && displayChainTraceRequested?.captureId === options.captureId
+        && displayChainTraceRequested.frame === options.frame
+        ? displayChainTraceRequested
+        : null;
+      const request = reusableRequest
+        ? { ok: true as const, captureId: reusableRequest.captureId, frame: reusableRequest.frame, requestSerial: reusableRequest.requestSerial }
+        : setDisplayChainTraceCapture(options.captureId, options.frame);
       if (!request.ok) return { error: request.error };
       const fields = engine as unknown as Record<string, unknown>;
       const wasRunning = fields.animationFrameId !== null && fields.animationFrameId !== undefined;
@@ -3301,7 +3324,12 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         const install = (fields.modelInstances as Map<string, { styleGroups?: Map<string, { group?: { graph?: { name?: string; nodes?: { id?: string; inputs?: { color?: unknown } }[] } }; signature?: string; pipeline?: unknown }> }> | undefined)
           ?.get("companion")?.styleGroups?.get("v14d-skin-variant-brows-lashes");
         const trace = serializeDisplayChainTrace(displayChainTraceLast);
-        const renderObserved = trace?.captureId === options.captureId && trace?.frame === options.frame;
+        const renderObserved = Boolean(
+          trace
+          && trace.requestSerial === request.requestSerial
+          && trace.captureId === options.captureId
+          && trace.frame === options.frame,
+        );
         const maskCanvas = document.createElement("canvas");
         maskCanvas.width = width;
         maskCanvas.height = height;
@@ -3318,6 +3346,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           height,
           requestedRender: Boolean(options.render),
           renderObserved,
+          renderSerialBefore,
           renderLoopRunningBefore: wasRunning,
           renderLoopRunningAfter: fields.animationFrameId !== null && fields.animationFrameId !== undefined,
           currentFrame: Number.isFinite(Number(progress?.current)) ? Number(progress.current) * V14D_HAIR_AUTHORITATIVE_CAPTURE.fps : null,
@@ -3790,9 +3819,8 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         let renderedAfterApply = false;
         if (res.ok && options?.render !== false) {
           const engineFields = engine as unknown as { animationFrameId?: number | null };
-          // A frozen acceptance capture has no render loop to consume the new pipeline.
-          // Submit one zero-delta frame only in that state; live production playback keeps
-          // its existing loop and is not given an extra frame or time advance.
+          // 冻结的验收采集没有 render loop 消费新管线；仅在该状态提交一次零增量帧。
+          // 生产播放保持现有循环，不额外推进帧数或时间。
           if (engineFields.animationFrameId === null || engineFields.animationFrameId === undefined) {
             engine.renderFrame(0);
             renderedAfterApply = true;

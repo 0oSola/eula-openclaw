@@ -18,6 +18,8 @@ Stage 2C-M2a 已证明 Brows/Lashes graph、WGSL 和 pipeline 安装成功，且
 
 identity 实际 Brows/Lashes draw 使用 `gpu-1`；sentinel compile/install pipeline 变为 `gpu-36`，但旧路径冻结 render loop 后没有新的 `renderFrame`，所以实际 draw trace 仍是 identity，HDR resolve 与 canvas 仍是上一提交帧。已证伪 pipeline cache/signature 复用、draw range 变化、bind group 变化、compile/install 失败、HDR resolve/tone mapping 覆盖，以及 page error/WebGPU validation/HTTP 失败。
 
+诊断开始前先固定了 5 个可证伪假设与预测：H1 为冻结帧缺少新的 `renderFrame`/command submission，预测补零增量帧后 draw/HDR/canvas 都变化；H2 为 pipeline cache/signature 复用，预测 identity 与 sentinel pipeline 身份相同；H3 为 apply 后 draw-call group/pipeline 未重建，预测实际 `setPipeline` 仍为 identity；H4 为后续 pass 覆盖，预测 HDR 变化而 resolve/canvas 不变；H5 为采集/重建撤销 sentinel，预测 graph/tint/pipeline 回退或出现请求错误。最终仅 H1 被确认，H2-H5 均由实际 trace、HDR/canvas 和错误计数证伪。
+
 ## 4. 解决方式
 
 - 在 `?v14dAcceptanceProbe=1` 下增加默认关闭的 `installDisplayChainTrace`、`setDisplayChainTraceCapture`、`captureDisplayChainState`。它们只读记录真实 `setPipeline`、`setBindGroup(2)`、`drawIndexed`、draw range、bind group、compile/install pipeline、composite pipeline、HDR 和 canvas 统计。
@@ -40,13 +42,16 @@ identity 实际 Brows/Lashes draw 使用 `gpu-1`；sentinel compile/install pipe
 
 | 命令 | 结果 | 关键证据 |
 | --- | --- | --- |
-| `node web/scripts/repro-v14d-brows-lashes-display-chain.mjs` | exit 0 | `report-green/report.json`；identity `gpu-1`，sentinel `gpu-36`；Brows HDR 红均值 `0.162362 -> 0.026098`，Lashes `0.078112 -> 0.018781`；目标像素 changedRatio `0.95958`，meanAbsRgbSum `47.038855`；page/HTTP/request errors 均 0 |
-| `node web/scripts/repro-v14d-brows-lashes-display-chain.mjs --fault-no-render` | exit 1（预期） | `report-negative/report.json`；`applied.ok=true`、sentinel pipeline `gpu-36`，`renderObserved=false`，失败原因 `sentinel actual render/setPipeline was not observed` |
-| `node --test tests/v14d-brows-lashes-partition.test.mjs tests/v14d-hair-partition.test.mjs tests/reze-k3-skin-variant.test.mjs` | exit 0 | 45 tests，44 pass，1 个既有 triUV 证据缺失测试按预期 skip，0 fail |
-| `node scripts/patch-reze-engine.mjs --verify` | exit 0 | 基线 87 项严格不变量全部通过 |
-| `node scripts/patch-reze-engine.mjs --self-test` | exit 0 | fresh fixture 首次/二次幂等、anchor-miss/missing-file/重复 marker 负测和真实 node_modules 不变全部通过 |
-| `npm run build` | 首次 exit 1，修正类型后再次 exit 0 | 首次仅为 `setDisplayChainTraceCapture` 联合类型未收窄；补显式判别联合后 Next.js 编译、类型检查、静态页生成和优化均通过 |
-| `git diff --check` | 待最终提交前复核 | 不应有空白错误 |
+| `node web/scripts/repro-v14d-brows-lashes-display-chain.mjs` | exit 0 | `final-green-5/report.json`；identity/sentinel 共用 captureId `v14d-bl-pair`；identity `gpu-1`，sentinel `gpu-36`；Brows HDR 红均值 `0.162728 -> 0.026098`，Lashes `0.077985 -> 0.018781`；目标像素 changedRatio `0.956458`，meanAbsRgbSum `46.339945`；page/HTTP/request errors 均 0；脚本同时校验 bind group、draw 顺序/范围/group 与实际 draw pipeline |
+| `node web/scripts/repro-v14d-brows-lashes-display-chain.mjs --fault-no-render` | exit 1（预期） | `final-negative-5/report.json`；同一 captureId `v14d-bl-pair`；`applied.ok=true`、sentinel pipeline `gpu-36`，`renderObserved=false`，失败原因 `sentinel actual render/setPipeline was not observed` |
+| `node --check web/scripts/repro-v14d-brows-lashes-display-chain.mjs` | exit 0 | 最小复现脚本语法检查通过 |
+| `node --test tests/v14d-brows-lashes-partition.test.mjs tests/v14d-hair-partition.test.mjs tests/reze-k3-skin-variant.test.mjs`（在 `web/`） | exit 0 | 45 tests，44 pass，1 个既有 triUV 证据缺失测试按预期 skip，0 fail |
+| `node scripts/patch-reze-engine.mjs --verify`（在 `web/`） | exit 0 | 基线 87 项严格不变量全部通过 |
+| `node scripts/patch-reze-engine.mjs --self-test`（在 `web/`） | exit 0 | fresh fixture 首次/二次幂等、anchor-miss/missing-file/重复 marker 负测和真实 node_modules 不变全部通过 |
+| `npm run build`（在 `web/`） | exit 0 | Next.js 编译、类型检查、静态页生成和优化全部通过；构建产生的 `web/next-env.d.ts` 生成物差异已移除 |
+| `node scripts/probe-v14d-vmd-runtime.mjs`（在 `web/`，`V14D_CAPTURE_ORIGIN=http://127.0.0.1:3114`） | exit 0 | 默认非 acceptance 入口完成 VMD load→play→pause→seek，seek 到 `2.000s`，无 v14dFaceStatic/engine probe 泄漏；控制台既有 Three.js 属性警告不构成 page error |
+| `npm run check:basic`（在 `web/`） | exit 1（基线既有） | `run-basic-checks.mjs` 仍要求 `const initialSettings = sceneSettings ?? DEFAULT_SETTINGS` 旧字面结构；冻结 base 与当前代码均使用 `sceneSettings ?? pipelineDefaultSettings`，本票未改该无关断言 |
+| `git diff --check` | exit 0 | 无空白错误（仅有 Windows 换行提示） |
 
 ## 7. 范围边界与遗留风险
 
@@ -63,7 +68,7 @@ identity 实际 Brows/Lashes draw 使用 `gpu-1`；sentinel compile/install pipe
 ## 证据路径
 
 - 红灯（修复前）：`.scratch/repro-v14d-brows-lashes-display-chain/report-red-before-fix.json`。
-- 健康绿测：`.scratch/repro-v14d-brows-lashes-display-chain/green/report.json`。
-- stale-render 负测：`.scratch/repro-v14d-brows-lashes-display-chain/negative/report.json`。
+- 健康绿测：`.scratch/repro-v14d-brows-lashes-display-chain/final-green-5/report.json`。
+- stale-render 负测：`.scratch/repro-v14d-brows-lashes-display-chain/final-negative-5/report.json`。
 - 相关代码：`web/src/features/stage/RezeWebGpuStage.tsx`、`web/scripts/repro-v14d-brows-lashes-display-chain.mjs`。
 - 概念：`workflow/concepts/v14d-display-chain-commit-boundary.zh-CN.md`、`workflow/concepts/v14d-compile-install-not-display-proof.zh-CN.md`。

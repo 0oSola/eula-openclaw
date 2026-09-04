@@ -24,6 +24,7 @@ const WIDTH = 1440;
 const HEIGHT = 960;
 const USER_ID = "8X29-AF3E";
 const RUNS = Number(process.env.V14D_REPRO_RUNS || 1);
+const CAPTURE_ID = "v14d-bl-pair";
 
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -64,7 +65,19 @@ const report = {
   ticket: "Stage 2C-M2a.3 Brows/Lashes display chain minimum repro",
   origin: ORIGIN,
   viewport: { width: WIDTH, height: HEIGHT, deviceScaleFactor: 1 },
-  authority: { pmx: PMX, vmd: VMD_URL, seconds: 4, frame: 120, fps: 30, camera: "face" },
+  authority: { pmx: PMX, vmd: VMD_URL, seconds: 4, frame: 120, fps: 30, camera: "face", captureId: CAPTURE_ID },
+  hypotheses: [
+    { id: "H1", statement: "applyStyleGroups 成功后冻结帧没有新的 renderFrame/command submission", prediction: "补一次零增量 render 后，实际 draw、HDR 与 canvas 出现 sentinel 差异", result: "confirmed" },
+    { id: "H2", statement: "pipeline cache/signature 错误复用旧 pipeline", prediction: "identity 与 sentinel compile/install 或实际 draw pipeline 身份相同", result: "falsified" },
+    { id: "H3", statement: "applyStyleGroups 后 draw-call group/pipeline 未重建", prediction: "style group 状态变化但实际 setPipeline 仍为 identity", result: "falsified" },
+    { id: "H4", statement: "正确 fragment 写入中间目标后被后续 pass 覆盖", prediction: "Brows/Lashes HDR 变化但 resolve/composite/canvas 不变化", result: "falsified" },
+    { id: "H5", statement: "采集或重建时序撤销 sentinel", prediction: "apply 后 graph/tint/pipeline 回退或出现重建/请求错误", result: "falsified" },
+  ],
+  diagnosis: {
+    firstLostBoundary: "applyStyleGroups 返回之后 → 下一次 renderFrame/command submission 之前",
+    captureId: CAPTURE_ID,
+    frame: 120,
+  },
   runs: [],
   pageErrors: [],
   failedRequests: [],
@@ -145,122 +158,6 @@ async function preparePage(page) {
   await page.waitForTimeout(500);
 }
 
-async function captureState(page, mode) {
-  return page.evaluate(async ({ vmdUrl, mode }) => {
-    const stage = window.__rezeStageProbe;
-    if (!stage?.playVmd || !stage.captureHairTriUv) return { error: "stage probe unavailable" };
-    if (mode === "identity") {
-      const v1 = document.querySelector('[data-testid="reze-k3-skin-variant-v1"]');
-      if (v1) v1.click();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    } else {
-      const applied = await stage.applyBadSkinGraph("wrongBrowsLashesTint");
-      if (!applied?.ok) return { error: "wrongTint apply failed", applied };
-    }
-    await stage.playVmd(vmdUrl);
-    stage.pauseVmd();
-    stage.seekVmd(4);
-    stage.pauseVmd();
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    stage.cameraOrbit("face");
-    const engine = stage.engineRef?.current;
-    const model = stage.modelRef?.current;
-    if (!engine || !model) return { error: "engine/model unavailable" };
-    model.pause();
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-
-    const ids = window.__v14dDisplayChainObjectIds || { next: 1, map: new WeakMap() };
-    window.__v14dDisplayChainObjectIds = ids;
-    const objectId = (value) => {
-      if (!value || (typeof value !== "object" && typeof value !== "function")) return null;
-      let id = ids.map.get(value);
-      if (!id) { id = "gpu-" + ids.next++; ids.map.set(value, id); }
-      return id;
-    };
-    const groupId = "v14d-skin-variant-brows-lashes";
-    const inst = engine.modelInstances?.get("companion");
-    const install = inst?.styleGroups?.get(groupId);
-    const targetDraws = (inst?.drawCalls || []).filter((draw) => draw.materialName === "Brows" || draw.materialName === "Lashes");
-    const runtime = {
-      mode,
-      graphName: install?.group?.graph?.name || null,
-      tint: install?.group?.graph?.nodes?.find((node) => node.id === "v14d_brows_lashes_tint")?.inputs?.color || null,
-      signature: install?.signature || null,
-      pipeline: objectId(install?.pipeline),
-      pipelineNoDepthWrite: objectId(install?.pipelineNoDepthWrite),
-      renderLoopRunningBeforeCapture: engine.animationFrameId !== null && engine.animationFrameId !== undefined,
-      drawCalls: targetDraws.map((draw) => ({
-        materialName: draw.materialName,
-        type: draw.type,
-        count: draw.count,
-        firstIndex: draw.firstIndex,
-        drawIndex: inst.drawCalls.indexOf(draw),
-        groupId: draw.groupId,
-        bindGroup: objectId(draw.bindGroup),
-        baseBindGroupEntries: (draw.baseBindGroupEntries || []).map((entry) => ({ binding: entry.binding, resourcePresent: entry.resource != null })),
-        pipelineUsedByLookup: objectId(draw.groupId ? inst.styleGroups.get(draw.groupId)?.pipeline : null),
-      })),
-      viewTransform: typeof engine.getViewTransformOptions === "function" ? engine.getViewTransformOptions() : null,
-    };
-
-    const raw = await stage.captureHairTriUv(["Brows", "Lashes"], {
-      useForegroundDepth: true,
-      nearClipOverride: 1.0,
-      sourceMode: "production-draw-call",
-    });
-    if (!raw || raw.error) return { error: raw?.error || "capture failed", runtime };
-    const decode = async (dataUrl) => {
-      const image = new Image();
-      await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = dataUrl; });
-      const canvas = document.createElement("canvas");
-      canvas.width = raw.width; canvas.height = raw.height;
-      const context = canvas.getContext("2d");
-      context.drawImage(image, 0, 0);
-      return context.getImageData(0, 0, raw.width, raw.height).data;
-    };
-    const pixels = await decode(raw.canvasDataUrl);
-    const mask = await decode(raw.materialMaskPng);
-    const idsByName = raw.materialIdByName || {};
-    const slotStats = {};
-    for (const name of ["Brows", "Lashes"]) {
-      const materialId = Number(idsByName[name]);
-      let pixelsInSlot = 0;
-      let sumR = 0; let sumG = 0; let sumB = 0;
-      let minR = 255; let maxR = 0;
-      for (let i = 0; i < raw.width * raw.height; i += 1) {
-        if (mask[i * 4] === 0 || mask[i * 4 + 1] !== materialId) continue;
-        pixelsInSlot += 1;
-        const off = i * 4;
-        sumR += pixels[off]; sumG += pixels[off + 1]; sumB += pixels[off + 2];
-        minR = Math.min(minR, pixels[off]); maxR = Math.max(maxR, pixels[off]);
-      }
-      slotStats[name] = {
-        materialId,
-        pixels: pixelsInSlot,
-        meanRgb: pixelsInSlot ? [sumR / pixelsInSlot, sumG / pixelsInSlot, sumB / pixelsInSlot].map((value) => Number(value.toFixed(3))) : null,
-        redRange: pixelsInSlot ? [minR, maxR] : null,
-      };
-    }
-    return {
-      runtime,
-      capture: {
-        captureId: raw.captureId,
-        source: raw.source,
-        sourceMode: raw.sourceMode,
-        width: raw.width,
-        height: raw.height,
-        currentFrame: raw.captureEvidence?.pixel?.currentFrame ?? null,
-        captureEvidence: raw.captureEvidence || null,
-        productionSource: raw.productionSource || null,
-        slotStats,
-        materialIdByName: idsByName,
-        canvasDataUrl: raw.canvasDataUrl,
-        materialMaskPng: raw.materialMaskPng,
-      },
-    };
-  }, { vmdUrl: VMD_URL, mode });
-}
-
 const FAULT_NO_RENDER = process.argv.includes("--fault-no-render");
 
 async function runOnce(index) {
@@ -289,19 +186,19 @@ async function runOnce(index) {
     if (setup.error) return { index, error: setup.error };
     const traceInstalled = await page.evaluate(() => window.__rezeStageProbe?.installDisplayChainTrace?.() || { ok: false, error: "trace install unavailable" });
     if (!traceInstalled?.ok) return { index, error: "display chain trace install failed", traceInstalled };
-    const identity = await page.evaluate(() => window.__rezeStageProbe.captureDisplayChainState({ captureId: "v14d-bl-pair-identity", frame: 120, render: true }));
+    const identity = await page.evaluate((captureId) => window.__rezeStageProbe.captureDisplayChainState({ captureId, frame: 120, render: true }), CAPTURE_ID);
     if (identity.error) return { index, error: identity.error, identity };
-    await page.evaluate(() => {
+    await page.evaluate((captureId) => {
       const stage = window.__rezeStageProbe;
-      stage.setDisplayChainTraceCapture("v14d-bl-pair-sentinel", 120);
       stage.engineRef.current.stopRenderLoop();
       stage.modelRef.current.pause();
-    });
+      stage.setDisplayChainTraceCapture(captureId, 120);
+    }, CAPTURE_ID);
     const applied = await page.evaluate(async (faultNoRender) => {
       const stage = window.__rezeStageProbe;
       return stage.applyBadSkinGraph("wrongBrowsLashesTint", faultNoRender ? { render: false } : undefined);
     }, FAULT_NO_RENDER);
-    const sentinel = await page.evaluate(() => window.__rezeStageProbe.captureDisplayChainState({ captureId: "v14d-bl-pair-sentinel", frame: 120, render: false }));
+    const sentinel = await page.evaluate((captureId) => window.__rezeStageProbe.captureDisplayChainState({ captureId, frame: 120, render: false, reuseRequestedCapture: true }), CAPTURE_ID);
     if (sentinel.error) return { index, error: sentinel.error, identity, sentinel };
     const diff = await page.evaluate(async ({ identityDataUrl, sentinelDataUrl, maskDataUrl, materialIds, width, height }) => {
       const decode = async (dataUrl) => {
@@ -384,6 +281,7 @@ async function runOnce(index) {
           renderObserved: state.renderObserved,
           renderLoopRunningBefore: state.renderLoopRunningBefore,
           renderLoopRunningAfter: state.renderLoopRunningAfter,
+          renderSerialBefore: state.renderSerialBefore,
           hdr: state.hdr,
           trace: state.trace,
         },
@@ -409,18 +307,48 @@ for (const run of report.runs) {
   if (!run.identity?.capture || !run.sentinel?.capture) continue;
   if (run.identity.capture.currentFrame == null || Math.abs(Number(run.identity.capture.currentFrame) - 120) > 1e-6) report.failures.push("run " + run.index + ": identity frame is not 120");
   if (run.sentinel.capture.currentFrame == null || Math.abs(Number(run.sentinel.capture.currentFrame) - 120) > 1e-6) report.failures.push("run " + run.index + ": sentinel frame is not 120");
+  if (run.identity.capture.captureId !== CAPTURE_ID || run.sentinel.capture.captureId !== CAPTURE_ID) report.failures.push("run " + run.index + ": identity/sentinel captureId mismatch");
   if (run.identity.runtime.graphName !== "V14D Brows Lashes V1 Composite") report.failures.push("run " + run.index + ": identity graph is not Brows/Lashes V1");
   if (run.sentinel.runtime.graphName !== "V14D Brows Lashes V1 Composite") report.failures.push("run " + run.index + ": sentinel graph is not Brows/Lashes V1");
-  if (JSON.stringify(run.identity.runtime.drawCalls.map((draw) => [draw.materialName, draw.count, draw.firstIndex])) !== JSON.stringify(run.sentinel.runtime.drawCalls.map((draw) => [draw.materialName, draw.count, draw.firstIndex]))) report.failures.push("run " + run.index + ": draw ranges changed");
+  const identityDraws = run.identity.runtime.drawCalls || [];
+  const sentinelDraws = run.sentinel.runtime.drawCalls || [];
+  if (JSON.stringify(identityDraws.map((draw) => [draw.materialName, draw.count, draw.firstIndex, draw.drawIndex, draw.groupId])) !== JSON.stringify(sentinelDraws.map((draw) => [draw.materialName, draw.count, draw.firstIndex, draw.drawIndex, draw.groupId]))) report.failures.push("run " + run.index + ": draw ranges/order/group changed");
+  if (JSON.stringify(identityDraws.map((draw) => [draw.materialName, draw.bindGroup])) !== JSON.stringify(sentinelDraws.map((draw) => [draw.materialName, draw.bindGroup]))) report.failures.push("run " + run.index + ": bind groups changed");
   if (run.identity.runtime.pipeline === run.sentinel.runtime.pipeline) report.failures.push("run " + run.index + ": sentinel compile/install pipeline identity was reused");
   if (JSON.stringify(run.sentinel.runtime.tint) !== JSON.stringify([0, 1, 1])) report.failures.push("run " + run.index + ": sentinel tint did not enter runtime graph");
   if (!(run.diff?.sampled > 0)) report.failures.push("run " + run.index + ": no Brows/Lashes pixels in final canvas mask");
+  if (run.applied?.ok !== true) report.failures.push("run " + run.index + ": sentinel style groups were not applied");
+  if (FAULT_NO_RENDER && run.applied?.renderedAfterApply !== false) report.failures.push("run " + run.index + ": stale-render fault did not suppress render");
+  if (!FAULT_NO_RENDER && run.applied?.renderedAfterApply !== true) report.failures.push("run " + run.index + ": healthy path did not submit the required frozen-frame render");
   if (!(run.sentinel.capture.displayChain?.renderObserved === true)) report.failures.push("run " + run.index + ": sentinel actual render/setPipeline was not observed");
-  const actualSentinelPipelines = new Set((run.sentinel.capture.displayChain?.trace?.draws || [])
-    .filter((draw) => draw.materialName === "Brows" || draw.materialName === "Lashes")
-    .map((draw) => draw.pipeline));
-  if (run.sentinel.capture.displayChain?.renderObserved === true && !actualSentinelPipelines.has(run.sentinel.runtime.pipeline)) {
-    report.failures.push("run " + run.index + ": sentinel draw used a pipeline different from compile/install");
+  for (const mode of ["identity", "sentinel"]) {
+    const state = run[mode];
+    const targetDraws = state.runtime.drawCalls || [];
+    const traceDraws = (state.capture.displayChain?.trace?.draws || [])
+      .filter((draw) => draw.materialName === "Brows" || draw.materialName === "Lashes");
+    if (state.capture.displayChain?.renderObserved === true && traceDraws.length !== targetDraws.length) {
+      report.failures.push("run " + run.index + ": " + mode + " Brows/Lashes draw trace count mismatch");
+    }
+    for (let index = 0; index < targetDraws.length; index += 1) {
+      const target = targetDraws[index];
+      const actual = traceDraws[index];
+      if (state.capture.displayChain?.renderObserved !== true || !actual) continue;
+      if (actual.pipeline !== target.pipelineUsedByLookup || actual.pipeline !== state.runtime.pipeline) {
+        report.failures.push("run " + run.index + ": " + mode + " draw used a pipeline different from compile/install");
+      }
+      if (actual.bindGroup !== target.bindGroup) {
+        report.failures.push("run " + run.index + ": " + mode + " draw used a bind group different from draw snapshot");
+      }
+    }
+  }
+  const identityTraceTargets = (run.identity.capture.displayChain?.trace?.draws || []).filter((draw) => draw.materialName === "Brows" || draw.materialName === "Lashes");
+  const sentinelTraceTargets = (run.sentinel.capture.displayChain?.trace?.draws || []).filter((draw) => draw.materialName === "Brows" || draw.materialName === "Lashes");
+  if (run.identity.capture.displayChain?.renderObserved === true && run.sentinel.capture.displayChain?.renderObserved === true
+    && JSON.stringify(identityTraceTargets.map((draw) => draw.pipeline)) === JSON.stringify(sentinelTraceTargets.map((draw) => draw.pipeline))) {
+    report.failures.push("run " + run.index + ": identity/sentinel actual draw pipelines did not differ");
+  }
+  if (run.sentinel.capture.displayChain?.renderObserved === true && run.sentinel.capture.displayChain.trace?.compositePipeline == null) {
+    report.failures.push("run " + run.index + ": sentinel composite pipeline was not observed");
   }
   if (!((run.diff?.meanAbsRgbSum ?? 0) > 1)) report.failures.push("run " + run.index + ": final canvas no-effect");
 }
