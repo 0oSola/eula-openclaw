@@ -25,8 +25,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const V14D_AUTHORITY_PATH = path.join(rootDir, "src", "features", "stage", "v14dAuthority.js");
 let V14D_HAIR_TINT;
+let V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR;
 try {
-  ({ V14D_HAIR_TINT } = await import(pathToFileURL(V14D_AUTHORITY_PATH).href));
+  ({ V14D_HAIR_TINT, V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR } = await import(pathToFileURL(V14D_AUTHORITY_PATH).href));
 } catch (error) {
   throw new Error("无法加载 V14D 唯一权威模块: " + V14D_AUTHORITY_PATH + "（" + (error?.message || error) + "）");
 }
@@ -35,6 +36,13 @@ if (!Array.isArray(V14D_HAIR_TINT) || V14D_HAIR_TINT.length !== 3
   throw new Error("V14D_HAIR_TINT 权威导出必须是 3 个 [0,1] 范围内的有限数值");
 }
 const V14D_HAIR_TINT_LITERAL = JSON.stringify(V14D_HAIR_TINT);
+// wrongAlpha 故障因子唯一权威：与引擎/分析器同一 v14dAuthority.js 导出，禁止手写漂移。
+if (typeof V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR !== "number"
+  || !Number.isFinite(V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR)
+  || V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR <= 0 || V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR >= 1e-6) {
+  throw new Error("V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR 权威导出必须是 (0,1e-6) 内的有限数值（须低于 hashed clamp 下限 1e-6 才真实剔除片元）");
+}
+const V14D_WRONG_ALPHA_FAULT_FACTOR_LITERAL = String(V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR);
 
 // ─── --self-test 早退分流（必须在任何真实 node_modules 写入/patch target 遍历/strict verify 之前）───
 // 本块自包含、只操作临时目录：构造干净 reze-engine 0.26.0 隔离 fixture，
@@ -957,8 +965,8 @@ const STATE2_VERIFY_CHECKS = (() => {
   // （graph.tags 含 v14d-wrong-alpha-fault）在 src/dist 各恰好一次。
   { label: "src/graph/slots.ts 正常 alpha 语义保留（let 分支）", file: slotsSrc, marker: ': "  let alpha = material.alpha * tex_s.a' },
   { label: "dist/graph/slots.js 正常 alpha 语义保留（let 分支）", file: slotsDist, marker: ': "  let alpha = material.alpha * tex_s.a' },
-  { label: "src/graph/slots.ts wrongAlpha fault 因子恰好一次", file: slotsSrc, marker: "var alpha = material.alpha * tex_s.a * 1e-7" },
-  { label: "dist/graph/slots.js wrongAlpha fault 因子恰好一次", file: slotsDist, marker: "var alpha = material.alpha * tex_s.a * 1e-7" },
+  { label: "src/graph/slots.ts wrongAlpha fault 因子恰好一次", file: slotsSrc, marker: "var alpha = material.alpha * tex_s.a * " + V14D_WRONG_ALPHA_FAULT_FACTOR_LITERAL },
+  { label: "dist/graph/slots.js wrongAlpha fault 因子恰好一次", file: slotsDist, marker: "var alpha = material.alpha * tex_s.a * " + V14D_WRONG_ALPHA_FAULT_FACTOR_LITERAL },
   { label: "src/graph/compile.ts alphaFault tag 门控恰好一次", file: compileSrc, marker: 'graph.tags?.includes("v14d-wrong-alpha-fault")' },
   { label: "dist/graph/compile.js alphaFault tag 门控恰好一次", file: compileDist, marker: 'graph.tags?.includes("v14d-wrong-alpha-fault")' },
   { label: "src/graph/compile.ts brows-lashes tint 读取", file: compileSrc, marker: 'n.id === "v14d_brows_lashes_tint"' },
@@ -2051,7 +2059,8 @@ const browsLashesCompileTargets = [
 // ─── Stage 2C-M2a 修正轮：wrongAlpha 验收故障注入 seam（方案A，仅专用 fault tag 可达）───
 // compile.ts 仅在 graph.tags 含专用 fault tag（与 v14dAuthority.js 的
 // V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_TAG 同字面量）时给 assembleModule/prelude 传
-// v14dAlphaFault=true；prelude 的 alpha 行由 let 改为 var 并乘固定故障因子 1e-7
+// v14dAlphaFault=true；prelude 的 alpha 行由 let 改为 var 并乘固定故障因子
+// V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR（权威导出，当前 1e-7）
 // （在 hashed discard 之前），1e-7 < hashed clamp 下限 1e-6 → 真实剔除边缘片元，
 // 画布边界环颜色分布改变。正常 graph 无该 tag → let alpha 原字节语义不变；stockings
 // 等其它 hashed 材质不受影响。该 tag 只由 ?v14dAcceptanceProbe=1 的
@@ -2061,8 +2070,8 @@ const ALPHA_FAULT_TAG = "v14d-wrong-alpha-fault";
 const ALPHA_FAULT_PRELUDE_SRC = "// V14D_ALPHA_FAULT_BEGIN\nfunction prelude(renderClass: RenderClass, alphaMode: AlphaMode, v14dAlphaFault = false): string {\n// V14D_ALPHA_FAULT_END";
 const ALPHA_FAULT_PRELUDE_DIST = "// V14D_ALPHA_FAULT_BEGIN\nfunction prelude(renderClass, alphaMode, v14dAlphaFault = false) {\n// V14D_ALPHA_FAULT_END";
 // prelude 函数体 alphaDecl 声明块（插在 const gate 行之前，模板字符串外）。
-const ALPHA_FAULT_DECL_BLOCK_SRC = "  // V14D_ALPHA_FAULT_ALPHA_DECL_BEGIN\n  const alphaDecl = v14dAlphaFault\n    ? \"  var alpha = material.alpha * tex_s.a * 1e-7; // V14D wrongAlpha fault: pre-discard factor\"\n    : \"  let alpha = material.alpha * tex_s.a;\"\n  // V14D_ALPHA_FAULT_ALPHA_DECL_END\n";
-const ALPHA_FAULT_DECL_BLOCK_DIST = "    // V14D_ALPHA_FAULT_ALPHA_DECL_BEGIN\n    const alphaDecl = v14dAlphaFault\n        ? \"  var alpha = material.alpha * tex_s.a * 1e-7; // V14D wrongAlpha fault: pre-discard factor\"\n        : \"  let alpha = material.alpha * tex_s.a;\";\n    // V14D_ALPHA_FAULT_ALPHA_DECL_END\n";
+const ALPHA_FAULT_DECL_BLOCK_SRC = "  // V14D_ALPHA_FAULT_ALPHA_DECL_BEGIN\n  const alphaDecl = v14dAlphaFault\n    ? \"  var alpha = material.alpha * tex_s.a * " + V14D_WRONG_ALPHA_FAULT_FACTOR_LITERAL + "; // V14D wrongAlpha fault: pre-discard factor\"\n    : \"  let alpha = material.alpha * tex_s.a;\"\n  // V14D_ALPHA_FAULT_ALPHA_DECL_END\n";
+const ALPHA_FAULT_DECL_BLOCK_DIST = "    // V14D_ALPHA_FAULT_ALPHA_DECL_BEGIN\n    const alphaDecl = v14dAlphaFault\n        ? \"  var alpha = material.alpha * tex_s.a * " + V14D_WRONG_ALPHA_FAULT_FACTOR_LITERAL + "; // V14D wrongAlpha fault: pre-discard factor\"\n        : \"  let alpha = material.alpha * tex_s.a;\";\n    // V14D_ALPHA_FAULT_ALPHA_DECL_END\n";
 const alphaFaultTargets = [
   // prelude 签名（src / dist）。
   {

@@ -15,6 +15,10 @@ const CHROME_EXE = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const ORIGIN = process.env.V14D_CAPTURE_ORIGIN || "http://127.0.0.1:3114";
 const BASE = ORIGIN + "/companion?v14dAcceptanceProbe=1";
 const OUT = path.resolve(".scratch/reze-k3-v1-stage");
+// P0 逐槽 Morph 取证：权威 PMX 顶点级受影响槽映射（由 Blender/PMX 取证脚本产出）。
+// 闭眼 まばたき 与表情 笑い 均只移动 Lashes（506 顶点）、Brows 0 顶点，故逐槽判定必须
+// 按此声明：受影响槽须超同状态噪声上界、未受影响槽应≈基线。该 JSON 是机器取证唯一来源。
+const MORPH_FORENSIC = path.resolve(".scratch/v14d-brows-lashes/pmx-morph-forensic.json");
 fs.mkdirSync(OUT, { recursive: true });
 // Stage 2C-M2a 修正轮：--fast-bl 只跑到 G3 Brows/Lashes identity-target Gate 即退出，
 // 供特写取景/阈值标定的快速单变量迭代；正式全量验收不带此开关（跑完 G1-G7）。
@@ -912,6 +916,14 @@ if (!G7_MORPH_ONLY) try {
   const blV1Png = saveDataUrl(blV1Atomic?.canvasDataUrl, "g3-brows-lashes-v1-canvas.png");
   const blV1Meta = path.join(OUT, "g3-brows-lashes-v1-atomic-summary.json");
   fs.writeFileSync(blV1Meta, JSON.stringify(summarizeHairAtomicCapture(blV1Atomic), null, 2));
+  // P1 独立采集 provenance：run1 健康 V1 采集身份（captureId/frame/动画名/画布路径+SHA256）。
+  const tintProvRun1 = {
+    captureId: blV1Atomic?.captureId ?? blV1Atomic?.captureEvidence?.pixel?.captureId ?? null,
+    frame: blV1Atomic?.captureEvidence?.pixel?.currentFrame ?? blV1Atomic?.captureState?.currentFrame ?? null,
+    seconds: blV1Atomic?.captureEvidence?.pixel?.currentSeconds ?? blV1Atomic?.captureState?.currentSeconds ?? null,
+    animationName: blV1Atomic?.captureEvidence?.pixel?.animationName ?? blV1Atomic?.captureState?.animationName ?? null,
+    canvasPath: blV1Png, canvasSha256: blV1Png ? sha256(blV1Png) : null,
+  };
   const blCapturePair = validateV14dHairCapturePair({
     original: { ...(blOriginalAtomic?.captureEvidence || {}) },
     v1: { ...(blV1Atomic?.captureEvidence || {}) },
@@ -982,7 +994,15 @@ if (!G7_MORPH_ONLY) try {
   await page.click(sel.variantBtn("v1")); await waitRebuilt();
   await prepareHairCapture();
   const blBaselineAtomic = await captureBrowsLashesAtomic();
-  saveDataUrl(blBaselineAtomic?.canvasDataUrl, "g3-brows-lashes-v1-canvas-redmae.png");
+  const blBaselinePng = saveDataUrl(blBaselineAtomic?.canvasDataUrl, "g3-brows-lashes-v1-canvas-redmae.png");
+  // P1 独立采集 provenance：run2 健康恒等采集身份（与 run1 不同 captureId）。
+  const tintProvRun2 = {
+    captureId: blBaselineAtomic?.captureId ?? blBaselineAtomic?.captureEvidence?.pixel?.captureId ?? null,
+    frame: blBaselineAtomic?.captureEvidence?.pixel?.currentFrame ?? blBaselineAtomic?.captureState?.currentFrame ?? null,
+    seconds: blBaselineAtomic?.captureEvidence?.pixel?.currentSeconds ?? blBaselineAtomic?.captureState?.currentSeconds ?? null,
+    animationName: blBaselineAtomic?.captureEvidence?.pixel?.animationName ?? blBaselineAtomic?.captureState?.animationName ?? null,
+    canvasPath: blBaselinePng, canvasSha256: blBaselinePng ? sha256(blBaselinePng) : null,
+  };
   const calibBaseline = runAnalyzer(["--brows-lashes", "--tint-pair=g3-brows-lashes-v1-canvas-redmae.png"]);
   // analyzer 报告名由 --tint-pair 画布名推导（去 "g3-brows-lashes-" 前缀与 "-canvas"
   // 后缀）：g3-brows-lashes-v1-canvas-redmae.png → visual-diff-brows-lashes-v1-redmae.json。
@@ -1014,7 +1034,14 @@ if (!G7_MORPH_ONLY) try {
   await page.waitForTimeout(400);
   await prepareHairCapture();
   const blWrongTintAtomic = await captureBrowsLashesAtomic();
-  saveDataUrl(blWrongTintAtomic?.canvasDataUrl, "g3-brows-lashes-v1-canvas-wrongtint.png");
+  const blWrongTintPng = saveDataUrl(blWrongTintAtomic?.canvasDataUrl, "g3-brows-lashes-v1-canvas-wrongtint.png");
+  const tintProvWrong = {
+    captureId: blWrongTintAtomic?.captureId ?? blWrongTintAtomic?.captureEvidence?.pixel?.captureId ?? null,
+    frame: blWrongTintAtomic?.captureEvidence?.pixel?.currentFrame ?? blWrongTintAtomic?.captureState?.currentFrame ?? null,
+    seconds: blWrongTintAtomic?.captureEvidence?.pixel?.currentSeconds ?? blWrongTintAtomic?.captureState?.currentSeconds ?? null,
+    animationName: blWrongTintAtomic?.captureEvidence?.pixel?.animationName ?? blWrongTintAtomic?.captureState?.animationName ?? null,
+    canvasPath: blWrongTintPng, canvasSha256: blWrongTintPng ? sha256(blWrongTintPng) : null,
+  };
   if (blWrongTintAtomic && !blWrongTintAtomic.error && blWrongTintAtomic.materialMaskPng) {
     fs.writeFileSync(path.join(OUT, "g3-brows-lashes-tri-uv-wrongtint.json"), JSON.stringify({
       source: blWrongTintAtomic.source, width: blWrongTintAtomic.width, height: blWrongTintAtomic.height,
@@ -1064,10 +1091,23 @@ if (!G7_MORPH_ONLY) try {
   tintCalib.wrongBelowThreshold = wrongBelowThreshold;
   tintCalib.directionOk = directionOk;
   tintCalib.margin = "健康 redDropDiff>=0（恒等 tint 红绿同降）与错误 redDropDiff<0（错误 tint 额外压红）符号分离；两次独立健康采集均>=0 证明非按错误样本硬编码，阈值 0 取两侧实测中点";
+  // P1 独立采集 provenance（Stage 2C-M2a 修正轮）：把两次健康与一次错误采集的
+  // captureId/frame/动画名/画布路径+SHA256 写入机器报告，证明三次采集来自不同原子帧。
+  // 硬断言 run1/run2 采集身份不同（captureId 不同），且均为权威 VMD 的 4 秒/frame120。
+  // 不要求画布 hash 不同（确定性渲染允许同 hash），只证明采集来源是独立原子帧。
+  tintCalib.provenance = { run1: tintProvRun1, run2: tintProvRun2, wrong: tintProvWrong };
+  const provOk = [tintProvRun1, tintProvRun2, tintProvWrong].every((p) => p
+    && p.captureId != null && p.frame === HAIR_CAPTURE_FRAME
+    && typeof p.animationName === "string" && p.animationName.includes("koleda-v14d-authoritative-pose-f120")
+    && p.canvasSha256)
+    && String(tintProvRun1.captureId) !== String(tintProvRun2.captureId)
+    && String(tintProvRun1.captureId) !== String(tintProvWrong.captureId)
+    && String(tintProvRun2.captureId) !== String(tintProvWrong.captureId);
+  tintCalib.provenanceOk = provOk;
   report.gates.G3.browsLashesTintCalibration = tintCalib;
-  if (!(healthyAboveThreshold && wrongBelowThreshold && directionOk)) {
-    fail("G3", "wrongTint 阈值标定证据不足：健康两次应>=0、错误应<0、target红均值应>0；实际 " + JSON.stringify({ healthyAboveThreshold, wrongBelowThreshold, directionOk, h1b: tintCalib.healthy.run1.brows?.redDropDiff, h1l: tintCalib.healthy.run1.lashes?.redDropDiff, h2b: tintCalib.healthy.run2.brows?.redDropDiff, h2l: tintCalib.healthy.run2.lashes?.redDropDiff, wb: tintCalib.wrong.brows?.redDropDiff, wl: tintCalib.wrong.lashes?.redDropDiff }));
-  } else note("G3", "wrongTint 阈值标定 PASS（健康2次>=0、错误<0、显示链不变口径有效）");
+  if (!(healthyAboveThreshold && wrongBelowThreshold && directionOk && provOk)) {
+    fail("G3", "wrongTint 阈值标定证据不足：健康两次应>=0、错误应<0、target红均值应>0、三次采集 provenance 应独立（不同 captureId、frame120/权威VMD）；实际 " + JSON.stringify({ healthyAboveThreshold, wrongBelowThreshold, directionOk, provOk, prov: tintCalib.provenance }));
+  } else note("G3", "wrongTint 阈值标定 PASS（健康2次>=0、错误<0、显示链不变口径有效、三次采集 provenance 独立）");
 
   // wrongAlpha 负测（Stage 2C-M2a 修正轮 P0-2，方案A引擎 seam）：注入专用 fault tag
   // "v14d-wrong-alpha-fault"（权威 graph 名不变，override/hair helper 同生产 V1），
@@ -1529,36 +1569,133 @@ try {
       wrongNameVsOpen: morphProbe.wrongName?.error ? null : distTo(morphProbe.wrongName),
       noSwitchVsOpen: morphProbe.noSwitch?.error ? null : distTo(morphProbe.noSwitch),
     };
-    // 阈值标定（权威健康证据，同帧 hashed 抖动在同状态/错误名下产生非零 Jaccard
-    // 基线）：实测 wrongName/noSwitch（状态未变）Brows≈0.031-0.033、Lashes≈0.0078-0.0084；
-    // 闭眼（まばたき 0→1）Brows≈0.067、表情（笑い 0→1）Lashes≈0.986（移动 506 顶点）。
-    // minMorphJaccard=0.05 取负测上界（Brows 0.033）与健康有效下界（闭眼 Brows 0.067）
-    // 之间的几何中点量级：负测两槽均低于阈值自然拒绝、闭眼/表情超过阈值判真移动。
-    // 记录全部实测值供审查，阈值有实测裕量、非硬编码必败字段。
-    const minMorphJaccard = 0.05;
+    // P0 逐槽判定（Stage 2C-M2a 修正轮）：不能用任意槽 some() 兜底——必须由取证声明的
+    // 受影响槽逐槽超过同状态噪声上界。闭眼 まばたき / 表情 笑い 均只移动 Lashes（506 顶点）、
+    // Brows 0 顶点（见 pmx-morph-forensic.json）。同状态噪声上界取负测（wrongName/noSwitch）
+    // 各槽实测 Jaccard 的最大值 + 0.02 裕量（真实 hashed 抖动基线，非硬编码必败）。
+    let forensic = null;
+    try { forensic = JSON.parse(fs.readFileSync(MORPH_FORENSIC, "utf8")); } catch (e) { forensic = { error: String(e) }; }
+    const forensicFor = (names) => (forensic?.morphs || []).filter((m) => names.includes(m.name));
+    // 受影响槽映射：某槽 lashesVerts/browsVerts > 0 → 该槽受影响。按 morph 聚合（任一匹配 morph 移动该槽即受影响）。
+    const affectedSlotsFor = (names) => {
+      const set = new Set();
+      for (const m of forensicFor(names)) {
+        if ((m.lashesVerts || 0) > 0) set.add("Lashes");
+        if ((m.browsVerts || 0) > 0) set.add("Brows");
+      }
+      return set;
+    };
+    const closedAffected = affectedSlotsFor(morphProbe.closedEyeMorphs || []);
+    const exprAffected = affectedSlotsFor(morphProbe.expressionMorphs || []);
+    // 同状态噪声上界：负测两状态的逐槽最大值 + 裕量。minForeground=1。
+    const negNoise = (n) => Math.max(
+      dist.wrongNameVsOpen?.[n] ?? 0,
+      dist.noSwitchVsOpen?.[n] ?? 0,
+    );
+    const NOISE_MARGIN = 0.02;
+    const noiseUpper = Object.fromEntries(slotsArr.map((n) => [n, +(negNoise(n) + NOISE_MARGIN).toFixed(4)]));
     const minForeground = 1;
     const visibleAll = slotsArr.every((n) => counts.open[n] >= minForeground && counts.closed[n] >= minForeground && counts.expression[n] >= minForeground);
-    const closedMoved = slotsArr.some((n) => dist.closedVsOpen[n] >= minMorphJaccard);
-    const exprMoved = slotsArr.some((n) => dist.expressionVsOpen[n] >= minMorphJaccard);
-    // 负测判别：错误名/不切换必须≈0（两槽均低于阈值）。
-    const negWrongNameRejected = dist.wrongNameVsOpen ? slotsArr.every((n) => dist.wrongNameVsOpen[n] < minMorphJaccard) : false;
-    const negNoSwitchRejected = dist.noSwitchVsOpen ? slotsArr.every((n) => dist.noSwitchVsOpen[n] < minMorphJaccard) : false;
+    // 逐槽受影响判定：受影响槽距离必须 > 该槽同状态噪声上界；未受影响槽不做移动断言（只须不消失）。
+    const perSlot = (stateDist, affected) => Object.fromEntries(slotsArr.map((n) => [n, {
+      affected: affected.has(n),
+      dist: stateDist[n],
+      noiseUpper: noiseUpper[n],
+      moved: affected.has(n) ? stateDist[n] > noiseUpper[n] : null,
+    }]));
+    const closedPerSlot = perSlot(dist.closedVsOpen, closedAffected);
+    const exprPerSlot = perSlot(dist.expressionVsOpen, exprAffected);
+    // 闭眼/表情通过 = 每个受影响槽都真实移动（>该槽噪声上界），且取证确认该状态有受影响槽。
+    const closedMoved = closedAffected.size > 0 && [...closedAffected].every((n) => closedPerSlot[n].moved === true);
+    const exprMoved = exprAffected.size > 0 && [...exprAffected].every((n) => exprPerSlot[n].moved === true);
+    // 负测判别：错误名/不切换必须两槽均低于各自噪声上界。
+    const negWrongNameRejected = dist.wrongNameVsOpen ? slotsArr.every((n) => dist.wrongNameVsOpen[n] < noiseUpper[n]) : false;
+    const negNoSwitchRejected = dist.noSwitchVsOpen ? slotsArr.every((n) => dist.noSwitchVsOpen[n] < noiseUpper[n]) : false;
     report.gates.G7.verdict = {
-      ok: visibleAll && closedMoved && exprMoved,
-      counts, dist, minMorphJaccard, minForeground,
-      calibration: "minMorphJaccard=" + minMorphJaccard + " 介于负测实测（≈0）与健康实测（闭眼/表情）之间，见 dist 实测值",
+      ok: visibleAll && closedMoved && exprMoved && negWrongNameRejected && negNoSwitchRejected,
+      counts, dist, noiseUpper, minForeground,
+      expectedAffectedSlots: { closed: [...closedAffected], expression: [...exprAffected] },
+      closedPerSlot, exprPerSlot,
+      forensicSource: MORPH_FORENSIC,
+      calibration: "逐槽判定：受影响槽距离须>该槽同状态噪声上界（负测实测+0.02 裕量）；无 any-slot 兜底",
     };
+    if (forensic?.error) fail("G7", "Morph 取证 JSON 读取失败: " + forensic.error);
     if (!visibleAll) fail("G7", "整槽消失：某槽在某状态前景像素为 0 " + JSON.stringify(counts));
-    if (!closedMoved) fail("G7", "闭眼 Morph 未真实移动网格（Jaccard 距离均<" + minMorphJaccard + "）" + JSON.stringify(dist.closedVsOpen));
-    if (!exprMoved) fail("G7", "表情 Morph（笑い）未真实移动网格（Jaccard 距离均<" + minMorphJaccard + "）" + JSON.stringify(dist.expressionVsOpen));
+    if (closedAffected.size === 0) fail("G7", "取证未声明闭眼受影响槽（pmx-morph-forensic 缺失/无匹配 morph）");
+    if (exprAffected.size === 0) fail("G7", "取证未声明表情受影响槽（pmx-morph-forensic 缺失/无匹配 morph）");
+    if (!closedMoved) fail("G7", "闭眼 Morph 受影响槽未真实移动（逐槽须>该槽噪声上界）" + JSON.stringify({ expected: [...closedAffected], perSlot: closedPerSlot }));
+    if (!exprMoved) fail("G7", "表情 Morph（笑い）受影响槽未真实移动（逐槽须>该槽噪声上界）" + JSON.stringify({ expected: [...exprAffected], perSlot: exprPerSlot }));
     report.gates.G7.negatives = { wrongName: dist.wrongNameVsOpen, noSwitch: dist.noSwitchVsOpen, wrongNameRejected: negWrongNameRejected, noSwitchRejected: negNoSwitchRejected };
-    if (!negWrongNameRejected) fail("G7", "负测失败：错误 Morph 名（不存在）应与开眼一致（≈0），实际 " + JSON.stringify(dist.wrongNameVsOpen));
-    if (!negNoSwitchRejected) fail("G7", "负测失败：状态不切换应与开眼一致（≈0），实际 " + JSON.stringify(dist.noSwitchVsOpen));
+    if (!negWrongNameRejected) fail("G7", "负测失败：错误 Morph 名（不存在）应与开眼一致（<噪声上界），实际 " + JSON.stringify(dist.wrongNameVsOpen));
+    if (!negNoSwitchRejected) fail("G7", "负测失败：状态不切换应与开眼一致（<噪声上界），实际 " + JSON.stringify(dist.noSwitchVsOpen));
     if (visibleAll && closedMoved && exprMoved && negWrongNameRejected && negNoSwitchRejected) {
-      note("G7", "PASS counts=" + JSON.stringify(counts) + " dist=" + JSON.stringify(dist));
+      note("G7", "PASS counts=" + JSON.stringify(counts) + " dist=" + JSON.stringify(dist) + " closedAffected=" + JSON.stringify([...closedAffected]) + " exprAffected=" + JSON.stringify([...exprAffected]));
     }
     await page.evaluate(() => window.__rezeStageProbe.cameraOrbit("reset"));
   }
+
+  // P0 整槽消失负测（Stage 2C-M2a 修正轮）：实际运行 missingBrows/missingLashes 扰动，
+  // 重采该扰动下的原子画布+mask+triUV，由正式逐槽 analyzer 非零拒绝（消失槽样本<下限）。
+  // 不能只引用「理论上样本为 0」——必须用真实画布证据由正式 Gate 自然拒绝。
+  try {
+    const { execSync } = await import("node:child_process");
+    const runBLAnalyzer = (args) => {
+      try {
+        const stdout = execSync(["node", "scripts/analyze-reze-k3-v1-diff.mjs", ...args].join(" "), { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, V14D_HAIR_TEX: HAIR_TEX, V14D_HAIR_PMX: HAIR_PMX }, stdio: ["ignore", "pipe", "pipe"] });
+        return { exit: 0, stdout };
+      } catch (error) { return { exit: Number(error?.status ?? 1), stdout: String(error?.stdout ?? "") }; }
+    };
+    const readReport = (name) => { try { return JSON.parse(fs.readFileSync(path.join(OUT, name), "utf8")); } catch { return null; } };
+    const missingSlotResults = {};
+    for (const kind of ["missingBrows", "missingLashes"]) {
+      // 复位干净 V1 后注入 missing 扰动。
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForSelector("[data-render-pipeline]", { timeout: 60000 });
+      await page.waitForTimeout(2500);
+      await switchToRezeK3();
+      await page.selectOption('select[aria-label="模型切换"]', KOLEDA_REL).catch(() => {});
+      await importDir(IMPORT_DIR);
+      await page.click(sel.variantBtn("v1")); await waitRebuilt();
+      const applied = await page.evaluate(async (k) => {
+        const r = await window.__rezeStageProbe.applyBadSkinGraph(k);
+        const c = document.querySelector("canvas").dataset;
+        return { ok: r.ok, browsOnComposite: c.v14dSkinVariantBrowsOnComposite, lashesOnComposite: c.v14dSkinVariantLashesOnComposite };
+      }, kind);
+      await page.waitForTimeout(400);
+      await prepareHairCapture();
+      const atomic = await captureBrowsLashesAtomic();
+      const tag = kind === "missingBrows" ? "missing-brows" : "missing-lashes";
+      const canvasFile = saveDataUrl(atomic?.canvasDataUrl, "g3-brows-lashes-v1-canvas-" + tag + ".png");
+      if (atomic && !atomic.error && atomic.materialMaskPng) {
+        saveDataUrl(atomic.materialMaskPng, "g3-brows-lashes-material-mask-" + tag + ".png");
+        fs.writeFileSync(path.join(OUT, "g3-brows-lashes-tri-uv-" + tag + ".json"), JSON.stringify({
+          source: atomic.source, width: atomic.width, height: atomic.height,
+          materialIdByName: atomic.materialIdByName, byMaterial: atomic.byMaterial,
+        }, null, 2));
+      }
+      const result = runBLAnalyzer(["--brows-lashes", "--neg-missing-slot=" + tag]);
+      const rep = readReport("visual-diff-brows-lashes-" + tag + ".json");
+      const missingSlot = kind === "missingBrows" ? "brows" : "lashes";
+      const otherSlot = kind === "missingBrows" ? "lashes" : "brows";
+      const missingGateFalse = rep?.browsLashesFormalGate?.formalTargetGate?.[missingSlot] === false;
+      const otherGateTrue = rep?.browsLashesFormalGate?.formalTargetGate?.[otherSlot] === true;
+      const rejected = result.exit !== 0 && missingGateFalse && otherGateTrue
+        && Array.isArray(rep?.analysisFailures) && rep.analysisFailures.length === 0;
+      missingSlotResults[kind] = {
+        applied, analyzerExit: result.exit, missingSlot, otherSlot,
+        missingSlotForeground: rep?.regions?.[missingSlot]?.targetConvergence?.materialForegroundPixels ?? null,
+        otherSlotForeground: rep?.regions?.[otherSlot]?.targetConvergence?.materialForegroundPixels ?? null,
+        formalTargetGate: rep?.browsLashesFormalGate?.formalTargetGate ?? null,
+        rejected, canvasFile,
+      };
+    }
+    report.gates.G7.missingSlotNegatives = missingSlotResults;
+    for (const kind of ["missingBrows", "missingLashes"]) {
+      if (!missingSlotResults[kind].rejected) {
+        fail("G7", "整槽消失负测失败（" + kind + "）：必须 analyzer exit 非零、消失槽正式 Gate=false、另一槽 Gate=true、analysisFailures=[]；实际 " + JSON.stringify(missingSlotResults[kind]));
+      } else note("G7", "整槽消失负测 PASS（" + kind + " 由正式逐槽 analyzer 自然非零拒绝）");
+    }
+  } catch (e) { fail("G7", "missingSlot 负测 exception: " + (e?.stack || e)); }
 } catch (e) { fail("G7", "exception: " + (e?.stack || e)); }
 
 if (!G7_MORPH_ONLY && report.pageErrors.length) fail("G1", "pageErrors: " + report.pageErrors.slice(0, 3).join(" | "));

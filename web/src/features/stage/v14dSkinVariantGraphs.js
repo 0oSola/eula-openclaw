@@ -232,7 +232,8 @@ export function perturbV14dSkinVariantStyleGroups(groups, kind) {
     // "V14D Brows Lashes V1 Composite"（override/hair helper 正常应用，与生产 V1 同构），
     // 仅在 graph.tags 注入专用 fault tag "v14d-wrong-alpha-fault"。引擎 compile 按该 tag
     // 给 prelude 传 v14dAlphaFault=true，WGSL 在 hashed discard 前把 alpha 乘固定故障因子
-    // （0.05），真实剔除部分片元、coverage/边界环收缩。正常 graph 无此 tag，alpha 语义不变。
+    // V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR（权威导出，当前 1e-7），真实剔除部分片元、
+    // coverage/边界环收缩。正常 graph 无此 tag，alpha 语义不变。
     return groups.map((g) =>
       g.id === "v14d-skin-variant-brows-lashes"
         ? { ...g, graph: { ...g.graph, tags: [...(g.graph.tags ?? []), V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_TAG] } }

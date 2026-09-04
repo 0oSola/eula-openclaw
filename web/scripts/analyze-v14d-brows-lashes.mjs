@@ -11,7 +11,8 @@
 //   --neg-wrongtint        读 wrongtint 画布，错误 tint 拉远两槽目标，两槽正式 Gate=false
 //   --neg-swap-slot-target 交换 Brows↔Lashes 的 target/triUV 归属，analyzer exit 非零
 //   --neg-wrong-alpha      读 wrongAlpha 画布（专用 fault tag → 引擎 prelude 在 hashed
-//                          discard 前把 alpha 乘固定故障因子 0.05，真实剔除片元、
+//                          discard 前把 alpha 乘固定故障因子
+//                          V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR（权威导出，当前 1e-7），真实剔除片元、
 //                          coverage/边界环收缩），边界环 lashesAlphaEdge.gate 必须自然
 //                          false（真实像素/coverage 证据，非配置/阈值自证）
 // 任一正式判定失败 → exit 1（swap 负测模式也保留非零以证明阻断）；报告写
@@ -53,7 +54,7 @@ const THRESHOLDS = {
   // 前景掩码的 4-邻域形态学边界环（屏幕空间边界像素集合），实测非空（Lashes≈130 边界
   // 像素/特写帧），在该边界环上核对黑边（lum<25）/白边（lum>235）/整槽消失三类风险。
   // wrongAlpha（专用 fault tag → 引擎 prelude 在 hashed discard 前把 alpha 乘故障因子
-  // 0.05）真实剔除部分片元：production 前景 mask 收缩、边界环像素数与边缘色分布改变
+  // 权威 1e-7）真实剔除部分片元：production 前景 mask 收缩、边界环像素数与边缘色分布改变
   // → 边界环 Gate 自然非零拒绝（真实 coverage/像素证据，非阈值/配置自证）。
   lashesEdgeMae: 120,             // 边缘区 V1 对 canonical 的 MAE 上限（保留作颜色误差参考）
   minEdgeBoundaryPixels: 8,       // 边界环最小像素数（整槽消失/极端裁切→环塌缩被拒）
@@ -274,7 +275,7 @@ function slotIdentityTarget({ slot, materialName, materialId, capture, materialM
 // Lashes 透明边缘专门 Gate（Stage 2C-M2a 第二次修正轮：屏幕空间边界环口径）。
 // 分母 = production material-ID 前景掩码的 4-邻域形态学边界环（前景像素中至少一个
 // 4-邻邻居不是该槽前景）。该环非空且随裁切口径变化：wrongAlpha（专用 fault tag → 引擎
-// prelude 在 discard 前把 alpha 乘故障因子 0.05）真实剔除片元、mask 收缩、边界环像素数
+// prelude 在 discard 前把 alpha 乘故障因子 权威 1e-7）真实剔除片元、mask 收缩、边界环像素数
 // 与边缘色分布改变 → 自然拒绝。
 // 黑边=边界环暗像素(lum<25)占比超限；白边=亮像素(lum>235)占比超限；整槽消失=环塌缩
 // （edgeBoundary<minEdgeBoundaryPixels 或 lashesForeground=0）。
@@ -359,6 +360,10 @@ export async function runBrowsLashesAnalysis(argv) {
   const negWrongTint = argv.includes("--neg-wrongtint");
   const negSwap = argv.includes("--neg-swap-slot-target");
   const negWrongAlpha = argv.includes("--neg-wrong-alpha");
+  // P0 整槽消失负测（Stage 2C-M2a 修正轮）：--neg-missing-slot=missing-brows|missing-lashes
+  // 读取该扰动下独立采集的画布/mask/triUV，消失槽样本<下限 → 正式逐槽 Gate 非零拒绝。
+  const missingSlotArg = argv.find((a) => a.startsWith("--neg-missing-slot="));
+  const negMissingSlot = missingSlotArg ? missingSlotArg.slice("--neg-missing-slot=".length) : null;
   // 标定模式：读 --tint-pair=FILE 指定的 second-redMae 画布作为 V1（健康恒等 tint 的
   // 独立重复采集），通道指纹只记录 baselineShift 证据、不触发失败。用于 P1 阈值标定。
   const tintPairArg = argv.find((a) => a.startsWith("--tint-pair="));
@@ -373,23 +378,28 @@ export async function runBrowsLashesAnalysis(argv) {
     ? path.join(OUT, "g3-brows-lashes-tri-uv-wrongtint.json")
     : negWrongAlpha
     ? path.join(OUT, "g3-brows-lashes-tri-uv-wrong-alpha.json")
+    : negMissingSlot
+    ? path.join(OUT, "g3-brows-lashes-tri-uv-" + negMissingSlot + ".json")
     : path.join(OUT, "g3-brows-lashes-tri-uv.json");
+  const V1_MISS = negMissingSlot ? path.join(OUT, "g3-brows-lashes-v1-canvas-" + negMissingSlot + ".png") : V1;
+  const MASK_MISS = negMissingSlot ? path.join(OUT, "g3-brows-lashes-material-mask-" + negMissingSlot + ".png") : MASK;
   const REPORT = calibrationMode
     ? path.join(OUT, "visual-diff-brows-lashes-" + path.basename(tintPairFile, ".png").replace(/^g3-brows-lashes-/, "").replace(/-canvas$/, "") + ".json")
     : negWrongTint
     ? path.join(OUT, "visual-diff-brows-lashes-wrongtint.json")
     : negSwap ? path.join(OUT, "visual-diff-brows-lashes-swap-slot-target.json")
     : negWrongAlpha ? path.join(OUT, "visual-diff-brows-lashes-wrong-alpha.json")
+    : negMissingSlot ? path.join(OUT, "visual-diff-brows-lashes-" + negMissingSlot + ".json")
     : path.join(OUT, "visual-diff-brows-lashes.json");
   const out = { width: 0, height: 0, thresholds: THRESHOLDS, regions: {}, verdict: {}, failures: [], analysisFailures: [] };
   try {
-    if (!fs.existsSync(ORIG) || !fs.existsSync(V1) || !fs.existsSync(MASK) || !fs.existsSync(TRIUV)) {
-      out.analysisFailures.push("missing artifacts: " + [ORIG, V1, MASK, TRIUV].filter((p) => !fs.existsSync(p)).join(","));
+    if (!fs.existsSync(ORIG) || !fs.existsSync(V1_MISS) || !fs.existsSync(MASK_MISS) || !fs.existsSync(TRIUV)) {
+      out.analysisFailures.push("missing artifacts: " + [ORIG, V1_MISS, MASK_MISS, TRIUV].filter((p) => !fs.existsSync(p)).join(","));
       throw new Error("missing artifacts");
     }
     const origImage = await loadRaw(ORIG);
-    const v1Image = await loadRaw(V1);
-    const materialMask = await loadRaw(MASK);
+    const v1Image = await loadRaw(V1_MISS);
+    const materialMask = await loadRaw(MASK_MISS);
     const capture = JSON.parse(fs.readFileSync(TRIUV, "utf8"));
     const W = origImage.width, H = origImage.height;
     out.width = W; out.height = H;
@@ -419,8 +429,9 @@ export async function runBrowsLashesAnalysis(argv) {
       if (!converged) out.failures.push(slot + " 未向权威 face_d 恒等目标收敛 v1Mae=" + conv.v1Mae + " p95=" + conv.p95?.v1 + " targetBinding=" + (conv.targetBinding?.consistent ? "consistent" : "mismatch") + " metricFailures=" + (conv.metricFailureReasons?.join(",") || "none"));
     }
     // 逐槽 UV 取证图 + 差异图（P1 视觉产物）：original/V1/target/diff/alpha-edge。
-    // 把脸部近景 ROI 的该槽像素抠出成四张图，便于审查。
-    try {
+    // 把脸部近景 ROI 的该槽像素抠出成四张图，便于审查。整槽消失负测（--neg-missing-slot）
+    // 跳过此可视化（消失槽 mask 像素数与画布尺寸不一致会污染 artifact，判定只用正式 Gate）。
+    if (!negMissingSlot) try {
       for (const { slot, materialName } of V14D_BROWS_LASHES_SLOTS) {
         const materialId = slot === "brows" ? browsId : lashesId;
         const info = slotInfo(capture, materialName);
@@ -452,13 +463,16 @@ export async function runBrowsLashesAnalysis(argv) {
         out.regions[slot].artifacts = { original: "g3-" + slot + "-original.png", v1: "g3-" + slot + "-v1.png", target: "g3-" + slot + "-target.png", diff: "g3-" + slot + "-diff.png" };
       }
     } catch (e) { out.artifactError = String(e); }
-    // Lashes 透明边缘专门 Gate。
-    const alphaEdge = lashesAlphaEdge({ capture, materialMask, lashesId, v1Image, faceTex, W, H, faceRoi });
-    out.lashesAlphaEdge = alphaEdge;
-    if (alphaEdge.error) out.failures.push("lashes alpha-edge 判定不可用: " + alphaEdge.error);
-    else if (alphaEdge.gate !== true) out.failures.push("lashes 透明边缘 Gate 未通过 " + (alphaEdge.failures?.join(";") || ""));
+    // Lashes 透明边缘专门 Gate。整槽消失负测下消失槽无前景（样本<下限已由逐槽 Gate 拒绝），
+    // alpha-edge 在 missingLashes 下分母塌缩属预期；为聚焦「逐槽消失」单变量，跳过该可视化 Gate。
+    if (!negMissingSlot) {
+      const alphaEdge = lashesAlphaEdge({ capture, materialMask, lashesId, v1Image, faceTex, W, H, faceRoi });
+      out.lashesAlphaEdge = alphaEdge;
+      if (alphaEdge.error) out.failures.push("lashes alpha-edge 判定不可用: " + alphaEdge.error);
+      else if (alphaEdge.gate !== true) out.failures.push("lashes 透明边缘 Gate 未通过 " + (alphaEdge.failures?.join(";") || ""));
+    }
     // Lashes alpha-edge 证据图：按 face_d alpha 三区着色（核心=绿/边缘=黄/透明区=红）。
-    try {
+    if (!negMissingSlot) try {
       const rw = faceRoi.x1 - faceRoi.x0, rh = faceRoi.y1 - faceRoi.y0;
       const ePx = Buffer.alloc(rw * rh * 4);
       const info = slotInfo(capture, "Lashes");
@@ -482,15 +496,15 @@ export async function runBrowsLashesAnalysis(argv) {
       out.lashesAlphaEdge.artifact = "g3-lashes-alpha-edge.png";
     } catch (e) { out.lashesAlphaEdge.artifactError = String(e); }
 
-    // 正式组合 Gate。
+    // 正式组合 Gate。整槽消失负测不纳入 alpha-edge（分母塌缩属预期，单变量聚焦逐槽消失）。
     const browsPass = out.verdict.browsTargetConverged === true;
     const lashesPass = out.verdict.lashesTargetConverged === true;
     const formalTargetGate = { brows: browsPass, lashes: lashesPass };
     out.browsLashesFormalGate = {
       authority: "material-id+atomic-triuv+identity-target-convergence+lashes-alpha-edge",
-      pass: browsPass && lashesPass && out.lashesAlphaEdge?.gate === true,
+      pass: browsPass && lashesPass && (negMissingSlot ? true : out.lashesAlphaEdge?.gate === true),
       formalTargetGate,
-      lashesAlphaEdgeGate: out.lashesAlphaEdge?.gate === true,
+      lashesAlphaEdgeGate: negMissingSlot ? null : (out.lashesAlphaEdge?.gate === true),
     };
     for (const slot of ["brows", "lashes"]) {
       if (formalTargetGate[slot] === true) continue;

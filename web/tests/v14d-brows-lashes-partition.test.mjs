@@ -12,6 +12,7 @@ import {
   V14D_LASHES_MATERIAL_NAME,
   V14D_BROWS_LASHES_TINT,
   V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_TAG,
+  V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR,
 } from "../src/features/stage/v14dAuthority.js";
 
 function fakeGroups() {
@@ -114,6 +115,25 @@ test("negative wrongBrowsLashesAlpha: 专用 fault tag 注入（alpha 故障因�
   // 正常 V1 不含 fault tag（默认入口/普通 V1 不可达）。
   const normal = v1.find((g) => g.id === "v14d-skin-variant-brows-lashes");
   assert.ok(!normal.graph.tags.includes(V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_TAG), "正常 V1 graph 不得含 fault tag");
+});
+
+test("wrongAlpha 故障因子唯一权威：patch 脚本从 v14dAuthority 导入生成，不复制字面量", async () => {
+  // Stage 2C-M2a 修正轮 P1：V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR 是 wrongAlpha 故障
+  // 因子的唯一权威。patch-reze-engine.mjs 必须动态导入该导出并据其生成引擎 literal，
+  // 禁止在脚本内手写数字字面量（否则 authority 改值后 patch 漂移）。
+  assert.equal(typeof V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR, "number");
+  assert.ok(Number.isFinite(V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR));
+  assert.ok(V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR > 0 && V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR < 1e-6,
+    "故障因子须低于 hashed clamp 下限 1e-6 才真实剔除片元");
+  const fs = await import("node:fs");
+  const patchSrc = fs.readFileSync(new URL("../scripts/patch-reze-engine.mjs", import.meta.url), "utf8");
+  // patch 脚本必须引用权威导出（生成值来自 authority），而非手写数字字面量。
+  assert.ok(patchSrc.includes("V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR"), "patch 必须引用权威导出");
+  assert.ok(/import\(pathToFileURL\(V14D_AUTHORITY_PATH\)\.href\)[\s\S]*V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR|V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR[\s\S]*= await import/.test(patchSrc),
+    "patch 必须从 v14dAuthority.js 动态导入故障因子");
+  // 断言故障因子 literal 由权威值拼接生成（V14D_WRONG_ALPHA_FAULT_FACTOR_LITERAL），
+  // 不出现脱离 authority 的独立硬编码数字。
+  assert.ok(patchSrc.includes("V14D_WRONG_ALPHA_FAULT_FACTOR_LITERAL"), "patch 必须用权威值拼接 fault literal");
 });
 
 test("negative wrongGraph: all graph names replaced with non-authoritative", () => {
