@@ -333,14 +333,22 @@
 
 - 英文机器名：`v14d-display-chain-commit-boundary`；诊断接口 `installDisplayChainTrace`、`setDisplayChainTraceCapture`、`captureDisplayChainState`。
 - 含义：材质图编译/安装、样式组重绑只是显示链前置状态；从真实 draw-call 的 `setPipeline`/`setBindGroup`/`drawIndexed`，到场景 HDR 目标、resolve、composite/tone mapping 和最终 canvas 的命令提交，才构成一次可见变化。冻结 render loop 时，apply 成功而没有下一次 `renderFrame`/queue submission，画布可以继续保持旧帧。
-- 允许用法：在显式 `?v14dAcceptanceProbe=1` 下，以同一 captureId/frame 记录 compile/install pipeline、实际 draw pipeline、bind group、draw range、HDR 和最终 canvas，定位首个预期变化消失的边界。
+- 允许用法：在显式 `?v14dAcceptanceProbe=1` 下，以 `pairId` 关联 identity、identity-control、sentinel 对照；每一侧使用唯一 `captureId/frame` 记录 compile/install pipeline、实际 draw pipeline、bind group、draw range、HDR 和最终 canvas，定位首个预期变化消失的边界。报告的 `displayChain`/`stageDeltas` 必须把 HDR resolve 槽差异、composite pipeline/gamma、最终 canvas 和非目标噪声基线落盘，并硬断言 `pageErrors`、`failedRequests`、`httpBad` 均为 0。
 - 禁止用法：不得把该诊断接缝启用到默认生产入口；不得用它改 graph 公式、正式视觉阈值、alpha analyzer、灯光、相机、PMX/VMD 或播放链。
-- 路由影响：只影响 Reze WebGPU 验收诊断与显示链故障分类；完整 Brows/Lashes 逐槽、透明边缘和动态 Morph Gate 仍按各自契约验收。完整定义见 `workflow/concepts/v14d-display-chain-commit-boundary.zh-CN.md`。
+- 路由影响：只影响 Reze WebGPU 验收诊断与显示链故障分类；健康回放的 H1–H5 结果必须由实际证据动态产生；`--fault-no-render` 只确认无新提交帧，缺少 observed sentinel draw 时 H2–H5 必须为 `not-evaluated`。完整 Brows/Lashes 逐槽、透明边缘和动态 Morph Gate 仍按各自契约验收。完整定义见 `workflow/concepts/v14d-display-chain-commit-boundary.zh-CN.md`。
 
 # V14D 编译/安装非最终显示证明
 
 - 英文机器名：`v14d-compile-install-not-display-proof`。
 - 含义：graph/WGSL 编译成功和 WebGPU pipeline 安装成功，只证明着色器阶段可建立；它不证明目标 draw 实际绑定新 pipeline，也不证明 HDR resolve、后续 composite/tone mapping 或最终 canvas 已使用该结果。
 - 允许用法：把 compile/install 作为必要前置证据，再分别核对实际 `setPipeline`、draw range/bind group、pre-tonemap HDR、resolve/composite 与 canvas 差异；在冻结帧场景使用一次明确的零增量 render 提交完成显示链。
-- 禁止用法：不得以 pipeline 身份变化、OnComposite 计数、截图存在、配置完整或放宽 analyzer 阈值包装 canvas no-effect 为通过。
+- 禁止用法：不得以 pipeline 身份变化、OnComposite 计数、截图存在、配置完整或放宽 analyzer 阈值包装“最终画布未达到拒绝阈值且没有实际 render 证据”为通过。
 - 路由影响：当 `wrongTint` 已进入 graph/WGSL/安装但最终画布无变化时，优先路由到显示链提交边界诊断；只有证明 draw 与目标均已变化后，才进入 tone mapping、采集或视觉公式调查。
+
+# V14D 显示链绘制身份唯一性
+
+- 英文机器名：`v14d-display-chain-draw-identity`；相关字段 `drawIdentityKey`、`drawIndex`、`drawOrder`、`matchStatus`。
+- 含义：生产 draw 与实际 `drawIndexed` 必须按 `materialName`、`groupId`、`type`、`count`、`firstIndex` 及顺序建立可审计一一对应；生产 `drawIndex` 与实际 `drawOrder` 分开记录。
+- 允许用法：Brows/Lashes 各恰好一个唯一匹配，`drawIndex` 非空，实际 pipeline 等于该槽 compile/install pipeline，重复 range 或未匹配必须机器失败。
+- 禁止用法：不得按顺序猜配、用目标 mask 扩大掩盖 unmatched、把 `drawOrder` 强行当作生产 `drawIndex`，或用身份核对替代 HDR/canvas 证据。
+- 路由影响：只影响显式 acceptance probe 的显示链 trace 与 repro 报告；完整定义见 `workflow/concepts/v14d-display-chain-draw-identity.zh-CN.md`。

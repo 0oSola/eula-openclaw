@@ -70,9 +70,13 @@ _Avoid_: 当前工作区会话、最近历史会话
 _Avoid_: 单一 JSONL 文件扫描、项目目录发现
 
 **显示链提交边界**：
-材质图编译/安装和 draw-call 绑定状态发生变化后，必须经过下一次真实渲染帧的命令提交、HDR resolve、合成/色调映射和画布呈现，变化才成为最终可见输出的边界。冻结渲染循环时，前置状态可以已经更新而画布仍是上一帧。
+材质图编译/安装和 draw-call 绑定状态发生变化后，必须经过下一次真实渲染帧的命令提交、HDR resolve、合成/色调映射和画布呈现，变化才成为最终可见输出的边界。冻结渲染循环时，前置状态可以已经更新而画布仍是上一帧。显示链报告以 `pairId` 关联对照、以每侧唯一 `captureId/frame` 绑定请求与 observed render，并在 `displayChain/stageDeltas` 中分别保存实际 draw、HDR resolve 槽、composite 和最终 canvas 证据。
 _Avoid_: 把 graph/WGSL/pipeline 编译成功直接当作最终画布已更新
 
 **编译安装非最终显示证明**：
-编译与安装只证明着色器和管线阶段成功；它不证明目标 draw 实际使用了新管线，也不证明中间 HDR、resolve、后续合成或最终 canvas 已发生预期变化。
+编译与安装只证明着色器和管线阶段成功；它不证明目标 draw 实际使用了新管线，也不证明中间 HDR、resolve、后续合成或最终 canvas 已发生预期变化。健康结论必须由实际阶段差异和零错误计数共同支撑；无新帧故障只能确认提交边界缺失，不能把旧 trace 当作其他假设的证伪。
 _Avoid_: 用 pipeline 安装日志、材质计数或 analyzer 阈值替代显示链证据
+
+**显示链绘制身份唯一性**：
+生产 draw 与实际 `drawIndexed` 必须按材质名、分组、类型、count、firstIndex 和顺序建立唯一对应；生产 `drawIndex` 与实际 `drawOrder` 分开记录，重复或未匹配必须机器拒绝。
+_Avoid_: 按顺序猜配、把生产索引强行当作实际顺序，或用 draw 身份证据替代 HDR/resolve/canvas 证据

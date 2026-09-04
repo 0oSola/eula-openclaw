@@ -78,6 +78,10 @@ import {
   type V14dNormalizedImage,
 } from "@/features/stage/v14dColorBaseline";
 import {
+  findV14dDisplayChainDrawMatch,
+  makeV14dDisplayChainDrawIdentityKey,
+} from "@/features/stage/v14dDisplayChainEvidence.mjs";
+import {
   V14D_FACE_MATERIAL_NAME,
   V14D_FACE_BASE_TEXTURE_NAME,
   V14D_FACE_STATIC_AUTHORITY,
@@ -3060,11 +3064,15 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       materialName: string | null;
       type: string;
       drawIndex: number | null;
+      drawOrder: number;
       count: number;
       firstIndex: number;
       groupId: string | null;
       pipeline: unknown;
       bindGroup: unknown;
+      matchStatus: "unique" | "ambiguous" | "unmatched";
+      candidateIndices: number[];
+      drawIdentityKey: string;
     };
     type V14dDisplayTraceFrame = {
       schemaVersion: 1;
@@ -3160,8 +3168,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
         if (!trace || !pass || typeof pass !== "object") return drawMaterials.call(this, pass, inst, type);
         let pipeline: unknown = null;
         let materialBindGroup: unknown = null;
-        let nextDrawIndex = 0;
-        const instance = inst as { name?: string; drawCalls?: { type?: string; materialName?: string; count?: number; firstIndex?: number; groupId?: string | null }[] };
+        const instance = inst as { name?: string; drawCalls?: { type?: string; materialName?: string; count?: number; firstIndex?: number; groupId?: string | null; drawIndex?: number | null }[] };
         const drawCalls = instance.drawCalls ?? [];
         const instanceName = String(instance.name ?? "unknown");
         const wrappedPass = new Proxy(pass as object, {
@@ -3184,27 +3191,39 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             if (property === "drawIndexed") {
               return (count: number, ...args: unknown[]) => {
                 const firstIndex = Number(args[1] ?? 0);
-                let drawIndex = -1;
-                for (let index = nextDrawIndex; index < drawCalls.length; index += 1) {
-                  const draw = drawCalls[index];
-                  if (draw.type === type && draw.count === count && draw.firstIndex === firstIndex) {
-                    drawIndex = index;
-                    nextDrawIndex = index + 1;
-                    break;
-                  }
-                }
-                const draw = drawIndex >= 0 ? drawCalls[drawIndex] : null;
-                trace.draws.push({
+                const match = findV14dDisplayChainDrawMatch(drawCalls, { type: String(type), count, firstIndex });
+                const draw = match.status === "unique" ? match.draw : null;
+                const drawIndex = match.status === "unique"
+                  ? (draw?.drawIndex == null
+                    ? match.index
+                    : Number.isInteger(draw.drawIndex) ? draw.drawIndex : null)
+                  : null;
+                const drawOrder = trace.draws.length;
+                const matchStatus = match.status as V14dDisplayTraceDraw["matchStatus"];
+                const observedDraw = {
                   instanceName,
                   materialName: draw?.materialName ?? null,
                   type: String(type),
-                  drawIndex: drawIndex >= 0 ? drawIndex : null,
+                  drawIndex,
+                  drawOrder,
                   count,
                   firstIndex,
                   groupId: draw?.groupId ?? null,
                   pipeline,
                   bindGroup: materialBindGroup,
-                });
+                  matchStatus,
+                  candidateIndices: match.candidateIndices,
+                  drawIdentityKey: makeV14dDisplayChainDrawIdentityKey({
+                    materialName: draw?.materialName ?? null,
+                    groupId: draw?.groupId ?? null,
+                    type: String(type),
+                    count,
+                    firstIndex,
+                    drawIndex,
+                    drawOrder,
+                  }),
+                };
+                trace.draws.push(observedDraw);
                 return (method as (...callArgs: unknown[]) => unknown).call(targetPass, count, ...args);
               };
             }
@@ -3350,6 +3369,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
           renderLoopRunningBefore: wasRunning,
           renderLoopRunningAfter: fields.animationFrameId !== null && fields.animationFrameId !== undefined,
           currentFrame: Number.isFinite(Number(progress?.current)) ? Number(progress.current) * V14D_HAIR_AUTHORITATIVE_CAPTURE.fps : null,
+          materialIdByName,
           graphName: install?.group?.graph?.name ?? null,
           tint: install?.group?.graph?.nodes?.find((node) => node.id === "v14d_brows_lashes_tint")?.inputs?.color ?? null,
           signature: install?.signature ?? null,
