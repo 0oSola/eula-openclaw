@@ -1489,58 +1489,99 @@ try {
   const morphProbe = await page.evaluate(async ({ slots }) => {
     const stage = window.__rezeStageProbe;
     const model = stage?.modelRef?.current ?? null;
-    if (!stage || !stage.captureHairTriUv || !model) return { error: "probe/model unavailable" };
-    const captureSlotPixels = async () => {
+    const engine = stage?.engineRef?.current ?? null;
+    if (!stage || !stage.captureHairTriUv || !model || !engine) return { error: "probe/model/engine unavailable" };
+    // ── 方案 A（Stage 2C-M2a 裁定）：临时 clip 挂起，仅显式 acceptance probe 使用。
+    // 权威 pose VMD 仅含 frame120 的「まばたき=1」单关键帧（clamp-to-first 使所有帧=1，
+    // 模型恒闭眼），且每次 renderFrame/update 重采样 VMD clip 覆写手动 morph 权重。
+    // G7 职责收敛为「Brows/Lashes 材质在真实 PMX Morph 顶点变形下保持正确绑定/可见性/
+    // 逐槽身份」，不承担 VMD 0→1 插值资产证明（后者由 G5 的 load→play→pause→seek→end 覆盖）。
+    // 流程：保存原态 → 暂停并固定 frame120/相机 → 挂起 clip 重采样 → 正常权重 0→1
+    // 逐状态真实 render/flush/capture → finally 恢复 morph 权重、clip 挂起、VMD 时间/
+    // 播放态、相机、render-loop。正常权重 0→1，不用超权重。
+    const saved = {
+      clipSuspended: model.isClipApplySuspended?.() ?? false,
+      playing: Boolean(model.getAnimationProgress?.()?.playing),
+      seconds: Number(model.getAnimationProgress?.()?.current) || 0,
+    };
+    const closedNames = (stage.selectClosedEyeMorphNames?.(model.getMorphing().morphs.map((m) => m.name))) || [];
+    const exprNames = (stage.selectExpressionMorphNames?.(model.getMorphing().morphs.map((m) => m.name))) || [];
+    if (!closedNames.length) return { error: "no closed-eye morph (まばたき) found" };
+    if (!exprNames.length) return { error: "no expression morph (笑い) found" };
+    const renderObserved = {};
+    // 逐槽证据：material-mask 前景像素集合（mask Jaccard + 整槽消失）+ 受影响槽逐三角
+    // 质心位移（闭眼/表情主要是垂直位移，Lashes mask 集合常不变 → 质心是几何位置证据）。
+    const captureSlotEvidence = async (label) => {
       const raw = await stage.captureHairTriUv(slots);
       if (!raw || raw.error) return { error: raw?.error || "capture failed" };
+      renderObserved[label] = { captureId: raw.captureId ?? null, frame: raw.captureEvidence?.pixel?.currentFrame ?? null };
       const img = new Image();
       await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = raw.materialMaskPng; });
       const cv = document.createElement("canvas"); cv.width = raw.width; cv.height = raw.height;
       const cx = cv.getContext("2d"); cx.drawImage(img, 0, 0);
       const px = cx.getImageData(0, 0, raw.width, raw.height).data;
       const slotPixels = {};
+      const triCentroids = {};
       for (const name of slots) {
         const id = raw.materialIdByName?.[name];
         const list = [];
         if (Number.isInteger(id) && id > 0) { for (let p = 0; p < raw.width * raw.height; p += 1) { const i = p * 4; if (px[i] !== 0 && px[i + 1] === id) list.push(p); } }
         slotPixels[name] = list;
+        // 逐三角质心（union mask：triId>0 的像素归属该三角，质心=该三角屏幕投影中心）。
+        const bm = raw.byMaterial?.[name];
+        const triId = bm?.triId ? Array.from(bm.triId) : null;
+        if (triId) {
+          const sums = new Map();
+          for (let p = 0; p < raw.width * raw.height; p += 1) { const t = triId[p]; if (t > 0) { const s = sums.get(t) || { x: 0, y: 0, n: 0 }; s.x += p % raw.width; s.y += Math.floor(p / raw.width); s.n += 1; sums.set(t, s); } }
+          const cents = [];
+          for (const [t, s] of sums) cents.push({ t, x: s.x / s.n, y: s.y / s.n });
+          cents.sort((a, b) => a.t - b.t);
+          triCentroids[name] = cents;
+        }
       }
-      return { slotPixels, width: raw.width, height: raw.height };
+      return { slotPixels, triCentroids, width: raw.width, height: raw.height };
     };
-    const allMorphNames = model.getMorphing().morphs.map((m) => m.name);
-    const closedNames = (stage.selectClosedEyeMorphNames?.(allMorphNames)) || [];
-    const exprNames = (stage.selectExpressionMorphNames?.(allMorphNames)) || [];
-    if (!closedNames.length) return { error: "no closed-eye morph (まばたき) found" };
-    if (!exprNames.length) return { error: "no expression morph (笑い) found" };
     const settle = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    // 状态 A：开眼基线（权威 pose 默认即开眼，所有权 0）。
-    const openEye = await captureSlotPixels();
-    // 状态 B：闭眼（正常权威权重 0→1，写まばたき=1；VMD 采样在原子采集冻结期被暂停，
-    // setMorphWeight 立即生效于蒙皮顶点）。
-    for (const name of closedNames) model.setMorphWeight(name, 1);
-    await settle();
-    const closedEye = await captureSlotPixels();
-    for (const name of closedNames) model.setMorphWeight(name, 0);
-    await settle();
-    // 状态 C：表情（非眨眼，笑い=1）。
-    for (const name of exprNames) model.setMorphWeight(name, 1);
-    await settle();
-    const expression = await captureSlotPixels();
-    for (const name of exprNames) model.setMorphWeight(name, 0);
-    await settle();
-    // 负测 1：错误 Morph 名（不存在的 morph）→ setMorphWeight 无效果，前景集合应≈开眼。
-    model.setMorphWeight("__nonexistent_morph__", 1);
-    await settle();
-    const wrongName = await captureSlotPixels();
-    // 负测 2：状态不切换（重复开眼基线，不写任何 morph）→ 前景集合应≈开眼。
-    const noSwitch = await captureSlotPixels();
-    return { openEye, closedEye, expression, wrongName, noSwitch, closedEyeMorphs: closedNames, expressionMorphs: exprNames };
+    const setW = (names, w) => { for (const n of names) model.setMorphWeight(n, w); };
+    try {
+      model.pause();
+      model.setClipApplySuspended?.(true);
+      setW(closedNames, 0); setW(exprNames, 0);
+      await settle();
+      const openEye = await captureSlotEvidence("open");
+      setW(closedNames, 1);
+      await settle();
+      const closedEye = await captureSlotEvidence("closed");
+      setW(closedNames, 0);
+      await settle();
+      setW(exprNames, 1);
+      await settle();
+      const expression = await captureSlotEvidence("expression");
+      setW(exprNames, 0);
+      await settle();
+      model.setMorphWeight("__nonexistent_morph__", 1);
+      await settle();
+      const wrongName = await captureSlotEvidence("wrongName");
+      const noSwitch = await captureSlotEvidence("noSwitch");
+      return { openEye, closedEye, expression, wrongName, noSwitch, closedEyeMorphs: closedNames, expressionMorphs: exprNames, renderObserved, clipSuspendedUsed: true };
+    } finally {
+      setW(closedNames, 0); setW(exprNames, 0);
+      model.setClipApplySuspended?.(saved.clipSuspended);
+      stage.seekVmd?.(saved.seconds);
+      if (saved.playing) model.play?.(); else model.pause?.();
+      await settle();
+    }
   }, { slots: BROWS_LASHES_SLOTS });
 
+
+
   report.gates.G7 = report.gates.G7 || { status: "pass", failures: [] };
-  report.gates.G7.morph = {
+report.gates.G7.morph = {
     closedEyeMorphs: morphProbe.closedEyeMorphs,
     expressionMorphs: morphProbe.expressionMorphs,
+    renderObserved: morphProbe.renderObserved || null,
+    clipSuspended: morphProbe.clipSuspendedUsed === true,
+    weightRange: "0->1",
     error: morphProbe.error || null,
   };
   if (morphProbe.error || morphProbe.openEye?.error || morphProbe.closedEye?.error || morphProbe.expression?.error) {
@@ -1596,15 +1637,37 @@ try {
     const noiseUpper = Object.fromEntries(slotsArr.map((n) => [n, +(negNoise(n) + NOISE_MARGIN).toFixed(4)]));
     const minForeground = 1;
     const visibleAll = slotsArr.every((n) => counts.open[n] >= minForeground && counts.closed[n] >= minForeground && counts.expression[n] >= minForeground);
-    // 逐槽受影响判定：受影响槽距离必须 > 该槽同状态噪声上界；未受影响槽不做移动断言（只须不消失）。
-    const perSlot = (stateDist, affected) => Object.fromEntries(slotsArr.map((n) => [n, {
+    // 逐三角质心位移（几何位置证据）：受影响槽（闭眼/表情主要是垂直位移，mask 集合常不变）
+    // 用逐三角屏幕质心最大位移证明 morph 顶点变形投影到屏幕；噪声上界=负测同口径最大位移+裕量。
+    const centroidOf = (state, n) => state?.triCentroids?.[n] || [];
+    const centroidMaxDisp = (s1, s2, n) => {
+      const a = centroidOf(s1, n), b = centroidOf(s2, n);
+      const m = new Map(a.map((c) => [c.t, c]));
+      let mx = 0;
+      for (const cb of b) { const ca = m.get(cb.t); if (ca) { const d = Math.hypot(cb.x - ca.x, cb.y - ca.y); if (d > mx) mx = d; } }
+      return +mx.toFixed(3);
+    };
+    const CENTROID_NOISE_MARGIN = 1.5; // 像素裕量
+    const centroidNoiseUpper = Object.fromEntries(slotsArr.map((n) => [n, +(Math.max(
+      morphProbe.wrongName?.error ? 0 : centroidMaxDisp(morphProbe.openEye, morphProbe.wrongName, n),
+      morphProbe.noSwitch?.error ? 0 : centroidMaxDisp(morphProbe.openEye, morphProbe.noSwitch, n),
+    ) + CENTROID_NOISE_MARGIN).toFixed(3)]));
+    const centroidDisp = {
+      closed: Object.fromEntries(slotsArr.map((n) => [n, centroidMaxDisp(morphProbe.openEye, morphProbe.closedEye, n)])),
+      expression: Object.fromEntries(slotsArr.map((n) => [n, centroidMaxDisp(morphProbe.openEye, morphProbe.expression, n)])),
+    };
+    // 逐槽受影响判定：受影响槽须满足「mask Jaccard > 噪声上界」或「逐三角质心位移 > 噪声上界」
+    // 之一（前者抓集合变化、后者抓位置变化；闭眼垂直位移走质心）。未受影响槽只须不消失。
+    const perSlot = (stateDist, affected, stateCentroid) => Object.fromEntries(slotsArr.map((n) => [n, {
       affected: affected.has(n),
       dist: stateDist[n],
       noiseUpper: noiseUpper[n],
-      moved: affected.has(n) ? stateDist[n] > noiseUpper[n] : null,
+      centroidDisp: stateCentroid[n],
+      centroidNoiseUpper: centroidNoiseUpper[n],
+      moved: affected.has(n) ? (stateDist[n] > noiseUpper[n] || stateCentroid[n] > centroidNoiseUpper[n]) : null,
     }]));
-    const closedPerSlot = perSlot(dist.closedVsOpen, closedAffected);
-    const exprPerSlot = perSlot(dist.expressionVsOpen, exprAffected);
+    const closedPerSlot = perSlot(dist.closedVsOpen, closedAffected, centroidDisp.closed);
+    const exprPerSlot = perSlot(dist.expressionVsOpen, exprAffected, centroidDisp.expression);
     // 闭眼/表情通过 = 每个受影响槽都真实移动（>该槽噪声上界），且取证确认该状态有受影响槽。
     const closedMoved = closedAffected.size > 0 && [...closedAffected].every((n) => closedPerSlot[n].moved === true);
     const exprMoved = exprAffected.size > 0 && [...exprAffected].every((n) => exprPerSlot[n].moved === true);
@@ -1613,11 +1676,15 @@ try {
     const negNoSwitchRejected = dist.noSwitchVsOpen ? slotsArr.every((n) => dist.noSwitchVsOpen[n] < noiseUpper[n]) : false;
     report.gates.G7.verdict = {
       ok: visibleAll && closedMoved && exprMoved && negWrongNameRejected && negNoSwitchRejected,
-      counts, dist, noiseUpper, minForeground,
+      counts, dist, noiseUpper, minForeground, centroidDisp, centroidNoiseUpper,
       expectedAffectedSlots: { closed: [...closedAffected], expression: [...exprAffected] },
       closedPerSlot, exprPerSlot,
       forensicSource: MORPH_FORENSIC,
+      renderObserved: morphProbe.renderObserved || null,
+      clipSuspended: morphProbe.clipSuspendedUsed === true,
+      weightRange: "0->1",
       calibration: "逐槽判定：受影响槽距离须>该槽同状态噪声上界（负测实测+0.02 裕量）；无 any-slot 兜底",
+      口径声明: "G7 是验收探针控制的真实 PMX Morph 变形材质 Gate（setClipApplySuspended 挂起 clip 重采样 + 正常权重 0→1 + 真实 render/flush/capture），不是权威 pose VMD 原生眨眼插值 Gate；后者因权威 VMD 仅含 frame120 まばたき=1 单关键帧、无 0→1 轨道，不在本票宣称范围（VMD 插值由 G5 覆盖）。",
     };
     if (forensic?.error) fail("G7", "Morph 取证 JSON 读取失败: " + forensic.error);
     if (!visibleAll) fail("G7", "整槽消失：某槽在某状态前景像素为 0 " + JSON.stringify(counts));
