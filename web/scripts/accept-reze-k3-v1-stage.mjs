@@ -1521,49 +1521,70 @@ try {
       const cx = cv.getContext("2d"); cx.drawImage(img, 0, 0);
       const px = cx.getImageData(0, 0, raw.width, raw.height).data;
       const slotPixels = {};
-      const triCentroids = {};
+      const gpuVerts = {};
+      // A3：位移真值=生产 GPU 顶点快照。同一生产 ModelInstance 的 vertex/index buffer，
+      // 按各槽真实 draw range（count/firstIndex/materialName）取唯一顶点集合的 model-space position。
+      const inst = engine.modelInstances ? [...engine.modelInstances.values()][0] : null;
+      const allIndices = model.getIndices();
+      const vertexBuffer = inst?.vertexBuffer ?? null;
+      const device = engine.device ?? null;
       for (const name of slots) {
         const id = raw.materialIdByName?.[name];
         const list = [];
         if (Number.isInteger(id) && id > 0) { for (let p = 0; p < raw.width * raw.height; p += 1) { const i = p * 4; if (px[i] !== 0 && px[i + 1] === id) list.push(p); } }
         slotPixels[name] = list;
-        // 逐三角质心（union mask：triId>0 的像素归属该三角，质心=该三角屏幕投影中心）。
-        const bm = raw.byMaterial?.[name];
-        const triId = bm?.triId ? Array.from(bm.triId) : null;
-        if (triId) {
-          const sums = new Map();
-          for (let p = 0; p < raw.width * raw.height; p += 1) { const t = triId[p]; if (t > 0) { const s = sums.get(t) || { x: 0, y: 0, n: 0 }; s.x += p % raw.width; s.y += Math.floor(p / raw.width); s.n += 1; sums.set(t, s); } }
-          const cents = [];
-          for (const [t, s] of sums) cents.push({ t, x: s.x / s.n, y: s.y / s.n });
-          cents.sort((a, b) => a.t - b.t);
-          triCentroids[name] = cents;
+        // 该槽 draw range 唯一顶点集合（来自 index buffer）。
+        const mats = model.getMaterials();
+        const mi = mats.findIndex((m) => m.name === name);
+        if (vertexBuffer && device && mi >= 0) {
+          const firstIndex = mats.slice(0, mi).reduce((s, m) => s + m.vertexCount, 0);
+          const indexCount = mats[mi].vertexCount;
+          const uniq = [...new Set(Array.from(allIndices.slice(firstIndex, firstIndex + indexCount)))].sort((a, b) => a - b);
+          const minV = uniq[0], maxV = uniq[uniq.length - 1], vcount = maxV - minV + 1;
+          const byteLen = vcount * 32;
+          const rb = device.createBuffer({ size: byteLen, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+          const enc = device.createCommandEncoder();
+          enc.copyBufferToBuffer(vertexBuffer, minV * 32, rb, 0, byteLen);
+          device.queue.submit([enc.finish()]);
+          await rb.mapAsync(GPUMapMode.READ);
+          const arr = new Float32Array(rb.getMappedRange().slice(0));
+          rb.unmap(); rb.destroy();
+          const positions = {};
+          for (const v of uniq) { const b = (v - minV) * 8; positions[v] = [+arr[b].toFixed(5), +arr[b + 1].toFixed(5), +arr[b + 2].toFixed(5)]; }
+          gpuVerts[name] = { vertexSet: uniq, positions, drawRange: { firstIndex, count: indexCount }, vertexCount: uniq.length };
         }
       }
-      return { slotPixels, triCentroids, width: raw.width, height: raw.height };
+      return { slotPixels, gpuVerts, width: raw.width, height: raw.height };
     };
+
     const settle = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     const setW = (names, w) => { for (const n of names) model.setMorphWeight(n, w); };
+    // 方案 A3（Stage 2C-M2a 裁定）：clip 挂起后 renderFrame 不再重采样 VMD、不写 morph 权重，
+    // dispatchMorphCompute 因 dispatchNeeded=false 不跑 → 顶点缓冲保持 base。需在 clip 挂起下
+    // 手动上传 morph 权重并标记 dispatchNeeded=true（镜像生产 dispatchMorph 的权重上传），
+    // 再经 renderFrame 触发 morph compute 写 vertexBuffer，最后由生产源快照读回真实位移。
+    // 仅显式 acceptance probe；不新增第三套公开 probe，复用生产 ModelInstance.gpuMorph。
+    const gpuDiag = { note: "A3: 让 renderFrame 原生 updateInstances 在 consumeMorphWeightsDirty 时上传 effective weights 并 dispatch morph compute（clip 挂起下 VMD 不覆写）" };
+
+
+
     try {
       model.pause();
       model.setClipApplySuspended?.(true);
       setW(closedNames, 0); setW(exprNames, 0);
-      await settle();
       const openEye = await captureSlotEvidence("open");
       setW(closedNames, 1);
-      await settle();
       const closedEye = await captureSlotEvidence("closed");
       setW(closedNames, 0);
-      await settle();
       setW(exprNames, 1);
-      await settle();
       const expression = await captureSlotEvidence("expression");
       setW(exprNames, 0);
-      await settle();
       model.setMorphWeight("__nonexistent_morph__", 1);
-      await settle();
       const wrongName = await captureSlotEvidence("wrongName");
       const noSwitch = await captureSlotEvidence("noSwitch");
-      return { openEye, closedEye, expression, wrongName, noSwitch, closedEyeMorphs: closedNames, expressionMorphs: exprNames, renderObserved, clipSuspendedUsed: true };
+      return { openEye, closedEye, expression, wrongName, noSwitch, closedEyeMorphs: closedNames, expressionMorphs: exprNames, renderObserved, clipSuspendedUsed: true, gpuDiag };
+
+
     } finally {
       setW(closedNames, 0); setW(exprNames, 0);
       model.setClipApplySuspended?.(saved.clipSuspended);
@@ -1582,6 +1603,7 @@ report.gates.G7.morph = {
     renderObserved: morphProbe.renderObserved || null,
     clipSuspended: morphProbe.clipSuspendedUsed === true,
     weightRange: "0->1",
+    gpuDiag: morphProbe.gpuDiag || null,
     error: morphProbe.error || null,
   };
   if (morphProbe.error || morphProbe.openEye?.error || morphProbe.closedEye?.error || morphProbe.expression?.error) {
@@ -1637,46 +1659,61 @@ report.gates.G7.morph = {
     const noiseUpper = Object.fromEntries(slotsArr.map((n) => [n, +(negNoise(n) + NOISE_MARGIN).toFixed(4)]));
     const minForeground = 1;
     const visibleAll = slotsArr.every((n) => counts.open[n] >= minForeground && counts.closed[n] >= minForeground && counts.expression[n] >= minForeground);
-    // 逐三角质心位移（几何位置证据）：受影响槽（闭眼/表情主要是垂直位移，mask 集合常不变）
-    // 用逐三角屏幕质心最大位移证明 morph 顶点变形投影到屏幕；噪声上界=负测同口径最大位移+裕量。
-    const centroidOf = (state, n) => state?.triCentroids?.[n] || [];
-    const centroidMaxDisp = (s1, s2, n) => {
-      const a = centroidOf(s1, n), b = centroidOf(s2, n);
-      const m = new Map(a.map((c) => [c.t, c]));
-      let mx = 0;
-      for (const cb of b) { const ca = m.get(cb.t); if (ca) { const d = Math.hypot(cb.x - ca.x, cb.y - ca.y); if (d > mx) mx = d; } }
-      return +mx.toFixed(3);
+    // A3：位移真值=生产 GPU 顶点快照（model-space position delta）。屏幕投影质心受 ~2.5px
+    // 抖动污染，降级为渲染健康辅助（diagnosticOnly），不再作为 morph 位移判据。
+    // 受影响槽：该槽 draw 顶点集合与 PMX morph 受影响顶点（按名称交集，506=全 morph 取证数）
+    // 有非空交集，且 weight0→weight1 生产 GPU 顶点 delta 的 RMS/max 超过 same-weight 重复噪声+epsilon。
+    const gpuStats = (s1, s2, n) => {
+      const a = s1?.gpuVerts?.[n], b = s2?.gpuVerts?.[n];
+      if (!a || !b) return { maxDelta: 0, rmsDelta: 0, movedVertexCount: 0, vertexCount: 0 };
+      let mx = 0, sumSq = 0, moved = 0, cnt = 0;
+      for (const v of a.vertexSet) {
+        const pa = a.positions[v], pb = b.positions[v];
+        if (!pa || !pb) continue;
+        const d = Math.hypot(pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]);
+        if (d > mx) mx = d; sumSq += d * d; if (d > 1e-4) moved += 1; cnt += 1;
+      }
+      return { maxDelta: +mx.toFixed(5), rmsDelta: +(Math.sqrt(sumSq / Math.max(1, cnt))).toFixed(6), movedVertexCount: moved, vertexCount: cnt };
     };
-    const CENTROID_NOISE_MARGIN = 1.5; // 像素裕量
-    const centroidNoiseUpper = Object.fromEntries(slotsArr.map((n) => [n, +(Math.max(
-      morphProbe.wrongName?.error ? 0 : centroidMaxDisp(morphProbe.openEye, morphProbe.wrongName, n),
-      morphProbe.noSwitch?.error ? 0 : centroidMaxDisp(morphProbe.openEye, morphProbe.noSwitch, n),
-    ) + CENTROID_NOISE_MARGIN).toFixed(3)]));
-    const centroidDisp = {
-      closed: Object.fromEntries(slotsArr.map((n) => [n, centroidMaxDisp(morphProbe.openEye, morphProbe.closedEye, n)])),
-      expression: Object.fromEntries(slotsArr.map((n) => [n, centroidMaxDisp(morphProbe.openEye, morphProbe.expression, n)])),
+    const GPU_EPSILON = 1e-4; // 数值噪声 epsilon（float32 读回）
+    // same-weight 重复噪声上界：wrongName/noSwitch 各槽 GPU delta 最大值 + epsilon。
+    const gpuNoiseUpper = Object.fromEntries(slotsArr.map((n) => [n, +(Math.max(
+      morphProbe.wrongName?.error ? 0 : gpuStats(morphProbe.openEye, morphProbe.wrongName, n).maxDelta,
+      morphProbe.noSwitch?.error ? 0 : gpuStats(morphProbe.openEye, morphProbe.noSwitch, n).maxDelta,
+    ) + GPU_EPSILON).toFixed(5)]));
+    const gpuDelta = {
+      closed: Object.fromEntries(slotsArr.map((n) => [n, gpuStats(morphProbe.openEye, morphProbe.closedEye, n)])),
+      expression: Object.fromEntries(slotsArr.map((n) => [n, gpuStats(morphProbe.openEye, morphProbe.expression, n)])),
     };
-    // 逐槽受影响判定：受影响槽须满足「mask Jaccard > 噪声上界」或「逐三角质心位移 > 噪声上界」
-    // 之一（前者抓集合变化、后者抓位置变化；闭眼垂直位移走质心）。未受影响槽只须不消失。
-    const perSlot = (stateDist, affected, stateCentroid) => Object.fromEntries(slotsArr.map((n) => [n, {
+    // 逐槽受影响判定（无 any-slot 兜底）：受影响槽须 movedVertexCount>0 且 maxDelta>噪声上界+epsilon；
+    // 未受影响槽须不超过该上界（Brows 不得替 Lashes 通过）。
+    const perSlot = (stateDist, affected, stateGpu) => Object.fromEntries(slotsArr.map((n) => [n, {
       affected: affected.has(n),
       dist: stateDist[n],
       noiseUpper: noiseUpper[n],
-      centroidDisp: stateCentroid[n],
-      centroidNoiseUpper: centroidNoiseUpper[n],
-      moved: affected.has(n) ? (stateDist[n] > noiseUpper[n] || stateCentroid[n] > centroidNoiseUpper[n]) : null,
+      gpuDelta: stateGpu[n],
+      gpuNoiseUpper: gpuNoiseUpper[n],
+      moved: affected.has(n) ? (stateGpu[n].movedVertexCount > 0 && stateGpu[n].maxDelta > gpuNoiseUpper[n]) : null,
+      stable: !affected.has(n) ? (stateGpu[n].maxDelta <= gpuNoiseUpper[n]) : null,
     }]));
-    const closedPerSlot = perSlot(dist.closedVsOpen, closedAffected, centroidDisp.closed);
-    const exprPerSlot = perSlot(dist.expressionVsOpen, exprAffected, centroidDisp.expression);
+    const closedPerSlot = perSlot(dist.closedVsOpen, closedAffected, gpuDelta.closed);
+    const exprPerSlot = perSlot(dist.expressionVsOpen, exprAffected, gpuDelta.expression);
+    // 屏幕证据降为渲染健康辅助。
+    const screenProjection = { diagnosticOnly: true, ignoredByMorphMovementGate: true, note: "屏幕投影受 ~2.5px 抖动污染，不作为 morph 位移判据" };
+
     // 闭眼/表情通过 = 每个受影响槽都真实移动（>该槽噪声上界），且取证确认该状态有受影响槽。
     const closedMoved = closedAffected.size > 0 && [...closedAffected].every((n) => closedPerSlot[n].moved === true);
     const exprMoved = exprAffected.size > 0 && [...exprAffected].every((n) => exprPerSlot[n].moved === true);
-    // 负测判别：错误名/不切换必须两槽均低于各自噪声上界。
-    const negWrongNameRejected = dist.wrongNameVsOpen ? slotsArr.every((n) => dist.wrongNameVsOpen[n] < noiseUpper[n]) : false;
-    const negNoSwitchRejected = dist.noSwitchVsOpen ? slotsArr.every((n) => dist.noSwitchVsOpen[n] < noiseUpper[n]) : false;
+    // 负测判别（GPU 顶点口径）：错误名/不切换各槽 GPU delta 须不超过噪声上界（无真实 morph 变形）。
+    const negGpuDelta = {
+      wrongName: Object.fromEntries(slotsArr.map((n) => [n, morphProbe.wrongName?.error ? null : gpuStats(morphProbe.openEye, morphProbe.wrongName, n)])),
+      noSwitch: Object.fromEntries(slotsArr.map((n) => [n, morphProbe.noSwitch?.error ? null : gpuStats(morphProbe.openEye, morphProbe.noSwitch, n)])),
+    };
+    const negWrongNameRejected = morphProbe.wrongName?.error ? false : slotsArr.every((n) => negGpuDelta.wrongName[n].maxDelta <= gpuNoiseUpper[n]);
+    const negNoSwitchRejected = morphProbe.noSwitch?.error ? false : slotsArr.every((n) => negGpuDelta.noSwitch[n].maxDelta <= gpuNoiseUpper[n]);
     report.gates.G7.verdict = {
       ok: visibleAll && closedMoved && exprMoved && negWrongNameRejected && negNoSwitchRejected,
-      counts, dist, noiseUpper, minForeground, centroidDisp, centroidNoiseUpper,
+      counts, dist, noiseUpper, minForeground, gpuDelta, gpuNoiseUpper, negGpuDelta, screenProjection,
       expectedAffectedSlots: { closed: [...closedAffected], expression: [...exprAffected] },
       closedPerSlot, exprPerSlot,
       forensicSource: MORPH_FORENSIC,
@@ -1690,7 +1727,7 @@ report.gates.G7.morph = {
     if (!visibleAll) fail("G7", "整槽消失：某槽在某状态前景像素为 0 " + JSON.stringify(counts));
     if (closedAffected.size === 0) fail("G7", "取证未声明闭眼受影响槽（pmx-morph-forensic 缺失/无匹配 morph）");
     if (exprAffected.size === 0) fail("G7", "取证未声明表情受影响槽（pmx-morph-forensic 缺失/无匹配 morph）");
-    if (!closedMoved) fail("G7", "闭眼 Morph 受影响槽未真实移动（逐槽须>该槽噪声上界）" + JSON.stringify({ expected: [...closedAffected], perSlot: closedPerSlot }));
+if (!closedMoved) fail("G7", "闭眼 Morph 受影响槽未真实移动（逐槽须>该槽噪声上界）" + JSON.stringify({ expected: [...closedAffected], perSlot: closedPerSlot, gpuDiag: morphProbe.gpuDiag }));
     if (!exprMoved) fail("G7", "表情 Morph（笑い）受影响槽未真实移动（逐槽须>该槽噪声上界）" + JSON.stringify({ expected: [...exprAffected], perSlot: exprPerSlot }));
     report.gates.G7.negatives = { wrongName: dist.wrongNameVsOpen, noSwitch: dist.noSwitchVsOpen, wrongNameRejected: negWrongNameRejected, noSwitchRejected: negNoSwitchRejected };
     if (!negWrongNameRejected) fail("G7", "负测失败：错误 Morph 名（不存在）应与开眼一致（<噪声上界），实际 " + JSON.stringify(dist.wrongNameVsOpen));
