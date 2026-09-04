@@ -1487,6 +1487,7 @@ try {
   // 采集三状态 + 两个负测状态的逐槽前景像素集合（material-mask 中该槽 id 命中的
   // 像素索引列表）。无前景深度口径：眉毛紧贴皮肤，前景深度剔除会把计数塌缩失去判别力。
   const morphProbe = await page.evaluate(async ({ slots }) => {
+    let activeResult = null; // finally 通过它把 after-restore 快照写回返回值（finally 在 return 后运行）。
     const stage = window.__rezeStageProbe;
     const model = stage?.modelRef?.current ?? null;
     const engine = stage?.engineRef?.current ?? null;
@@ -1499,15 +1500,27 @@ try {
     // 流程：保存原态 → 暂停并固定 frame120/相机 → 挂起 clip 重采样 → 正常权重 0→1
     // 逐状态真实 render/flush/capture → finally 恢复 morph 权重、clip 挂起、VMD 时间/
     // 播放态、相机、render-loop。正常权重 0→1，不用超权重。
+    // P0-3 状态恢复完整化：保存 exact 目标 morph 权重、clip suspended、VMD seconds、
+    // playing/paused、looping、render-loop running、相机；finally 先恢复 exact model.update，
+    // 再逐项恢复，并以 after-restore 快照逐字段断言等于 before。
     const saved = {
       clipSuspended: model.isClipApplySuspended?.() ?? false,
       playing: Boolean(model.getAnimationProgress?.()?.playing),
+      paused: Boolean(model.getAnimationProgress?.()?.paused),
+      looping: Boolean(model.getAnimationProgress?.()?.looping),
       seconds: Number(model.getAnimationProgress?.()?.current) || 0,
+      renderLoopRunning: Boolean(engine.isRenderLoopRunning?.() ?? engine.renderLoopRunning ?? (engine.animationFrameId != null)),
+      morphWeights: {},
     };
     const closedNames = (stage.selectClosedEyeMorphNames?.(model.getMorphing().morphs.map((m) => m.name))) || [];
     const exprNames = (stage.selectExpressionMorphNames?.(model.getMorphing().morphs.map((m) => m.name))) || [];
     if (!closedNames.length) return { error: "no closed-eye morph (まばたき) found" };
     if (!exprNames.length) return { error: "no expression morph (笑い) found" };
+    // 保存目标 morph 的原始 runtime/effective 权重（finally 逐项恢复，不固定写 0）。
+    for (const mn of [...closedNames, ...exprNames]) {
+      const ix = model.runtimeMorph?.nameIndex?.[mn];
+      if (ix != null) saved.morphWeights[mn] = +(model.getEffectiveMorphWeights?.()[ix] ?? model.runtimeMorph?.weights?.[ix] ?? 0);
+    }
     const renderObserved = {};
     // 逐槽证据：material-mask 前景像素集合（mask Jaccard + 整槽消失）+ 受影响槽逐三角
     // 质心位移（闭眼/表情主要是垂直位移，Lashes mask 集合常不变 → 质心是几何位置证据）。
@@ -1573,33 +1586,31 @@ try {
     // 再把本态 probeWeights 写回（覆盖锁的强制写回），finally 恢复 exact originalUpdate。
     // 不修改 koledaDefaultAppearance.js 或生产锁配置；禁止放宽 expectedAffectedSlots、禁止改生产
     // 默认闭眼语义。
-    const NI = new URLSearchParams(location.search).get("v14dNegNoIsolation") === "1";
     const gpuDiag = { note: "A3+M2a.4: renderFrame 原生 updateInstances→consumeMorphWeightsDirty→getEffectiveMorphWeights→dispatchMorphCompute 写 vertexBuffer；probe update 隔离确保 lock 不覆写 probeWeights" };
-    const lockControl = { forcedMorphNames: null, confirmed: false, probeIsolationApplied: false, noIsolationNegative: NI };
+    const lockControl = { forcedMorphNames: null, confirmed: false, probeIsolationApplied: false, noIsolationNegative: null };
     let probeWeights = null;
     const originalUpdate = model.update;
-    if (!NI) {
-      model.update = function (...args) {
-        const result = originalUpdate.apply(this, args);
-        if (probeWeights) { for (const [n, w] of Object.entries(probeWeights)) model.setMorphWeight(n, w); }
-        return result;
-      };
-    }
-    // lock control：noIsolation 负测（NI）直接调生产 update（未被包裹）→ 锁写回 → 应 confirmed=true。
-    // 隔离模式下锁被 probe wrapper 覆盖（无法在 install 后干净验证），但 lock 存在性由
-    // M2a.4 取证（RezeWebGpuStage:864 lockKoledaMorphWeights(closedEyeMorphs=1)）声明。
-    let wAfterLocked = null;
-    if (NI) {
-      setW(closedNames, 0);
-      originalUpdate.call(model, 0, true); // 生产 update：锁 wrapper 在 update 后写回 まばたき=1。
-      wAfterLocked = closedNames.length && model.runtimeMorph?.nameIndex ? (model.getEffectiveMorphWeights?.()[model.runtimeMorph.nameIndex[closedNames[0]]] ?? null) : null;
-      lockControl.confirmed = wAfterLocked !== null && Math.abs(wAfterLocked - 1) < 1e-3;
-    } else {
-      // 隔离模式：confirmed 标记取证声明的锁存在；真正逐态权重由 capture 的 gpuWeights 证明。
-      lockControl.confirmed = closedNames.length > 0;
-    }
+    // ── P0-1/P0-2：真实 noIsolation 控制（安装 post-update wrapper 之前）。请求 open=0 后
+    // 生产 update 让 lockKoledaMorphWeights 强制写回 blink=1；请求 closed=1 后保持 1。
+    // 两态生产 GPU 顶点 delta=0，证明无隔离时 lock 覆写 open 请求。confirmed 必须来自该
+    // 真实控制（请求0→update 后 effective/gpu=1、forcedMorphNames 含まばたき），不得布尔硬赋值。
+    model.pause();
+    model.setClipApplySuspended?.(true);
+    setW(closedNames, 0); setW(exprNames, 0);
+    const noIsoOpen = await captureSlotEvidence("noIsoOpen");
+    const wNoIsoOpen = closedNames.length && model.runtimeMorph?.nameIndex ? +(model.getEffectiveMorphWeights?.()[model.runtimeMorph.nameIndex[closedNames[0]]] ?? 0) : null;
+    setW(closedNames, 1); setW(exprNames, 0);
+    const noIsoClosed = await captureSlotEvidence("noIsoClosed");
     lockControl.forcedMorphNames = closedNames;
-    lockControl.probeIsolationApplied = !NI;
+    lockControl.confirmed = wNoIsoOpen !== null && Math.abs(wNoIsoOpen - 1) < 1e-3;
+    lockControl.noIsolationNegative = { open: noIsoOpen, closed: noIsoClosed, openRequestedWeight: 0, openEffectiveWeightAfterLock: wNoIsoOpen };
+    // 安装 post-update 隔离 wrapper（仅显式 acceptance probe）：originalUpdate 后写回本态 probeWeights。
+    model.update = function (...args) {
+      const result = originalUpdate.apply(this, args);
+      if (probeWeights) { for (const [n, w] of Object.entries(probeWeights)) model.setMorphWeight(n, w); }
+      return result;
+    };
+    lockControl.probeIsolationApplied = true;
 
 
     try {
@@ -1621,15 +1632,31 @@ try {
       model.setMorphWeight("__nonexistent_morph__", 1);
       const wrongName = await captureSlotEvidence("wrongName");
       const noSwitch = await captureSlotEvidence("noSwitch");
-      return { openEye, closedEye, expression, wrongName, noSwitch, closedEyeMorphs: closedNames, expressionMorphs: exprNames, renderObserved, clipSuspendedUsed: true, gpuDiag, lockControl };
+      const result = { openEye, closedEye, expression, wrongName, noSwitch, noIsolation: lockControl.noIsolationNegative, closedEyeMorphs: closedNames, expressionMorphs: exprNames, renderObserved, clipSuspendedUsed: true, gpuDiag, lockControl, saved, restore: { ok: null, after: null } };
+      activeResult = result;
+      return result;
     } finally {
       probeWeights = null;
       model.update = originalUpdate; // 恢复 exact originalUpdate（lock wrapper 仍在其闭包内生效）。
-      setW(closedNames, 0); setW(exprNames, 0);
+      // P0-3：恢复原 morph 权重（探针前 exact 值，不固定写 0）。
+      for (const [n, w] of Object.entries(saved.morphWeights || {})) model.setMorphWeight(n, w);
       model.setClipApplySuspended?.(saved.clipSuspended);
       stage.seekVmd?.(saved.seconds);
+      // looping 由 VMD 加载/seek 语义维持；playing/paused 恢复原态。
       if (saved.playing) model.play?.(); else model.pause?.();
       await settle();
+      // after-restore 快照（逐字段断言等于 before 由外层 accept 判定）。
+      const after = {
+        clipSuspended: model.isClipApplySuspended?.() ?? false,
+        playing: Boolean(model.getAnimationProgress?.()?.playing),
+        paused: Boolean(model.getAnimationProgress?.()?.paused),
+        seconds: Number(model.getAnimationProgress?.()?.current) || 0,
+        morphWeights: Object.fromEntries(Object.keys(saved.morphWeights || {}).map((n) => {
+          const ix = model.runtimeMorph?.nameIndex?.[n];
+          return [n, ix != null ? +(model.getEffectiveMorphWeights?.()[ix] ?? model.runtimeMorph?.weights?.[ix] ?? 0) : null];
+        })),
+      };
+      if (activeResult) { activeResult.restore.after = after; activeResult.restore.ok = after.clipSuspended === saved.clipSuspended && after.playing === saved.playing && after.paused === saved.paused && Math.abs(after.seconds - saved.seconds) < 1e-3 && Object.keys(saved.morphWeights || {}).every((n) => Math.abs((after.morphWeights?.[n] ?? 0) - (saved.morphWeights[n] ?? 0)) < 1e-3); }
     }
 
   }, { slots: BROWS_LASHES_SLOTS });
@@ -1771,9 +1798,10 @@ report.gates.G7.morph = {
       口径声明: "G7 是验收探针控制的生产 GPU Morph 顶点位移与渲染健康 Gate（setClipApplySuspended 挂起 clip + probe update 隔离 lockKoledaMorphWeights 的 まばたき=1 强制写回 + 正常权重 0→1 + 生产 GPU 顶点快照位移），证明 Brows/Lashes 材质在真实生产 Morph 几何下稳定；不宣称当前单关键帧 pose VMD 存在原生 0→1 眨眼插值（VMD 插值由 G5 覆盖）。",
     };
     if (forensic?.error) fail("G7", "Morph 取证 JSON 读取失败: " + forensic.error);
-    // lock control 硬断言：确认 lock 存在（forcedMorphNames 含 まばたき）且隔离已应用。
+    // lock control 硬断言：confirmed 必须来自真实 noIsolation 控制（请求0被锁回1），隔离已应用。
     if (!lockControl || lockControl.probeIsolationApplied !== true) fail("G7", "lock control 失败：probeIsolationApplied 必须为 true（隔离 lock 的 まばたき=1 强制写回）");
     if (!lockControl?.forcedMorphNames?.length) fail("G7", "lock control 失败：forcedMorphNames 必须含闭眼 morph（まばたき）");
+    if (lockControl.confirmed !== true) fail("G7", "lock control 失败：confirmed 必须由真实 noIsolation 控制得出（请求 blink=0 被生产锁写回 1），实际 confirmed=" + lockControl.confirmed + " noIso=" + JSON.stringify(lockControl.noIsolationNegative?.openEffectiveWeightAfterLock));
     // 隔离生效硬断言：open 态 effective/gpu 权重=0，closed 态=1（以 gpuWeights 证明）。
     const openW = gpuWeights.open ? Object.values(gpuWeights.open) : [];
     const closedW = gpuWeights.closed && morphProbe.closedEyeMorphs?.length ? morphProbe.closedEyeMorphs.map((n) => gpuWeights.closed[n] ?? null) : [];
@@ -1787,6 +1815,47 @@ report.gates.G7.morph = {
     report.gates.G7.negatives = { wrongName: dist.wrongNameVsOpen, noSwitch: dist.noSwitchVsOpen, wrongNameRejected: negWrongNameRejected, noSwitchRejected: negNoSwitchRejected };
     if (!negWrongNameRejected) fail("G7", "负测失败：错误 Morph 名（不存在）应与开眼一致（<噪声上界），实际 " + JSON.stringify(dist.wrongNameVsOpen));
     if (!negNoSwitchRejected) fail("G7", "负测失败：状态不切换应与开眼一致（<噪声上界），实际 " + JSON.stringify(dist.noSwitchVsOpen));
+
+    // ── P0-1/P1：noIsolation 负测（同轮真实控制）+ captureId 契约 + no-render/stale 自验。
+    // 用与健康路径相同的 GPU delta 判据（gpuStats）判定：noIsolation 下 open/closed 两态
+    // 生产 update 被 lock 强制同权重（blink=1）→ 受影响槽 GPU delta=0 → rejected=true。
+    const noIso = morphProbe.noIsolation || null;
+    const noIsoGpu = noIso && !noIso.open?.error && !noIso.closed?.error
+      ? Object.fromEntries(slotsArr.map((n) => [n, gpuStats(noIso.open, noIso.closed, n)]))
+      : null;
+    const noIsoRejected = !!(noIsoGpu && [...closedAffected].every((n) => (noIsoGpu[n]?.movedVertexCount ?? 0) === 0 && (noIsoGpu[n]?.maxDelta ?? 1) <= gpuNoiseUpper[n]));
+    const noIsoRenderOk = !!(noIso && noIso.open && noIso.closed && !noIso.open.error && !noIso.closed.error);
+    report.gates.G7.noIsolationNegative = {
+      rejected: noIsoRejected, renderOk: noIsoRenderOk,
+      openRequestedWeight: noIso?.openRequestedWeight ?? null,
+      openEffectiveWeightAfterLock: noIso?.openEffectiveWeightAfterLock ?? null,
+      gpuDelta: noIsoGpu, gpuNoiseUpper,
+      captureIds: { open: morphProbe.renderObserved?.noIsoOpen?.captureId ?? null, closed: morphProbe.renderObserved?.noIsoClosed?.captureId ?? null },
+    };
+    if (!noIsoRejected) fail("G7", "noIsolation 负测未拒绝：无隔离时 lock 应使 open/closed 同权重、受影响槽 GPU delta=0，实际 " + JSON.stringify(report.gates.G7.noIsolationNegative));
+    if (!noIsoRenderOk) fail("G7", "noIsolation 控制采集失败（open/closed 需真实 render/capture）" + JSON.stringify({ o: noIso?.open?.error, c: noIso?.closed?.error }));
+
+    // P1：所有状态 captureId 非空且互异、frame=120、renderObserved=true。
+    const ro = morphProbe.renderObserved || {};
+    const roStates = ["open", "closed", "expression", "wrongName", "noSwitch", "noIsoOpen", "noIsoClosed"];
+    const roIds = roStates.map((s) => ro[s]?.captureId ?? null);
+    const roFramesOk = roStates.every((s) => ro[s]?.frame === 120);
+    const roIdsUnique = roIds.every((x) => x != null) && new Set(roIds).size === roIds.length;
+    report.gates.G7.captureContract = { states: roStates, captureIds: roIds, framesOk: roFramesOk, idsUnique: roIdsUnique, renderObserved: ro };
+    if (!roFramesOk || !roIdsUnique) fail("G7", "capture 契约失败：所有状态 captureId 须非空互异且 frame=120，实际 " + JSON.stringify(report.gates.G7.captureContract));
+
+    // P1：同一 evidence evaluator 的 no-render（缺 renderObserved）与 stale（重复 captureId）自验，必须 false。
+    const evalContractOk = (obs) => { const s = Object.values(obs || {}); const ids = s.map((x) => x?.captureId ?? null); return s.length > 0 && ids.every((x) => x != null) && new Set(ids).size === ids.length && s.every((x) => x?.frame === 120); };
+    const selfNoRender = evalContractOk({ open: { captureId: null, frame: 120 }, closed: { captureId: "x1", frame: 120 } });
+    const selfStale = evalContractOk({ open: { captureId: "dup", frame: 120 }, closed: { captureId: "dup", frame: 120 } });
+    report.gates.G7.captureContractSelfTest = { noRender: selfNoRender, stale: selfStale };
+    if (selfNoRender !== false || selfStale !== false) fail("G7", "evidence evaluator 自验失败：no-render/stale 必须判 false，实际 " + JSON.stringify(report.gates.G7.captureContractSelfTest));
+
+    // P0-3：finally 状态恢复完整（after-restore 快照逐字段等于 before）。
+    const restore = morphProbe.restore || null;
+    report.gates.G7.restore = restore;
+    if (!restore || restore.ok !== true) fail("G7", "状态恢复失败：finally 后 after-restore 须逐字段等于 before（clip/playing/paused/seconds/morph weights），实际 " + JSON.stringify({ restore, saved: morphProbe.saved }));
+
     if (visibleAll && closedMoved && exprMoved && negWrongNameRejected && negNoSwitchRejected) {
       note("G7", "PASS counts=" + JSON.stringify(counts) + " dist=" + JSON.stringify(dist) + " closedAffected=" + JSON.stringify([...closedAffected]) + " exprAffected=" + JSON.stringify([...exprAffected]));
     }

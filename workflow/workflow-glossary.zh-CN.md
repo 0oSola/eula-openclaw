@@ -6,8 +6,8 @@
 - 含义：`/companion` reze-k3 舞台中克莱妲部分 PMX 材质槽的可选 V14D
   实时合成模式；`original`=原始 Reze K3，`v1`=Reze K3 V1（V14D）。
   持久化按 用户+模型+reze-k3 管线 三维隔离，默认 original。
-  截至 Stage 2C-M2a 最终收口（2026-09-05，主会话验收通过）：**Face、BodySkin、
-  HairA、HairB、Brows、Lashes** 六槽已完成正式逐槽 Gate，正式迁移进度 6/15。
+  截至 Stage 2C-M2a 候选收口（2026-09-04，待主会话验收）：**Face、BodySkin、
+  HairA、HairB、Brows、Lashes** 六槽在本票自评闭合正式逐槽 Gate；本段为候选收口、待主会话验收，正式迁移进度仍 4/15，待主会话真正验收后再登记 6/15。
   Brows/Lashes 的正式验收口径（本票最终闭合）：① 逐槽原子同帧 material-ID +
   production-draw-call triUV + 同像素 identity-target 收敛；② Lashes 透明边缘
   屏幕空间形态学边界环 Gate（非空分母，黑框/白边/整槽消失三类自然检出）；③

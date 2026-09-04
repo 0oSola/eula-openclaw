@@ -57,9 +57,9 @@ V14D 眉毛与睫毛恒等乘色迁移（Brows/Lashes identity tint）。
 - 与 `reze-k3-skin-variant`（V1 切换总开关/资格/持久化）共用同一接线与回退路径。
 - 与 `v14d-hair-triuv-pixel-gate`（HairA/HairB 逐像素目标收敛）的差异仅在于「恒等 tint 不需要 changed=true 这一颜色变化判据」；但逐槽原子同帧 material-ID+triUV+pixel 的 identity-target 收敛 Gate（对同槽 canonical target 计算逐像素误差/覆盖/P95，并以 wrongTint、错槽目标自然拒绝）仍是必须闭合的正式 Gate。不能用「恒等不适用」免除该 Gate。
 
-## 最终收口（Stage 2C-M2a，2026-09-05 主会话验收通过）
+## 候选收口（Stage 2C-M2a，2026-09-04 待主会话验收）
 
-原「待修正 Gate 清单」四项已全部闭合并经主会话验收，完整 G1-G7 全绿（allPass=true、exit=0），正式迁移进度登记为 6/15（Face、BodySkin、HairA、HairB、Brows、Lashes）。各阻断项最终口径见下。
+原「待修正 Gate 清单」四项在本票自评闭合并跑通完整 G1-G7（allPass=true、exit=0）。本段为候选收口、待主会话验收，正式迁移进度仍 4/15（Face、BodySkin、HairA、HairB），待主会话真正验收后再登记 6/15。各阻断项自评口径见下。
 
 1. **逐槽原子同帧 identity-target Gate（闭合）**：production-draw-call material-ID + triUV + 同像素 identity-target 收敛，两槽 formalTargetGate 双 true、targetBinding consistent、inputsValid；各槽样本、coverage、MAE/P95 落盘。
 2. **Lashes 透明边缘 Gate（闭合）**：改为屏幕空间形态学边界环（非空 core/edge/transparent 分母），比较 Original/V1 边界覆盖、综合色、黑边/白边/整槽消失。wrongAlpha 不再修改 analyzer 阈值自证，改用专用 acceptance fault graph（仅 ?v14dAcceptanceProbe=1 可达）在 hashed discard 前乘固定故障因子 V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR，真实剔除片元使 coverage/边界环收缩，由形态学边界环 Gate 自然非零拒绝。
