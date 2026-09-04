@@ -328,3 +328,19 @@
 - 禁止用法：不得用 model.getVertices() CPU base、旧的无 COPY_SRC 读回、材质计数、矩形 ROI、屏幕平移、mask 膨胀或 depthBias 冒充生产源；不得把 GPU 句柄序列化到 JSON、localStorage、共享配置或后端；不得用该诊断 seam 改视觉公式、alpha、灯光、相机默认值、PMX/VMD 或 Morph 数据。
 - 路由影响：由 web/scripts/patch-reze-engine.mjs 注入 reze-engine src/dist/d.ts 的接口和合法 COPY_SRC usage；web/src/features/stage/v14dColorBaseline.ts 执行只读读回与统计；RezeWebGpuStage.tsx 仅在显式验收 probe 中选择 sourceMode=production-draw-call，默认生产入口不调用。机器错误分类为 interface-unavailable、invalid-capture-request、snapshot-rejected、buffer-readback-failed、buffer-readback-incomplete。
 - 验收证据：正常回放的 Brows 为 production/triUV=257/257、overlapRatio=1、centroidShiftPx=0；Lashes 为 9320/9320、overlapRatio=1、centroidShiftPx=0。--neg-wrong-source 与 --neg-mat-swap 均必须 exit=1 且 negativeVerdict.status=rejected。完整定义见 workflow/concepts/v14d-production-draw-call-source-snapshot.zh-CN.md。
+
+# V14D 显示链提交边界
+
+- 英文机器名：`v14d-display-chain-commit-boundary`；诊断接口 `installDisplayChainTrace`、`setDisplayChainTraceCapture`、`captureDisplayChainState`。
+- 含义：材质图编译/安装、样式组重绑只是显示链前置状态；从真实 draw-call 的 `setPipeline`/`setBindGroup`/`drawIndexed`，到场景 HDR 目标、resolve、composite/tone mapping 和最终 canvas 的命令提交，才构成一次可见变化。冻结 render loop 时，apply 成功而没有下一次 `renderFrame`/queue submission，画布可以继续保持旧帧。
+- 允许用法：在显式 `?v14dAcceptanceProbe=1` 下，以同一 captureId/frame 记录 compile/install pipeline、实际 draw pipeline、bind group、draw range、HDR 和最终 canvas，定位首个预期变化消失的边界。
+- 禁止用法：不得把该诊断接缝启用到默认生产入口；不得用它改 graph 公式、正式视觉阈值、alpha analyzer、灯光、相机、PMX/VMD 或播放链。
+- 路由影响：只影响 Reze WebGPU 验收诊断与显示链故障分类；完整 Brows/Lashes 逐槽、透明边缘和动态 Morph Gate 仍按各自契约验收。完整定义见 `workflow/concepts/v14d-display-chain-commit-boundary.zh-CN.md`。
+
+# V14D 编译/安装非最终显示证明
+
+- 英文机器名：`v14d-compile-install-not-display-proof`。
+- 含义：graph/WGSL 编译成功和 WebGPU pipeline 安装成功，只证明着色器阶段可建立；它不证明目标 draw 实际绑定新 pipeline，也不证明 HDR resolve、后续 composite/tone mapping 或最终 canvas 已使用该结果。
+- 允许用法：把 compile/install 作为必要前置证据，再分别核对实际 `setPipeline`、draw range/bind group、pre-tonemap HDR、resolve/composite 与 canvas 差异；在冻结帧场景使用一次明确的零增量 render 提交完成显示链。
+- 禁止用法：不得以 pipeline 身份变化、OnComposite 计数、截图存在、配置完整或放宽 analyzer 阈值包装 canvas no-effect 为通过。
+- 路由影响：当 `wrongTint` 已进入 graph/WGSL/安装但最终画布无变化时，优先路由到显示链提交边界诊断；只有证明 draw 与目标均已变化后，才进入 tone mapping、采集或视觉公式调查。

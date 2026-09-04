@@ -3052,6 +3052,289 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("v14dAcceptanceProbe") === "1";
   useEffect(() => {
     if (!acceptanceProbeEnabled) return;
+    // acceptance-only display-chain trace: the default production entry never installs it.
+    // It wraps the real Engine methods without changing their arguments or return values,
+    // recording the pipeline/bind-group objects passed to setPipeline/setBindGroup/drawIndexed.
+    type V14dDisplayTraceDraw = {
+      instanceName: string;
+      materialName: string | null;
+      type: string;
+      drawIndex: number | null;
+      count: number;
+      firstIndex: number;
+      groupId: string | null;
+      pipeline: unknown;
+      bindGroup: unknown;
+    };
+    type V14dDisplayTraceFrame = {
+      schemaVersion: 1;
+      captureId: string | null;
+      frame: number | null;
+      renderSerial: number;
+      draws: V14dDisplayTraceDraw[];
+      pipelineBinds: { instanceName: string; type: string; pipeline: unknown }[];
+      compositePipeline: unknown;
+      compositeGamma: number | null;
+    };
+    const displayChainObjectIds = new WeakMap<object, string>();
+    let nextDisplayChainObjectId = 1;
+    const displayChainObjectId = (value: unknown) => {
+      if (!value || (typeof value !== "object" && typeof value !== "function")) return null;
+      const object = value as object;
+      const existing = displayChainObjectIds.get(object);
+      if (existing) return existing;
+      const id = "gpu-" + nextDisplayChainObjectId++;
+      displayChainObjectIds.set(object, id);
+      return id;
+    };
+    let displayChainTraceCleanup: (() => void) | null = null;
+    let displayChainTraceRequested: { captureId: string; frame: number } | null = null;
+    let displayChainTraceCurrent: V14dDisplayTraceFrame | null = null;
+    let displayChainTraceLast: V14dDisplayTraceFrame | null = null;
+    let displayChainRenderSerial = 0;
+    type V14dDisplayTraceInstallResult =
+      | { ok: true; alreadyInstalled?: boolean }
+      | { ok: false; error: string };
+    const serializeDisplayChainTrace = (trace: V14dDisplayTraceFrame | null) => trace
+      ? {
+          schemaVersion: trace.schemaVersion,
+          captureId: trace.captureId,
+          frame: trace.frame,
+          renderSerial: trace.renderSerial,
+          draws: trace.draws.map((draw) => ({
+            ...draw,
+            pipeline: displayChainObjectId(draw.pipeline),
+            bindGroup: displayChainObjectId(draw.bindGroup),
+          })),
+          pipelineBinds: trace.pipelineBinds.map((bind) => ({ ...bind, pipeline: displayChainObjectId(bind.pipeline) })),
+          compositePipeline: displayChainObjectId(trace.compositePipeline),
+          compositeGamma: trace.compositeGamma,
+        }
+      : null;
+    const installDisplayChainTrace = (): V14dDisplayTraceInstallResult => {
+      const engine = engineRef.current;
+      if (!engine) return { ok: false, error: "engine unavailable" };
+      if (displayChainTraceCleanup) return { ok: true, alreadyInstalled: true };
+      const target = engine as unknown as Record<string, unknown>;
+      const originalRenderFrame = target.renderFrame;
+      const originalDrawMaterials = target.drawMaterials;
+      if (typeof originalRenderFrame !== "function" || typeof originalDrawMaterials !== "function") {
+        return { ok: false, error: "reze-engine display trace seam unavailable" };
+      }
+      const renderFrame = originalRenderFrame as (deltaSeconds: number) => unknown;
+      const drawMaterials = originalDrawMaterials as (pass: unknown, inst: unknown, type: unknown) => unknown;
+      const wrappedRenderFrame = function (this: unknown, deltaSeconds: number) {
+        const requested = displayChainTraceRequested;
+        const trace: V14dDisplayTraceFrame = {
+          schemaVersion: 1,
+          captureId: requested?.captureId ?? null,
+          frame: requested?.frame ?? null,
+          renderSerial: ++displayChainRenderSerial,
+          draws: [],
+          pipelineBinds: [],
+          compositePipeline: null,
+          compositeGamma: null,
+        };
+        displayChainTraceCurrent = trace;
+        try {
+          return renderFrame.call(this, deltaSeconds);
+        } finally {
+          const fields = this as Record<string, unknown>;
+          const view = fields.viewTransform as { gamma?: unknown } | undefined;
+          const gamma = Number(view?.gamma);
+          trace.compositeGamma = Number.isFinite(gamma) ? gamma : null;
+          trace.compositePipeline = gamma === 1
+            ? fields.compositePipelineIdentity
+            : fields.compositePipelineGamma;
+          displayChainTraceLast = trace;
+          displayChainTraceCurrent = null;
+        }
+      };
+      const wrappedDrawMaterials = function (this: unknown, pass: unknown, inst: unknown, type: unknown) {
+        const trace = displayChainTraceCurrent;
+        if (!trace || !pass || typeof pass !== "object") return drawMaterials.call(this, pass, inst, type);
+        let pipeline: unknown = null;
+        let materialBindGroup: unknown = null;
+        const instance = inst as { name?: string; drawCalls?: { materialName?: string; count?: number; firstIndex?: number; groupId?: string | null }[] };
+        const drawCalls = instance.drawCalls ?? [];
+        const instanceName = String(instance.name ?? "unknown");
+        const wrappedPass = new Proxy(pass as object, {
+          get(targetPass, property, receiver) {
+            const method = Reflect.get(targetPass, property, receiver);
+            if (typeof method !== "function") return method;
+            if (property === "setPipeline") {
+              return (nextPipeline: unknown) => {
+                pipeline = nextPipeline;
+                trace.pipelineBinds.push({ instanceName, type: String(type), pipeline: nextPipeline });
+                return (method as (...args: unknown[]) => unknown).call(targetPass, nextPipeline);
+              };
+            }
+            if (property === "setBindGroup") {
+              return (index: number, bindGroup: unknown, ...rest: unknown[]) => {
+                if (index === 2) materialBindGroup = bindGroup;
+                return (method as (...args: unknown[]) => unknown).call(targetPass, index, bindGroup, ...rest);
+              };
+            }
+            if (property === "drawIndexed") {
+              return (count: number, ...args: unknown[]) => {
+                const firstIndex = Number(args[1] ?? 0);
+                const drawIndex = drawCalls.findIndex((draw) => draw.count === count && draw.firstIndex === firstIndex);
+                const draw = drawIndex >= 0 ? drawCalls[drawIndex] : null;
+                trace.draws.push({
+                  instanceName,
+                  materialName: draw?.materialName ?? null,
+                  type: String(type),
+                  drawIndex: drawIndex >= 0 ? drawIndex : null,
+                  count,
+                  firstIndex,
+                  groupId: draw?.groupId ?? null,
+                  pipeline,
+                  bindGroup: materialBindGroup,
+                });
+                return (method as (...callArgs: unknown[]) => unknown).call(targetPass, count, ...args);
+              };
+            }
+            return (method as (...args: unknown[]) => unknown).bind(targetPass);
+          },
+        });
+        return drawMaterials.call(this, wrappedPass, inst, type);
+      };
+      target.renderFrame = wrappedRenderFrame;
+      target.drawMaterials = wrappedDrawMaterials;
+      displayChainTraceCleanup = () => {
+        if (target.renderFrame === wrappedRenderFrame) target.renderFrame = originalRenderFrame;
+        if (target.drawMaterials === wrappedDrawMaterials) target.drawMaterials = originalDrawMaterials;
+        displayChainTraceRequested = null;
+        displayChainTraceCurrent = null;
+        displayChainTraceLast = null;
+        displayChainTraceCleanup = null;
+      };
+      return { ok: true, alreadyInstalled: false };
+    };
+    const setDisplayChainTraceCapture = (captureId: string, frame: number):
+      | { ok: true; captureId: string; frame: number }
+      | { ok: false; error: string } => {
+      if (typeof captureId !== "string" || captureId.length === 0 || !Number.isFinite(frame)) {
+        return { ok: false, error: "captureId/frame invalid" };
+      }
+      const installed = installDisplayChainTrace();
+      if (!installed.ok) return installed;
+      displayChainTraceRequested = { captureId, frame };
+      return { ok: true, captureId, frame };
+    };
+    const captureDisplayChainState = async (options: { captureId: string; frame: number; render?: boolean }) => {
+      const canvas = canvasRef.current;
+      const engine = engineRef.current;
+      const model = modelRef.current;
+      if (!canvas || !engine || !model) return { error: "canvas/engine/model unavailable" };
+      const request = setDisplayChainTraceCapture(options.captureId, options.frame);
+      if (!request.ok) return { error: request.error };
+      const fields = engine as unknown as Record<string, unknown>;
+      const wasRunning = fields.animationFrameId !== null && fields.animationFrameId !== undefined;
+      engine.stopRenderLoop();
+      model.pause();
+      try {
+        if (options.render) engine.renderFrame(0);
+        const width = canvas.width;
+        const height = canvas.height;
+        const production = engine.getProductionDrawCallSourceSnapshot(options.captureId, options.frame);
+        const resolve = await readV14dColorBaselineResolveTargets(engine, width, height);
+        const materialMask = await readV14dColorBaselineMaterialMask(engine, width, height);
+        const display = await readV14dCanvasDisplay(canvas);
+        const materials = model.getMaterials();
+        const materialIdByName: Record<string, number> = {};
+        let nextId = 1;
+        for (const material of materials) {
+          if (material.vertexCount <= 0) continue;
+          materialIdByName[material.name] = nextId++;
+        }
+        const ids = ["Brows", "Lashes"] as const;
+        const slotStats: Record<string, unknown> = {};
+        for (const name of ids) {
+          const materialId = materialIdByName[name];
+          let samples = 0;
+          const hdrSum = [0, 0, 0];
+          const displaySum = [0, 0, 0];
+          const hdrMin = [Infinity, Infinity, Infinity];
+          const hdrMax = [-Infinity, -Infinity, -Infinity];
+          const displayMin = [Infinity, Infinity, Infinity];
+          const displayMax = [-Infinity, -Infinity, -Infinity];
+          for (let index = 0; index < width * height; index += 1) {
+            const off = index * 4;
+            if (materialMask.data[off] === 0 || materialMask.data[off + 1] !== materialId) continue;
+            samples += 1;
+            for (let channel = 0; channel < 3; channel += 1) {
+              const hdrValue = resolve.hdr.data[off + channel];
+              const displayValue = display.data[off + channel] * 255;
+              hdrSum[channel] += hdrValue;
+              displaySum[channel] += displayValue;
+              hdrMin[channel] = Math.min(hdrMin[channel], hdrValue);
+              hdrMax[channel] = Math.max(hdrMax[channel], hdrValue);
+              displayMin[channel] = Math.min(displayMin[channel], displayValue);
+              displayMax[channel] = Math.max(displayMax[channel], displayValue);
+            }
+          }
+          slotStats[name] = {
+            materialId,
+            samples,
+            hdrMean: samples ? hdrSum.map((value) => Number((value / samples).toFixed(6))) : null,
+            hdrRange: samples ? [hdrMin, hdrMax].map((range) => range.map((value) => Number(value.toFixed(6)))) : null,
+            displayMean: samples ? displaySum.map((value) => Number((value / samples).toFixed(3))) : null,
+            displayRange: samples ? [displayMin, displayMax].map((range) => range.map((value) => Number(value.toFixed(3)))) : null,
+          };
+        }
+        const instance = production.instances.find((item) => item.name === "companion");
+        const targetDraws = (instance?.drawCalls ?? [])
+          .filter((draw) => draw.materialName === "Brows" || draw.materialName === "Lashes")
+          .map((draw) => ({
+            materialName: draw.materialName,
+            materialIndex: draw.materialIndex,
+            count: draw.count,
+            firstIndex: draw.firstIndex,
+            drawIndex: draw.drawIndex,
+            pickDrawCallIndex: draw.pickDrawCallIndex,
+            groupId: draw.groupId,
+            graphName: draw.graphName,
+            compileInstallPipeline: displayChainObjectId(draw.mainPipeline),
+            bindGroup: displayChainObjectId(draw.mainBindGroup),
+          }));
+        const install = (fields.modelInstances as Map<string, { styleGroups?: Map<string, { group?: { graph?: { name?: string; nodes?: { id?: string; inputs?: { color?: unknown } }[] } }; signature?: string; pipeline?: unknown }> }> | undefined)
+          ?.get("companion")?.styleGroups?.get("v14d-skin-variant-brows-lashes");
+        const trace = serializeDisplayChainTrace(displayChainTraceLast);
+        const renderObserved = trace?.captureId === options.captureId && trace?.frame === options.frame;
+        const maskCanvas = document.createElement("canvas");
+        maskCanvas.width = width;
+        maskCanvas.height = height;
+        const maskContext = maskCanvas.getContext("2d");
+        if (!maskContext) return { error: "material mask canvas unavailable" };
+        const maskImage = maskContext.createImageData(width, height);
+        maskImage.data.set(materialMask.data);
+        maskContext.putImageData(maskImage, 0, 0);
+        const progress = model.getAnimationProgress?.();
+        return {
+          captureId: options.captureId,
+          frame: options.frame,
+          width,
+          height,
+          requestedRender: Boolean(options.render),
+          renderObserved,
+          renderLoopRunningBefore: wasRunning,
+          renderLoopRunningAfter: fields.animationFrameId !== null && fields.animationFrameId !== undefined,
+          currentFrame: Number.isFinite(Number(progress?.current)) ? Number(progress.current) * V14D_HAIR_AUTHORITATIVE_CAPTURE.fps : null,
+          graphName: install?.group?.graph?.name ?? null,
+          tint: install?.group?.graph?.nodes?.find((node) => node.id === "v14d_brows_lashes_tint")?.inputs?.color ?? null,
+          signature: install?.signature ?? null,
+          targetDraws,
+          slotStats,
+          hdr: { sourceFormat: resolve.hdr.sourceFormat, nanCount: resolve.hdr.nanCount, infCount: resolve.hdr.infCount },
+          trace,
+          canvasDataUrl: canvas.toDataURL("image/png"),
+          materialMaskPng: maskCanvas.toDataURL("image/png"),
+        };
+      } finally {
+        if (wasRunning) engine.runRenderLoop();
+      }
+    };
     (window as unknown as { __rezeStageProbe?: unknown }).__rezeStageProbe = {
       async playVmd(url: string, raceKey?: string) {
         const m = modelRef.current;
@@ -3478,7 +3761,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       },
       // 负测钩子（仅验收开关）：用错误 graph / 编译非法 graph 驱动 V1 styleGroup 应用，
       // 真实验证「错误 graph 不命中 Face draw-call」「applyStyleGroups 失败回退 original」。
-      async applyBadSkinGraph(kind: BadSkinGraphKind) {
+      async applyBadSkinGraph(kind: BadSkinGraphKind, options?: { render?: boolean }) {
         const engine = engineRef.current;
         if (!engine) throw new Error("no engine");
         const groups = buildV14dSkinVariantStyleGroups(engine.getStyleGroups("companion"));
@@ -3504,8 +3787,25 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             canvasRef.current.dataset.v14dSkinVariantLashesOnComposite = String(counts.lashesOnComposite);
           } catch { /* 证据读取失败不阻断负测 */ }
         }
-        return { ok: res.ok };
+        let renderedAfterApply = false;
+        if (res.ok && options?.render !== false) {
+          const engineFields = engine as unknown as { animationFrameId?: number | null };
+          // A frozen acceptance capture has no render loop to consume the new pipeline.
+          // Submit one zero-delta frame only in that state; live production playback keeps
+          // its existing loop and is not given an extra frame or time advance.
+          if (engineFields.animationFrameId === null || engineFields.animationFrameId === undefined) {
+            engine.renderFrame(0);
+            renderedAfterApply = true;
+          }
+        }
+        return { ok: res.ok, groups: res.groups, unknownMaterials: res.unknownMaterials, conflicts: res.conflicts, renderedAfterApply };
       },
+      // Stage 2C-M2a.3：显式 acceptance probe 才安装的只读 draw/display 链取证。
+      // 默认入口不暴露；调用方必须自己声明 captureId/frame，且 captureDisplayChainState
+      // 会在读取前冻结 render loop，避免把时间推进或异步重建误判为颜色变化。
+      installDisplayChainTrace,
+      setDisplayChainTraceCapture,
+      captureDisplayChainState,
       // Stage 2C-M2a 修正轮（G7 动态 Morph）：暴露引擎/模型引用与闭眼 Morph 选择器，
       // 供 accept 在 V1 下采集开眼/闭眼两状态的逐槽可见性。只读 + setMorphWeight/
       // setMaterialVisible 组合，不改 PMX/VMD/Morph 数据；默认生产入口不暴露本探针。
@@ -3514,6 +3814,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       selectClosedEyeMorphNames: selectKoledaClosedEyeMorphNames,
     };
     return () => {
+      displayChainTraceCleanup?.();
       delete (window as unknown as { __rezeStageProbe?: unknown }).__rezeStageProbe;
       vmdPlaybackMirrorCleanupRef.current?.();
       vmdPlaybackMirrorCleanupRef.current = null;
