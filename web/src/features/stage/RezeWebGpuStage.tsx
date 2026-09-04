@@ -3647,7 +3647,11 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
               (engine as unknown as { updateCameraUniforms?: () => void }).updateCameraUniforms?.();
             }
           }
+          // P1-1：renderObserved = 本采集真实提交了一帧渲染（engine.renderFrame(0)）且 GPU 队列
+          // flush 完成；非仅 captureId/frame 两字段。无 render 时该帧未提交 → renderObserved=false。
+          let renderObserved = false;
           engine.renderFrame(0);
+          renderObserved = true;
           await flushV14dDiagnosticBarrier(engine);
           const progressAfterRender = readCaptureProgress();
           if (!progressAfterRender) return {
@@ -3796,6 +3800,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             captureProgressBeforeRead: progressAfterRender,
             captureProgressAfterRead: progressAfterRead,
             productionSource: productionSource.audit,
+            renderObserved,
             captureEvidence: {
               pixel: pixelEvidence,
               materialMask: materialMaskEvidence,
