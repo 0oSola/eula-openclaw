@@ -10,8 +10,10 @@
 // 负测（实跑、自然拒绝、非配置包装）：
 //   --neg-wrongtint        读 wrongtint 画布，错误 tint 拉远两槽目标，两槽正式 Gate=false
 //   --neg-swap-slot-target 交换 Brows↔Lashes 的 target/triUV 归属，analyzer exit 非零
-//   --neg-wrong-alpha      模拟错误 alpha 口径（阈值翻倍/边缘区判口径错位），
-//                          lashesAlphaEdge.gate 必须自然 false（真实 face_d alpha 分布下）
+//   --neg-wrong-alpha      读 wrongAlpha 画布（专用 fault tag → 引擎 prelude 在 hashed
+//                          discard 前把 alpha 乘固定故障因子 0.05，真实剔除片元、
+//                          coverage/边界环收缩），边界环 lashesAlphaEdge.gate 必须自然
+//                          false（真实像素/coverage 证据，非配置/阈值自证）
 // 任一正式判定失败 → exit 1（swap 负测模式也保留非零以证明阻断）；报告写
 // .scratch/reze-k3-v1-stage/visual-diff-brows-lashes[-wrongtint|-swap-slot-target].json。
 import sharp from "sharp";
@@ -45,27 +47,36 @@ const THRESHOLDS = {
   slotAbsMae: 95,                 // V1 对 face_d canonical 的绝对 MAE 上限（含显示链亮度差）
   slotP95: 150,                   // V1 对 canonical 的 P95 上限（边缘抖动放宽）
   minCoverage: 0.0,               // 覆盖率仅记录不判定（分母改为该槽全屏前景像素，非 ROI）
-  // Lashes alpha 边缘：核心/边缘/透明三区分母 + 边缘误差上限
-  lashesEdgeMae: 120,             // 边缘区 V1 对 canonical 的 MAE 上限
-  // Stage 2C-M2a 收尾（按权威取证标定）：face_d 在 Brows/Lashes 生产可见像素的
-  // alpha 实测全部为 1.0（hashed cutout 已剔除 alpha<0.5 的透明纹素，可见区落在
-  // opaque 纹素上），阈值±edgeBand 的「alpha 边缘带」恒为空。边缘证据改用「可见
-  // 像素的最小 alpha 分位数贴近裁切阈值」口径：alpha 口径若被改错（如 alphaMode
-  // 从 hashed 变 opaque），被剔除的透明纹素会重新可见，可见像素的最小 alpha 会显著
-  // 低于 1.0 并贴近/低于阈值；健康 hashed 口径下 minAlpha 恒 =1.0。
-  // minLashesEdgeProximity 标定：权威 face_d 两槽可见像素 min alpha=1.0（见
-  // .scratch/v14d-brows-lashes/brows-lashes-forensic.json + 实测分布），故要求
-  // minAlpha >= 0.9（贴近 1.0、远离裁切阈值 0.5），且 transparentVisibleRatio<=0.5、
-  // core>=1 不变（整槽消失/裁切不足仍被拒）。
-  minLashesEdgeProximity: 0.9,    // 可见像素最小 alpha 分位下限（健康 hashed 口径）
-  // wrongTint 通道指纹判别阈值（由 run merge5 实测标定，见标定脚本 .scratch/calib-tint.mjs）：
-  // K3 显示链（曝光 0.6/Toon/sRGB）对绝对 MAE 强压缩，恒等 target 绝对误差口径无判别力；
-  // 且显示链让 Original 画布红通道反比恒等 target 更贴（baseline 指纹），绝对 target 差
-  // 全部失效。唯一有判别力的口径是「恒等画布自身作为红通道参考基线」：恒等 tint 时 V1 与
-  // Original 的红通道指纹重合（idVsId 实测 109-111），wrongTint 归零红通道使 V1 红通道偏离
-  // 该基线（wrongVsId 实测 53-61，偏移 48-58）。判别：baselineShift=idVsId-wrongVsId 必须
-  // ≥ minTintBaselineShift。
-  minTintBaselineShift: 20,       // 红通道基线偏移下限（恒等实测偏移≈0，wrongTint 实测 48-58）
+  // Lashes 透明边缘：核心/边缘/透明三区分母 + 屏幕空间边界环误差上限。
+  // 边缘分母口径（Stage 2C-M2a 第二次修正轮）：face_d 在两槽生产可见像素 alpha 恒 1.0，
+  // 纹理 alpha 边缘带恒空（无判别力）。正式「透明边缘」证据改用 production material-ID
+  // 前景掩码的 4-邻域形态学边界环（屏幕空间边界像素集合），实测非空（Lashes≈130 边界
+  // 像素/特写帧），在该边界环上核对黑边（lum<25）/白边（lum>235）/整槽消失三类风险。
+  // wrongAlpha（专用 fault tag → 引擎 prelude 在 hashed discard 前把 alpha 乘故障因子
+  // 0.05）真实剔除部分片元：production 前景 mask 收缩、边界环像素数与边缘色分布改变
+  // → 边界环 Gate 自然非零拒绝（真实 coverage/像素证据，非阈值/配置自证）。
+  lashesEdgeMae: 120,             // 边缘区 V1 对 canonical 的 MAE 上限（保留作颜色误差参考）
+  minEdgeBoundaryPixels: 8,       // 边界环最小像素数（整槽消失/极端裁切→环塌缩被拒）
+  maxEdgeDarkRatio: 0.45,         // 边界环暗像素占比上限（黑边）；健康 Lashes 实测 0.354（46/130，暗红褐睫毛有真实暗边界），wrongTint 0.485；整槽纯黑失效→ratio→1.0 必拒
+  maxEdgeBrightRatio: 0.35,       // 边界环亮像素占比上限（白边）
+  // 保留 minLashesEdgeProximity 作为纹理 alpha 口径的参考记录（非正式判定）：权威
+  // face_d 两槽可见像素 min alpha=1.0（见 .scratch/v14d-brows-lashes/brows-lashes-forensic.json）。
+  // 正式透明边缘判定已由屏幕空间边界环（minEdgeBoundaryPixels/maxEdgeDarkRatio/
+  // maxEdgeBrightRatio）承担，不再以空 alpha 边缘带软通过。
+  minLashesEdgeProximity: 0.9,    // 参考记录：可见像素最小 alpha（健康 hashed 口径恒 1.0）
+  // wrongTint 通道指纹判别阈值（Stage 2C-M2a 修正轮 P1 标定，口径修正为显示链不变的
+  // 通道比差值）。绝对 MAE 与红通道归一化偏移均受 K3 显示链（曝光/Toon/sRGB）对红通道的
+  // 非均匀压缩影响（暗眉/暗红睫红通道对恒等 target 的偏差本就大，不可判别）。改用：
+  //   redDropDiff = mean( (V1红-Orig红)/max(1,Orig红) - (V1绿-Orig绿)/max(1,Orig绿) )。
+  // 显示链对每个槽的红/绿施加同一因子，恒等 tint 下红降≈绿降 → redDropDiff≈0；
+  // 错误 tint[0,1,1] 额外压低红通道 → 红降>绿降 → redDropDiff 显著为负。标定（.scratch probe，
+  // 两次独立健康 + 一次错误采集）：
+  //   恒等：Brows redDropDiff≈+0.037/+0.037、Lashes≈+0.092/+0.099（均>0）；
+  //   错误：Brows≈-0.144、Lashes≈-0.021（均<0）。阈值取 0（符号分离，两侧均有实测裕量）。
+  // 标定证据（两次独立健康采集 + 一次错误采集的 redDropDiff）写入机器报告
+  // browsLashesTintCalibration（accept G3）。
+  minTintBaselineShift: 20,       // 保留字段（标定汇总断言兼容），判别改用 maxRedDropDiff
+  maxRedDropDiff: 0.0,            // 红降-绿降差值上限：恒等 tint>=0，错误 tint[0,1,1]<0
 };
 
 function percentile95(values) {
@@ -137,7 +148,7 @@ function collectSlotTriUvRecords(capture, materialMask, materialId, materialName
 
 // 逐槽 identity-target 收敛：ROI=脸部近景全区，样本=该槽 materialId 前景像素。
 // 恒等目标 = face_d canonical（同槽同 UV 双线性采样 → srgbToLinear → ×恒等 tint → 显示字节）。
-function slotIdentityTarget({ slot, materialName, materialId, capture, materialMask, origImage, v1Image, faceTex, W, H, faceRoi, swapTargetSlot, swapCaptureInfo, wrongTintFingerprint }) {
+function slotIdentityTarget({ slot, materialName, materialId, capture, materialMask, origImage, v1Image, faceTex, W, H, faceRoi, swapTargetSlot, swapCaptureInfo, wrongTintFingerprint, calibrationMode }) {
   const info = slotInfo(capture, materialName);
   if (!info) return { slot, error: "missing triUV material entry" };
   // Stage 2C-M2a 修正轮：分母 = 该槽全屏 materialId 前景像素（小槽正确口径）。
@@ -173,11 +184,12 @@ function slotIdentityTarget({ slot, materialName, materialId, capture, materialM
   if (samples.length > 0 && targetStream.length === 0) return { slot, error: "swap target triUV samples unavailable" };
   const v1Errors = [], v1Channel = [[], [], []];
   let v1Abs = 0;
-  // wrongTint 通道指纹：需要恒等画布（ORIG）同槽同像素做对照。
-  const needChannelFingerprint = wrongTintFingerprint === true;
-  const wrongTintTarget = needChannelFingerprint ? [0.0, 1.0, 1.0] : null;
+  // 通道指纹（Stage 2C-M2a 修正轮 P1 口径修正）：对所有模式（含健康）计算显示链不变的
+  // 通道比差值 redDropDiff，作为 maxRedDropDiff 的机器标定证据——健康采集（≈+0.04/+0.09）
+  // 与错误采集（≈-0.14/-0.02）同口径对比，证明阈值有裕量。
+  const needChannelFingerprint = true;
   const channelFingerprint = needChannelFingerprint
-    ? { red: { identityVsIdentity: [], wrongVsIdentity: [], identityVsWrong: [], wrongVsWrong: [] } }
+    ? { red: { identityVsIdentity: [], wrongVsIdentity: [], redDropDiff: [], tgtRedSum: 0 } }
     : null;
   for (let k = 0; k < samples.length; k += 1) {
     const s = samples[k];
@@ -192,12 +204,11 @@ function slotIdentityTarget({ slot, materialName, materialId, capture, materialM
     for (let c = 0; c < 3; c += 1) v1Channel[c].push(ch[c]);
     s.v1Error = px;
     if (needChannelFingerprint) {
-      const tWrong = v14dBrowsLashesTargetDisplayFromLinear(rgbLinear.map((v, c) => v * wrongTintTarget[c]));
       const origPx = [origImage.data[off], origImage.data[off + 1], origImage.data[off + 2]];
       channelFingerprint.red.identityVsIdentity.push(Math.abs(origPx[0] - target[0]));
       channelFingerprint.red.wrongVsIdentity.push(Math.abs(v1[0] - target[0]));
-      channelFingerprint.red.identityVsWrong.push(Math.abs(origPx[0] - tWrong[0]));
-      channelFingerprint.red.wrongVsWrong.push(Math.abs(v1[0] - tWrong[0]));
+      channelFingerprint.red.redDropDiff.push(((v1[0] - origPx[0]) / Math.max(1, origPx[0])) - ((v1[1] - origPx[1]) / Math.max(1, origPx[1])));
+      channelFingerprint.red.tgtRedSum += target[0];
     }
   }
   const v1Mae = samples.length ? v1Abs / samples.length : 0;
@@ -218,30 +229,31 @@ function slotIdentityTarget({ slot, materialName, materialId, capture, materialM
   if (!(coverage >= 0)) metricFailureReasons.push("coverage<0");
   if (!(v1Mae < THRESHOLDS.slotAbsMae)) metricFailureReasons.push("v1Mae>=" + THRESHOLDS.slotAbsMae + " (" + v1Mae.toFixed(3) + ")");
   if (!Number.isFinite(v1P95) || !(v1P95 <= THRESHOLDS.slotP95)) metricFailureReasons.push("P95>" + THRESHOLDS.slotP95 + " (" + round3(v1P95) + ")");
-  // wrongTint 基线偏移指纹：显示链让 Original 画布红通道自带 baseline 指纹，绝对 target
-  // 差口径全部失效。改用恒等画布自身作红通道参考基线：恒等 tint 时 V1 红通道与 Original
-  // 指纹重合，wrongTint 归零红通道使 V1 红通道偏离基线。baselineShift=idVsId-wrongVsId
-  // 显著为正即证明 tint 到达像素。
+  // wrongTint 通道指纹（口径修正）：判别量 = redDropDiff = mean[(V1红-Orig红)/Orig红 - (V1绿-Orig绿)/Orig绿]。
+  // 显示链不变（红绿同因子缩放抵消），恒等 tint 时≈0，错误 tint[0,1,1] 压低红通道 → 显著为负。
   let tintFingerprint = null;
   if (channelFingerprint) {
     const avg = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
+    const n = channelFingerprint.red.redDropDiff.length;
     const idVsId = avg(channelFingerprint.red.identityVsIdentity);
     const wrongVsId = avg(channelFingerprint.red.wrongVsIdentity);
-    const idVsWrong = avg(channelFingerprint.red.identityVsWrong);
-    const wrongVsWrong = avg(channelFingerprint.red.wrongVsWrong);
-    const baselineShift = idVsId - wrongVsId;
-    // tintReachedPixels=true 表示错误 tint 确实到达像素（红通道已偏离恒等基线）。
-    // 这正是负测要检出的异常：baselineShift 越大，tint 错误越确定，正式 Gate 必须拒绝。
-    const tintReachedPixels = baselineShift >= THRESHOLDS.minTintBaselineShift;
+    const redDropDiff = avg(channelFingerprint.red.redDropDiff);
+    const meanTgtRed = n ? channelFingerprint.red.tgtRedSum / n : null;
+    const tintReachedPixels = Number.isFinite(redDropDiff) && redDropDiff < THRESHOLDS.maxRedDropDiff;
     tintFingerprint = {
-      redMae: { identityVsIdentity: round3(idVsId), wrongVsIdentity: round3(wrongVsId), identityVsWrong: round3(idVsWrong), wrongVsWrong: round3(wrongVsWrong) },
-      baselineShift: round3(baselineShift),
-      minTintBaselineShift: THRESHOLDS.minTintBaselineShift,
+      redMae: { identityVsIdentity: round3(idVsId), wrongVsIdentity: round3(wrongVsId), meanTargetRed: round3(meanTgtRed) },
+      redDropDiff: round3(redDropDiff),
+      maxRedDropDiff: THRESHOLDS.maxRedDropDiff,
       tintReachedPixels,
-      evidence: "错误 tint 到达像素：红通道偏离恒等画布基线（baselineShift 显著为正）",
+      evidence: "错误 tint 到达像素：V1 红通道相对绿通道的额外压降 redDropDiff 显著为负（红通道被错误 tint 压低）",
     };
+    // 标定模式（--tint-pair）下 redDropDiff 不作为失败依据，只记录供阈值标定。
+    if (calibrationMode) {
+      tintFingerprint.calibrationOnly = true;
+    }
     // tint 到达像素（即 tint 被改错）必须让逐槽正式 Gate 自然 false（真实拒绝证据）。
-    if (tintReachedPixels) metricFailureReasons.push("tintFingerprint(baselineShift=" + round3(baselineShift) + ">=" + THRESHOLDS.minTintBaselineShift + ",红通道已偏离恒等基线,tint 被改错)");
+    // 标定模式下跳过此失败（健康 redDropDiff≈0 是预期，只记录证据不判错）。
+    if (tintReachedPixels && !calibrationMode) metricFailureReasons.push("tintFingerprint(redDropDiff=" + round3(redDropDiff) + "<" + THRESHOLDS.maxRedDropDiff + ",红通道相对绿通道被额外压低,tint 被改错)");
   }
   const metricGateFinal = metricFailureReasons.length === 0;
   return {
@@ -259,76 +271,86 @@ function slotIdentityTarget({ slot, materialName, materialId, capture, materialM
 
 // Lashes 透明边缘专门 Gate：按 face_d alpha 把 Lashes 前景样本分核心/边缘/透明三区，
 // 核对生产可见性（materialId 前景）与权威 alphaThreshold cutout 一致性 + 边缘颜色误差。
+// Lashes 透明边缘专门 Gate（Stage 2C-M2a 第二次修正轮：屏幕空间边界环口径）。
+// 分母 = production material-ID 前景掩码的 4-邻域形态学边界环（前景像素中至少一个
+// 4-邻邻居不是该槽前景）。该环非空且随裁切口径变化：wrongAlpha（专用 fault tag → 引擎
+// prelude 在 discard 前把 alpha 乘故障因子 0.05）真实剔除片元、mask 收缩、边界环像素数
+// 与边缘色分布改变 → 自然拒绝。
+// 黑边=边界环暗像素(lum<25)占比超限；白边=亮像素(lum>235)占比超限；整槽消失=环塌缩
+// （edgeBoundary<minEdgeBoundaryPixels 或 lashesForeground=0）。
 function lashesAlphaEdge({ capture, materialMask, lashesId, v1Image, faceTex, W, H, faceRoi, wrongAlpha }) {
   const materialName = "Lashes";
   const info = slotInfo(capture, materialName);
   if (!info) return { error: "missing lashes triUV" };
-  const threshold = V14D_BROWS_LASHES_ALPHA_THRESHOLD * (wrongAlpha ? 2 : 1); // 负测翻倍口径
-  const edgeBand = wrongAlpha ? 0.02 : 0.15; // 负测收窄边缘带 → 边缘样本口径错位
-  let core = 0, edge = 0, transparentZone = 0, lashesForeground = 0;
-  const edgeErrors = [];
-  const visibleAlphas = [];
-  let blackFrame = 0, whiteFringe = 0;
+  const threshold = V14D_BROWS_LASHES_ALPHA_THRESHOLD;
+  // 1) 生产可见性前景掩码（materialId 命中即该像素由 Lashes 渲染）。
+  const fg = new Uint8Array(W * H);
+  let lashesForeground = 0;
+  for (let p = 0; p < W * H; p += 1) {
+    const i = p * 4;
+    if (materialMask.data[i] !== 0 && materialMask.data[i + 1] === lashesId) { fg[p] = 1; lashesForeground += 1; }
+  }
+  // 2) 4-邻域形态学边界环：前景像素中至少一个邻居非前景。
+  const edgePixels = [];
   for (let y = 0; y < H; y += 1) for (let x = 0; x < W; x += 1) {
-    const i = (y * W + x) * 4;
-    // 只统计 Lashes 前景像素（生产可见性）：materialId 命中即「该像素由 Lashes 渲染」。
-    if (materialMask.data[i] === 0 || materialMask.data[i + 1] !== lashesId) continue;
-    lashesForeground += 1;
-    if (!info.triMask?.[y * W + x]) continue;
-    const triId = Number(info.triId?.[y * W + x]);
-    const u = Number(info.uv?.[(y * W + x) * 2]);
-    const v = Number(info.uv?.[(y * W + x) * 2 + 1]);
+    const p = y * W + x;
+    if (!fg[p]) continue;
+    const left = x > 0 ? fg[p - 1] : 0;
+    const right = x < W - 1 ? fg[p + 1] : 0;
+    const up = y > 0 ? fg[p - W] : 0;
+    const down = y < H - 1 ? fg[p + W] : 0;
+    if (left + right + up + down < 4) edgePixels.push(p);
+  }
+  // 3) 边界环上的颜色统计（黑边/白边/边缘色误差）+ 纹理 alpha 参考记录。
+  let blackFrame = 0, whiteFringe = 0;
+  const edgeErrors = [];
+  const edgeLums = [];
+  const visibleAlphas = [];
+  for (const p of edgePixels) {
+    const i = p * 4;
+    const px = [v1Image.data[i], v1Image.data[i + 1], v1Image.data[i + 2]];
+    const lum = (px[0] + px[1] + px[2]) / 3;
+    edgeLums.push(lum);
+    if (lum < 25) blackFrame += 1;
+    if (lum > 235) whiteFringe += 1;
+    // triUV 合法的边界像素才计入边缘色误差与 alpha 记录。
+    if (!info.triMask?.[p]) continue;
+    const triId = Number(info.triId?.[p]);
+    const u = Number(info.uv?.[p * 2]);
+    const v = Number(info.uv?.[p * 2 + 1]);
     if (!Number.isInteger(triId) || triId < 0 || triId >= Number(info.triangleCount)) continue;
     if (!barycentricInside(barycentricForTriangleUv(u, v, slotTriangleUvs(info, triId)))) continue;
     const a = sampleFaceAlpha(faceTex, u, v);
     visibleAlphas.push(a);
     const rgbLinear = sampleHairTextureLinear(faceTex, u, v);
     const target = v14dBrowsLashesTargetDisplayFromLinear(rgbLinear);
-    const off = i;
-    const px = [v1Image.data[off], v1Image.data[off + 1], v1Image.data[off + 2]];
-    const err = px.reduce((s, val, c) => s + Math.abs(val - target[c]), 0) / 3;
-    // 三区口径：alpha≥threshold+edgeBand=核心；threshold±edgeBand=边缘；<threshold-edgeBand=透明区。
-    if (a >= threshold + edgeBand) core += 1;
-    else if (a >= threshold - edgeBand) {
-      edge += 1;
-      edgeErrors.push(err);
-      // 黑框（边缘过暗）/白边（边缘过亮）风险计数。
-      const lum = (px[0] + px[1] + px[2]) / 3;
-      if (lum < 25) blackFrame += 1;
-      if (lum > 235) whiteFringe += 1;
-    } else transparentZone += 1;
+    edgeErrors.push(px.reduce((s, val, c) => s + Math.abs(val - target[c]), 0) / 3);
   }
-  visibleAlphas.sort((a, b) => a - b);
-  const minAlpha = visibleAlphas.length ? visibleAlphas[0] : null;
+  const edgeCount = edgePixels.length;
   const edgeMae = edgeErrors.length ? edgeErrors.reduce((s, v) => s + v, 0) / edgeErrors.length : 0;
+  const minAlpha = visibleAlphas.length ? Math.min(...visibleAlphas) : null;
+  const darkRatio = edgeCount > 0 ? blackFrame / edgeCount : 0;
+  const brightRatio = edgeCount > 0 ? whiteFringe / edgeCount : 0;
   const failures = [];
+  // 整槽消失：前景=0 或边界环塌缩（槽太小/被剔除→环像素数低于下限）。
   if (lashesForeground < 1) failures.push("lashesForeground=0(整槽消失)");
-  if (core < 1) failures.push("core=0(无核心区,cutout 过度→整槽消失风险)");
-  // 边缘颜色/fringe 误差仅在有真实 alpha 边缘带样本时判定；健康 hashed 口径下
-  // 可见像素全在 opaque 区（edge=0），此时边缘颜色约束不适用（无边缘样本可测）。
-  if (edge >= 1 && !(edgeMae <= THRESHOLDS.lashesEdgeMae)) failures.push("edgeMae>" + THRESHOLDS.lashesEdgeMae + " (" + round3(edgeMae) + ")");
-  // Stage 2C-M2a 收尾（边缘证据口径修正）：可见像素的最小 alpha 必须贴近 1.0
-  //（远离裁切阈值）。wrongAlpha 把阈值翻倍 → minAlpha(1.0) < 2×0.5+0.9 必失败；
-  // alphaMode 错为 opaque 时透明纹素重新可见、minAlpha 显著 <1.0，同样自然拒绝。
-  const edgeProximityThreshold = wrongAlpha
-    ? threshold + THRESHOLDS.minLashesEdgeProximity // 负测：阈值翻倍后该下限不可达
-    : THRESHOLDS.minLashesEdgeProximity;
-  if (minAlpha === null || !(minAlpha >= edgeProximityThreshold)) {
-    failures.push("minVisibleAlpha=" + round3(minAlpha) + "<" + round3(edgeProximityThreshold) + "(可见像素贴近/落入裁切透明区,cutout 口径异常→黑框/白边/整槽消失风险)");
-  }
-  // 透明区可见 = cutout 不足 → 黑框/白边风险：生产 Lashes 前景落在 face_d alpha
-  // 明显低于阈值的区域，说明引擎裁切与权威 cutout 口径不一致。
-  const transparentVisibleRatio = lashesForeground > 0 ? transparentZone / lashesForeground : 0;
-  if (transparentVisibleRatio > 0.5) failures.push("transparentVisibleRatio>0.5(" + round3(transparentVisibleRatio) + ",裁切不足→黑框/白边风险)");
+  if (edgeCount < THRESHOLDS.minEdgeBoundaryPixels) failures.push("edgeBoundary=" + edgeCount + "<" + THRESHOLDS.minEdgeBoundaryPixels + "(边界环塌缩,整槽消失/极端裁切风险)");
+  // 黑边：边界环暗像素占比超限。
+  if (darkRatio > THRESHOLDS.maxEdgeDarkRatio) failures.push("edgeDarkRatio=" + round3(darkRatio) + ">" + THRESHOLDS.maxEdgeDarkRatio + "(黑边风险)");
+  // 白边：边界环亮像素占比超限。
+  if (brightRatio > THRESHOLDS.maxEdgeBrightRatio) failures.push("edgeBrightRatio=" + round3(brightRatio) + ">" + THRESHOLDS.maxEdgeBrightRatio + "(白边风险)");
+  // 边缘色误差（仅在有 triUV 合法样本时判定）。
+  if (edgeErrors.length >= 1 && !(edgeMae <= THRESHOLDS.lashesEdgeMae)) failures.push("edgeMae>" + THRESHOLDS.lashesEdgeMae + " (" + round3(edgeMae) + ")");
   return {
-    materialName, lashesForeground, core, edge, transparentZone,
-    coreEdgeTransparentDenominators: { core, edge, transparentZone, total: lashesForeground },
-    transparentVisibleRatio: round3(transparentVisibleRatio),
-    minVisibleAlpha: round3(minAlpha),
+    materialName, lashesForeground,
+    edgeBoundaryPixels: edgeCount,
+    boundaryRingDenominator: { edgeBoundary: edgeCount, foreground: lashesForeground },
+    edgeDarkRatio: round3(darkRatio), edgeBrightRatio: round3(brightRatio),
     edgeMae: round3(edgeMae), edgeP95: round3(percentile95(edgeErrors)),
     blackFrameCount: blackFrame, whiteFringeCount: whiteFringe,
+    minVisibleAlpha: round3(minAlpha),
     alphaThreshold: threshold, authorityAlphaThreshold: V14D_BROWS_LASHES_ALPHA_THRESHOLD,
-    cutoutConsistency: { productionVisibleFollowsAuthorityCutout: transparentVisibleRatio <= 0.5 && core >= 1 },
+    edgeBoundaryCalibratedFrom: "production material-id 4-neighbour boundary ring (130 px/closeup frame)",
     failures, gate: failures.length === 0,
   };
 }
@@ -337,13 +359,24 @@ export async function runBrowsLashesAnalysis(argv) {
   const negWrongTint = argv.includes("--neg-wrongtint");
   const negSwap = argv.includes("--neg-swap-slot-target");
   const negWrongAlpha = argv.includes("--neg-wrong-alpha");
+  // 标定模式：读 --tint-pair=FILE 指定的 second-redMae 画布作为 V1（健康恒等 tint 的
+  // 独立重复采集），通道指纹只记录 baselineShift 证据、不触发失败。用于 P1 阈值标定。
+  const tintPairArg = argv.find((a) => a.startsWith("--tint-pair="));
+  const calibrationMode = Boolean(tintPairArg);
+  const tintPairFile = calibrationMode ? path.join(OUT, tintPairArg.slice("--tint-pair=".length)) : null;
   const ORIG = path.join(OUT, "g3-brows-lashes-original-canvas.png");
-  const V1 = negWrongTint ? path.join(OUT, "g3-brows-lashes-v1-canvas-wrongtint.png") : path.join(OUT, "g3-brows-lashes-v1-canvas.png");
-  const MASK = path.join(OUT, "g3-brows-lashes-material-mask.png");
-  const TRIUV = negWrongTint && fs.existsSync(path.join(OUT, "g3-brows-lashes-tri-uv-wrongtint.json"))
+  const V1 = calibrationMode ? tintPairFile : negWrongTint ? path.join(OUT, "g3-brows-lashes-v1-canvas-wrongtint.png") : negWrongAlpha ? path.join(OUT, "g3-brows-lashes-v1-canvas-wrong-alpha.png") : path.join(OUT, "g3-brows-lashes-v1-canvas.png");
+  // 负测 mask/triUV 必须用各自扰动采集的独立文件；缺失则记 analysisFailures 并拒绝
+  // （Stage 2C-M2a 修正轮：不再静默回退到健康 mask，避免「负测被健康证据洗白」）。
+  const MASK = negWrongAlpha ? path.join(OUT, "g3-brows-lashes-material-mask-wrong-alpha.png") : path.join(OUT, "g3-brows-lashes-material-mask.png");
+  const TRIUV = negWrongTint
     ? path.join(OUT, "g3-brows-lashes-tri-uv-wrongtint.json")
+    : negWrongAlpha
+    ? path.join(OUT, "g3-brows-lashes-tri-uv-wrong-alpha.json")
     : path.join(OUT, "g3-brows-lashes-tri-uv.json");
-  const REPORT = negWrongTint
+  const REPORT = calibrationMode
+    ? path.join(OUT, "visual-diff-brows-lashes-" + path.basename(tintPairFile, ".png").replace(/^g3-brows-lashes-/, "").replace(/-canvas$/, "") + ".json")
+    : negWrongTint
     ? path.join(OUT, "visual-diff-brows-lashes-wrongtint.json")
     : negSwap ? path.join(OUT, "visual-diff-brows-lashes-swap-slot-target.json")
     : negWrongAlpha ? path.join(OUT, "visual-diff-brows-lashes-wrong-alpha.json")
@@ -378,7 +411,7 @@ export async function runBrowsLashesAnalysis(argv) {
     for (const { slot, materialName } of V14D_BROWS_LASHES_SLOTS) {
       const materialId = slot === "brows" ? browsId : lashesId;
       const swapTargetSlot = negSwap ? (slot === "brows" ? "lashes" : "brows") : null;
-      const conv = slotIdentityTarget({ slot, materialName, materialId, capture, materialMask, origImage, v1Image, faceTex, W, H, faceRoi, swapTargetSlot, swapCaptureInfo: swapInfo, wrongTintFingerprint: negWrongTint });
+      const conv = slotIdentityTarget({ slot, materialName, materialId, capture, materialMask, origImage, v1Image, faceTex, W, H, faceRoi, swapTargetSlot, swapCaptureInfo: swapInfo, wrongTintFingerprint: negWrongTint, calibrationMode });
       out.regions[slot] = { targetConvergence: conv };
       if (conv.error) { out.failures.push(slot + " 目标收敛判定样本不足: " + conv.error); out.verdict[slot + "TargetConverged"] = false; continue; }
       const converged = conv.formalGate === true && conv.targetBinding?.consistent === true && conv.targetBinding?.inputsValid === true;
@@ -420,7 +453,7 @@ export async function runBrowsLashesAnalysis(argv) {
       }
     } catch (e) { out.artifactError = String(e); }
     // Lashes 透明边缘专门 Gate。
-    const alphaEdge = lashesAlphaEdge({ capture, materialMask, lashesId, v1Image, faceTex, W, H, faceRoi, wrongAlpha: negWrongAlpha });
+    const alphaEdge = lashesAlphaEdge({ capture, materialMask, lashesId, v1Image, faceTex, W, H, faceRoi });
     out.lashesAlphaEdge = alphaEdge;
     if (alphaEdge.error) out.failures.push("lashes alpha-edge 判定不可用: " + alphaEdge.error);
     else if (alphaEdge.gate !== true) out.failures.push("lashes 透明边缘 Gate 未通过 " + (alphaEdge.failures?.join(";") || ""));

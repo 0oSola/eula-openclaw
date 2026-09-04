@@ -41,3 +41,19 @@ export const V14D_HAIR_TINT = [0.84, 0.85, 0.96];
  * 独立 V1 composite 分组（hashed-alpha 裁切口径 alphaThreshold=0.5，与引擎一致）。
  */
 export const V14D_BROWS_LASHES_TINT = [1.0, 1.0, 1.0];
+
+// Stage 2C-M2a 修正轮（wrongAlpha 负测 seam，仅验收故障注入可达）：
+// 专用 fault tag。compile.ts 仅在 graph.tags 含该标识时给引擎 prelude 传
+// v14dAlphaFault=true，使该 graph 的 WGSL 在 hashed discard 之前把 alpha 乘固定故障因子，
+// 真实改变运行时 coverage/画布。graph.name 保持权威名（override/hair helper 同生产 V1），
+// 确保拒绝来自真实 alpha/coverage 语义而非 override 跳过。正常 Brows/Lashes 与其他
+// hashed 材质（stockings 等）不含该 tag，保持 material.alpha * tex_s.a 原字节语义。
+// 该 tag 只由 ?v14dAcceptanceProbe=1 下的 applyBadSkinGraph("wrongBrowsLashesAlpha")
+// 创建/安装；UI、普通 V1、默认入口不可达。
+export const V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_TAG = "v14d-wrong-alpha-fault";
+// wrongAlpha 固定故障因子（单变量、明显）：1e-7。引擎 hashed discard 阈值经 clamp 到
+// [1e-6, 1.0]；可见区 face_d alpha=1.0 × 1e-7 ≈ 0，低于任何 hashed_alpha_threshold
+// （≥1e-6）→ 真实 discard 全部片元、production 前景 coverage/边界环塌缩（整槽消失风险
+// 口径的真实 coverage 证据，非纯颜色扰动）。该字面量与引擎 slots.ts 注入的 fault alpha
+// 表达式保持一致（引擎不跨包 import）。
+export const V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR = 1e-7;

@@ -16,6 +16,7 @@ import {
   V14D_BROWS_MATERIAL_NAME,
   V14D_LASHES_MATERIAL_NAME,
   V14D_BROWS_LASHES_TINT,
+  V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_TAG,
 } from "./v14dAuthority.js";
 
 /**
@@ -227,12 +228,14 @@ export function perturbV14dSkinVariantStyleGroups(groups, kind) {
     ];
   }
   if (kind === "wrongBrowsLashesAlpha") {
-    // 错误 alpha 口径负测：把 hashed 裁切改成 opaque（截断阈值 0.001，等价「不过滤
-    // 半透明边缘」），保留同一恒等 tint graph。预期 Lashes 透明边缘 Gate（P0-2）
-    // 检出 cutout 口径偏离（核心/边缘/透明区分母与权威 alphaThreshold=0.5 不一致）。
+    // 错误 alpha 口径负测（Stage 2C-M2a 修正轮 seam，二次修正）：保留权威 graph 名
+    // "V14D Brows Lashes V1 Composite"（override/hair helper 正常应用，与生产 V1 同构），
+    // 仅在 graph.tags 注入专用 fault tag "v14d-wrong-alpha-fault"。引擎 compile 按该 tag
+    // 给 prelude 传 v14dAlphaFault=true，WGSL 在 hashed discard 前把 alpha 乘固定故障因子
+    // （0.05），真实剔除部分片元、coverage/边界环收缩。正常 graph 无此 tag，alpha 语义不变。
     return groups.map((g) =>
       g.id === "v14d-skin-variant-brows-lashes"
-        ? { ...g, alphaMode: "opaque" }
+        ? { ...g, graph: { ...g.graph, tags: [...(g.graph.tags ?? []), V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_TAG] } }
         : g,
     );
   }

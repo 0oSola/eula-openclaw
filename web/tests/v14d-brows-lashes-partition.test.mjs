@@ -11,6 +11,7 @@ import {
   V14D_BROWS_MATERIAL_NAME,
   V14D_LASHES_MATERIAL_NAME,
   V14D_BROWS_LASHES_TINT,
+  V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_TAG,
 } from "../src/features/stage/v14dAuthority.js";
 
 function fakeGroups() {
@@ -99,12 +100,20 @@ test("negative swapBrowsLashes: two distinct-identity cloned graphs cross-bound 
   assert.notEqual(browsG.graph.name, lashesG.graph.name, "两 graph 必须有独立身份（非仅数组顺序）");
 });
 
-test("negative wrongBrowsLashesAlpha: alphaMode flipped to opaque", () => {
+test("negative wrongBrowsLashesAlpha: 专用 fault tag 注入（alpha 故障因子 seam）", () => {
   const v1 = buildV14dSkinVariantStyleGroups(fakeGroups());
   const bad = perturbV14dSkinVariantStyleGroups(v1, "wrongBrowsLashesAlpha");
   const bl = bad.find((g) => g.id === "v14d-skin-variant-brows-lashes");
-  assert.equal(bl.alphaMode, "opaque");
-  assert.equal(bl.graph.name, "V14D Brows Lashes V1 Composite", "graph 保持恒等 tint（单变量只改 alpha 口径）");
+  // Stage 2C-M2a 修正轮 seam：不再翻 alphaMode（hashed↔opaque 对可见区 alpha=1 无像素
+  // 差异），改在 graph.tags 注入专用 fault tag，引擎 prelude 在 hashed discard 前乘故障
+  // 因子。graph 名/alphaMode 保持权威形态（override/hair helper 同生产 V1，单变量只在
+  // prelude alpha）。
+  assert.equal(bl.alphaMode, "hashed", "alphaMode 保持 hashed（fault 经 tag 注入，非翻口径）");
+  assert.equal(bl.graph.name, "V14D Brows Lashes V1 Composite", "graph 名保持权威（override 同生产 V1）");
+  assert.ok(bl.graph.tags.includes(V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_TAG), "graph.tags 必须含专用 fault tag");
+  // 正常 V1 不含 fault tag（默认入口/普通 V1 不可达）。
+  const normal = v1.find((g) => g.id === "v14d-skin-variant-brows-lashes");
+  assert.ok(!normal.graph.tags.includes(V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_TAG), "正常 V1 graph 不得含 fault tag");
 });
 
 test("negative wrongGraph: all graph names replaced with non-authoritative", () => {

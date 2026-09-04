@@ -188,7 +188,8 @@ if (process.argv.includes("--self-test")) {
   const firstExit = first.exit;
   if (firstExit !== 0) reportPatchFailure("首次运行", first);
   ok(firstExit === 0, "首次完整 fixture 生产补丁 exit=0（实际得到 " + firstExit + "）");
-  const orderOk = (fp) => { const c = fs.readFileSync(fp, "utf8"); const ai = c.indexOf("export function assembleModule"); const seg = ai >= 0 ? c.slice(ai, ai + 900) : ""; const hi = seg.indexOf("V14D_STATE2_HELPERS_WGSL : "); const pi = seg.indexOf("prelude(renderClass, alphaMode)"); return hi >= 0 && pi >= 0 && hi < pi; };
+  // Stage 2C-M2a 修正轮：prelude 调用现带 v14dAlphaFault 参数，匹配前缀（不含结尾括号）。
+  const orderOk = (fp) => { const c = fs.readFileSync(fp, "utf8"); const ai = c.indexOf("export function assembleModule"); const seg = ai >= 0 ? c.slice(ai, ai + 900) : ""; const hi = seg.indexOf("V14D_STATE2_HELPERS_WGSL : "); const pi = seg.indexOf("prelude(renderClass, alphaMode"); return hi >= 0 && pi >= 0 && hi < pi; };
   ok(orderOk(fixSlotsSrc), "断点C 首次注入后 src assembleModule 内 helperIndex < preludeIndex");
   ok(orderOk(fixSlotsDist), "断点C 首次注入后 dist assembleModule 内 helperIndex < preludeIndex");
   // 二次运行必须 exit 0 且文件 hash 不变（幂等）。
@@ -926,8 +927,8 @@ const STATE2_VERIFY_CHECKS = (() => {
   // 否则 WGSL 函数嵌套 → expected '}' for function body，Face graph 应用失败静默回退。
   // Stage 2C-M1：state2 helpers 与 prelude 之间现在隔着 hair helper 注入行；
   // 「helper 在 prelude 前注入」不变量更新为 hair helper（最后一个 helper）紧邻 prelude。
-  { label: "src/graph/slots.ts helper 在 prelude 前注入", file: slotsSrc, marker: 'V14D_HAIR_HELPER_WGSL : "") +' + "\n" + "    prelude(renderClass, alphaMode)" },
-  { label: "dist/graph/slots.js helper 在 prelude 前注入", file: slotsDist, marker: 'V14D_HAIR_HELPER_WGSL : "") +' + "\n" + "        prelude(renderClass, alphaMode)" },
+  { label: "src/graph/slots.ts helper 在 prelude 前注入", file: slotsSrc, marker: 'V14D_HAIR_HELPER_WGSL : "") +' + "\n" + "    prelude(renderClass, alphaMode, v14dAlphaFault)" },
+  { label: "dist/graph/slots.js helper 在 prelude 前注入", file: slotsDist, marker: 'V14D_HAIR_HELPER_WGSL : "") +' + "\n" + "        prelude(renderClass, alphaMode, v14dAlphaFault)" },
   // Stage 2B-M3 全身皮肤统一：身体合成 helper + BodySkin graph.name 覆写分支（src/dist 各自恰好一次）。
   { label: "src/graph/slots.ts body skin helper", file: slotsSrc, marker: "fn v14d_skin_body_composite(base: vec3f)" },
   { label: "dist/graph/slots.js body skin helper", file: slotsDist, marker: "fn v14d_skin_body_composite(base: vec3f)" },
@@ -938,17 +939,28 @@ const STATE2_VERIFY_CHECKS = (() => {
   { label: "src/graph/slots.ts hair helper 常量", file: slotsSrc, marker: "const V14D_HAIR_HELPER_WGSL = " },
   { label: "dist/graph/slots.js hair helper 常量", file: slotsDist, marker: "const V14D_HAIR_HELPER_WGSL = " },
   { label: "src/graph/slots.ts assembleModule hair helper 参数", file: slotsSrc, marker: "includeV14dHairHelper = false," },
-  { label: "dist/graph/slots.js assembleModule hair helper 参数", file: slotsDist, marker: "includeV14dHairHelper = false)" },
+  { label: "dist/graph/slots.js assembleModule hair helper 参数", file: slotsDist, marker: "includeV14dHairHelper = false, v14dAlphaFault = false)" },
   { label: "src/graph/slots.ts assembleModule hair helper 注入", file: slotsSrc, marker: "(includeV14dHairHelper ? V14D_HAIR_HELPER_WGSL : " },
   { label: "dist/graph/slots.js assembleModule hair helper 注入", file: slotsDist, marker: "(includeV14dHairHelper ? V14D_HAIR_HELPER_WGSL : " },
-  { label: "src/graph/compile.ts hair graph 门控", file: compileSrc, marker: 'graph.name === "V14D Hair V1 Composite" || graph.name === "V14D Brows Lashes V1 Composite")' },
-  { label: "dist/graph/compile.js hair graph 门控", file: compileDist, marker: 'graph.name === "V14D Hair V1 Composite" || graph.name === "V14D Brows Lashes V1 Composite");' },
+  { label: "src/graph/compile.ts hair graph 门控", file: compileSrc, marker: 'graph.name === "V14D Hair V1 Composite" || graph.name === "V14D Brows Lashes V1 Composite"' },
+  { label: "dist/graph/compile.js hair graph 门控", file: compileDist, marker: 'graph.name === "V14D Hair V1 Composite" || graph.name === "V14D Brows Lashes V1 Composite"' },
   { label: "src/graph/slots.ts hair override 分支", file: slotsSrc, marker: 'graphName === "V14D Hair V1 Composite"' },
   { label: "dist/graph/slots.js hair override 分支", file: slotsDist, marker: 'graphName === "V14D Hair V1 Composite"' },
   { label: "src/graph/slots.ts brows-lashes override guard", file: slotsSrc, marker: 'graphName === "V14D Brows Lashes V1 Composite"' },
   { label: "dist/graph/slots.js brows-lashes override guard", file: slotsDist, marker: 'graphName === "V14D Brows Lashes V1 Composite"' },
-  { label: "src/graph/compile.ts brows-lashes helper 注入门控", file: compileSrc, marker: 'graph.name === "V14D Brows Lashes V1 Composite")' },
-  { label: "dist/graph/compile.js brows-lashes helper 注入门控", file: compileDist, marker: 'graph.name === "V14D Brows Lashes V1 Composite");' },
+  { label: "src/graph/compile.ts brows-lashes helper 注入门控", file: compileSrc, marker: 'graph.name === "V14D Brows Lashes V1 Composite", v14dAlphaFault)' },
+  { label: "dist/graph/compile.js brows-lashes helper 注入门控", file: compileDist, marker: 'graph.name === "V14D Brows Lashes V1 Composite", v14dAlphaFault);' },
+  // Stage 2C-M2a 修正轮：wrongAlpha 验收故障注入 seam 不变量（裁决项 3）。
+  // 正常路径：prelude 默认 alpha 表达式 material.alpha * tex_s.a 必须保留（let 形态，
+  // 在 alphaDecl 三元表达式的 false 分支与其它非 fault 材质复用）。fault 因子仅在
+  // alphaDecl 的 true 分支出现恰好一次（src/dist 各一）。compile 的 fault tag 门控
+  // （graph.tags 含 v14d-wrong-alpha-fault）在 src/dist 各恰好一次。
+  { label: "src/graph/slots.ts 正常 alpha 语义保留（let 分支）", file: slotsSrc, marker: ': "  let alpha = material.alpha * tex_s.a' },
+  { label: "dist/graph/slots.js 正常 alpha 语义保留（let 分支）", file: slotsDist, marker: ': "  let alpha = material.alpha * tex_s.a' },
+  { label: "src/graph/slots.ts wrongAlpha fault 因子恰好一次", file: slotsSrc, marker: "var alpha = material.alpha * tex_s.a * 1e-7" },
+  { label: "dist/graph/slots.js wrongAlpha fault 因子恰好一次", file: slotsDist, marker: "var alpha = material.alpha * tex_s.a * 1e-7" },
+  { label: "src/graph/compile.ts alphaFault tag 门控恰好一次", file: compileSrc, marker: 'graph.tags?.includes("v14d-wrong-alpha-fault")' },
+  { label: "dist/graph/compile.js alphaFault tag 门控恰好一次", file: compileDist, marker: 'graph.tags?.includes("v14d-wrong-alpha-fault")' },
   { label: "src/graph/compile.ts brows-lashes tint 读取", file: compileSrc, marker: 'n.id === "v14d_brows_lashes_tint"' },
   { label: "dist/graph/compile.js brows-lashes tint 读取", file: compileDist, marker: 'n.id === "v14d_brows_lashes_tint"' },
   ];
@@ -1918,14 +1930,16 @@ const state2CompletenessTargets = [
     replacement: COMPILE_STATE2_SRC_FINAL,
     // Stage 2C-M2a：FINAL（仅 hair）与 Brows/Lashes 已打形态都视为收敛终态，
     // 避免 FINAL 把 Brows/Lashes 文本替换回去又被 brows-lashes target 二次改写的循环。
-    isDone: (content) => content.includes(COMPILE_STATE2_SRC_FINAL) || content.includes(COMPILE_STATE2_SRC_BROWS_LASHES_ANCHOR),
+    // Stage 2C-M2a 修正轮：alphaFault compile target 已打时该行结尾变为
+    // 「...Composite\", (graph.tags?.includes(\"v14d-wrong-alpha-fault\")...)』，也视为收敛终态。
+    isDone: (content) => content.includes(COMPILE_STATE2_SRC_FINAL) || content.includes(COMPILE_STATE2_SRC_BROWS_LASHES_ANCHOR) || content.includes('graph.tags?.includes("v14d-wrong-alpha-fault")'),
     label: "src/graph/compile.ts state2 override + tag 门控接线",
   },
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js"),
     anchors: [COMPILE_STATE2_DIST_FRESH_ANCHOR, COMPILE_STATE2_DIST_STATE2_ANCHOR, COMPILE_STATE2_DIST_A_ANCHOR, COMPILE_STATE2_DIST_A_STATE2_ANCHOR, COMPILE_STATE2_DIST_HAIR_UPGRADE_ANCHOR, COMPILE_STATE2_DIST_TINT_UPGRADE_ANCHOR, COMPILE_STATE2_DIST_BROWS_LASHES_ANCHOR],
     replacement: COMPILE_STATE2_DIST_FINAL,
-    isDone: (content) => content.includes(COMPILE_STATE2_DIST_FINAL) || content.includes(COMPILE_STATE2_DIST_BROWS_LASHES_ANCHOR),
+    isDone: (content) => content.includes(COMPILE_STATE2_DIST_FINAL) || content.includes(COMPILE_STATE2_DIST_BROWS_LASHES_ANCHOR) || content.includes('graph.tags?.includes("v14d-wrong-alpha-fault")'),
     label: "dist/graph/compile.js state2 override + tag 门控接线",
   },
   {
@@ -2017,7 +2031,9 @@ const browsLashesCompileTargets = [
       "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\")",
     ],
     replacement: "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\")",
-    doneMarker: "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\")",
+    // Stage 2C-M2a 修正轮：alphaFault compile target 在本 target 之后把该行结尾
+    // 「...Composite\")」改为「...Composite\", (graph.tags...』；幂等需认两种形态。
+    isDone: (content) => content.includes("graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\")") || content.includes("graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\","),
     label: "src/graph/compile.ts brows-lashes helper 注入门控",
   },
   {
@@ -2027,11 +2043,138 @@ const browsLashesCompileTargets = [
       "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\");",
     ],
     replacement: "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\");",
-    doneMarker: "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\");",
+    isDone: (content) => content.includes("graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\");") || content.includes("graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\","),
     label: "dist/graph/compile.js brows-lashes helper 注入门控",
   },
 ];
 
+// ─── Stage 2C-M2a 修正轮：wrongAlpha 验收故障注入 seam（方案A，仅专用 fault tag 可达）───
+// compile.ts 仅在 graph.tags 含专用 fault tag（与 v14dAuthority.js 的
+// V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_TAG 同字面量）时给 assembleModule/prelude 传
+// v14dAlphaFault=true；prelude 的 alpha 行由 let 改为 var 并乘固定故障因子 1e-7
+// （在 hashed discard 之前），1e-7 < hashed clamp 下限 1e-6 → 真实剔除边缘片元，
+// 画布边界环颜色分布改变。正常 graph 无该 tag → let alpha 原字节语义不变；stockings
+// 等其它 hashed 材质不受影响。该 tag 只由 ?v14dAcceptanceProbe=1 的
+// applyBadSkinGraph("wrongBrowsLashesAlpha") 创建/安装；UI/普通 V1/默认入口不可达。
+const ALPHA_FAULT_TAG = "v14d-wrong-alpha-fault";
+// prelude 签名替换（含 BEGIN/END 包裹注释，与手动 node_modules 形态逐字节一致）。
+const ALPHA_FAULT_PRELUDE_SRC = "// V14D_ALPHA_FAULT_BEGIN\nfunction prelude(renderClass: RenderClass, alphaMode: AlphaMode, v14dAlphaFault = false): string {\n// V14D_ALPHA_FAULT_END";
+const ALPHA_FAULT_PRELUDE_DIST = "// V14D_ALPHA_FAULT_BEGIN\nfunction prelude(renderClass, alphaMode, v14dAlphaFault = false) {\n// V14D_ALPHA_FAULT_END";
+// prelude 函数体 alphaDecl 声明块（插在 const gate 行之前，模板字符串外）。
+const ALPHA_FAULT_DECL_BLOCK_SRC = "  // V14D_ALPHA_FAULT_ALPHA_DECL_BEGIN\n  const alphaDecl = v14dAlphaFault\n    ? \"  var alpha = material.alpha * tex_s.a * 1e-7; // V14D wrongAlpha fault: pre-discard factor\"\n    : \"  let alpha = material.alpha * tex_s.a;\"\n  // V14D_ALPHA_FAULT_ALPHA_DECL_END\n";
+const ALPHA_FAULT_DECL_BLOCK_DIST = "    // V14D_ALPHA_FAULT_ALPHA_DECL_BEGIN\n    const alphaDecl = v14dAlphaFault\n        ? \"  var alpha = material.alpha * tex_s.a * 1e-7; // V14D wrongAlpha fault: pre-discard factor\"\n        : \"  let alpha = material.alpha * tex_s.a;\";\n    // V14D_ALPHA_FAULT_ALPHA_DECL_END\n";
+const alphaFaultTargets = [
+  // prelude 签名（src / dist）。
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
+    anchor: "function prelude(renderClass: RenderClass, alphaMode: AlphaMode): string {",
+    replacement: ALPHA_FAULT_PRELUDE_SRC,
+    // doneMarker 只认签名行（手动/已打形态在 BEGIN 与签名行间可能含额外注释块）。
+    doneMarker: "function prelude(renderClass: RenderClass, alphaMode: AlphaMode, v14dAlphaFault = false): string {",
+    label: "src/graph/slots.ts prelude alphaFault 签名",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
+    anchor: "function prelude(renderClass, alphaMode) {",
+    replacement: ALPHA_FAULT_PRELUDE_DIST,
+    doneMarker: ALPHA_FAULT_PRELUDE_DIST,
+    label: "dist/graph/slots.js prelude alphaFault 签名",
+  },
+  // prelude 函数体 alphaDecl 声明块（src / dist）：插在 const gate 行之前。
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
+    anchor: '  const gate = renderClass === "eye" ? EYE_REAR_GATE : ""',
+    replacement: ALPHA_FAULT_DECL_BLOCK_SRC + '  const gate = renderClass === "eye" ? EYE_REAR_GATE : ""',
+    doneMarker: "V14D_ALPHA_FAULT_ALPHA_DECL_BEGIN",
+    label: "src/graph/slots.ts prelude alphaFault alphaDecl 声明块",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
+    anchor: '    const gate = renderClass === "eye" ? EYE_REAR_GATE : "";',
+    replacement: ALPHA_FAULT_DECL_BLOCK_DIST + '    const gate = renderClass === "eye" ? EYE_REAR_GATE : "";',
+    doneMarker: "V14D_ALPHA_FAULT_ALPHA_DECL_BEGIN",
+    label: "dist/graph/slots.js prelude alphaFault alphaDecl 声明块",
+  },
+  // prelude 模板内 alpha 行（src / dist）：固定 let 行 → 模板占位 alphaDecl。
+  // 锚必须带紧随的 discard 占位行上下文（WGSL 模板内特有），否则会撞车匹配到
+  // 上面 alphaDecl 声明块 false 分支字符串里的同一 let 文本（声明块 target 先注入）。
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
+   anchor: "  let alpha = material.alpha * tex_s.a;\n${discard}",
+   replacement: "${alphaDecl}\n${discard}",
+   doneMarker: "${alphaDecl}\n${discard}",
+   label: "src/graph/slots.ts prelude 模板 alpha 行换 alphaDecl",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
+   anchor: "  let alpha = material.alpha * tex_s.a;\n${discard}",
+   replacement: "${alphaDecl}\n${discard}",
+   doneMarker: "${alphaDecl}\n${discard}",
+   label: "dist/graph/slots.js prelude 模板 alpha 行换 alphaDecl",
+  },
+  // assembleModule 签名（src / dist）。
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
+    anchor: "  includeV14dHairHelper = false,\n): string {",
+    replacement: "  includeV14dHairHelper = false,\n  v14dAlphaFault = false,\n): string {",
+    doneMarker: "  includeV14dHairHelper = false,\n  v14dAlphaFault = false,\n): string {",
+    label: "src/graph/slots.ts assembleModule alphaFault 参数",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
+    anchor: "includeV14dHairHelper = false) {",
+    replacement: "includeV14dHairHelper = false, v14dAlphaFault = false) {",
+    doneMarker: "includeV14dHairHelper = false, v14dAlphaFault = false) {",
+    label: "dist/graph/slots.js assembleModule alphaFault 参数",
+  },
+  // assembleModule prelude 调用传 fault（src / dist）。
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
+    anchor: "    prelude(renderClass, alphaMode) +",
+    replacement: "    prelude(renderClass, alphaMode, v14dAlphaFault) +",
+    doneMarker: "    prelude(renderClass, alphaMode, v14dAlphaFault) +",
+    label: "src/graph/slots.ts assembleModule prelude 传 fault",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "slots.js"),
+    anchor: "        prelude(renderClass, alphaMode) +",
+    replacement: "        prelude(renderClass, alphaMode, v14dAlphaFault) +",
+    doneMarker: "        prelude(renderClass, alphaMode, v14dAlphaFault) +",
+    label: "dist/graph/slots.js assembleModule prelude 传 fault",
+  },
+  // compile.ts / compile.js：graph.tags 含 fault tag → 传 v14dAlphaFault=true。
+  // (a) 在「const fsBodyLive = v14dState2OverrideFsBodyFixed(...)」行后插入 const
+  //     v14dAlphaFault 行（与手动 node_modules 形态逐字节一致）。
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "compile.ts"),
+    anchor: "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody, hairTint)",
+    replacement: "  const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody, hairTint)\n  // V14D_ALPHA_FAULT_COMPILE_BEGIN\n  const v14dAlphaFault = (graph.tags?.includes(\"" + ALPHA_FAULT_TAG + "\") ?? false)\n  // V14D_ALPHA_FAULT_COMPILE_END",
+    doneMarker: "V14D_ALPHA_FAULT_COMPILE_BEGIN",
+    label: "src/graph/compile.ts alphaFault const 行",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js"),
+    anchor: "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody, hairTint);",
+    replacement: "    const fsBodyLive = v14dState2OverrideFsBodyFixed(graph.name, fsBody, hairTint);\n    // V14D_ALPHA_FAULT_COMPILE_BEGIN\n    const v14dAlphaFault = (graph.tags?.includes(\"" + ALPHA_FAULT_TAG + "\") ?? false);\n    // V14D_ALPHA_FAULT_COMPILE_END",
+    doneMarker: "V14D_ALPHA_FAULT_COMPILE_BEGIN",
+    label: "dist/graph/compile.js alphaFault const 行",
+  },
+  // (b) assembleModule 调用行追加 v14dAlphaFault 参数（与手动形态一致：变量引用）。
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "compile.ts"),
+    anchor: "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\")",
+    replacement: "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\", v14dAlphaFault)",
+    doneMarker: "graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\", v14dAlphaFault)",
+    label: "src/graph/compile.ts alphaFault tag 门控",
+  },
+  {
+    file: path.join(rootDir, "node_modules", "reze-engine", "dist", "graph", "compile.js"),
+    anchor: "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\");",
+    replacement: "graph.name === \"V14D Hair V1 Composite\" || graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\", v14dAlphaFault);",
+    doneMarker: "graph.name === \"" + BROWS_LASHES_GRAPH_NAME + "\", v14dAlphaFault);",
+    label: "dist/graph/compile.js alphaFault tag 门控",
+  },
+];
 const state2SlotTargets = [
   {
     file: path.join(rootDir, "node_modules", "reze-engine", "src", "graph", "slots.ts"),
@@ -2086,6 +2229,10 @@ state2Targets.push(...state2CompletenessTargets, ...state2SlotTargets);
 state2Targets.push(...browsLashesOverrideTargets);
 // compile 侧在 compile FINAL 之后再扩展（FINAL anchors 不含 Brows/Lashes 文本）。
 state2Targets.push(...browsLashesCompileTargets);
+// Stage 2C-M2a 修正轮：alphaFault seam 必须在 assembleModule state2 门控（收敛出
+// includeV14dHairHelper 参数）与 brows-lashes helper 注入门控（compile 收敛出最终
+// 调用行）之后应用，其锚点依赖这两步的最终形态。
+state2Targets.push(...alphaFaultTargets);
 
 // Stage 2C-M1 修正轮：dist/graph/slots.js 头部 bundle specifier 重定向（node 直跑）。
 // 独立 target：anchor 取文件首个既有 import 行（"./nodes"），幂等（doneMarker 认
@@ -2110,7 +2257,10 @@ applyPatchManifest(passthroughTargets, "display-passthrough");
     const NL = String.fromCharCode(10);
     const Q = String.fromCharCode(34);
     const helperRef = "(includeState2Mask ? V14D_STATE2_HELPERS_WGSL : " + Q + Q + ") +";
-    const preludeRef = "prelude(renderClass, alphaMode) +";
+    // Stage 2C-M2a 修正轮：alphaFault 的 assemble 调用 target 先于本修正跑（state2Targets
+    // 同批 apply），把 prelude 调用改为含 v14dAlphaFault 参数的形态；本修正的旧/新顺序
+    // 锚必须匹配该最终形态，否则 clean install 的 dist 旧顺序无法识别。
+    const preludeRef = "prelude(renderClass, alphaMode, v14dAlphaFault) +";
     const oldOrder = "decls(renderClass, alphaMode) +" + NL + "        " + preludeRef + NL + "        " + helperRef;
     const newOrder = "decls(renderClass, alphaMode) +" + NL + "        " + helperRef + NL + "        " + preludeRef;
     let content = fs.readFileSync(distSlots, "utf8");

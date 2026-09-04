@@ -3860,6 +3860,13 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       engineRef,
       modelRef,
       selectClosedEyeMorphNames: selectKoledaClosedEyeMorphNames,
+      // Stage 2C-M2a 修正轮（G7 表情状态）：暴露非眨眼表情 Morph 名选择器（权威 PMX
+      // 取证：「笑い」移动 506 个 Lashes 顶点，是最强的非眨眼表情状态）。只读选择器。
+      selectExpressionMorphNames: (names = []) =>
+        (Array.isArray(names) ? names : []).filter(Boolean).filter((name) => {
+          const text = String(name).toLowerCase();
+          return text.includes("笑い") || text.includes("smile") || text.includes("warai");
+        }),
     };
     return () => {
       displayChainTraceCleanup?.();
