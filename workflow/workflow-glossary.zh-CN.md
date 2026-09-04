@@ -140,6 +140,14 @@
 - 禁止用法：不得修改 PMX/VMD 源文件；不得把该规则应用于未命中克莱妲关键字的模型；不得根据固定材质编号隐藏部件。
 - 路由影响：按 Morph 名称优先选择同时包含 eye/眼/目 与 close/闭 的闭眼通道，缺失时才使用 blink；Reze WebGPU 在每帧 VMD Morph 采样后重新写入该通道，从而保持闭眼并禁用眨眼；按材质名称匹配 `mask`、`face mask`、`mouth mask`、`口罩`、`面具` 后隐藏；Reze WebGPU 对 body/face/skin/肌/脸/顔 命中的材质强制归入 `cloth_smooth`（柔滑布料）分组。
 
+# V14D Morph 取证默认外观锁隔离
+
+- 英文机器名：`v14d-morph-forensic-lock-isolation`；失败分类：`H6_productionDefaultAppearanceLockInterference`。
+- 含义：显式 Morph 取证探针先记录克莱妲默认外观锁对请求权重的控制，再在生产 `model.update()` 返回后仅对探针重写指定权重，并继续使用真实 GPU Morph dispatch、队列等待和生产 `vertexBuffer` 读回，避免把锁造成的同态零 delta 误判为引擎 Morph 丢失。
+- 允许用法：`web/scripts/repro-v14d-lashes-morph-offsets.mjs` 的 probe-only 隔离；报告 `defaultAppearanceLockControl`、`defaultAppearanceLockBypassedByProbe`、H6 状态和 `firstLostBoundary`。
+- 禁止用法：不得修改生产默认外观锁、正式 G7、`expectedAffectedSlots`、PMX/VMD、视觉公式或材质资产；不得用绕过探针宣称产品默认外观已解除。
+- 路由影响：先核对 PMX/Blender 的严格非零偏移、材质交集、生产 draw 索引和 runtime CSR；隔离后 GPU 仍不一致才进入引擎 Morph 输入/compute 路线。完整定义见 `workflow/concepts/v14d-morph-forensic-lock-isolation.zh-CN.md`。
+
 # 通用内置动作库
 
 - 英文机器名：`usage/vmd/_builtin`
