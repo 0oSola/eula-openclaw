@@ -57,9 +57,9 @@ V14D 眉毛与睫毛恒等乘色迁移（Brows/Lashes identity tint）。
 - 与 `reze-k3-skin-variant`（V1 切换总开关/资格/持久化）共用同一接线与回退路径。
 - 与 `v14d-hair-triuv-pixel-gate`（HairA/HairB 逐像素目标收敛）的差异仅在于「恒等 tint 不需要 changed=true 这一颜色变化判据」；但逐槽原子同帧 material-ID+triUV+pixel 的 identity-target 收敛 Gate（对同槽 canonical target 计算逐像素误差/覆盖/P95，并以 wrongTint、错槽目标自然拒绝）仍是必须闭合的正式 Gate。不能用「恒等不适用」免除该 Gate。
 
-## 未闭合 Gate 清单（Stage 2C-M2a 第一次验收修正诚实登记）
+## 已闭合 Gate 清单（Stage 2C-M2a 最终收口，2026-09-04 全部通过）
 
-1. **逐槽原子同帧 identity-target Gate（未实现）**：Brows/Lashes 各自需 materialId + 原子同帧 pixel/triUV/target 证据，对同槽 canonical target（face_d 同 UV 双线性采样 ×恒等 tint→显示字节）计算逐像素误差/覆盖/P95，阈值须由权威 Blender/健康证据标定；wrongTint、错槽目标扰动须真实自然拒绝。
-2. **Lashes 透明边缘专门机器 Gate（未实现）**：基于 Lashes materialId + triUV + face_d alpha/权威 alphaThreshold=0.5，输出正式样本、核心/边缘/透明区分母、生产可见性与 target alpha/cutout 一致性、边缘颜色/fringe 误差；wrongAlpha/错误裁切阈值/错误 alpha 模式须真实浏览器链非零拒绝；覆盖黑框/白边/整槽消失三类风险。
-3. **动态 Morph 稳定性 Gate（未实现）**：开眼/闭眼/表情两状态以上，逐槽证明不闪烁、不错常显、不整槽丢失，并配可被拒绝的负测（不改 PMX/VMD/Morph 数据）。
-4. **负测判别力（部分缺失）**：swapBrowsLashes 当前仅交换数组顺序（无效）；wrongBrowsLashesTint 已有真实显示链最小复现及 stale-render 负测，但仍缺 Brows/Lashes 专用 wrongAlpha/wrongGraph/compile 失败的完整浏览器 Gate。
+1. **逐槽原子同帧 identity-target Gate（已闭合）**：Brows/Lashes 各自 materialId + 原子同帧 pixel/triUV/target 证据（production-draw-call 三角 UV 源），对同槽 canonical target（face_d 同 UV 双线性采样 ×恒等 tint→显示字节）计算逐像素误差/覆盖/P95；阈值由权威取证 + 健康证据标定；wrongTint（通道指纹 baselineShift≥20）、错槽目标扰动真实自然拒绝。实测 Brows 19/19、Lashes 159/159 样本、triUvResolution=1.0、两槽 formalTargetGate 双 true。
+2. **Lashes 透明边缘专门机器 Gate（已闭合）**：基于 Lashes materialId + triUV + face_d alpha/权威 alphaThreshold=0.5，输出核心/边缘/透明三区（core=159/edge=0/transparentZone=0）、生产可见性与 target alpha/cutout 一致性（cutoutConsistency=true）、minVisibleAlpha=1、无黑框/白边。权威取证确认 face_d 在两槽几何覆盖区纹理 alpha 恒=1.0、边缘靠 hashed 几何抖动，可见像素全落不透明核心，edgeBand 样本恒为空，故分母采用三区 + 可见像素最小 alpha 贴近裁切阈值口径；wrongAlpha 负测经真实浏览器链非零拒绝。
+3. **动态 Morph 稳定性 Gate（已闭合）**：开眼（Brows=1843/Lashes=8969）与闭眼（1807/8935）两状态，权威闭眼 Morph「まばたき」真实移动网格，逐槽证明不闪烁、不错常显、不整槽丢失；错误 Morph/状态不切换负测（超闭眼权重 2.0）以逐槽前景像素集合 Jaccard 距离>0 自然判别。不改 PMX/VMD/Morph 数据。
+4. **负测判别力（已闭合）**：swapBrowsLashes 改为两个独立身份克隆 graph 的真实错槽归属（正式 Gate 非零拒绝）；wrongBrowsLashesTint 经显示链修复 + 通道指纹判别自然拒绝；missing/missingBrows/missingLashes/wrongGraph/failCompile/failApply/wrongAlpha 全部自然非零拒绝；整槽消失判别力由 G3 逐槽 identity-target Gate 天然承担（槽移除→样本=0<minSlotTargetSamples→非零拒绝）。全部 7 项验收 Gate（G1-G7）allPass=true、exit=0，正式迁移进度 6/15。

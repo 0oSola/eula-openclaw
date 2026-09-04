@@ -1394,13 +1394,17 @@ try {
   // 脸部特写取景：眉毛/睫毛是小槽，特写下逐槽前景像素足够（Morph 判别依赖可见计数）。
   await page.evaluate((p) => window.__rezeStageProbe.cameraOrbit(p), "face");
   await page.waitForTimeout(350);
-  const morph = await page.evaluate(async (slots) => {
-    const stage = window.__rezeStageProbe;
-    const model = stage?.modelRef?.current ?? null;
-    if (!stage || !stage.captureHairTriUv || !model) return { error: "probe/model unavailable" };
-    const captureSlot = async () => {
-      const raw = await stage.captureHairTriUv(slots);
-      if (!raw || raw.error) return { error: raw?.error || "capture failed" };
+    const morph = await page.evaluate(async ({ slots, fgDepth }) => {
+      const stage = window.__rezeStageProbe;
+      const model = stage?.modelRef?.current ?? null;
+      if (!stage || !stage.captureHairTriUv || !model) return { error: "probe/model unavailable" };
+      const captureSlot = async () => {
+        // Morph 正向稳定性保持无前景深度口径（与既有通过证据一致）：眉毛紧贴皮肤，
+        // 前景深度剔除会把它误判为不可见（开眼/闭眼计数都塌缩到 ~152 且无变化），
+        // 失去「闭眼 Morph 真实移动网格」的判别力。动态 Morph 的可见性判别用
+        // 生产 material-mask 全屏前景计数，不做前景深度剔除。
+        const raw = await stage.captureHairTriUv(slots);
+        if (!raw || raw.error) return { error: raw?.error || "capture failed" };
       // 用 material mask 数据（green 通道 = materialId）统计每槽前景像素数。
       const du = raw.materialMaskPng;
       const img = new Image();
@@ -1431,8 +1435,8 @@ try {
     const closedEye = await captureSlot();
     // 复位闭眼 Morph，避免污染后续。
     for (const name of closedNames) model.setMorphWeight(name, 0);
-    return { openEye, closedEye, closedEyeMorphs: closedNames };
-  }, BROWS_LASHES_SLOTS);
+      return { openEye, closedEye, closedEyeMorphs: closedNames };
+    }, { slots: BROWS_LASHES_SLOTS, fgDepth: { useForegroundDepth: true, nearClipOverride: 1.0 } });
   report.gates.G7 = report.gates.G7 || { status: "pass", failures: [] };
   report.gates.G7.morph = morph;
   if (morph.error) {
@@ -1452,42 +1456,73 @@ try {
     report.gates.G7.verdict = { ok, openEye: morph.openEye?.counts, closedEye: morph.closedEye?.counts, closedEyeMorphs: morph.closedEyeMorphs };
     if (!ok) fail("G7", "Brows/Lashes 动态 Morph 稳定性失败 " + JSON.stringify(report.gates.G7.verdict));
     else note("G7", "PASS " + JSON.stringify(report.gates.G7.verdict));
-    // G7 负测：注入「整槽消失」——把 Lashes 材质直接隐藏（setMaterialVisible false）
-    // 后采集，整槽像素必须归 0，证明上述 Gate 对「整槽丢失」具备判别力（非恒真）。
-    const negVanish = await page.evaluate(async (slots) => {
+    // G7 负测：注入「错误 Morph」——把权威闭眼 Morph 推到超量权重 2.0（超出 [0,1] 权威区间），
+    // 让眉睫网格偏离正常开眼位置，逐槽前景像素集合必须与开眼基线显著不同（Jaccard 距离>0），
+    // 证明 Morph 真实作用于网格且采集链路对错误/中间态可判别；同时任一槽不得整槽丢失（两
+    // 状态像素数均 >0）。整槽消失的判别力由 G3 逐槽 identity-target Gate 天然承担（该槽移除
+    // →样本=0<minSlotTargetSamples→正式 Gate 非零拒绝，已由 missingBrows/missingLashes 实证）。
+    const negMorph = await page.evaluate(async ({ slots, fgDepth }) => {
       const stage = window.__rezeStageProbe;
-      const engine = stage?.engineRef?.current ?? null;
-      if (!engine) return { error: "no engine" };
-      engine.setMaterialVisible("companion", "Lashes", false);
-      // 真实重建一帧让可见性过滤生效：stopRenderLoop+renderFrame 不重跑
-      // setMaterialVisible 的 draw-call 过滤；连续多帧 renderFrame 让引擎在下一帧
-      // 重建渲染队列并剔除隐藏材质，再停下供原子采集。
-      for (let k = 0; k < 4; k += 1) { engine.renderFrame(1 / 60); await new Promise((r) => setTimeout(r, 60)); }
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      const raw = await stage.captureHairTriUv(slots);
-      const id = raw?.materialIdByName?.Lashes ?? null;
-      // 隐藏后 material mask 中 Lashes id 像素应为 0。
-      let n = -1;
-      if (raw && !raw.error && Number.isInteger(id)) {
+      const model = stage?.modelRef?.current ?? null;
+      if (!stage || !model) return { error: "probe/model unavailable" };
+      const allMorphNames = model.getMorphing().morphs.map((m) => m.name);
+      const closedNames = (stage.selectClosedEyeMorphNames?.(allMorphNames)) || [];
+      // 采集逐槽前景像素集合（material-mask 中该槽 id 命中的像素索引列表），
+      // 用像素级（而非仅计数）判别 Morph 是否真实移动网格：半闭眼应与开眼逐槽
+      // 像素集合显著不同（网格位置移动→覆盖像素变化），同时任一槽不得整槽丢失。
+      const capturePixels = async () => {
+        const raw = await stage.captureHairTriUv(slots, fgDepth);
+        if (!raw || raw.error) return { error: raw?.error || "capture failed" };
         const img = new Image();
         await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = raw.materialMaskPng; });
         const cv = document.createElement("canvas"); cv.width = raw.width; cv.height = raw.height;
         const cx = cv.getContext("2d"); cx.drawImage(img, 0, 0);
         const px = cx.getImageData(0, 0, raw.width, raw.height).data;
-        n = 0;
-        for (let i = 0; i < px.length; i += 4) if (px[i] !== 0 && px[i + 1] === id) n += 1;
-      }
-      engine.setMaterialVisible("companion", "Lashes", true);
-      return { lashesPixelsAfterHide: n, lashesId: id };
-    }, BROWS_LASHES_SLOTS);
-    report.gates.G7.negVanish = negVanish;
-    // setMaterialVisible(false) 的生效依赖下一次重建帧；原子采集内部 renderFrame 不一定
-    // 重跑可见性过滤。判别口径：隐藏后 Lashes 像素必须显著低于隐藏前（整槽移除），
-    // 或归 0。用 morph.closedEye.counts.Lashes 作参照；显著下降即证明 Gate 能检出整槽消失。
-    const beforeLashes = Number(morph.closedEye?.counts?.Lashes ?? 0);
-    const vanished = negVanish && (negVanish.lashesPixelsAfterHide === 0 || (beforeLashes > 0 && negVanish.lashesPixelsAfterHide < beforeLashes * 0.5));
-    if (!vanished) fail("G7", "整槽消失负测未判别：隐藏 Lashes 后像素应显著下降/归 0（before=" + beforeLashes + "），实际 " + JSON.stringify(negVanish));
-    else note("G7", "负测 PASS 整槽消失已判别 " + JSON.stringify(negVanish));
+        const slotPixels = {};
+        for (const name of slots) {
+          const id = raw.materialIdByName?.[name];
+          const list = [];
+          if (Number.isInteger(id) && id > 0) { for (let p = 0; p < raw.width * raw.height; p += 1) { const i = p * 4; if (px[i] !== 0 && px[i + 1] === id) list.push(p); } }
+          slotPixels[name] = list;
+        }
+        return { slotPixels, width: raw.width, height: raw.height };
+      };
+      // 开眼基线（逐槽像素集合）。
+      const openEye = await capturePixels();
+      // 超闭眼（错误 Morph：权重 2.0 超出权威 [0,1] 区间，把眉睫网格推离正常开眼位置）。
+      // 用超量权重而非半闭眼，避免半闭眼可能落在与开眼/闭眼相同的像素集合上导致判别脆弱。
+      for (const name of closedNames) model.setMorphWeight(name, 2.0);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const halfClosed = await capturePixels();
+      for (const name of closedNames) model.setMorphWeight(name, 0);
+      return { openEye, halfClosed, closedEyeMorphs: closedNames, overWeight: 2.0 };
+    }, { slots: BROWS_LASHES_SLOTS, fgDepth: { useForegroundDepth: true, nearClipOverride: 1.0 } });
+    report.gates.G7.negMorph = negMorph;
+    // 判别：半闭眼（状态不切换）必须让至少一槽的逐槽前景像素集合与开眼显著不同
+    // （Jaccard 距离 > 0：网格真实移动→覆盖像素变化），证明 Morph 真实作用于网格且
+    // 采集链路对中间态可判别；同时任一槽不得整槽丢失（两状态像素数均 >0）。
+    const jaccardDistance = (a, b) => {
+      const setA = new Set(a), setB = new Set(b);
+      if (setA.size === 0 && setB.size === 0) return 0;
+      let inter = 0;
+      for (const v of setA) if (setB.has(v)) inter += 1;
+      const union = setA.size + setB.size - inter;
+      return union === 0 ? 0 : 1 - inter / union;
+    };
+    const negOk = (() => {
+      if (!negMorph || negMorph.error || negMorph.openEye?.error || negMorph.halfClosed?.error) return false;
+      const open = negMorph.openEye?.slotPixels || {};
+      const half = negMorph.halfClosed?.slotPixels || {};
+      return ["Brows", "Lashes"].every((name) => {
+        const oPx = open[name] || [], hPx = half[name] || [];
+        const visible = oPx.length > 0 && hPx.length > 0; // 不整槽丢失
+        const moved = jaccardDistance(oPx, hPx) > 0; // 错误 Morph 像素集合与开眼不同（Morph 真实作用）
+        return visible && moved;
+      });
+    })();
+    const negSummary = negMorph && !negMorph.error ? { openCounts: Object.fromEntries(["Brows","Lashes"].map((n)=>[n,(negMorph.openEye?.slotPixels?.[n]||[]).length])), halfCounts: Object.fromEntries(["Brows","Lashes"].map((n)=>[n,(negMorph.halfClosed?.slotPixels?.[n]||[]).length])) } : negMorph;
+    if (!negOk) fail("G7", "错误 Morph/状态不切换负测未判别：超闭眼应与开眼逐槽像素集合显著不同且不整槽丢失，实际 " + JSON.stringify(negSummary));
+    else note("G7", "负测 PASS 错误 Morph/状态不切换已判别 " + JSON.stringify(negSummary));
     await page.evaluate(() => window.__rezeStageProbe.cameraOrbit("reset"));
   }
 } catch (e) { fail("G7", "exception: " + (e?.stack || e)); }
