@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { captureApiRoute } from "./v14d-capture-api-origin.mjs";
 import { evaluateG7WeightEvidence, calibrateG7Noise, evaluateG7Movement, validateG7Source } from "../src/features/stage/v14dG7WeightEvidence.js";
 import {
   validateV14dHairCapturePair,
@@ -14,6 +15,8 @@ import {
 
 const CHROME_EXE = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const ORIGIN = process.env.V14D_CAPTURE_ORIGIN || "http://127.0.0.1:3114";
+const API_ROUTE = captureApiRoute(process.env.V14D_CAPTURE_API_ORIGIN);
+const ENTRY_ONLY = process.argv.includes("--entry-only");
 // P0-1 红绿证明开关：?v14dG7FaultRestore=1 在 G7 open 态采集后注入 throw，验证异常路径 finally
 // 恢复 exact 原态（restore.ok===true）。仅 acceptance probe；--fault-restore 可不经 URL 强制开启。
 const FAULT_RESTORE = process.argv.includes("--fault-restore");
@@ -161,6 +164,15 @@ if (process.argv.includes("--self-test-g5-stale")) {
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "rk3v1-stage-"));
 const context = await chromium.launchPersistentContext(profile, { executablePath: CHROME_EXE, headless: true, viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1, args: ["--enable-unsafe-webgpu"] });
 const page = context.pages()[0] ?? (await context.newPage());
+report.apiOrigin = API_ROUTE.origin;
+report.pmxResponses = [];
+context.on("response", response => {
+  const url = new URL(response.url());
+  if (url.pathname.toLowerCase().endsWith(".pmx")) report.pmxResponses.push({
+    origin: url.origin, pathname: url.pathname, status: response.status(),
+    contentType: response.headers()["content-type"] || null, configuredOriginMatched: API_ROUTE.matches(url),
+  });
+});
 page.on("pageerror", (e) => report.pageErrors.push(String((e && e.stack) || e)));
 page.on("console", (m) => { const t = m.text(); if (/v14d-skin-variant|WGSL|error|未定义|undeclared|tint/i.test(t)) (report.consoleWarn = report.consoleWarn || []).push(t.slice(0, 900)); });
 page.on("requestfailed", (r) => report.failedReqs.push({ url: r.url().slice(0, 160), err: r.failure()?.errorText || "unknown" }));
@@ -189,11 +201,11 @@ await page.route("**/api/backend/**", async (route) => {
   if (p.startsWith("/companion") || p.startsWith("/config/companion")) return json({ user_id: USER_ID, selected_model_path: null, render_pipeline: "reze-k3", reze_stage_document: null, updated_at: null });
   return json({ items: [] });
 });
-// 兜底：直接命中后端 origin（127.0.0.1:8000）的请求。
+// 兜底：仅拦截配置的直接后端来源，默认兼容8000；不接管其他端口。
 // shared-config 用 directApi:true，MMDStage.toAbsolute 把存根模型/贴图/VMD 相对路径
 // 也解析到该 origin，二者都不经 /api/backend 代理。后端不可用时必须在此拦截，
 // 否则产生 ERR_CONNECTION_REFUSED 进入 failedRequests 阻断 G1。
-await page.route("**://127.0.0.1:8000/**", async (route) => {
+await page.route(API_ROUTE.matches, async (route) => {
   const url = new URL(route.request().url());
   const p = url.pathname;
   const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -398,6 +410,75 @@ function hairCaptureAudit(capture, atomicPair) {
     triUvCaptureId: triUv.captureId ?? null,
     pixelTriUvPair: atomicPair,
   };
+}
+
+// 入口回放只证明受控存根环境的导入、开关与六槽绑定，不替代G1-G7。
+if (ENTRY_ONLY) {
+  const started = Date.now();
+  const entry = { startedAt: new Date(started).toISOString(), status: "running", phase: "navigate", failures: [] };
+  report.entry = entry;
+  let deadline;
+  try {
+    await Promise.race([
+      (async () => {
+        await gotoCompanion();
+        await switchToRezeK3();
+        // 与完整验收相同：K3侧栏下通用模型选择器可隐藏，目录导入仍是必经步骤。
+        await page.selectOption('select[aria-label="模型切换"]', KOLEDA_REL).catch(() => {});
+        entry.phase = "import-and-ready";
+        await importDir(IMPORT_DIR);
+        entry.original = await readCanvasState();
+        if (entry.original.webgpuStatus !== "ready" || entry.original.variant !== "original") throw new Error("原始模式未就绪");
+        await shot("entry-original");
+        entry.phase = "v1-binding";
+        await page.click(sel.variantBtn("v1"));
+        await waitRebuilt();
+        entry.v1 = await readCanvasState();
+        entry.copy = await page.locator(sel.variantBtn("v1")).innerText();
+        if (entry.v1.webgpuStatus !== "ready" || entry.v1.variant !== "v1") throw new Error("V1未就绪");
+        for (const slot of ["face", "body", "hairA", "hairB", "brows", "lashes"]) {
+          const count = Number(entry.v1[slot + "DrawCalls"]);
+          if (!(count > 0 && count === Number(entry.v1[slot + "OnComposite"]))) throw new Error(slot + "绑定未通过");
+        }
+        for (const word of ["Face", "BodySkin", "HairA/HairB", "Brows", "Lashes", "6 槽", "9 槽", "高光待决"])
+          if (!entry.copy.includes(word)) throw new Error("显示文案缺少" + word);
+        await shot("entry-v1");
+        entry.phase = "original-return";
+        await page.click(sel.variantBtn("original"));
+        await waitRebuilt();
+        entry.returned = await readCanvasState();
+        if (entry.returned.variant !== "original" || entry.returned.webgpuStatus !== "ready") throw new Error("切回原始模式失败");
+      })(),
+      new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error("入口回放105秒预算耗尽")), 105000); }),
+    ]);
+    if (report.pageErrors.length || report.failedReqs.length || report.httpBad.length) throw new Error("入口存在页面或HTTP错误");
+    entry.status = "pass";
+  } catch (error) {
+    entry.status = "fail";
+    entry.failures.push(String(error?.stack || error));
+  } finally {
+    clearTimeout(deadline);
+    let diagnosticTimer;
+    await Promise.race([
+      (async () => {
+        entry.lastPage = await page.evaluate(() => ({
+          canvas: [...document.querySelectorAll("canvas")].map(c => ({ ...c.dataset })),
+          visibleText: document.body.innerText.slice(-5000),
+        }));
+        const file = path.join(OUT, "entry-final.png");
+        await page.screenshot({ path: file, timeout: 3000 });
+        report.screenshots.entryFinal = file;
+      })().catch(error => { entry.diagnosticError = String(error); }),
+      new Promise(resolve => { diagnosticTimer = setTimeout(resolve, 4000); }),
+    ]);
+    clearTimeout(diagnosticTimer);
+    await context.close();
+    entry.elapsedMs = Date.now() - started;
+    report.summary = { allPass: entry.status === "pass", exitCode: entry.status === "pass" ? 0 : 1, scope: "entry-only", fullAcceptanceRun: false };
+    fs.writeFileSync(path.join(OUT, "entry-report.json"), JSON.stringify(report, null, 2));
+    console.log("===ENTRY=== " + JSON.stringify({ ...report.summary, phase: entry.phase, failures: entry.failures, pmxResponses: report.pmxResponses }));
+  }
+  process.exit(report.summary.exitCode);
 }
 
 // ── G1：用户路径与切换 ───────────────────────────────────────────────
@@ -1417,7 +1498,7 @@ if (!G7_MORPH_ONLY) try {
     if (p.startsWith("/companion") || p.startsWith("/config/companion")) return json({ user_id: USER_ID, selected_model_path: null, render_pipeline: "reze-k3", reze_stage_document: null, updated_at: null });
     return json({ items: [] });
   });
-  await prodPage.route("**://127.0.0.1:8000/**", async (route) => {
+  await prodPage.route(API_ROUTE.matches, async (route) => {
     const url = new URL(route.request().url());
     const p = url.pathname;
     const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
