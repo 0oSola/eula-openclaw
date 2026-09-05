@@ -2,12 +2,18 @@
 
 ## 中文名称
 
-### 当前候选补正（G7，待主会话验收，正式进度4/15）
+### 当前阶段验收与集成状态
+
+主会话代码与运行证据验收通过（2026-09-05），待主工作树集成。材质阶段验收6/15（Face、BodySkin、HairA、HairB、Brows、Lashes）；已合并仍4/15（Face、BodySkin、HairA、HairB），不得把阶段验收写成已合并。
+
+验证来源：主会话复跑59项聚焦测试（58通过、1允许跳过）、patch verify 93/93、固定点差异检查和禁止文件范围检查；交叉复核执行任务实际运行的健康、首次异常、中途异常及完整报告、full-native-exit.json、完整日志、构建日志和主舞台及开眼截图。完整 G1–G7 由执行任务运行，原生退出码0且未超时；两处异常原生退出码1且恢复成功。主会话本轮未重复运行完整验收。
+
+范围边界：HairA/HairB仅基础色（BaseColor）迁移，高光及其他头发着色仍待决；浏览器验收使用API/会话/资源列表存根环境，真实本地模型与生产 /companion 渲染链已验证，不等于真实后端联调通过。用户可见UI仍只列Face/BodySkin，留待集成时修正文案，本轮不改UI或代码。
 
 本节取代历史候选自评中不完整的 G7 证据口径：
 
 - 每态 `weightEvidence`（权重证据）分开保留请求、运行时、有效权重与真实 GPU 缓冲读回。`readV14dProductionDrawCallSourceSnapshot` 复用原 COPY_SRC 读回输出；`gpu` 不再取自 `getEffectiveMorphWeights()`。open/closed 的 captureId/frame 和来源必须各自匹配，改下一态之前冻结副本。
-- `restore.before/after`（恢复前后快照）记录原相机 position/target/fov、Morph、clip、播放/暂停、looping、render-loop。必须在脸部取景前保存，在 finally 真正应用原相机并同步 uniforms；比较固定脸部矩阵不是恢复。非默认机位健康、首次采集抛错和中途抛错均须保持原态。
+- `restore.before/after`（恢复前后快照）记录原相机 position/target/fov、Morph、clip、播放/暂停、looping、渲染循环（render-loop）。必须在脸部取景前保存，在 finally 真正应用原相机并同步 着色器统一参数（uniforms）；比较固定脸部矩阵不是恢复。非默认机位健康、首次采集抛错和中途抛错均须保持原态。
 - `noiseCalibration`（噪声标定）只取独立 open/openRepeat 健康采集加原 epsilon；wrongName/noSwitch 不参与。两类负测共用正式移动判定，只有有效证据、不满足正式移动条件且仍落在健康噪声内才是预期拒绝。大幅错误位移、空样本、NaN、错源不能抬高自己的阈值后通过。
 - `sourceAudit`（生产源审计）核对本态 captureId/frame、生产缓冲身份、读回有限值、无待调度 Morph、draw/pick 范围一致。不接受 `raw.source` 字符串回退。
 - `--g7-evidence-only` 只运行本轮权重/相机/移动证据，不宣称覆盖 G1–G6 或 missing 材质分析；完整 accept 不带该开关。`V14D_G7_OUT` 是各分析器共同的输出目录，默认兼容旧目录，本轮指定独立子目录保留历史证据。
@@ -62,7 +68,7 @@ V14D 眉毛与睫毛恒等乘色迁移（Brows/Lashes identity tint）。
 
 ## 失败后的修正路线
 - 若两槽 OnComposite=0：检查 `buildV14dSkinVariantStyleGroups` 是否把两槽从原 face 分组抽出、graph.name 是否与引擎补丁门控字符串精确一致、compile 的 helper 注入门控是否包含该 graph。
-- 若 graph/WGSL/compile-install 已变化但最终画布不变：先沿“显示链提交边界”检查实际 `setPipeline`、bind group、draw range、HDR resolve、合成和 canvas；不要先修改 tint、阈值或 alpha analyzer。
+- 若 graph/WGSL/compile-install 已变化但最终画布不变：先沿“显示链提交边界”检查实际 `setPipeline`、bind group、绘制索引范围（draw range）、HDR resolve、合成和 canvas；不要先修改 tint、阈值或 alpha analyzer。
 - 若颜色异常（偏色/消失）：检查是否误用非恒等 tint 或 renderClass=hair。
 - 若透明边缘破裂：检查 alphaMode 是否为 hashed、引擎 hashed-alpha 裁切是否生效。
 
@@ -70,9 +76,9 @@ V14D 眉毛与睫毛恒等乘色迁移（Brows/Lashes identity tint）。
 - 与 `reze-k3-skin-variant`（V1 切换总开关/资格/持久化）共用同一接线与回退路径。
 - 与 `v14d-hair-triuv-pixel-gate`（HairA/HairB 逐像素目标收敛）的差异仅在于「恒等 tint 不需要 changed=true 这一颜色变化判据」；但逐槽原子同帧 material-ID+triUV+pixel 的 identity-target 收敛 Gate（对同槽 canonical target 计算逐像素误差/覆盖/P95，并以 wrongTint、错槽目标自然拒绝）仍是必须闭合的正式 Gate。不能用「恒等不适用」免除该 Gate。
 
-## 候选收口（Stage 2C-M2a，2026-09-04 待主会话验收）
+## 历史候选自评（Stage 2C-M2a，2026-09-04；非当前验收状态）
 
-原「待修正 Gate 清单」四项在本票自评闭合并跑通完整 G1-G7（allPass=true、exit=0）。本段为候选收口、待主会话验收，正式迁移进度仍 4/15（Face、BodySkin、HairA、HairB），待主会话真正验收后再登记 6/15。各阻断项自评口径见下。
+本节保留历史候选自评，不能作为当前验收证书；当前结论与验证来源以顶部为准：材质阶段验收6/15，已合并仍4/15，Brows/Lashes待主工作树集成。下列历史自评中的完整运行由执行任务实施，不表示主会话本轮重跑完整验收。
 
 1. **逐槽原子同帧 identity-target Gate（闭合）**：production-draw-call material-ID + triUV + 同像素 identity-target 收敛，两槽 formalTargetGate 双 true、targetBinding consistent、inputsValid；各槽样本、coverage、MAE/P95 落盘。
 2. **Lashes 透明边缘 Gate（闭合）**：改为屏幕空间形态学边界环（非空 core/edge/transparent 分母），比较 Original/V1 边界覆盖、综合色、黑边/白边/整槽消失。wrongAlpha 不再修改 analyzer 阈值自证，改用专用 acceptance fault graph（仅 ?v14dAcceptanceProbe=1 可达）在 hashed discard 前乘固定故障因子 V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR，真实剔除片元使 coverage/边界环收缩，由形态学边界环 Gate 自然非零拒绝。

@@ -2,14 +2,20 @@
 
 ## Reze K3 皮肤变体
 
-当前 G7 候选补正：`weightEvidence`=同态请求/运行时/有效/GPU缓冲读回证据；`noiseCalibration`=独立健康重复噪声标定；`sourceAudit`=本态生产源身份与有效读回审计。三者用于 Brows/Lashes 的正式移动判定，禁止以CPU值冒充GPU或让负测自校准。`restore.before/after` 必须证明原非默认相机被真正应用恢复。`--g7-evidence-only` 不替代完整验收，`V14D_G7_OUT` 隔离本轮产物。完整口径见 `concepts/v14d-brows-lashes-identity-tint.zh-CN.md` 当前候选补正；正式进度仍4/15，历史“闭合”仅为自评。
+主会话代码与运行证据验收通过（2026-09-05），待主工作树集成。材质阶段验收6/15（Face、BodySkin、HairA、HairB、Brows、Lashes）；已合并仍4/15（Face、BodySkin、HairA、HairB），不得把阶段验收写成已合并。
+
+验证来源：主会话复跑59项聚焦测试（58通过、1允许跳过）、patch verify 93/93、固定点差异检查和禁止文件范围检查；交叉复核执行任务实际运行的健康、首次异常、中途异常及完整报告、full-native-exit.json、完整日志、构建日志和主舞台及开眼截图。完整 G1–G7 由执行任务运行，原生退出码0且未超时；两处异常原生退出码1且恢复成功。主会话本轮未重复运行完整验收。
+
+范围边界：HairA/HairB仅基础色（BaseColor）迁移，高光及其他头发着色仍待决；浏览器验收使用API/会话/资源列表存根环境，真实本地模型与生产 /companion 渲染链已验证，不等于真实后端联调通过。用户可见UI仍只列Face/BodySkin，留待集成时修正文案，本轮不改UI或代码。
+
+当前 G7 证据口径：`weightEvidence`=同态请求/运行时/有效/GPU缓冲读回证据；`noiseCalibration`=独立健康重复噪声标定；`sourceAudit`=本态生产源身份与有效读回审计。三者用于 Brows/Lashes 的正式移动判定，禁止以CPU值冒充GPU或让负测自校准。`restore.before/after` 必须证明原非默认相机被真正应用恢复。`--g7-evidence-only` 不替代完整验收，`V14D_G7_OUT` 隔离本轮产物。完整口径见 `concepts/v14d-brows-lashes-identity-tint.zh-CN.md` 当前阶段验收与集成状态；历史“闭合”仅为当轮自评。
 
 - 英文机器名：`rezeK3SkinVariant`
 - 含义：`/companion` reze-k3 舞台中克莱妲部分 PMX 材质槽的可选 V14D
   实时合成模式；`original`=原始 Reze K3，`v1`=Reze K3 V1（V14D）。
   持久化按 用户+模型+reze-k3 管线 三维隔离，默认 original。
-  截至 Stage 2C-M2a 候选收口（2026-09-04，待主会话验收）：**Face、BodySkin、
-  HairA、HairB、Brows、Lashes** 六槽在本票自评闭合正式逐槽 Gate；本段为候选收口、待主会话验收，正式迁移进度仍 4/15，待主会话真正验收后再登记 6/15。
+  截至 Stage 2C-M2a 阶段验收（2026-09-05）：**Face、BodySkin、
+  HairA、HairB、Brows、Lashes** 六槽通过材质阶段验收（6/15）；已合并仍4/15，Brows/Lashes待主工作树集成。
   Brows/Lashes 的正式验收口径（本票最终闭合）：① 逐槽原子同帧 material-ID +
   production-draw-call triUV + 同像素 identity-target 收敛；② Lashes 透明边缘
   屏幕空间形态学边界环 Gate（非空分母，黑框/白边/整槽消失三类自然检出）；③
@@ -323,7 +329,7 @@
 - 英文机器名：v14d-hair-triuv-pixel-gate。
 - 含义：HairA/HairB 每个正式屏幕样本同时绑定引擎 materialId、同槽局部 triId、插值 UV 和权威 hair_d 线性双线性采样目标，再应用 v14dAuthority.js 的 V14D_HAIR_TINT 转为显示字节比较；纹理四邻域按 WebGPU `REPEAT` 在宽/高方向 modulo wrap，不能在边缘 clamp。Hair 正式画布与 material-ID/depth、triId、插值 UV、triangleUvs 必须由同一个原子 `captureHairTriUv` probe 在同停帧返回，并共享 `captureId/currentSeconds/currentFrame/fps/fpsProvenance`；其中 pixel/triUV 的 width/height 必须各自为有限正整数且 pair 内相等，fps 必须为有限数 30，来源必须为 `vmd-standard-fixed-30`，不得由 frame/seconds 事后补造。original/V1 还必须分别满足绝对 `4s / frame 120 / 30 FPS / koleda-v14d-authoritative-pose-f120.vmd`，动画名不得为空。`targetBinding.inputsValid` 证明输入合法，`metricGate` 证明误差自然收敛；正式 Gate 由 `hairFormalGate` 唯一组合每槽 changed、目标收敛、绑定一致性和输入合法性。错槽负测使用自身 UV 的同像素 canonical target 与 v1Mae/drop/P95 证据，不能写入强制失败字段。ROI 不能替代材质/三角形身份，旧 targetMean 只保留为历史 checkpoint；合并 `hair` ROI 只能标记为 `diagnosticOnly/report-only`，不得阻断健康样本或污染负测 `analysisFailures`。
 - 允许用法：Stage 2C-M1.1/M1.2/M1.3 的 HairA/HairB BaseColor 逐槽 Gate、固定帧同帧 triUV 证据、错槽/错目标语义负测和 wrongTint 预期拒绝协议；独立 analyzer 默认读取 `g3-hair-original-canvas.png` / `g3-hair-v1-canvas.png`。
-- 禁止用法：不得用整槽均值、矩形 ROI、材质计数恒等式、`targetBinding.consistent=false` 自证或视角相关高光结果冒充逐像素 BaseColor 目标；不得让 captureHairTriUv 采集后无条件启动 render-loop；不得扩大到 PMX/VMD/骨骼/物理/播放或其他材质槽。
+- 禁止用法：不得用整槽均值、矩形 ROI、材质计数恒等式、`targetBinding.consistent=false` 自证或视角相关高光结果冒充逐像素 BaseColor 目标；不得让 captureHairTriUv 采集后无条件启动 渲染循环（render-loop）；不得扩大到 PMX/VMD/骨骼/物理/播放或其他材质槽。
 - 路由影响：由 web/scripts/analyze-reze-k3-v1-diff.mjs 与 web/scripts/accept-reze-k3-v1-stage.mjs 消费，采集只在显式 acceptance probe 下启用；原子采集时间推进、跨帧配对或 triUV 解析率低于 99.9% 时拒绝；`--self-test-hair-gate` 可在无渲染产物时验证正式组合与负测判定契约；完整定义见 workflow/concepts/v14d-hair-triuv-pixel-gate.zh-CN.md。
 
 # V14D Brows/Lashes 恒等 tint 迁移
@@ -337,8 +343,8 @@
 # V14D 生产绘制调用几何源快照
 
 - 英文机器名：v14d-production-draw-call-source-snapshot；引擎方法 getProductionDrawCallSourceSnapshot(captureId, frame)。
-- 含义：reze-engine 在同一 JavaScript realm 内，以只读方式返回生产 material-ID pick 与正常生产 draw call 共同使用的 ModelInstance GPU 顶点、索引、joints、weights、skin matrix buffer、draw range、bind group、pipeline、HDR/mask resolve texture 及 Morph/蒙皮来源。快照句柄只给同 realm 的诊断 pass 消费；落盘 audit 只保存身份、范围、格式、非零统计、索引完整性和 sameAsEngine 核对结果。
-- 允许用法：显式 acceptance probe 的 captureHairTriUv 使用 production-draw-call source 生成同帧 triId+UV；核对 Brows/Lashes 等目标槽的真实生产几何来源、pick/main draw range 和绑定关系；用 captureId/frame 把 pixel、material mask、triUV 与 source audit 关联。
+- 含义：reze-engine 在同一 JavaScript realm 内，以只读方式返回生产 material-ID pick 与正常生产 draw call 共同使用的 ModelInstance GPU 顶点、索引、joints、weights、skin matrix buffer、绘制索引范围（draw range）、bind group、pipeline、HDR/mask resolve texture 及 Morph/蒙皮来源。快照句柄只给同 realm 的诊断 pass 消费；落盘 audit 只保存身份、范围、格式、非零统计、索引完整性和 sameAsEngine 核对结果。
+- 允许用法：显式 acceptance probe 的 captureHairTriUv 使用 production-draw-call source 生成同帧 triId+UV；核对 Brows/Lashes 等目标槽的真实生产几何来源、pick/main 绘制索引范围（draw range） 和绑定关系；用 captureId/frame 把 pixel、material mask、triUV 与 source audit 关联。
 - 禁止用法：不得用 model.getVertices() CPU base、旧的无 COPY_SRC 读回、材质计数、矩形 ROI、屏幕平移、mask 膨胀或 depthBias 冒充生产源；不得把 GPU 句柄序列化到 JSON、localStorage、共享配置或后端；不得用该诊断 seam 改视觉公式、alpha、灯光、相机默认值、PMX/VMD 或 Morph 数据。
 - 路由影响：由 web/scripts/patch-reze-engine.mjs 注入 reze-engine src/dist/d.ts 的接口和合法 COPY_SRC usage；web/src/features/stage/v14dColorBaseline.ts 执行只读读回与统计；RezeWebGpuStage.tsx 仅在显式验收 probe 中选择 sourceMode=production-draw-call，默认生产入口不调用。机器错误分类为 interface-unavailable、invalid-capture-request、snapshot-rejected、buffer-readback-failed、buffer-readback-incomplete。
 - 验收证据：正常回放的 Brows 为 production/triUV=257/257、overlapRatio=1、centroidShiftPx=0；Lashes 为 9320/9320、overlapRatio=1、centroidShiftPx=0。--neg-wrong-source 与 --neg-mat-swap 均必须 exit=1 且 negativeVerdict.status=rejected。完整定义见 workflow/concepts/v14d-production-draw-call-source-snapshot.zh-CN.md。
@@ -347,7 +353,7 @@
 
 - 英文机器名：`v14d-display-chain-commit-boundary`；诊断接口 `installDisplayChainTrace`、`setDisplayChainTraceCapture`、`captureDisplayChainState`。
 - 含义：材质图编译/安装、样式组重绑只是显示链前置状态；从真实 draw-call 的 `setPipeline`/`setBindGroup`/`drawIndexed`，到场景 HDR 目标、resolve、composite/tone mapping 和最终 canvas 的命令提交，才构成一次可见变化。冻结 render loop 时，apply 成功而没有下一次 `renderFrame`/queue submission，画布可以继续保持旧帧。
-- 允许用法：在显式 `?v14dAcceptanceProbe=1` 下，以 `pairId` 关联 identity、identity-control、sentinel 对照；每一侧使用唯一 `captureId/frame` 记录 compile/install pipeline、实际 draw pipeline、bind group、draw range、HDR 和最终 canvas，定位首个预期变化消失的边界。报告的 `displayChain`/`stageDeltas` 必须把 HDR resolve 槽差异、composite pipeline/gamma、最终 canvas 和非目标噪声基线落盘，并硬断言 `pageErrors`、`failedRequests`、`httpBad` 均为 0。
+- 允许用法：在显式 `?v14dAcceptanceProbe=1` 下，以 `pairId` 关联 identity、identity-control、sentinel 对照；每一侧使用唯一 `captureId/frame` 记录 compile/install pipeline、实际 draw pipeline、bind group、绘制索引范围（draw range）、HDR 和最终 canvas，定位首个预期变化消失的边界。报告的 `displayChain`/`stageDeltas` 必须把 HDR resolve 槽差异、composite pipeline/gamma、最终 canvas 和非目标噪声基线落盘，并硬断言 `pageErrors`、`failedRequests`、`httpBad` 均为 0。
 - 禁止用法：不得把该诊断接缝启用到默认生产入口；不得用它改 graph 公式、正式视觉阈值、alpha analyzer、灯光、相机、PMX/VMD 或播放链。
 - 路由影响：只影响 Reze WebGPU 验收诊断与显示链故障分类；健康回放的 H1–H5 结果必须由实际证据动态产生；`--fault-no-render` 只确认无新提交帧，缺少 observed sentinel draw 时 H2–H5 必须为 `not-evaluated`。完整 Brows/Lashes 逐槽、透明边缘和动态 Morph Gate 仍按各自契约验收。完整定义见 `workflow/concepts/v14d-display-chain-commit-boundary.zh-CN.md`。
 
@@ -355,7 +361,7 @@
 
 - 英文机器名：`v14d-compile-install-not-display-proof`。
 - 含义：graph/WGSL 编译成功和 WebGPU pipeline 安装成功，只证明着色器阶段可建立；它不证明目标 draw 实际绑定新 pipeline，也不证明 HDR resolve、后续 composite/tone mapping 或最终 canvas 已使用该结果。
-- 允许用法：把 compile/install 作为必要前置证据，再分别核对实际 `setPipeline`、draw range/bind group、pre-tonemap HDR、resolve/composite 与 canvas 差异；在冻结帧场景使用一次明确的零增量 render 提交完成显示链。
+- 允许用法：把 compile/install 作为必要前置证据，再分别核对实际 `setPipeline`、绘制索引范围（draw range）/bind group、pre-tonemap HDR、resolve/composite 与 canvas 差异；在冻结帧场景使用一次明确的零增量 render 提交完成显示链。
 - 禁止用法：不得以 pipeline 身份变化、OnComposite 计数、截图存在、配置完整或放宽 analyzer 阈值包装“最终画布未达到拒绝阈值且没有实际 render 证据”为通过。
 - 路由影响：当 `wrongTint` 已进入 graph/WGSL/安装但最终画布无变化时，优先路由到显示链提交边界诊断；只有证明 draw 与目标均已变化后，才进入 tone mapping、采集或视觉公式调查。
 
