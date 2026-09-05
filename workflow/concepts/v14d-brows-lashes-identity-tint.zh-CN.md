@@ -4,11 +4,11 @@
 
 ### 当前阶段验收与集成状态
 
-主会话代码与运行证据验收通过（2026-09-05），待主工作树集成。材质阶段验收6/15（Face、BodySkin、HairA、HairB、Brows、Lashes）；已合并仍4/15（Face、BodySkin、HairA、HairB），不得把阶段验收写成已合并。
+主会话代码与运行证据验收通过（2026-09-05），六槽已合并。材质阶段验收6/15、已合并6/15（Face、BodySkin、HairA、HairB、Brows、Lashes），其余9槽尚未迁移。合并证据：主会话于2026-09-05在 `D:/workspace/MMD project` 的 `codex/local-interactive-integration` 实际快进合并至 `8267dfb5ae680db0ff5754ae537563422626163b`。合并后浏览器与主依赖环境尚未重新运行，不宣称主预览已启动。
 
 验证来源：主会话复跑59项聚焦测试（58通过、1允许跳过）、patch verify 93/93、固定点差异检查和禁止文件范围检查；交叉复核执行任务实际运行的健康、首次异常、中途异常及完整报告、full-native-exit.json、完整日志、构建日志和主舞台及开眼截图。完整 G1–G7 由执行任务运行，原生退出码0且未超时；两处异常原生退出码1且恢复成功。主会话本轮未重复运行完整验收。
 
-范围边界：HairA/HairB仅基础色（BaseColor）迁移，高光及其他头发着色仍待决；浏览器验收使用API/会话/资源列表存根环境，真实本地模型与生产 /companion 渲染链已验证，不等于真实后端联调通过。用户可见UI仍只列Face/BodySkin，留待集成时修正文案，本轮不改UI或代码。
+范围边界：HairA/HairB仅基础色（BaseColor）迁移，高光及其他头发着色仍待决；浏览器验收使用API/会话/资源列表存根环境，真实本地模型与生产 /companion 渲染链已验证，不等于真实后端联调通过。用户可见V1说明已更新为六槽与剩余9槽，并明确头发仅基础色、高光待决；本次只更新显示文案，不改按钮标识、枚举、资格逻辑或渲染行为。
 
 本节取代历史候选自评中不完整的 G7 证据口径：
 
@@ -78,7 +78,7 @@ V14D 眉毛与睫毛恒等乘色迁移（Brows/Lashes identity tint）。
 
 ## 历史候选自评（Stage 2C-M2a，2026-09-04；非当前验收状态）
 
-本节保留历史候选自评，不能作为当前验收证书；当前结论与验证来源以顶部为准：材质阶段验收6/15，已合并仍4/15，Brows/Lashes待主工作树集成。下列历史自评中的完整运行由执行任务实施，不表示主会话本轮重跑完整验收。
+本节保留历史候选自评，不能作为当前验收证书；当前结论与验证来源以顶部为准：材质阶段验收6/15，已合并6/15，Brows/Lashes已集成（合并证据见顶部）。下列历史自评中的完整运行由执行任务实施，不表示主会话本轮重跑完整验收。
 
 1. **逐槽原子同帧 identity-target Gate（闭合）**：production-draw-call material-ID + triUV + 同像素 identity-target 收敛，两槽 formalTargetGate 双 true、targetBinding consistent、inputsValid；各槽样本、coverage、MAE/P95 落盘。
 2. **Lashes 透明边缘 Gate（闭合）**：改为屏幕空间形态学边界环（非空 core/edge/transparent 分母），比较 Original/V1 边界覆盖、综合色、黑边/白边/整槽消失。wrongAlpha 不再修改 analyzer 阈值自证，改用专用 acceptance fault graph（仅 ?v14dAcceptanceProbe=1 可达）在 hashed discard 前乘固定故障因子 V14D_BROWS_LASHES_WRONG_ALPHA_FAULT_FACTOR，真实剔除片元使 coverage/边界环收缩，由形态学边界环 Gate 自然非零拒绝。

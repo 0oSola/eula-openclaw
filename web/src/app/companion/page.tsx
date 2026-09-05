@@ -3481,7 +3481,7 @@ export default function CompanionPage() {
                           <strong>{REZE_K3_SKIN_VARIANT_LABEL[variant]}</strong>
                           <span>
                             {variant === "v1"
-                              ? "克莱妲 V14D 皮肤阶段（仅 Face + BodySkin，未含其余 13 槽）"
+                              ? "克莱妲 V14D 外观：脸部（Face）、身体皮肤（BodySkin）、头发（HairA/HairB）、眉毛（Brows）、睫毛（Lashes），共 6 槽，剩余 9 槽未迁移；头发仅基础色，高光待决"
                               : "现有 Reze K3 材质与灯光"}
                           </span>
                         </button>

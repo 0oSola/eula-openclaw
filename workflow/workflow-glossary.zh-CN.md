@@ -2,11 +2,11 @@
 
 ## Reze K3 皮肤变体
 
-主会话代码与运行证据验收通过（2026-09-05），待主工作树集成。材质阶段验收6/15（Face、BodySkin、HairA、HairB、Brows、Lashes）；已合并仍4/15（Face、BodySkin、HairA、HairB），不得把阶段验收写成已合并。
+主会话代码与运行证据验收通过（2026-09-05），六槽已合并。材质阶段验收6/15、已合并6/15（Face、BodySkin、HairA、HairB、Brows、Lashes），其余9槽尚未迁移。合并证据：主会话于2026-09-05在 `D:/workspace/MMD project` 的 `codex/local-interactive-integration` 实际快进合并至 `8267dfb5ae680db0ff5754ae537563422626163b`。合并后浏览器与主依赖环境尚未重新运行，不宣称主预览已启动。
 
 验证来源：主会话复跑59项聚焦测试（58通过、1允许跳过）、patch verify 93/93、固定点差异检查和禁止文件范围检查；交叉复核执行任务实际运行的健康、首次异常、中途异常及完整报告、full-native-exit.json、完整日志、构建日志和主舞台及开眼截图。完整 G1–G7 由执行任务运行，原生退出码0且未超时；两处异常原生退出码1且恢复成功。主会话本轮未重复运行完整验收。
 
-范围边界：HairA/HairB仅基础色（BaseColor）迁移，高光及其他头发着色仍待决；浏览器验收使用API/会话/资源列表存根环境，真实本地模型与生产 /companion 渲染链已验证，不等于真实后端联调通过。用户可见UI仍只列Face/BodySkin，留待集成时修正文案，本轮不改UI或代码。
+范围边界：HairA/HairB仅基础色（BaseColor）迁移，高光及其他头发着色仍待决；浏览器验收使用API/会话/资源列表存根环境，真实本地模型与生产 /companion 渲染链已验证，不等于真实后端联调通过。用户可见V1说明已更新为六槽与剩余9槽，并明确头发仅基础色、高光待决；本次只更新显示文案，不改按钮标识、枚举、资格逻辑或渲染行为。
 
 当前 G7 证据口径：`weightEvidence`=同态请求/运行时/有效/GPU缓冲读回证据；`noiseCalibration`=独立健康重复噪声标定；`sourceAudit`=本态生产源身份与有效读回审计。三者用于 Brows/Lashes 的正式移动判定，禁止以CPU值冒充GPU或让负测自校准。`restore.before/after` 必须证明原非默认相机被真正应用恢复。`--g7-evidence-only` 不替代完整验收，`V14D_G7_OUT` 隔离本轮产物。完整口径见 `concepts/v14d-brows-lashes-identity-tint.zh-CN.md` 当前阶段验收与集成状态；历史“闭合”仅为当轮自评。
 
@@ -15,7 +15,7 @@
   实时合成模式；`original`=原始 Reze K3，`v1`=Reze K3 V1（V14D）。
   持久化按 用户+模型+reze-k3 管线 三维隔离，默认 original。
   截至 Stage 2C-M2a 阶段验收（2026-09-05）：**Face、BodySkin、
-  HairA、HairB、Brows、Lashes** 六槽通过材质阶段验收（6/15）；已合并仍4/15，Brows/Lashes待主工作树集成。
+  HairA、HairB、Brows、Lashes** 六槽通过材质阶段验收（6/15）；已合并6/15，Brows/Lashes已集成（合并证据见顶部）。
   Brows/Lashes 的正式验收口径（本票最终闭合）：① 逐槽原子同帧 material-ID +
   production-draw-call triUV + 同像素 identity-target 收敛；② Lashes 透明边缘
   屏幕空间形态学边界环 Gate（非空分母，黑框/白边/整槽消失三类自然检出）；③
