@@ -1,6 +1,12 @@
 # 当前系统拓扑与架构蓝图
 
-更新时间：2026-09-04
+更新时间：2026-09-05
+
+### Stage 2C-M2a 当前候选口径：G7 证据真实性修正
+
+正式迁移进度仍 **4/15**，Brows/Lashes 待主会话验收。下文历史自评中的 G7 通过措辞不代表主会话验收通过。当前 G7 每态分别保存 request/runtime/effective/GPU 权重；GPU 数值来自已有生产源快照的 `morphWeightsBuffer` COPY_SRC 读回，而非 CPU effective。open 在改 closed 前完成所有证据副本；无隔离控制只消费自己的副本。
+
+G7 改机位前保存真实位置、目标和视场角；显式验收探针在 finally 应用原参数并同步 uniforms，健康、首次 noIsolation 采集抛错、中途抛错都验证非默认相机恢复。噪声仅取独立 open/openRepeat 健康采集；wrongName/noSwitch 共用正式移动判定，证据非法不能算预期拒绝。生产源审计逐态检查 captureId/frame、缓冲身份、有限读回与 draw range，不接受非空字符串证明。实现不改变生产锁、材质公式或场景默认值。详见 `workflow/concepts/v14d-brows-lashes-identity-tint.zh-CN.md`。
 
 本文用于两类场景：
 

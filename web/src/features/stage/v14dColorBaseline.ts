@@ -491,6 +491,7 @@ export type V14dColorBaselineEngine = {
     weightsBuffer: GPUBuffer;
     indexBuffer: GPUBuffer;
     skinMatrixBuffer: GPUBuffer;
+    gpuMorph?: { weightsBuffer: GPUBuffer };
     pickPerInstanceBindGroup: GPUBindGroup;
     drawCalls?: Array<{ count: number; firstIndex: number; bindGroup: GPUBindGroup }>;
     pickDrawCalls: Array<{
@@ -613,6 +614,7 @@ export type V14dProductionSourceAudit = {
       weights: boolean;
       skinMatrices: boolean;
       pickInstanceBindGroup: boolean;
+      morphWeights: boolean;
     };
     buffers: {
       vertex: V14dProductionSourceBufferStats;
@@ -672,6 +674,7 @@ export class V14dProductionSourceError extends Error {
 export type V14dProductionSourceReadback = {
   snapshot: V14dProductionDrawCallSourceSnapshot;
   audit: V14dProductionSourceAudit;
+  morphWeightsByInstance: Record<string, number[]>;
 };
 
 export type V14dProductionSourceTriUvReadback = {
@@ -883,6 +886,7 @@ export async function readV14dProductionDrawCallSourceSnapshot(
     throw asProductionSourceError(error, "snapshot-rejected", "snapshot", "production source snapshot 被引擎拒绝：");
   }
   const auditInstances: V14dProductionSourceAudit["instances"] = [];
+  const morphWeightsByInstance: Record<string, number[]> = {};
   for (const instance of snapshot.instances) {
     let bytes: V14dProductionBufferBytes;
     try {
@@ -896,6 +900,7 @@ export async function readV14dProductionDrawCallSourceSnapshot(
     const weights = bytes.weights;
     const skinMatrices = bytes.skinMatrices;
     const morphWeights = bytes.morphWeights;
+    if (morphWeights) morphWeightsByInstance[instance.name] = Array.from(new Float32Array(morphWeights.slice().buffer));
     if (!vertex || !index || !joints || !weights || !skinMatrices) {
       throw new V14dProductionSourceError(
         "buffer-readback-incomplete",
@@ -911,6 +916,7 @@ export async function readV14dProductionDrawCallSourceSnapshot(
       weights: engineInstance?.weightsBuffer === instance.buffers.weights,
       skinMatrices: engineInstance?.skinMatrixBuffer === instance.buffers.skinMatrices,
       pickInstanceBindGroup: engineInstance?.pickPerInstanceBindGroup === instance.pickPerInstanceBindGroup,
+      morphWeights: !!instance.transforms.morphWeightsBuffer && engineInstance?.gpuMorph?.weightsBuffer === instance.transforms.morphWeightsBuffer,
     };
     const indexCopy = index.slice();
     const indexData = new Uint32Array(indexCopy.buffer);
@@ -993,6 +999,7 @@ export async function readV14dProductionDrawCallSourceSnapshot(
   };
   return {
     snapshot,
+    morphWeightsByInstance,
     audit: {
       schemaVersion: 1,
       captureId: snapshot.captureId,

@@ -3668,6 +3668,15 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             captureId,
             progressAfterRender.currentFrame,
           );
+          // 同一冻结帧内取得 CPU 两层观测与独立 GPU 缓冲读回，绝不将 effective 命名为 GPU。
+          const morphModel = model as unknown as { runtimeMorph: { weights: ArrayLike<number>; nameIndex: Record<string, number> }; getEffectiveMorphWeights(): ArrayLike<number> };
+          const morphWeightReadback = {
+            captureId, frame: progressAfterRender.currentFrame,
+            nameIndex: { ...morphModel.runtimeMorph.nameIndex },
+            runtime: Array.from(morphModel.runtimeMorph.weights),
+            effective: Array.from(morphModel.getEffectiveMorphWeights()),
+            gpu: productionSource.morphWeightsByInstance.companion ?? null,
+          };
           const materialMask = await readV14dColorBaselineMaterialMask(engine, width, height);
           const maskCanvas = document.createElement("canvas");
           maskCanvas.width = width;
@@ -3800,6 +3809,7 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
             captureProgressBeforeRead: progressAfterRender,
             captureProgressAfterRead: progressAfterRead,
             productionSource: productionSource.audit,
+            morphWeightReadback,
             renderObserved,
             captureEvidence: {
               pixel: pixelEvidence,
@@ -3881,6 +3891,14 @@ export const RezeWebGpuStage = forwardRef<MMDStageHandle, RezeStageProps>(functi
       // setMaterialVisible 组合，不改 PMX/VMD/Morph 数据；默认生产入口不暴露本探针。
       engineRef,
       modelRef,
+      // 验收专用：复用真实快照/应用接口，不经过持久化或默认 reset。
+      captureCamera: () => captureRezeCameraSnapshot(engineRef.current),
+      setCameraSnapshot(snapshot: MmdCameraSnapshot) {
+        const engine = engineRef.current;
+        if (!applyRezeCameraSnapshot(engine, snapshot)) throw new Error("acceptance camera restore unavailable");
+        (engine as unknown as { updateCameraUniforms(): void }).updateCameraUniforms();
+        return captureRezeCameraSnapshot(engine);
+      },
       selectClosedEyeMorphNames: selectKoledaClosedEyeMorphNames,
       // Stage 2C-M2a 修正轮（G7 表情状态）：暴露非眨眼表情 Morph 名选择器（权威 PMX
       // 取证：「笑い」移动 506 个 Lashes 顶点，是最强的非眨眼表情状态）。只读选择器。

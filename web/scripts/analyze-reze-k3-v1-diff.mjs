@@ -181,7 +181,7 @@ if (process.argv.includes("--self-test-hair-gate")) {
   process.exit(0);
 }
 
-const OUT = path.resolve(".scratch/reze-k3-v1-stage");
+const OUT = path.resolve(process.env.V14D_G7_OUT || ".scratch/reze-k3-v1-stage");
 const ORIG = path.join(OUT, "g3-original-canvas.png");
 const V1 = path.join(OUT, "g3-v1-canvas.png");
 const FORMAL_HAIR_ORIG = path.join(OUT, "g3-hair-original-canvas.png");

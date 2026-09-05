@@ -1,6 +1,19 @@
 # V14D Brows/Lashes 恒等 tint 迁移（identity-tint）
 
 ## 中文名称
+
+### 当前候选补正（G7，待主会话验收，正式进度4/15）
+
+本节取代历史候选自评中不完整的 G7 证据口径：
+
+- 每态 `weightEvidence`（权重证据）分开保留请求、运行时、有效权重与真实 GPU 缓冲读回。`readV14dProductionDrawCallSourceSnapshot` 复用原 COPY_SRC 读回输出；`gpu` 不再取自 `getEffectiveMorphWeights()`。open/closed 的 captureId/frame 和来源必须各自匹配，改下一态之前冻结副本。
+- `restore.before/after`（恢复前后快照）记录原相机 position/target/fov、Morph、clip、播放/暂停、looping、render-loop。必须在脸部取景前保存，在 finally 真正应用原相机并同步 uniforms；比较固定脸部矩阵不是恢复。非默认机位健康、首次采集抛错和中途抛错均须保持原态。
+- `noiseCalibration`（噪声标定）只取独立 open/openRepeat 健康采集加原 epsilon；wrongName/noSwitch 不参与。两类负测共用正式移动判定，只有有效证据、不满足正式移动条件且仍落在健康噪声内才是预期拒绝。大幅错误位移、空样本、NaN、错源不能抬高自己的阈值后通过。
+- `sourceAudit`（生产源审计）核对本态 captureId/frame、生产缓冲身份、读回有限值、无待调度 Morph、draw/pick 范围一致。不接受 `raw.source` 字符串回退。
+- `--g7-evidence-only` 只运行本轮权重/相机/移动证据，不宣称覆盖 G1–G6 或 missing 材质分析；完整 accept 不带该开关。`V14D_G7_OUT` 是各分析器共同的输出目录，默认兼容旧目录，本轮指定独立子目录保留历史证据。
+
+正例：open 请求0、runtime/effective/GPU均0，closed三者均1，负测相对独立健康噪声被拒绝。反例：CPU effective 重命名为 GPU、closed 时刻补读 open、异常后只比矩阵未应用原相机、用负测自身标定阈值。失败时保留本轮目录，按缺失的同态证据或恢复字段聚焦修正，不修改生产公式。
+
 V14D 眉毛与睫毛恒等乘色迁移（Brows/Lashes identity tint）。
 
 ## 英文机器名

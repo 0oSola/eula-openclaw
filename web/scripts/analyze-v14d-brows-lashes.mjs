@@ -34,7 +34,7 @@ import {
   v14dBrowsLashesTargetDisplayFromLinear,
 } from "../src/features/stage/v14dBrowsLashesTarget.js";
 
-const OUT = path.resolve(".scratch/reze-k3-v1-stage");
+const OUT = path.resolve(process.env.V14D_G7_OUT || ".scratch/reze-k3-v1-stage");
 const KOLEDA_DIR = process.env.V14D_KOLEDA_DIR || 'D:/mmd/克莱妲原皮';
 const FACE_TEX = process.env.V14D_BROWS_LASHES_TEX || path.join(KOLEDA_DIR, "Textures", V14D_BROWS_LASHES_TEXTURE_NAME);
 

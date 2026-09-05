@@ -2,6 +2,8 @@
 
 ## Reze K3 皮肤变体
 
+当前 G7 候选补正：`weightEvidence`=同态请求/运行时/有效/GPU缓冲读回证据；`noiseCalibration`=独立健康重复噪声标定；`sourceAudit`=本态生产源身份与有效读回审计。三者用于 Brows/Lashes 的正式移动判定，禁止以CPU值冒充GPU或让负测自校准。`restore.before/after` 必须证明原非默认相机被真正应用恢复。`--g7-evidence-only` 不替代完整验收，`V14D_G7_OUT` 隔离本轮产物。完整口径见 `concepts/v14d-brows-lashes-identity-tint.zh-CN.md` 当前候选补正；正式进度仍4/15，历史“闭合”仅为自评。
+
 - 英文机器名：`rezeK3SkinVariant`
 - 含义：`/companion` reze-k3 舞台中克莱妲部分 PMX 材质槽的可选 V14D
   实时合成模式；`original`=原始 Reze K3，`v1`=Reze K3 V1（V14D）。

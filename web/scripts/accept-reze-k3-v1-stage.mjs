@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { evaluateG7WeightEvidence, calibrateG7Noise, evaluateG7Movement, validateG7Source } from "../src/features/stage/v14dG7WeightEvidence.js";
 import {
   validateV14dHairCapturePair,
   V14D_HAIR_AUTHORITATIVE_CAPTURE,
@@ -16,8 +17,9 @@ const ORIGIN = process.env.V14D_CAPTURE_ORIGIN || "http://127.0.0.1:3114";
 // P0-1 红绿证明开关：?v14dG7FaultRestore=1 在 G7 open 态采集后注入 throw，验证异常路径 finally
 // 恢复 exact 原态（restore.ok===true）。仅 acceptance probe；--fault-restore 可不经 URL 强制开启。
 const FAULT_RESTORE = process.argv.includes("--fault-restore");
+const FAULT_FIRST_CAPTURE = process.argv.includes("--fault-first-capture");
 const BASE = ORIGIN + "/companion?v14dAcceptanceProbe=1" + (FAULT_RESTORE ? "&v14dG7FaultRestore=1" : "");
-const OUT = path.resolve(".scratch/reze-k3-v1-stage");
+const OUT = path.resolve(process.env.V14D_G7_OUT || ".scratch/reze-k3-v1-stage");
 // P0 逐槽 Morph 取证：权威 PMX 顶点级受影响槽映射（由 Blender/PMX 取证脚本产出）。
 // 闭眼 まばたき 与表情 笑い 均只移动 Lashes（506 顶点）、Brows 0 顶点，故逐槽判定必须
 // 按此声明：受影响槽须超同状态噪声上界、未受影响槽应≈基线。该 JSON 是机器取证唯一来源。
@@ -92,7 +94,8 @@ if (!fs.existsSync(path.join(NEG_NOMASK_DIR, PMX_NAME))) { fs.mkdirSync(NEG_NOMA
 const report = { origin: ORIGIN, base: BASE, assets: { pmx: PMX, vmd: VMD, mask: STATE2_MASK, hairTexture: HAIR_TEX, hairTextureSha256: fs.existsSync(HAIR_TEX) ? sha256(HAIR_TEX) : null, maskSha256: sha256(STATE2_MASK), vmdSha256: fs.existsSync(VMD) ? sha256(VMD) : null }, gates: {}, pageErrors: [], httpBad: [], failedReqs: [], screenshots: {} };
 // 聚焦校准开关 --g7-morph-only：只跑 G7 的动态 Morph 稳定性，跳过 G1-G6 前置断言
 // （最小环境准备由 G7 入口自行完成）。供红绿单变量迭代；正式全量验收不带此开关。
-const G7_MORPH_ONLY = process.argv.includes("--g7-morph-only");
+const G7_EVIDENCE_ONLY = process.argv.includes("--g7-evidence-only");
+const G7_MORPH_ONLY = process.argv.includes("--g7-morph-only") || G7_EVIDENCE_ONLY;
 const fail = (gate, msg) => {
   console.error("ASSERT-FAIL[" + gate + "]: " + msg);
   report.gates[gate] = report.gates[gate] || { status: "pass", failures: [] };
@@ -1483,13 +1486,16 @@ try {
   }
   await page.click(sel.variantBtn("v1")); await waitRebuilt();
   await prepareHairCapture();
-  // 脸部特写取景：眉毛/睫毛是小槽，特写下逐槽前景像素足够（Morph 判别依赖可见集合）。
-  await page.evaluate((p) => window.__rezeStageProbe.cameraOrbit(p), "face");
-  await page.waitForTimeout(350);
+  // 回归从非默认机位开始；探针必须真正恢复它，不得复位到默认/脸部机位。
+  await page.evaluate(() => {
+    const s = window.__rezeStageProbe, before = s.captureCamera();
+    if (!before) throw new Error('camera snapshot unavailable');
+    s.setCameraSnapshot({ ...before, position: [3.25, 17.4, -7.75], target: [0.2, 15.8, -0.4], fov: 39 });
+  });
 
   // 采集三状态 + 两个负测状态的逐槽前景像素集合（material-mask 中该槽 id 命中的
   // 像素索引列表）。无前景深度口径：眉毛紧贴皮肤，前景深度剔除会把计数塌缩失去判别力。
-  const morphProbe = await page.evaluate(async ({ slots }) => {
+  const morphProbe = await page.evaluate(async ({ slots, faultFirst }) => {
     let activeResult = null; // finally 通过它把 after-restore 快照写回返回值（finally 在 return 后运行）。
     const stage = window.__rezeStageProbe;
     const model = stage?.modelRef?.current ?? null;
@@ -1517,9 +1523,7 @@ try {
       looping: Boolean(model.getAnimationProgress?.()?.looping),
       seconds: Number(model.getAnimationProgress?.()?.current) || 0,
       renderLoopRunning: Boolean(engine.isRenderLoopRunning?.() ?? engine.renderLoopRunning ?? (engine.animationFrameId != null)),
-      // 相机快照用首态采集的 view/projection 矩阵（captureHairTriUv raw.camera），probe 开始时尚无，
-      // 在首个 noIso 采集后填充；G7 全程相机固定于 frame120 取景，故该矩阵即探针前相机状态。
-      camera: null,
+      camera: stage.captureCamera(),
       morphWeights: {},
     };
     const closedNames = (stage.selectClosedEyeMorphNames?.(model.getMorphing().morphs.map((m) => m.name))) || [];
@@ -1538,7 +1542,9 @@ try {
     // 验证外层 finally 在异常路径同样恢复 exact 原态。生产默认入口无该参数 → 不触发。
     const faultRestore = new URLSearchParams(window.location.search).get("v14dG7FaultRestore") === "1";
     const captureSlotEvidence = async (label) => {
+      const requested = { ...requestedWeights };
       const raw = await stage.captureHairTriUv(slots);
+      if (faultFirst && label === 'noIsoOpen') throw new Error('G7 fault: first noIsolation capture');
       if (faultRestore && label === "open") { const e = new Error("G7 fault-injection: open capture throw for restore red/green"); e.faultInjected = true; throw e; }
       if (!raw || raw.error) return { error: raw?.error || "capture failed" };
       // P1-1：每态返回完整原子证据（pixel/materialMask/triUV 同一 captureId/currentFrame + source audit）。
@@ -1553,7 +1559,7 @@ try {
         && pixelEv.currentFrame === atomicFrame
         && ce.materialMask?.currentFrame === atomicFrame
         && ce.triUv?.currentFrame === atomicFrame;
-      const sourceAudit = raw.productionSource ?? raw.source ?? null;
+      const sourceAudit = raw.productionSource ?? null;
       const renderOk = raw.renderObserved === true;
       renderObserved[label] = {
         captureId: atomicId,
@@ -1569,7 +1575,19 @@ try {
       const px = cx.getImageData(0, 0, raw.width, raw.height).data;
       const slotPixels = {};
       const gpuVerts = {};
-      const gpuWeights = {};
+      const wr = raw.morphWeightReadback;
+      const sourceInstance = raw.productionSource?.instances?.find((i) => i.name === 'companion');
+      const byName = (values) => Object.fromEntries([...closedNames, ...exprNames].map((n) => [n, values?.[wr?.nameIndex?.[n]] ?? null]));
+      const weightEvidence = {
+        label, captureId: raw.captureId, frame: raw.captureEvidence?.pixel?.currentFrame,
+        source: 'production-gpu-buffer-readback',
+        sourceCaptureId: wr?.captureId, sourceFrame: wr?.frame,
+        sourceIdentity: sourceInstance?.sourceIdentity,
+        bufferIdentity: sourceInstance?.bufferIdentity?.morphWeights === true,
+        dispatchPending: sourceInstance?.transforms?.morphDispatchPending,
+        requested, runtime: byName(wr?.runtime), effective: byName(wr?.effective), gpu: byName(wr?.gpu),
+      };
+      const gpuWeights = weightEvidence.gpu;
       // A3+M2a.4：位移真值=生产 GPU 顶点快照。captureHairTriUv 内 renderFrame→updateInstances
       // 在 consumeMorphWeightsDirty 时用 getEffectiveMorphWeights() 上传并 dispatch morph compute
       // 写 vertexBuffer；probe update 隔离确保 lock 不覆写本态 probeWeights。
@@ -1602,20 +1620,15 @@ try {
           gpuVerts[name] = { vertexSet: uniq, positions, drawRange: { firstIndex, count: indexCount }, vertexCount: uniq.length };
         }
       }
-      // 记录本态 closed/expr morph 的 effective 权重（证明隔离生效：open=0、closed=1）。
-      for (const mn of [...closedNames, ...exprNames]) {
-        const ix = model.runtimeMorph?.nameIndex?.[mn];
-        if (ix != null) gpuWeights[mn] = +(model.getEffectiveMorphWeights?.()[ix] ?? model.runtimeMorph?.weights?.[ix] ?? 0).toFixed(3);
-      }
       // P1-1：per-state 返回完整原子证据，供正式 evidence evaluator 硬断言同一 captureId/frame。
       // P0-2：raw.camera = captureHairTriUv 在同一 frame120 冻结姿态读取的真实相机 view/projection
       // 矩阵快照（G7 全程相机固定于 frame120 取景）。用作逐字段 before/after 一致性断言。
-      return { slotPixels, gpuVerts, gpuWeights, width: raw.width, height: raw.height, captureEvidence: ce, productionSource: sourceAudit, renderObserved: renderOk, atomicSameCapture, cameraMatrix: raw.camera ?? null };
+      return { slotPixels, gpuVerts, gpuWeights, weightEvidence, canvasDataUrl: raw.canvasDataUrl, width: raw.width, height: raw.height, captureEvidence: ce, productionSource: sourceAudit, renderObserved: renderOk, atomicSameCapture, cameraMatrix: raw.camera ?? null };
     };
 
 
-    const settle = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const setW = (names, w) => { for (const n of names) model.setMorphWeight(n, w); };
+    const requestedWeights = {};
+    const setW = (names, w) => { for (const n of names) { requestedWeights[n] = w; model.setMorphWeight(n, w); } };
     // M2a.4 真根因：lockKoledaMorphWeights 包装 model.update，在 update 后强制写回 まばたき=1
     // （生产默认闭眼语义，RezeWebGpuStage:864 锁定 closedEyeMorphs=1）。G7 探针请求 open=0 会被
     // 该锁覆写 → open/closed 同权重 → 506 顶点 GPU 位移=0。正式修正：仅在显式 acceptance probe
@@ -1631,6 +1644,8 @@ try {
     // 控制——纳入同一个外层 try/finally；任一 capture 抛错也走 finally 恢复 exact 原态。
     try {
       // ── P0-3：真实 noIsolation 控制（安装 post-update wrapper 之前）。请求 open=0 后
+      engine.stopRenderLoop();
+      stage.cameraOrbit('face');
       // 生产 update 让 lockKoledaMorphWeights 强制写回 blink=1；请求 closed=1 后保持 1。
       // 两态生产 GPU 顶点 delta=0，证明无隔离时 lock 覆写 open 请求。confirmed 必须由
       // 真实控制共同得出：open 与 closed 的 effective+GPU 权重均为 1、forced morph 身份
@@ -1641,21 +1656,13 @@ try {
       const noIsoOpen = await captureSlotEvidence("noIsoOpen");
       setW(closedNames, 1); setW(exprNames, 0);
       const noIsoClosed = await captureSlotEvidence("noIsoClosed");
-      // P0-2：相机快照取自真实采集的 view/projection 矩阵（首态 noIso 即探针前 frame120 相机姿态）。
-      if (saved.camera == null && noIsoOpen?.cameraMatrix) saved.camera = noIsoOpen.cameraMatrix;
-      // 逐 morph 观测 effective 权重（noIsolation 下 open 请求 blink=0 应被锁回 1）。
-      const observedOpen = Object.fromEntries(closedNames.map((mn) => {
-        const ix = model.runtimeMorph?.nameIndex?.[mn];
-        return [mn, ix != null ? +(model.getEffectiveMorphWeights?.()[ix] ?? model.runtimeMorph?.weights?.[ix] ?? 0) : null];
-      }));
-      const observedClosed = Object.fromEntries(closedNames.map((mn) => {
-        const ix = model.runtimeMorph?.nameIndex?.[mn];
-        return [mn, ix != null ? +(model.getEffectiveMorphWeights?.()[ix] ?? model.runtimeMorph?.weights?.[ix] ?? 0) : null];
-      }));
+      // 只消费各态切换之前冻结的副本，此刻 model 已处于 closed。
+      const observedOpen = noIsoOpen.weightEvidence.effective;
+      const observedClosed = noIsoClosed.weightEvidence.effective;
       const gpuOpen = noIsoOpen?.gpuWeights || {};
       const gpuClosed = noIsoClosed?.gpuWeights || {};
       // forcedMorphNames = 生产锁实际强制为 1 的 morph（open 请求 0 被观测为 1 者），非选择结果。
-      const forced = closedNames.filter((mn) => observedOpen[mn] !== null && Math.abs(observedOpen[mn] - 1) < 1e-3);
+      const forced = closedNames.filter((mn) => noIsoOpen.weightEvidence.requested[mn] === 0 && noIsoOpen.weightEvidence.runtime[mn] === 1 && observedOpen[mn] === 1 && gpuOpen[mn] === 1);
       lockControl.forcedMorphNames = forced;
       lockControl.observedWeights = { openEffective: observedOpen, closedEffective: observedClosed, openGpu: gpuOpen, closedGpu: gpuClosed };
       lockControl.confirmed = closedNames.length > 0
@@ -1676,6 +1683,7 @@ try {
       probeWeights = Object.fromEntries([...closedNames, ...exprNames].map((n) => [n, 0]));
       setW(closedNames, 0); setW(exprNames, 0);
       const openEye = await captureSlotEvidence("open");
+      const openRepeat = await captureSlotEvidence('openRepeat');
       probeWeights = Object.fromEntries([...closedNames.map((n) => [n, 1]), ...exprNames.map((n) => [n, 0])]);
       setW(closedNames, 1);
       const closedEye = await captureSlotEvidence("closed");
@@ -1689,76 +1697,74 @@ try {
       model.setMorphWeight("__nonexistent_morph__", 1);
       const wrongName = await captureSlotEvidence("wrongName");
       const noSwitch = await captureSlotEvidence("noSwitch");
-      const result = { openEye, closedEye, expression, wrongName, noSwitch, noIsolation: lockControl.noIsolationNegative, closedEyeMorphs: closedNames, expressionMorphs: exprNames, renderObserved, clipSuspendedUsed: true, gpuDiag, lockControl, saved, restore: { ok: null, after: null } };
+      const result = { openEye, openRepeat, closedEye, expression, wrongName, noSwitch, noIsolation: lockControl.noIsolationNegative, closedEyeMorphs: closedNames, expressionMorphs: exprNames, renderObserved, clipSuspendedUsed: true, gpuDiag, lockControl, saved, restore: { ok: null, after: null } };
       activeResult = result;
       return result;
     } catch (e) {
-      // P0-1：异常路径同样走下方 finally 恢复 exact 原态。finally 是 async（含 await settle），
-      // 本 catch 也 async：在 finally 同步段之后挂一个微任务，return 的 Promise 只在 finally 全部
-      // 完成后 resolve，从而读到最终 restore（红绿证明：faultRestoreError && restore.ok===true）。
+      // 返回同一对象，finally 完成恢复后才交给调用方，不以微任务模拟恢复时序。
       const result = { error: String(e?.message || e), faultRestoreError: true, openEye: null, closedEye: null, expression: null, wrongName: null, noSwitch: null, noIsolation: lockControl.noIsolationNegative, closedEyeMorphs: closedNames, expressionMorphs: exprNames, renderObserved, clipSuspendedUsed: true, gpuDiag, lockControl, saved, restore: { ok: null, after: null } };
       activeResult = result;
-      return Promise.resolve().then(() => { result.restore = activeResult.restore; return result; });
+      return result;
     } finally {
-      // P0-1：异常/提前返回同样走本 finally，恢复 exact 原态。
+      // 不 await、不渲染：先恢复真实参数，再同步读取 after，最后恢复原循环。
+      engine.stopRenderLoop();
       probeWeights = null;
-      model.update = originalUpdate; // 恢复 exact originalUpdate（lock wrapper 仍在其闭包内生效）。
-      // P0-3：恢复原 morph 权重（探针前 exact 值，不固定写 0）。
-      for (const [n, w] of Object.entries(saved.morphWeights || {})) model.setMorphWeight(n, w);
-      model.setClipApplySuspended?.(saved.clipSuspended);
-      stage.seekVmd?.(saved.seconds);
-      // P0-2：恢复 exact looping（引擎无公开 setter；AnimationState.currentLoop 是 looping 唯一
-      // 内部表示，seek/play 均不改它——play(name,{loop}) 才改。可审计恢复路线：直接写回该
-      // 内部字段，after 快照以 getAnimationProgress().looping 读回验证）。playing/paused 恢复原态。
-      try { const animState = model.animationState; if (animState && "currentLoop" in animState) animState.currentLoop = saved.looping; } catch { /* best effort */ }
-      if (saved.playing) model.play?.(); else model.pause?.();
-      // P0-2：恢复 exact render-loop running（captureHairTriUv 与采集均 stopRenderLoop）。
-      try { if (saved.renderLoopRunning) engine.runRenderLoop?.(); else engine.stopRenderLoop?.(); } catch { /* best effort */ }
-      // P0-2：恢复 exact 相机。G7 全程相机固定于 frame120 取景（探针与采集均不改投影），
-      // 故「恢复」= 验证恢复后相机矩阵与探针前 saved.camera 一致；采集末态的相机已由
-      // captureHairTriUv 的 finally 恢复 nearClip。此处用一次真实采集读取恢复后的矩阵。
-      let afterCamera = null;
-      try {
-        const probeRead = await stage.captureHairTriUv(slots);
-        afterCamera = probeRead?.camera ?? null;
-      } catch { /* best effort */ }
-      await settle();
-      // after-restore 快照（逐字段断言等于 before，含 looping/renderLoopRunning/camera）。
+      model.update = originalUpdate;
+      model.setClipApplySuspended(saved.clipSuspended);
+      model.seek(saved.seconds);
+      for (const [n, w] of Object.entries(saved.morphWeights)) model.setMorphWeight(n, w);
+      model.animationState.currentLoop = saved.looping;
+      // AnimationState 的两个标志并不互斥，逐项恢复原值，不以 pause 代替 stop。
+      model.animationState.isPlaying = saved.playing;
+      model.animationState.isPaused = saved.paused;
+      const afterCamera = stage.setCameraSnapshot(saved.camera);
+      if (saved.renderLoopRunning) engine.runRenderLoop();
       const after = {
-        clipSuspended: model.isClipApplySuspended?.() ?? false,
-        playing: Boolean(model.getAnimationProgress?.()?.playing),
-        paused: Boolean(model.getAnimationProgress?.()?.paused),
-        looping: Boolean(model.getAnimationProgress?.()?.looping),
-        renderLoopRunning: Boolean(engine.isRenderLoopRunning?.() ?? engine.renderLoopRunning ?? (engine.animationFrameId != null)),
-        seconds: Number(model.getAnimationProgress?.()?.current) || 0,
+        clipSuspended: model.isClipApplySuspended(),
+        playing: Boolean(model.getAnimationProgress().playing),
+        paused: Boolean(model.getAnimationProgress().paused),
+        looping: Boolean(model.getAnimationProgress().looping),
+        renderLoopRunning: engine.animationFrameId != null,
+        seconds: model.getAnimationProgress().current,
         camera: afterCamera,
-        morphWeights: Object.fromEntries(Object.keys(saved.morphWeights || {}).map((n) => {
-          const ix = model.runtimeMorph?.nameIndex?.[n];
-          return [n, ix != null ? +(model.getEffectiveMorphWeights?.()[ix] ?? model.runtimeMorph?.weights?.[ix] ?? 0) : null];
-        })),
+        morphWeights: Object.fromEntries(Object.keys(saved.morphWeights).map((n) => [n, Number(model.getEffectiveMorphWeights()[model.runtimeMorph.nameIndex[n]])])),
       };
-      // 相机矩阵逐字段比对（view/projection），与其它字段共同构成 restore.ok。
-      const camEq = (a, b) => {
-        if (!a && !b) return true; if (!a || !b) return false;
-        const arrEq = (x, y) => Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => Math.abs(v - y[i]) < 1e-3);
-        return arrEq(a.view, b.view) && arrEq(a.projection, b.projection);
+      const eqArray = (a,b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v,i) => Number.isFinite(v) && Math.abs(v-b[i]) <= 1e-6);
+      const cameraOk = !!saved.camera && !!after.camera && eqArray(saved.camera.position, after.camera.position) && eqArray(saved.camera.target, after.camera.target) && Math.abs(saved.camera.fov-after.camera.fov)<=1e-6;
+      if (activeResult) activeResult.restore = {
+        before: saved, after, cameraApplied: true, cameraOk, updateIdentityRestored: model.update === originalUpdate,
+        ok: cameraOk && model.update === originalUpdate
+          && ['clipSuspended','playing','paused','looping','renderLoopRunning'].every((key) => after[key] === saved[key])
+          && Math.abs(after.seconds-saved.seconds) <= 1e-6
+          && Object.keys(saved.morphWeights).every((n) => after.morphWeights[n] === saved.morphWeights[n]),
       };
-      if (activeResult) {
-        activeResult.restore.after = after;
-        activeResult.restore.ok = after.clipSuspended === saved.clipSuspended
-          && after.playing === saved.playing && after.paused === saved.paused
-          && after.looping === saved.looping && after.renderLoopRunning === saved.renderLoopRunning
-          && Math.abs(after.seconds - saved.seconds) < 1e-3
-          && camEq(after.camera, saved.camera)
-          && Object.keys(saved.morphWeights || {}).every((n) => Math.abs((after.morphWeights?.[n] ?? 0) - (saved.morphWeights[n] ?? 0)) < 1e-3);
-      }
     }
 
-  }, { slots: BROWS_LASHES_SLOTS });
+  }, { slots: BROWS_LASHES_SLOTS, faultFirst: FAULT_FIRST_CAPTURE });
 
 
 
   report.gates.G7 = report.gates.G7 || { status: "pass", failures: [] };
+  report.gates.G7.restore = morphProbe.restore;
+  if (!morphProbe.restore?.ok) fail('G7', '原相机/运行态未恢复: ' + JSON.stringify(morphProbe.restore));
+  if (!morphProbe.error) {
+    const closed = morphProbe.closedEyeMorphs, expr = morphProbe.expressionMorphs;
+    const assignments = (blink, smile) => Object.fromEntries([...closed.map(n=>[n,blink]), ...expr.map(n=>[n,smile])]);
+    const states = { open: morphProbe.openEye, openRepeat: morphProbe.openRepeat, closed: morphProbe.closedEye, expression: morphProbe.expression, wrongName: morphProbe.wrongName, noSwitch: morphProbe.noSwitch, noIsoOpen: morphProbe.noIsolation.open, noIsoClosed: morphProbe.noIsolation.closed };
+    const expected = { open: assignments(0,0), openRepeat: assignments(0,0), closed: assignments(1,0), expression: assignments(0,1), wrongName: assignments(0,0), noSwitch: assignments(0,0), noIsoOpen: assignments(0,0), noIsoClosed: assignments(1,0) };
+    const evidence = Object.fromEntries(Object.entries(states).map(([label,s])=>[label,s.weightEvidence]));
+    report.gates.G7.previews = Object.fromEntries(['open','closed','expression'].map(label=>[label,saveDataUrl(states[label].canvasDataUrl,'g7-' + label + '.png')]));
+    for (const s of Object.values(states)) delete s.canvasDataUrl;
+    const verdicts = Object.fromEntries(Object.entries(evidence).map(([label,e])=>[label,evaluateG7WeightEvidence(e,label,expected[label],label==='noIsoOpen'?assignments(1,0):expected[label])]));
+    report.gates.G7.weightEvidence = { states: evidence, verdicts };
+    report.gates.G7.sourceAudit = Object.fromEntries(Object.entries(states).map(([label,s]) => [label, { ok: validateG7Source(s.productionSource, s.weightEvidence.captureId, s.weightEvidence.frame), audit: s.productionSource }]));
+    for (const [label,v] of Object.entries(report.gates.G7.sourceAudit)) if (!v.ok) fail('G7', label + ' 生产源审计失败');
+    for (const [label,v] of Object.entries(verdicts)) if (!v.ok) fail('G7', label + ' 权重证据失败: ' + v.reasons.join(','));
+    const swapped = evaluateG7WeightEvidence(evidence.closed,'open',expected.open);
+    const cpuGpuMismatch = evaluateG7WeightEvidence({ ...evidence.open, gpu: evidence.closed.gpu },'open',expected.open);
+    report.gates.G7.weightEvidence.negatives = { swapped, cpuGpuMismatch };
+    if (swapped.ok || cpuGpuMismatch.ok) fail('G7', '权重证据负测没有判别力');
+  }
 report.gates.G7.morph = {
     closedEyeMorphs: morphProbe.closedEyeMorphs,
     expressionMorphs: morphProbe.expressionMorphs,
@@ -1775,7 +1781,7 @@ report.gates.G7.morph = {
     report.gates.G7.faultRestore = { triggered: true, error: morphProbe.error, restoreOk: morphProbe.restore?.ok === true, restore: morphProbe.restore ?? null };
     note("G7", "P0-1 异常路径恢复红绿：fault 已触发，restore.ok=" + (morphProbe.restore?.ok === true) + "（G7 因异常而失败，恢复须为 true）");
     fail("G7", "P0-1 异常路径红绿：fault-injection 使 G7 失败；restore.ok=" + (morphProbe.restore?.ok === true) + " 须为 true（恢复 exact 原态）");
-  } else if (FAULT_RESTORE) {
+  } else if (FAULT_RESTORE || FAULT_FIRST_CAPTURE) {
     fail("G7", "P0-1 红绿失败：--fault-restore 已开启但 fault 未触发（morphProbe.faultRestoreError 缺失）");
   } else if (morphProbe.error || morphProbe.openEye?.error || morphProbe.closedEye?.error || morphProbe.expression?.error) {
     fail("G7", "Morph 稳定性采集失败: " + JSON.stringify({ e: morphProbe.error, o: morphProbe.openEye?.error, c: morphProbe.closedEye?.error, x: morphProbe.expression?.error }));
@@ -1805,8 +1811,8 @@ report.gates.G7.morph = {
     };
     // P0 逐槽判定（Stage 2C-M2a 修正轮）：不能用任意槽 some() 兜底——必须由取证声明的
     // 受影响槽逐槽超过同状态噪声上界。闭眼 まばたき / 表情 笑い 均只移动 Lashes（506 顶点）、
-    // Brows 0 顶点（见 pmx-morph-forensic.json）。同状态噪声上界取负测（wrongName/noSwitch）
-    // 各槽实测 Jaccard 的最大值 + 0.02 裕量（真实 hashed 抖动基线，非硬编码必败）。
+    // Brows 0 顶点（见 pmx-morph-forensic.json）。噪声只来自独立健康重复采集，
+    // wrongName/noSwitch 不参与标定；屏幕 Jaccard 仅辅助诊断。
     let forensic = null;
     try { forensic = JSON.parse(fs.readFileSync(MORPH_FORENSIC, "utf8")); } catch (e) { forensic = { error: String(e) }; }
     const forensicFor = (names) => (forensic?.morphs || []).filter((m) => names.includes(m.name));
@@ -1821,11 +1827,9 @@ report.gates.G7.morph = {
     };
     const closedAffected = affectedSlotsFor(morphProbe.closedEyeMorphs || []);
     const exprAffected = affectedSlotsFor(morphProbe.expressionMorphs || []);
-    // 同状态噪声上界：负测两状态的逐槽最大值 + 裕量。minForeground=1。
-    const negNoise = (n) => Math.max(
-      dist.wrongNameVsOpen?.[n] ?? 0,
-      dist.noSwitchVsOpen?.[n] ?? 0,
-    );
+    // 独立健康重复采集，不让负测自身抬高阈值。屏幕数值仅诊断。
+    const healthyScreenRepeat = distTo(morphProbe.openRepeat);
+    const negNoise = (n) => healthyScreenRepeat[n];
     const NOISE_MARGIN = 0.02;
     const noiseUpper = Object.fromEntries(slotsArr.map((n) => [n, +(negNoise(n) + NOISE_MARGIN).toFixed(4)]));
     const minForeground = 1;
@@ -1836,22 +1840,19 @@ report.gates.G7.morph = {
     // 有非空交集，且 weight0→weight1 生产 GPU 顶点 delta 的 RMS/max 超过 same-weight 重复噪声+epsilon。
     const gpuStats = (s1, s2, n) => {
       const a = s1?.gpuVerts?.[n], b = s2?.gpuVerts?.[n];
-      if (!a || !b) return { maxDelta: 0, rmsDelta: 0, movedVertexCount: 0, vertexCount: 0 };
+      if (!a || !b || !a.vertexSet.length || a.vertexSet.length !== b.vertexSet.length) return { valid: false, maxDelta: null, rmsDelta: null, movedVertexCount: 0, vertexCount: 0 };
       let mx = 0, sumSq = 0, moved = 0, cnt = 0;
       for (const v of a.vertexSet) {
         const pa = a.positions[v], pb = b.positions[v];
-        if (!pa || !pb) continue;
+        if (!pa || !pb || ![...pa,...pb].every(Number.isFinite) || !b.vertexSet.includes(v)) return { valid: false, maxDelta: null, rmsDelta: null, movedVertexCount: 0, vertexCount: 0 };
         const d = Math.hypot(pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]);
         if (d > mx) mx = d; sumSq += d * d; if (d > 1e-4) moved += 1; cnt += 1;
       }
-      return { maxDelta: +mx.toFixed(5), rmsDelta: +(Math.sqrt(sumSq / Math.max(1, cnt))).toFixed(6), movedVertexCount: moved, vertexCount: cnt };
+      return { valid: cnt === a.vertexSet.length, maxDelta: mx, rmsDelta: Math.sqrt(sumSq / cnt), movedVertexCount: moved, vertexCount: cnt };
     };
-    const GPU_EPSILON = 1e-4; // 数值噪声 epsilon（float32 读回）
-    // same-weight 重复噪声上界：wrongName/noSwitch 各槽 GPU delta 最大值 + epsilon。
-    const gpuNoiseUpper = Object.fromEntries(slotsArr.map((n) => [n, +(Math.max(
-      morphProbe.wrongName?.error ? 0 : gpuStats(morphProbe.openEye, morphProbe.wrongName, n).maxDelta,
-      morphProbe.noSwitch?.error ? 0 : gpuStats(morphProbe.openEye, morphProbe.noSwitch, n).maxDelta,
-    ) + GPU_EPSILON).toFixed(5)]));
+    const healthyRepeatDelta = Object.fromEntries(slotsArr.map(n=>[n,gpuStats(morphProbe.openEye,morphProbe.openRepeat,n)]));
+    const gpuNoiseUpper = calibrateG7Noise(healthyRepeatDelta);
+    report.gates.G7.noiseCalibration = { source: 'independent-open-repeat', captureIds: [morphProbe.openEye.weightEvidence.captureId,morphProbe.openRepeat.weightEvidence.captureId], healthyRepeatDelta, gpuNoiseUpper };
     const gpuDelta = {
       closed: Object.fromEntries(slotsArr.map((n) => [n, gpuStats(morphProbe.openEye, morphProbe.closedEye, n)])),
       expression: Object.fromEntries(slotsArr.map((n) => [n, gpuStats(morphProbe.openEye, morphProbe.expression, n)])),
@@ -1873,15 +1874,22 @@ report.gates.G7.morph = {
     const screenProjection = { diagnosticOnly: true, ignoredByMorphMovementGate: true, note: "屏幕投影受 ~2.5px 抖动污染，不作为 morph 位移判据" };
 
     // 闭眼/表情通过 = 每个受影响槽都真实移动（>该槽噪声上界），且取证确认该状态有受影响槽。
-    const closedMoved = closedAffected.size > 0 && [...closedAffected].every((n) => closedPerSlot[n].moved === true);
-    const exprMoved = exprAffected.size > 0 && [...exprAffected].every((n) => exprPerSlot[n].moved === true);
+    const evidenceValid = label => report.gates.G7.weightEvidence.verdicts[label]?.ok === true && report.gates.G7.sourceAudit[label]?.ok === true && morphProbe.renderObserved[label]?.renderObserved === true && morphProbe.renderObserved[label]?.atomicSameCapture === true;
+    const commonValid = evidenceValid('open') && evidenceValid('openRepeat');
+    const closedMovement = evaluateG7Movement(gpuDelta.closed, [...closedAffected], gpuNoiseUpper, commonValid && evidenceValid('closed'));
+    const expressionMovement = evaluateG7Movement(gpuDelta.expression, [...exprAffected], gpuNoiseUpper, commonValid && evidenceValid('expression'));
+    const closedMoved = closedMovement.ok;
+    const exprMoved = expressionMovement.ok;
     // 负测判别（GPU 顶点口径）：错误名/不切换各槽 GPU delta 须不超过噪声上界（无真实 morph 变形）。
     const negGpuDelta = {
       wrongName: Object.fromEntries(slotsArr.map((n) => [n, morphProbe.wrongName?.error ? null : gpuStats(morphProbe.openEye, morphProbe.wrongName, n)])),
       noSwitch: Object.fromEntries(slotsArr.map((n) => [n, morphProbe.noSwitch?.error ? null : gpuStats(morphProbe.openEye, morphProbe.noSwitch, n)])),
     };
-    const negWrongNameRejected = morphProbe.wrongName?.error ? false : slotsArr.every((n) => negGpuDelta.wrongName[n].maxDelta <= gpuNoiseUpper[n]);
-    const negNoSwitchRejected = morphProbe.noSwitch?.error ? false : slotsArr.every((n) => negGpuDelta.noSwitch[n].maxDelta <= gpuNoiseUpper[n]);
+    const wrongNameMovement = evaluateG7Movement(negGpuDelta.wrongName, [...closedAffected], gpuNoiseUpper, commonValid && evidenceValid('wrongName') && slotsArr.every(n=>countOf(morphProbe.wrongName,n)>0));
+    const noSwitchMovement = evaluateG7Movement(negGpuDelta.noSwitch, [...closedAffected], gpuNoiseUpper, commonValid && evidenceValid('noSwitch') && slotsArr.every(n=>countOf(morphProbe.noSwitch,n)>0));
+    const negWrongNameRejected = wrongNameMovement.expectedRejected;
+    const negNoSwitchRejected = noSwitchMovement.expectedRejected;
+    report.gates.G7.movementEvaluator = { closedMovement, expressionMovement, wrongNameMovement, noSwitchMovement };
     const lockControl = morphProbe.lockControl || null;
     const gpuWeights = {
       open: morphProbe.openEye?.gpuWeights || null,
@@ -1937,7 +1945,7 @@ report.gates.G7.morph = {
     const noIsoGpu = noIso && !noIso.open?.error && !noIso.closed?.error
       ? Object.fromEntries(slotsArr.map((n) => [n, gpuStats(noIso.open, noIso.closed, n)]))
       : null;
-    const noIsoRejected = !!(noIsoGpu && [...closedAffected].every((n) => (noIsoGpu[n]?.movedVertexCount ?? 0) === 0 && (noIsoGpu[n]?.maxDelta ?? 1) <= gpuNoiseUpper[n]));
+    const noIsoRejected = !!noIsoGpu && evaluateG7Movement(noIsoGpu,[...closedAffected],gpuNoiseUpper,commonValid && evidenceValid('noIsoOpen') && evidenceValid('noIsoClosed')).expectedRejected;
     const noIsoRenderOk = !!(noIso && noIso.open && noIso.closed && !noIso.open.error && !noIso.closed.error);
     report.gates.G7.noIsolationNegative = {
       rejected: noIsoRejected, renderOk: noIsoRenderOk,
@@ -1952,7 +1960,7 @@ report.gates.G7.morph = {
     // P1-1：统一正式 evidence evaluator（健康/noIsolation/no-render/stale 共用同一函数）。
     // 每态须 renderObserved=true、atomicSameCapture=true（pixel/materialMask/triUV 同一 captureId/帧）、
     // sourceAudit 非空；跨态 captureId 非空互异、frame=120。
-    const EVIDENCE_STATES = ["open", "closed", "expression", "wrongName", "noSwitch", "noIsoOpen", "noIsoClosed"];
+    const EVIDENCE_STATES = ["open", "openRepeat", "closed", "expression", "wrongName", "noSwitch", "noIsoOpen", "noIsoClosed"];
     const evidenceOk = (obs) => {
       const list = EVIDENCE_STATES.map((s) => obs?.[s]);
       if (list.some((x) => !x)) return false;
@@ -1988,6 +1996,8 @@ report.gates.G7.morph = {
   }
 
 
+  // 聚焦权重/相机模式不运行既有材质分析器，避免写入历史固定目录。
+  if (!G7_EVIDENCE_ONLY) {
   // P0 整槽消失负测（Stage 2C-M2a 修正轮）：实际运行 missingBrows/missingLashes 扰动，
   // 重采该扰动下的原子画布+mask+triUV，由正式逐槽 analyzer 非零拒绝。
   // 口径（M2a.4 裁定 5）：missing 槽仍在同一 mesh 上被 material-ID pick 栅格化，恒等 tint 下
@@ -2057,6 +2067,7 @@ report.gates.G7.morph = {
       } else note("G7", "整槽消失负测 PASS（" + kind + " 由正式逐槽 analyzer 自然非零拒绝）");
     }
   } catch (e) { fail("G7", "missingSlot 负测 exception: " + (e?.stack || e)); }
+  }
 } catch (e) { fail("G7", "exception: " + (e?.stack || e)); }
 
 if (!G7_MORPH_ONLY && report.pageErrors.length) fail("G1", "pageErrors: " + report.pageErrors.slice(0, 3).join(" | "));
