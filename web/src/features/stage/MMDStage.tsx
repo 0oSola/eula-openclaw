@@ -5,6 +5,11 @@ import { ChangeEvent, PointerEvent, forwardRef, useEffect, useImperativeHandle, 
 import { getModelDisplayLabel } from "@/features/stage/modelCatalog.js";
 import { shouldTriggerStageCharacterClick } from "@/features/stage/stageCharacterClick.js";
 import { applyStageRuntimeState, MMDCompanionRuntime } from "@/features/stage/mmdCompanionRuntime.js";
+import { isKoledaModelIdentifier } from "@/features/stage/koledaDefaultAppearance.js";
+import {
+  V14D_GAME_MANIFEST_URL,
+  validateV14dGameManifest,
+} from "@/features/stage/v14dGameAppearanceAssets.js";
 import { RezeWebGpuStage } from "@/features/stage/RezeWebGpuStage";
 import type {
   RezeBackgroundEffect,
@@ -72,6 +77,24 @@ function toAbsolute(url: string): string {
   if (/^https?:\/\//i.test(url)) return url;
   const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
   return `${baseUrl}${url.startsWith("/") ? url : `/${url}`}`;
+}
+
+function absolutizeV14dGameManifest(manifest: any) {
+  return {
+    ...manifest,
+    model: manifest?.model ? { ...manifest.model, url: toAbsolute(manifest.model.url) } : manifest?.model,
+    textures: Array.isArray(manifest?.textures)
+      ? manifest.textures.map((entry: any) => ({ ...entry, url: toAbsolute(entry.url) }))
+      : manifest?.textures,
+    ocio: manifest?.ocio
+      ? Object.fromEntries(
+          Object.entries(manifest.ocio).map(([key, entry]: [string, any]) => [
+            key,
+            { ...entry, url: toAbsolute(entry?.url) },
+          ]),
+        )
+      : manifest?.ocio,
+  };
 }
 
 export type MMDStageHandle = {
@@ -272,52 +295,74 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       runtimeRef.current = null;
       return;
     }
-    if (!modelUrl) {
-      runtimeRef.current = null;
-      statusRef.current.textContent = "No MMD models found.";
-      return;
-    }
     let disposed = false;
-    const runtime = new (MMDCompanionRuntime as any)({
-      container: containerRef.current,
-      statusElement: statusRef.current,
-      renderPipeline,
-      cameraSnapshot: cameraSnapshotRef.current,
-    });
-    runtimeRef.current = runtime;
-    if (process.env.NODE_ENV !== "production") {
-      window.__mmdCompanionRuntime = runtime;
-    }
-    applyStageRuntimeState(runtime, {
-      interaction: currentInteractionRef.current,
-      speaking: currentSpeakingRef.current,
-      resolveUrl: toAbsolute,
-    });
-    runtime
-      .init(toAbsolute(modelUrl))
-      .then(() => {
-        if (disposed) return;
-        applyStageRuntimeState(runtime, {
-          interaction: currentInteractionRef.current,
-          speaking: currentSpeakingRef.current,
-          resolveUrl: toAbsolute,
-        });
-        if (typeof cameraLockedRef.current === "boolean") {
-          runtime.setCameraLocked(cameraLockedRef.current);
+    let runtime: any = null;
+    const controller = new AbortController();
+    const start = async () => {
+      let effectiveModelUrl = modelUrl;
+      let v14dGameManifest: any = null;
+      if (renderPipeline === "v14d-game") {
+        if (!isKoledaModelIdentifier(selectedModelPath, modelLabel, modelUrl)) {
+          throw new Error("V14D 游戏外观当前仅支持明确的 Koleda/克莱妲模型；未静默替换当前模型。");
         }
-      })
-      .catch((error: Error) => {
-        if (disposed) return;
-        statusRef.current!.textContent = `Model load failed: ${error.message}`;
+        statusRef.current!.textContent = "正在检查 V14D 本机游戏外观资源……";
+        const response = await fetch(toAbsolute(V14D_GAME_MANIFEST_URL), {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`V14D 游戏外观清单请求失败（${response.status}）。`);
+        const rawManifest = await response.json();
+        const validation = validateV14dGameManifest(rawManifest);
+        if (!validation.ok) throw new Error(validation.reason);
+        v14dGameManifest = absolutizeV14dGameManifest(rawManifest);
+        effectiveModelUrl = v14dGameManifest.model.url;
+      } else if (!modelUrl) {
+        throw new Error("No MMD models found.");
+      }
+      if (disposed) return;
+      runtime = new (MMDCompanionRuntime as any)({
+        container: containerRef.current,
+        statusElement: statusRef.current,
+        renderPipeline,
+        cameraSnapshot: cameraSnapshotRef.current,
+        v14dGameManifest,
       });
+      runtimeRef.current = runtime;
+      if (process.env.NODE_ENV !== "production") {
+        window.__mmdCompanionRuntime = runtime;
+      }
+      applyStageRuntimeState(runtime, {
+        interaction: currentInteractionRef.current,
+        speaking: currentSpeakingRef.current,
+        resolveUrl: toAbsolute,
+      });
+      await runtime.init(toAbsolute(effectiveModelUrl));
+      if (disposed) return;
+      applyStageRuntimeState(runtime, {
+        interaction: currentInteractionRef.current,
+        speaking: currentSpeakingRef.current,
+        resolveUrl: toAbsolute,
+      });
+      if (typeof cameraLockedRef.current === "boolean") {
+        runtime.setCameraLocked(cameraLockedRef.current);
+      }
+    };
+    void start().catch((error: Error) => {
+      if (disposed || error?.name === "AbortError") return;
+      statusRef.current!.textContent = renderPipeline === "v14d-game"
+        ? `V14D 游戏外观加载失败：${error.message}`
+        : `Model load failed: ${error.message}`;
+    });
     return () => {
       disposed = true;
+      controller.abort();
       if (process.env.NODE_ENV !== "production" && window.__mmdCompanionRuntime === runtime) {
         delete window.__mmdCompanionRuntime;
       }
-      runtime.dispose();
+      runtime?.dispose?.();
+      if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
-  }, [modelUrl, renderPipeline]);
+  }, [modelUrl, modelLabel, renderPipeline, selectedModelPath]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;

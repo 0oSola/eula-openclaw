@@ -427,6 +427,20 @@ export async function listMmdModels(): Promise<MmdModelAsset[]> {
   return payload.items || [];
 }
 
+export async function getV14dGameManifest(): Promise<{
+  available?: boolean;
+  reason?: string;
+  model?: {
+    url?: string;
+    relativePath?: string;
+    sha256?: string | null;
+    sizeBytes?: number;
+  };
+  [key: string]: unknown;
+}> {
+  return requestJSON("/assets/v14d-game/manifest", { method: "GET" });
+}
+
 export async function listMmdMotions(): Promise<MmdMotionAsset[]> {
   const payload = await requestJSON<{ items: MmdMotionAsset[] }>("/assets/mmd/vmds", {
     method: "GET",

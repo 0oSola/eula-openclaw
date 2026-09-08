@@ -1,6 +1,6 @@
 # 当前系统拓扑与架构蓝图
 
-更新时间：2026-09-05
+更新时间：2026-09-08
 
 验收环境适配：`accept-reze-k3-v1-stage.mjs` 使用 `V14D_CAPTURE_API_ORIGIN`（验收后端来源，默认8000）精确匹配直接后端请求，主验收页面与默认入口页面共用；主服务3100的前端配置为8100时显式传8100，不改生产API或服务。`--entry-only`（入口回放）先检查导入、画布就绪和六槽开关/绑定，失败即停止，不继续G2–G7；105秒内部预算、120秒外层硬限。入口结果与完整回放分开，API/会话存根加真实本地模型字节不代表真实后端已修复。
 
@@ -56,7 +56,7 @@ Companion Reze Design
 
 `reze-npr`、`classic` 等模式仍由 `MMDCompanionRuntime`（Three.js/WebGL）处理。两条路径的骨骼、Grant 付与求解器、点击、口型和物理实现不能视为等价：WebGPU 舞台使用 reze-engine 自己的 IK/物理，未验证功能不得跨分支承诺。浏览器无 WebGPU 或当前 PMX/VMD 无法被引擎解析时，舞台必须显示错误，用户需手动切换 `reze-npr` 恢复既有兼容路径；不得静默降级并继续显示为 WebGPU。
 
-### 1.1.1 `v14d-game` 第一纵向切片（准备态）
+### 1.1.1 `v14d-game` 第一纵向切片（本机外观接入）
 
 `render_pipeline=v14d-game` 走共享 Three.js/WebGL 舞台，不进入 Reze WebGPU 分支：
 
@@ -69,9 +69,20 @@ CompanionPage 选择/保存 v14d-game
       -> Three.js/WebGL
 ```
 
-当前适配器是可安装/释放的准备态接口，不读取本机 OCIO/LUT/GLSL、真实游戏资产或源预览公式；加载成功和舞台状态明确显示 `接入准备：真实游戏外观未迁移`。它不改变共享 VMD、口型、物理、动作和相机生命周期，`clearModel()` 与 `dispose()` 会释放适配器，切回旧管线由 `MMDStage` 的 runtime 清理完成。
+`v14d-game` 现在使用可安装/释放的 `v14dGameAppearanceAdapter`，并由独立 FastAPI 资产路由提供本机白名单资源。`/assets/v14d-game/manifest` 只登记以下固定身份：
 
-本机预览范围仅到“真实 PMX 进入共享舞台并保留既有动作入口”。截图默认值可以在类型配置中保留定义，但本票没有应用截图默认值，也没有接入真实游戏外观、材质公式、六灯映射、OCIO/LUT/GLSL、本机白名单资产路由、完整微调持久化或视觉对齐验收；这些是后续阻塞项，需先完成许可确认和模型专用映射。
+- 模型：`D:\mmd\克莱妲原皮\GirlsFrontline KoledaDefault.pmx`；模型和资源依赖必须命中明确的 `Textures`、`normalmap` 或 `spa` 子目录，路径穿越、未登记键和缺失文件均明确失败，不静默回退 builtin。
+- 外观资源：当前模型材质上的 normal/RMO 资源与头发高光资源由适配器安装；安装前保留 PMX 材质状态，释放或切回旧管线时恢复材质、节点和纹理所有权。适配器只接受名称明确包含 `Koleda`/“克莱妲”的模型。
+- 灯光：源清单的六盏 `AREA` 灯转换为共享舞台中的 `RectAreaLight`，按源模型缩放 `0.08` 与当前模型 fit 缩放映射位置、尺寸和功率；背景灯放到独立 layer。
+- 显示：本机 `processor.json`、GLSL 和两个 3D LUT 通过清单 SHA-256 校验后进入独立 OCIO 显示链。OCIO 身份为 `2.5.0 / AgX - Medium High Contrast / sRGB`；再分发许可未确认，资源只允许本机隔离预览，不能复制到 `public` 或发布包。
+
+真实模型仍由共享 `MMDCompanionRuntime` 的 MMDLoader、MMDAnimationHelper、VMD 播放、口型、物理、自由相机和动作生命周期承担；`v14d-game` 没有独立播放循环，也不把静态参考姿态写入骨骼基线。`clearModel()`/`dispose()` 会释放适配器、六灯、OCIO 显示链和模型；切回 `classic` 等旧管线重新建立旧舞台配置，不修改旧类型。
+
+`V14D_GAME_DEFAULT_SETTINGS` 仅保留截图默认值和下一阶段 settings 接口（`game/ocio`、曝光 `-0.40`、织纹 `2`、纵向细线 `1`、reference 闭眼、smile `0.55`、虹膜 `2`、自动脸部 `true`、手动 mask `2`、六灯开关等），不宣称这些完整微调参数已经全部应用到当前显示路径。当前仍未完成：五个 mask 的显示合成、背景显示后合成隔离、完整 UI/持久化、材质公式和面部/头发视觉对齐、许可确认、真实后端/登录会话联调以及完整验收截图/GIF。
+
+2026-09-08 的本机纵向验证使用 `node web/.scratch/v14d-game-appearance/verify-runtime.cjs`，在独立 `3145` 资产服务和 `8115` VMD 测试服务上完成：真实 Koleda PMX 进入 `ready`，13 项材质资源实际绑定，六灯实际存在，本机 OCIO `2.5.0 / AgX - Medium High Contrast / sRGB` 的 processor、shader、37³/57³ LUT 均返回并执行；真实 `koleda-v14d-authoritative-pose-f120.vmd` 播放约 5.1 秒且共享动作时间推进，自由相机快照发生变化。切回 `classic` 后，适配器、六灯和本机 OCIO 均释放，旧 runtime 仍可加载模型并推进同一 VMD；将 OCIO processor 标记为缺失时页面明确拒绝外观且不创建 runtime。证据保存在忽略目录 `web/.scratch/v14d-game-appearance/verify-report.json` 及三张截图中。该验证使用的是独立本机服务/存根，不等价于主后端、登录会话或生产资产服务联调。
+
+本次真实加载还观察到 PMX 依赖请求 `model/spa/` 和 `model/textures/extra.png` 返回 404；当前共享舞台仍能进入 `ready`，但这只能说明当前适配器显示路径可运行，不能证明 PMX 引用资源已完整闭合。该缺口、Three.js 既有材质属性警告和许可未确认均保留为发布前风险，不通过静默 builtin 或旧渲染回退掩盖。
 
 Reze WebGPU 播放 VMD 前会额外读取文件尾部的显示/IK 帧。`reze-engine@0.26.0` 自身只把骨骼帧和 Morph 帧装入动画剪辑，且默认在每次应用 VMD FK 后运行全局 IK；如果忽略 VMD 中“关闭足 IK”的状态，PMX 足 IK 会覆盖腿、膝和足首轨道，使完整 FK 动作表现为下半身锁定。当前前端只有在 VMD 中至少出现足 IK 条目、且文件内全部 IK 条目始终关闭时，才在该剪辑播放期间调用 `Engine.setIKEnabled(false)`；没有 IK 条目、包含开启条目或中途切换状态时保持舞台默认 IK，避免 Reze 的全局开关误伤其它 IK 链。单次动作完成、退出 VMD 模式或切换到不要求关闭 IK 的剪辑时必须恢复引擎初始 IK 状态。解析结果按 VMD URL 缓存，循环动作不得重复下载整份文件。
 

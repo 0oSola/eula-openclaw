@@ -70,6 +70,7 @@ import {
   DEFAULT_VMD_PLAYBACK_RATE,
 } from "@/features/stage/builtInMotionPreferences.js";
 import { getModelDisplayLabel, pickInitialModelSelection, pickRememberedModelSelection } from "@/features/stage/modelCatalog.js";
+import { createV14dGameModelAsset } from "@/features/stage/v14dGameAppearanceAssets.js";
 import {
   companionRenderPipelineStorageKey,
   normalizeRememberedRenderPipeline,
@@ -94,6 +95,7 @@ import {
   getOpenClawHealth,
   getMessageById,
   getResolvedMappings,
+  getV14dGameManifest,
   listMessageBridgeFeishuSessions,
   listChatSessions,
   listMmdModels,
@@ -433,7 +435,7 @@ const renderPipelineOptions: { value: RenderPipeline; label: string; description
   { value: "reze-npr", label: "Reze NPR", description: "reze-engine \u5b9e\u9a8c\u98ce\u683c" },
   { value: "reze-design", label: "Reze Design", description: "Reze \u706f\u5149\u00b7MIO \u661f\u6d77\u821e\u53f0" },
   { value: "reze-k3", label: "Reze K3", description: "Reze WebGPU \u590d\u523b\u00b7\u6750\u8d28\u4e0e\u573a\u666f" },
-  { value: "v14d-game", label: "V14D \u6e38\u620f\u53c2\u8003", description: "\u63a5\u5165\u51c6\u5907\uff1a\u771f\u5b9e\u6e38\u620f\u5916\u89c2\u672a\u8fc1\u79fb" },
+  { value: "v14d-game", label: "V14D \u6e38\u620f\u53c2\u8003", description: "\u672c\u673a\u9650\u5b9a\uff1aKoleda \u767d\u540d\u5355\u6750\u8d28\u3001\u516d\u706f\u4e0e\u672c\u673a OCIO\uff1b\u8bb8\u53ef\u672a\u786e\u8ba4\uff0c\u4e0d\u8fdb\u5165\u53d1\u5e03\u5305" },
 ];
 
 const MIO_REFERENCE_CAMERA_DEFAULT: MmdCameraSnapshot = {
@@ -767,35 +769,68 @@ export default function CompanionPage() {
 
     (async () => {
       try {
-        const [mappingRows, assetRows, modelRows, sessionRows, sharedConfig] = await Promise.all([
+        const [mappingRows, sharedConfig] = await Promise.all([
           getResolvedMappings(session.userId),
-          listVmdAssets(session.userId),
-          listMmdModels(),
-          listChatSessions(session.userId),
           getCompanionSharedConfig(session.userId).catch(() => null),
         ]);
         if (cancelled) return;
 
+        const effectivePipeline =
+          renderPipeline === "mio-reference"
+            ? (normalizeRememberedRenderPipeline(sharedConfig?.render_pipeline) as RenderPipeline)
+            : renderPipeline;
+        const modelRowsPromise: Promise<MmdModelAsset[]> =
+          effectivePipeline === "v14d-game"
+            ? getV14dGameManifest().then((manifest) => {
+                const model = createV14dGameModelAsset(manifest);
+                if (!model) {
+                  throw new Error(manifest?.reason || "V14D 游戏外观清单未登记 Koleda 模型。");
+                }
+                return [model];
+              })
+            : listMmdModels();
+        const [modelRows, sessionRows] = await Promise.all([
+          modelRowsPromise,
+          listChatSessions(session.userId),
+        ]);
+        if (cancelled) return;
+
+        // V14D 的真实外观清单必须先打通舞台；/assets/vmd 会同步扫描本机
+        // MMD 根目录并可能较慢，不能让它阻塞 Koleda 模型的首次显示。
+        const assetRowsPromise = listVmdAssets(session.userId);
+
         setMappings(mappingRows);
-        setAssets(assetRows);
         setModels(modelRows);
         setChatSessions(sessionRows);
         setSelectedModelPath((current) => {
           if (current && modelRows.some((item) => item.relative_path === current)) {
             return current;
           }
-          const preferred = pickRememberedModelSelection(
-            modelRows,
-            sharedConfig?.selected_model_path || "",
-            DEFAULT_MODEL_RELATIVE_PATH,
-          );
+          const preferred =
+            effectivePipeline === "v14d-game"
+              ? modelRows[0]
+              : pickRememberedModelSelection(
+                  modelRows,
+                  sharedConfig?.selected_model_path || "",
+                  DEFAULT_MODEL_RELATIVE_PATH,
+                );
           return preferred?.relative_path || "";
         });
-        setRenderPipeline((current) =>
-          current === "mio-reference"
-            ? (normalizeRememberedRenderPipeline(sharedConfig?.render_pipeline) as RenderPipeline)
-            : current,
-        );
+        setRenderPipeline(effectivePipeline);
+
+        if (effectivePipeline === "v14d-game") {
+          void assetRowsPromise
+            .then((assetRows) => {
+              if (!cancelled) setAssets(assetRows);
+            })
+            .catch(() => {
+              // 慢速/不可用的动作资产列表不应遮蔽已可用的 V14D 外观。
+            });
+        } else {
+          const assetRows = await assetRowsPromise;
+          if (cancelled) return;
+          setAssets(assetRows);
+        }
 
         let activeSession =
           sessionRows.find((item) => item.id === session.activeChatSessionId) ||

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
+import mimetypes
 import shutil
 import re
 import struct
@@ -23,6 +26,31 @@ _USAGE_VMD_SYNC_LOCK = RLock()
 
 _MMD_SCAN_CACHE: dict[str, tuple[float, list[Path]]] = {}
 _MMD_SCAN_CACHE_TTL_SECONDS = 15.0
+
+V14D_GAME_TEXTURES = (
+    ("body-normal", "normalmap/body_n.png", ("body", "skin", "face"), "normal"),
+    ("body-rmo", "normalmap/body_rmo.png", ("body", "skin", "face"), "rmo"),
+    ("cloth1-normal", "normalmap/c_KoledaSSR01_slg_cloth1_n.png", ("cth1",), "normal"),
+    ("cloth1-rmo", "normalmap/c_koledassr01_slg_cloth1_rmo_06_11_2026.png", ("cth1",), "rmo"),
+    ("cloth2-normal", "normalmap/c_KoledaSSR01_slg_cloth2_n.png", ("cth2",), "normal"),
+    ("cloth2-rmo", "normalmap/c_koledassr01_slg_cloth2_rmo_06_11_2026.png", ("cth2",), "rmo"),
+    ("cloth4-normal", "normalmap/c_KoledaSSR01_slg_cloth4_n.png", ("cth4",), "normal"),
+    ("cloth4-rmo", "normalmap/c_koledassr01_slg_cloth4_rmo_06_11_2026.png", ("cth4",), "rmo"),
+    ("cloth5-normal", "normalmap/c_KoledaSSR01_slg_cloth5_n.png", ("cth5",), "normal"),
+    ("cloth5-rmo", "normalmap/c_koledassr01_slg_cloth5_rmo_06_11_2026.png", ("cth5",), "rmo"),
+    ("glock-normal", "normalmap/c_KoledaSSR01_slg_glock_n.png", ("glock",), "normal"),
+    ("glock-rmo", "normalmap/c_KoledaSSR01_slg_glock_rmo.png", ("glock",), "rmo"),
+    ("hair-specular", "normalmap/c_KoledaSSR01_slg_hair_spc.png", ("hair",), "specular"),
+)
+
+V14D_GAME_OCIO = (
+    ("processor", "ocio/processor.json"),
+    ("shader", "ocio/processor.glsl"),
+    ("lut0", "ocio/lut-0.rgba32f"),
+    ("lut1", "ocio/lut-1.rgba32f"),
+)
+
+V14D_GAME_MODEL_DEPENDENCY_DIRS = frozenset({"Textures", "spa", "normalmap"})
 
 
 def _cached_scan(cache_key: str, scan_fn) -> list[Path]:
@@ -654,6 +682,209 @@ def get_vmd_asset_file(asset_id: str, request: Request):
     if not full_path.exists():
         raise HTTPException(status_code=404, detail="Asset file missing.")
     return FileResponse(full_path, media_type="application/octet-stream", filename=item["filename"])
+
+
+def _v14d_game_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _v14d_game_safe_path(root: Path, relative_path: str) -> Path:
+    relative = str(relative_path or "").replace("\\", "/")
+    candidate = Path(relative)
+    if not relative or candidate.is_absolute() or ".." in candidate.parts:
+        raise HTTPException(status_code=400, detail="Invalid V14D game asset path.")
+    resolved_root = root.resolve()
+    resolved = (resolved_root / candidate).resolve()
+    if resolved != resolved_root and resolved_root not in resolved.parents:
+        raise HTTPException(status_code=400, detail="Invalid V14D game asset path.")
+    return resolved
+
+
+def _v14d_game_source_lights(source_manifest: dict) -> tuple[list[dict], list[str]]:
+    raw_lights = source_manifest.get("lights")
+    if not isinstance(raw_lights, list) or len(raw_lights) != 6:
+        return [], ["source manifest 的六灯数量不是 6"]
+
+    lights: list[dict] = []
+    errors: list[str] = []
+    for index, source in enumerate(raw_lights):
+        matrix = source.get("matrix") if isinstance(source, dict) else None
+        color = source.get("color") if isinstance(source, dict) else None
+        shape = source.get("shape") if isinstance(source, dict) else None
+        light_type = source.get("type") if isinstance(source, dict) else None
+        size = source.get("size") if isinstance(source, dict) else None
+        power = source.get("power") if isinstance(source, dict) else None
+        if (
+            not isinstance(matrix, list)
+            or len(matrix) != 4
+            or any(not isinstance(row, list) or len(row) != 4 for row in matrix)
+            or not isinstance(color, list)
+            or len(color) != 3
+            or light_type != "AREA"
+            or shape not in {"DISK", "RECTANGLE"}
+            or not isinstance(size, (int, float))
+            or not isinstance(power, (int, float))
+        ):
+            errors.append(f"source manifest 灯光 {index} 字段不完整")
+            continue
+        try:
+            matrix_numbers = [[float(value) for value in row] for row in matrix]
+            color_numbers = [float(value) for value in color]
+            if any(not isinstance(value, (int, float)) for row in matrix_numbers for value in row):
+                raise ValueError("matrix")
+            if any(not isinstance(value, (int, float)) for value in color_numbers):
+                raise ValueError("color")
+            if not all(float(value) == float(value) for row in matrix_numbers for value in row):
+                raise ValueError("matrix")
+        except (TypeError, ValueError):
+            errors.append(f"source manifest 灯光 {index} 数值非法")
+            continue
+        position = [matrix_numbers[0][3], matrix_numbers[2][3], -matrix_numbers[1][3]]
+        lights.append(
+            {
+                "name": str(source.get("name") or f"source-light-{index}"),
+                "type": light_type,
+                "shape": shape,
+                "power": float(power),
+                "color": color_numbers,
+                "size": float(size),
+                "sizeY": float(source.get("sizeY") or size),
+                "matrix": matrix_numbers,
+                "position": position,
+                "useShadow": bool(source.get("useShadow", False)),
+                "backgroundOnly": str(source.get("name") or "").startswith("PROTO_BG_"),
+            }
+        )
+    return lights, errors
+
+
+def _v14d_game_catalog(settings) -> tuple[dict, dict[str, Path]]:
+    preview_root = settings.v14d_game_assets_root.resolve()
+    mmd_root = settings.mmd_root_dir.resolve()
+    model_relative = str(settings.v14d_game_model_relative_path).replace("\\", "/").strip("/")
+    model_path = _v14d_game_safe_path(mmd_root, model_relative)
+    manifest_path = _v14d_game_safe_path(preview_root / "assets", "manifest.json")
+    model_key = f"model/{model_path.name}"
+    asset_paths: dict[str, Path] = {model_key: model_path}
+
+    textures = []
+    for key, relative_path, material_hints, kind in V14D_GAME_TEXTURES:
+        path = _v14d_game_safe_path(model_path.parent, relative_path)
+        asset_paths[key] = path
+        textures.append(
+            {
+                "key": key,
+                "url": f"/assets/v14d-game/{key}",
+                "relativePath": relative_path,
+                "materialHints": list(material_hints),
+                "kind": kind,
+                "sha256": _v14d_game_sha256(path) if path.is_file() else None,
+            }
+        )
+
+    ocio = {}
+    missing = []
+    ocio_identity = {}
+    for key, relative_path in V14D_GAME_OCIO:
+        path = _v14d_game_safe_path(preview_root, relative_path)
+        asset_paths[key] = path
+        ocio[key] = {
+            "url": f"/assets/v14d-game/{key}",
+            "relativePath": relative_path,
+            "sha256": _v14d_game_sha256(path) if path.is_file() else None,
+        }
+    processor_path = asset_paths.get("processor")
+    if processor_path and processor_path.is_file():
+        try:
+            ocio_identity = json.loads(processor_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError) as error:
+            missing.append(f"OCIO processor identity unreadable: {error}")
+
+    for key, path in asset_paths.items():
+        if not path.is_file():
+            missing.append(f"{key}: {path}")
+    if not manifest_path.is_file():
+        missing.append(f"analysis manifest: {manifest_path}")
+
+    source_manifest = {}
+    source_manifest_sha256 = None
+    if manifest_path.is_file():
+        try:
+            source_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            source_manifest_sha256 = _v14d_game_sha256(manifest_path)
+        except (OSError, ValueError) as error:
+            missing.append(f"analysis manifest unreadable: {error}")
+
+    lights, light_errors = _v14d_game_source_lights(source_manifest)
+    missing.extend(light_errors)
+
+    payload = {
+        "id": "v14d-koleda-game-reference-local",
+        "available": not missing,
+        "reason": "" if not missing else "V14D 本机游戏外观资源不可用：" + "; ".join(missing),
+        "scope": "仅本机隔离预览；OCIO 许可未确认，不得发布或打包。",
+        "model": {
+            "url": f"/assets/v14d-game/{model_key}",
+            "relativePath": model_relative,
+            "sha256": _v14d_game_sha256(model_path) if model_path.is_file() else None,
+        },
+        "textures": textures,
+        "ocio": ocio,
+        "ocioIdentity": ocio_identity,
+        "lights": lights,
+        "settings": {
+            "display": "game/ocio",
+            "exposure": -0.40,
+            "fabricDetail": 2,
+            "legStructure": 1,
+            "closedEye": "reference",
+            "smile": 0.55,
+            "iris": 2,
+            "autoFace": True,
+            "manualMask": 2,
+            "lightingEnabled": True,
+            "hairMaskStrength": 1,
+            "hairMaskView": False,
+            "hairDiskCandidate": False,
+            "rotation": 0,
+        },
+        "sourceSha256": source_manifest.get("sourceSha256"),
+        "sourceManifestSha256": source_manifest_sha256,
+    }
+    return payload, asset_paths
+
+
+@router.get("/v14d-game/manifest")
+def get_v14d_game_manifest(request: Request):
+    settings = request.app.state.settings
+    payload, _asset_paths = _v14d_game_catalog(settings)
+    return payload
+
+
+@router.get("/v14d-game/{asset_key:path}")
+def get_v14d_game_asset(asset_key: str, request: Request):
+    settings = request.app.state.settings
+    payload, asset_paths = _v14d_game_catalog(settings)
+    requested_key = str(asset_key or "").replace("\\", "/").strip("/")
+    path = asset_paths.get(requested_key)
+    if path is None and requested_key.startswith("model/"):
+        dependency_relative = requested_key[len("model/") :]
+        dependency_parts = Path(dependency_relative.replace("\\", "/")).parts
+        if dependency_parts and dependency_parts[0] in V14D_GAME_MODEL_DEPENDENCY_DIRS:
+            dependency_root = Path(settings.mmd_root_dir).resolve() / Path(
+                settings.v14d_game_model_relative_path
+            ).parent
+            path = _v14d_game_safe_path(dependency_root, dependency_relative)
+    if path is None:
+        raise HTTPException(status_code=404, detail="V14D 游戏外观资源未登记。")
+    if not path.is_file() or payload["available"] is False:
+        raise HTTPException(status_code=404, detail=payload["reason"] or "V14D game asset is unavailable.")
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type, filename=path.name)
 
 
 @router.get("/mmd/models")

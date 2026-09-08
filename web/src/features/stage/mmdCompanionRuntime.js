@@ -4,6 +4,7 @@ import {
   MMDAnimationHelper,
   MMDLoader,
   OrbitControls,
+  RectAreaLightUniformsLib,
   RenderPass,
   ShaderPass,
   UnrealBloomPass,
@@ -14,6 +15,12 @@ import {
   selectKoledaClosedEyeMorphNames,
 } from "./koledaDefaultAppearance.js";
 import { createV14dGameAppearanceAdapter } from "./v14dGameAppearanceAdapter.js";
+import {
+  V14D_GAME_DEFAULT_SETTINGS,
+  V14D_GAME_MANIFEST_URL,
+  validateV14dGameManifest,
+} from "./v14dGameAppearanceAssets.js";
+import { createV14dGameLocalOcioDisplay } from "./v14dGameLocalOcioDisplay.js";
 
 const FIXED_EMOTION_MORPH_HINTS = {
   happy: ["smile", "happy", "\u7b11", "\u5fae\u7b11", "\u7b11\u3044"],
@@ -26,6 +33,15 @@ const FIXED_EMOTION_MORPH_HINTS = {
 
 function isRezeEditorPipeline(pipeline) {
   return pipeline === "reze-design" || pipeline === "reze-npr";
+}
+
+function disposeUnattachedMmdObject(root) {
+  root?.traverse?.((child) => {
+    if (!child?.isMesh) return;
+    child.geometry?.dispose?.();
+    if (Array.isArray(child.material)) child.material.forEach((material) => material?.dispose?.());
+    else child.material?.dispose?.();
+  });
 }
 
 function getRezeSceneDebugDefaults(pipeline) {
@@ -432,9 +448,9 @@ const STAGE_PRESENTATION_PRESETS = {
     backdrop: { enabled: false },
     postfx: { enabled: false },
     appearance: {
-      phase: "preparation",
+      phase: "idle",
       realAppearanceAvailable: false,
-      label: "接入准备：真实游戏外观未迁移",
+      label: "V14D 游戏外观未安装",
     },
   },
   "hero-shot": {
@@ -1810,7 +1826,6 @@ export function tuneRezeNprMMDMaterial(material, rampTexture) {
 function tuneV14dGamePreparationMaterial(material, rampTexture) {
   if (!material) return;
   const { needsCutout } = primeMMDMaterial(material);
-  if (needsCutout) material.alphaTest = Math.max(material.alphaTest || 0, 0.5);
   if (needsCutout) material.side = THREE.DoubleSide;
   material.userData = { ...(material.userData || {}), v14dGamePreparation: true };
   finalizeMMDMaterial(material, rampTexture);
@@ -1883,11 +1898,17 @@ function readFaceDetailPoints(points) {
 }
 
 export class MMDCompanionRuntime {
-  constructor({ container, statusElement, renderPipeline = "classic", cameraSnapshot = null }) {
+  constructor({ container, statusElement, renderPipeline = "classic", cameraSnapshot = null, v14dGameManifest = null }) {
     this.container = container;
     this.statusElement = statusElement;
     this.renderPipeline = renderPipeline;
-    this.appearanceAdapter = renderPipeline === "v14d-game" ? createV14dGameAppearanceAdapter() : null;
+    this.v14dGameManifest = v14dGameManifest;
+    this.v14dGameLocalOcioDisplay = null;
+    this.v14dGameLights = [];
+    this.v14dGameLightMapping = null;
+    this.appearanceAdapter = renderPipeline === "v14d-game"
+      ? createV14dGameAppearanceAdapter({ manifest: v14dGameManifest })
+      : null;
     this.cameraSnapshot = cameraSnapshot;
     this.clock = new THREE.Clock();
     this.loader = new MMDLoader();
@@ -1997,10 +2018,47 @@ export class MMDCompanionRuntime {
   }
 
   async init(modelUrl) {
+    if (this.destroyed) return;
+    if (this.renderPipeline === "v14d-game") {
+      await this.ensureV14dGameManifest();
+    }
+    if (this.destroyed) return;
     this.setupScene();
+    if (this.renderPipeline === "v14d-game") {
+      try {
+        this.setStatus("正在加载本机 OCIO 显示配置……");
+        const ocioDisplay = await createV14dGameLocalOcioDisplay({
+          renderer: this.renderer,
+          manifest: this.v14dGameManifest,
+        });
+        if (this.destroyed) {
+          ocioDisplay?.dispose?.();
+          return;
+        }
+        this.v14dGameLocalOcioDisplay = ocioDisplay;
+      } catch (error) {
+        if (this.destroyed) return;
+        this.dispose();
+        throw new Error(`V14D 本机 OCIO 不可用：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (this.destroyed) return;
     this.bindResize();
     this.startRenderLoop();
     await this.loadModel(modelUrl);
+  }
+
+  async ensureV14dGameManifest() {
+    if (!this.v14dGameManifest) {
+      const response = await fetch(V14D_GAME_MANIFEST_URL, { cache: "no-store" });
+      if (!response?.ok) {
+        throw new Error(`V14D 游戏外观清单请求失败（${response?.status || "未知"}）。`);
+      }
+      this.v14dGameManifest = await response.json();
+    }
+    const validation = validateV14dGameManifest(this.v14dGameManifest);
+    if (!validation.ok) throw new Error(validation.reason);
+    return this.v14dGameManifest;
   }
 
   setupScene() {
@@ -2102,6 +2160,13 @@ export class MMDCompanionRuntime {
   }
 
   setupLights(presentation) {
+    if (this.renderPipeline === "v14d-game") {
+      this.stageLights = { v14dGame: [] };
+      this.v14dGameLights = [];
+      this.v14dGameLightMapping = null;
+      this.camera?.layers.enable(1);
+      return;
+    }
     const ambient = new THREE.AmbientLight(presentation.lights.ambient.color, presentation.lights.ambient.intensity);
     const hemisphere = new THREE.HemisphereLight(
       presentation.lights.hemisphere.sky,
@@ -2132,6 +2197,77 @@ export class MMDCompanionRuntime {
     rim.position.fromArray(presentation.lights.rim.position);
     this.scene.add(rim);
     this.stageLights = { ambient, hemisphere, key, fill, rim };
+  }
+
+  disposeV14dGameLights() {
+    for (const light of this.v14dGameLights) {
+      this.scene?.remove(light);
+      light.dispose?.();
+    }
+    this.v14dGameLights = [];
+    if (this.renderPipeline === "v14d-game") {
+      this.stageLights = { v14dGame: [] };
+      this.v14dGameLightMapping = null;
+    }
+  }
+
+  configureV14dGameLights(fitResult) {
+    if (this.renderPipeline !== "v14d-game") return null;
+    const sourceLights = Array.isArray(this.v14dGameManifest?.lights) ? this.v14dGameManifest.lights : [];
+    if (sourceLights.length !== 6) throw new Error("V14D 游戏外观六灯清单不完整。");
+
+    RectAreaLightUniformsLib.init();
+    this.disposeV14dGameLights();
+    const sourceModelScale = 0.08;
+    const modelScale = Number(fitResult?.scale);
+    if (!Number.isFinite(modelScale) || modelScale <= 0) {
+      throw new Error("V14D 游戏外观模型缩放无效。");
+    }
+    const scaleRatio = modelScale / sourceModelScale;
+    const lights = sourceLights.map((source, index) => {
+      const sourceWidth = source.shape === "DISK"
+        ? Number(source.size) * Math.sqrt(Math.PI) / 2
+        : Number(source.size);
+      const sourceHeight = source.shape === "DISK"
+        ? sourceWidth
+        : Number(source.sizeY);
+      const width = Math.max(0.0001, sourceWidth * scaleRatio);
+      const height = Math.max(0.0001, sourceHeight * scaleRatio);
+      const intensity = Math.max(0, Number(source.power) || 0) * scaleRatio * scaleRatio;
+      const color = Array.isArray(source.color) ? source.color : [1, 1, 1];
+      const light = new THREE.RectAreaLight(new THREE.Color(color[0], color[1], color[2]), intensity, width, height);
+      const matrix = source.matrix;
+      const convert = ([x, y, z]) => new THREE.Vector3(x, z, -y);
+      const position = convert([matrix[0][3], matrix[1][3], matrix[2][3]]);
+      const xAxis = convert([matrix[0][0], matrix[1][0], matrix[2][0]]);
+      const yAxis = convert([matrix[0][1], matrix[1][1], matrix[2][1]]);
+      const zAxis = convert([matrix[0][2], matrix[1][2], matrix[2][2]]);
+      light.position.copy(position.multiplyScalar(scaleRatio));
+      light.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis));
+      light.layers.set(source.backgroundOnly ? 1 : 0);
+      light.userData = {
+        pipeline: "v14d-game",
+        sourceIndex: index,
+        sourceName: source.name || `source-light-${index}`,
+        sourceShape: source.shape,
+        sourcePower: Number(source.power) || 0,
+        sourceScale: sourceModelScale,
+        scaleRatio,
+        backgroundOnly: Boolean(source.backgroundOnly),
+        useShadow: Boolean(source.useShadow),
+      };
+      this.scene.add(light);
+      return light;
+    });
+    this.v14dGameLights = lights;
+    this.stageLights = { v14dGame: lights };
+    this.v14dGameLightMapping = {
+      sourceModelScale,
+      modelScale,
+      scaleRatio,
+      names: lights.map((light) => light.userData.sourceName),
+    };
+    return this.v14dGameLightMapping;
   }
 
   getMaterialDebugEntries() {
@@ -2761,12 +2897,23 @@ export class MMDCompanionRuntime {
   }
 
   async loadModel(modelUrl) {
-    this.setStatus("Loading MMD model...");
+    const effectiveModelUrl = this.renderPipeline === "v14d-game"
+      ? this.v14dGameManifest?.model?.url
+      : modelUrl;
+    if (!effectiveModelUrl) throw new Error("V14D 游戏外观模型 URL 缺失。");
+    this.setStatus(this.renderPipeline === "v14d-game" ? "正在加载 Koleda 游戏模型……" : "Loading MMD model...");
     this.clearModel();
-    this.isKoledaModel = isKoledaModelIdentifier(modelUrl);
+    this.isKoledaModel = isKoledaModelIdentifier(
+      effectiveModelUrl,
+      this.v14dGameManifest?.model?.relativePath,
+    );
     const mesh = await new Promise((resolve, reject) => {
-      this.loader.load(modelUrl, resolve, undefined, reject);
+      this.loader.load(effectiveModelUrl, resolve, undefined, reject);
     });
+    if (this.destroyed) {
+      disposeUnattachedMmdObject(mesh);
+      return;
+    }
     mesh.position.set(0, 0, 0);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -2785,22 +2932,48 @@ export class MMDCompanionRuntime {
         }
       }
     });
-    fitModelToPresentation(mesh, this.presentation);
+    const fitResult = fitModelToPresentation(mesh, this.presentation);
+    if (!fitResult) throw new Error("MMD 模型包围盒无效，无法接入舞台。");
     this.scene.add(mesh);
     this.model = mesh;
     this.helper.add(mesh, { physics: this.hasPhysicsSupport });
     this.captureBones(mesh);
-    this.appearanceAdapter?.install?.({
-      runtime: this,
-      model: mesh,
-      presentation: this.presentation,
-    });
+    try {
+      if (this.renderPipeline === "v14d-game") {
+        this.configureV14dGameLights(fitResult);
+      }
+      const appearanceStatus = await this.appearanceAdapter?.install?.({
+        runtime: this,
+        model: mesh,
+        modelUrl: effectiveModelUrl,
+        manifest: this.v14dGameManifest,
+        presentation: this.presentation,
+      });
+      if (this.renderPipeline === "v14d-game" && appearanceStatus?.phase !== "ready") {
+        throw new Error(appearanceStatus?.reason || "V14D 游戏外观适配器未就绪。");
+      }
+      if (this.destroyed) {
+        this.clearModel();
+        this.disposeV14dGameLights();
+        return;
+      }
+    } catch (error) {
+      if (this.destroyed) {
+        this.clearModel();
+        this.disposeV14dGameLights();
+        return;
+      }
+      this.clearModel();
+      this.disposeV14dGameLights();
+      throw error;
+    }
     this.getMaterialDebugEntries();
     this.attachFaceDetails(mesh, this.presentation);
     if (this.presentation?.outline?.enabled) {
       this.attachCharacterOutline(mesh, this.presentation);
     }
-    this.setStatus(this.appearanceAdapter?.getStatus?.().label || "Model ready.");
+    const appearanceStatus = this.appearanceAdapter?.getStatus?.();
+    this.setStatus(appearanceStatus?.label || "Model ready.");
     // MMDLoader 会为 toonIndex 指向空贴图路径（如克莱妲 PMX 里的 'spa/'）的材质
     // 挂上永远加载失败的 gradientMap（image 为空），导致 MeshToonMaterial 的 direct
     // light 被 ramp 采样成 0，材质只剩环境光而发闷（眼睛的蓝色虹膜就是这样变黑的）。
@@ -3706,6 +3879,18 @@ export class MMDCompanionRuntime {
   }
 
   renderScene() {
+    if (this.renderPipeline === "v14d-game") {
+      if (!this.v14dGameLocalOcioDisplay || !this.renderer || !this.scene || !this.camera) return;
+      const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+      this.v14dGameLocalOcioDisplay.render(
+        this.scene,
+        this.camera,
+        Math.max(1, Math.round(size.x)),
+        Math.max(1, Math.round(size.y)),
+        V14D_GAME_DEFAULT_SETTINGS.exposure,
+      );
+      return;
+    }
     if (this.shouldUsePostFX()) {
       this.composer?.render?.();
       return;
@@ -3719,6 +3904,9 @@ export class MMDCompanionRuntime {
     this.resizeObserver?.disconnect?.();
     this.resizeObserver = null;
     this.clearModel();
+    this.disposeV14dGameLights();
+    this.v14dGameLocalOcioDisplay?.dispose?.();
+    this.v14dGameLocalOcioDisplay = null;
     this.disposeFloor();
     this.disposeBackdrop();
     this.disposePostprocessing();
