@@ -1005,6 +1005,8 @@ class TraceStore:
             ON messages (workspace_id, account_id, session_id, deleted_at, visibility, created_at)
             """
         )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_message_motion_lookup ON message_motion_resolution(workspace_id, message_id, created_at DESC)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_message_tts_lookup ON message_tts(workspace_id, message_id, version DESC)")
         self._conn.commit()
 
     def _migrate_companion_shared_config_render_pipeline_check(self) -> None:
@@ -3732,14 +3734,43 @@ class TraceStore:
         self._conn.commit()
         return len(message_ids)
 
-    def _hydrate_message(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _hydrate_message(self, row: sqlite3.Row, related: dict | None = None) -> dict[str, Any]:
         message = dict(row)
         message["motion_plan"] = self._json_loads(message.pop("motion_plan_json", None), None)
         message["memory_ops"] = self._json_loads(message.pop("memory_ops_json", None), [])
         message["metadata"] = self._json_loads(message.pop("metadata_json", None), {})
-        message["tts"] = self.get_message_tts(message["workspace_id"], message["id"])
-        message["motion_resolution"] = self.get_message_motion_resolution(message["workspace_id"], message["id"])
+        if related is None:
+            message["tts"] = self.get_message_tts(message["workspace_id"], message["id"])
+            message["motion_resolution"] = self.get_message_motion_resolution(message["workspace_id"], message["id"])
+        else:
+            fields = related.get((message["workspace_id"], message["id"]), {})
+            message["tts"] = fields.get("tts")
+            message["motion_resolution"] = fields.get("motion_resolution")
         return message
+
+    def _hydrate_messages_batch(self, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+        by_workspace: dict[str, list[str]] = {}
+        for row in rows:
+            by_workspace.setdefault(row["workspace_id"], []).append(row["id"])
+        related: dict = {}
+        for workspace_id, message_ids in by_workspace.items():
+            for start in range(0, len(message_ids), 400):
+                chunk = message_ids[start:start + 400]
+                placeholders = ",".join("?" for _ in chunk)
+                for table, ordering, field in (("message_tts", "version", "tts"), ("message_motion_resolution", "created_at", "motion_resolution")):
+                    records = self._conn.execute(
+                        f"SELECT * FROM {table} WHERE workspace_id = ? AND message_id IN ({placeholders}) ORDER BY {ordering} DESC",
+                        (workspace_id, *chunk),
+                    ).fetchall()
+                    for record in records:
+                        fields = related.setdefault((workspace_id, record["message_id"]), {})
+                        if field in fields:
+                            continue
+                        value = dict(record)
+                        if field == "tts":
+                            value["proxy_audio_url"] = f"/tts/proxy/{value['id']}"
+                        fields[field] = value
+        return [self._hydrate_message(row, related) for row in rows]
 
     def list_messages(
         self,
@@ -3763,7 +3794,7 @@ class TraceStore:
             """,
             tuple(params),
         ).fetchall()
-        return [self._hydrate_message(row) for row in rows]
+        return self._hydrate_messages_batch(rows)
 
     def list_messages_for_chat(self, workspace_id: str, account_id: str, session_id: str) -> list[dict[str, Any]]:
         messages = self._suppress_message_bridge_echoes(
@@ -3771,8 +3802,22 @@ class TraceStore:
         )
         return self._suppress_nearby_message_bridge_duplicates(messages)
 
+    def list_messages_for_chat_readonly(self, workspace_id: str, account_id: str, session_id: str) -> list[dict[str, Any]]:
+        """工作线程使用独立只读连接，不共享业务写连接，也不执行初始化迁移。"""
+        connection = sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+        reader = object.__new__(TraceStore)
+        reader._conn = connection
+        try:
+            return reader.list_messages_for_chat(workspace_id, account_id, session_id)
+        finally:
+            connection.close()
+
     def _suppress_message_bridge_echoes(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         traced_messages: list[tuple[str, str, datetime]] = []
+        traced_by_content: dict[tuple[str, str], list[tuple[str, str, datetime]]] = {}
         for message in messages:
             if not message.get("trace_id"):
                 continue
@@ -3780,7 +3825,9 @@ class TraceStore:
             created_at = _parse_iso_datetime(message.get("created_at"))
             if not content or created_at is None:
                 continue
-            traced_messages.append((str(message.get("role") or ""), content, created_at))
+            item = (str(message.get("role") or ""), content, created_at)
+            traced_messages.append(item)
+            traced_by_content.setdefault((item[0], content), []).append(item)
         if not traced_messages:
             return messages
 
@@ -3791,7 +3838,7 @@ class TraceStore:
                 not message.get("trace_id")
                 and isinstance(metadata, dict)
                 and metadata.get("source") == "message_bridge"
-                and self._matches_traced_message_echo(message, traced_messages)
+                and self._matches_traced_message_echo(message, traced_by_content.get((str(message.get("role") or ""), _normalize_message_content(message.get("content"))), []))
             ):
                 continue
             output.append(message)

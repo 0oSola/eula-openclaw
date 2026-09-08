@@ -1,5 +1,9 @@
 # 当前系统拓扑与架构蓝图
 
+## Companion 加载性能修正
+
+聊天历史由工作线程通过独立只读SQLite快照读取，关联TTS/动作数据按批补全；新增复合索引，保留全部历史与原过滤规则。V14D资源清单与SHA按文件元数据缓存，文件URL以v=SHA256区分版本，固定版本可缓存、旧版本不匹配返回409，客户端仍验证字节。实际3100冷加载约14–16秒、复载约3.4–6秒，已消除8100被聊天历史长时间阻塞导致的灰色加载态。见docs/handoff/companion-loading-performance.md与workflow/concepts/v14d-resource-cache.zh-CN.md；渲染配方不变。
+
 ## 2026-09-08：V14D 游戏参考舞台实际外观迁移
 
 本机模型根目录可用V14D_GAME_MODEL_ROOT单独配置，默认仍沿用MMD_ROOT_DIR；不会改变其他模式的模型库。主目录当前本机配置指向D:/mmd，OCIO与mask缓存位于web/.scratch/v14d-head-preview。

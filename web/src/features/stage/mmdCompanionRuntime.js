@@ -1919,9 +1919,11 @@ export class MMDCompanionRuntime {
       this.v14dTexturesReady = new Promise((resolve) => { manager.onLoad = resolve; });
       manager.onError = (url) => this.v14dAssetWarnings.push({ url, kind: "load-error" });
       this.loader = new MMDLoader(manager);
+      const extractExtension = this.loader._extractExtension.bind(this.loader);
+      this.loader._extractExtension = (url) => extractExtension(url.split("?")[0].split("#")[0]);
       this.loader.loadPMX = (url, onLoad, _onProgress, onError) => {
         manager.itemStart(url);
-        fetch(url, { cache: "no-store" }).then(async (response) => {
+        fetch(url, { cache: "default" }).then(async (response) => {
           if (!response.ok) throw new Error("PMX读取失败：" + response.status);
           const buffer = await response.arrayBuffer();
           const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", buffer))).map(v => v.toString(16).padStart(2, "0")).join("");

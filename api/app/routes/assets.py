@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import copy
+from collections import OrderedDict
 import hashlib
 import json
 import mimetypes
@@ -14,7 +16,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from app.security import resolve_requester
@@ -684,12 +686,39 @@ def get_vmd_asset_file(asset_id: str, request: Request):
     return FileResponse(full_path, media_type="application/octet-stream", filename=item["filename"])
 
 
+_V14D_CACHE_LOCK = RLock()
+_V14D_HASH_CACHE: OrderedDict = OrderedDict()
+_V14D_CATALOG_CACHE: OrderedDict = OrderedDict()
+
+
+def _v14d_file_signature(path: Path):
+    try:
+        stat = path.stat()
+        return (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    except OSError:
+        return None
+
+
 def _v14d_game_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    signature = _v14d_file_signature(path)
+    key = str(path)
+    with _V14D_CACHE_LOCK:
+        cached = _V14D_HASH_CACHE.get(key)
+        if cached and cached[0] == signature:
+            _V14D_HASH_CACHE.move_to_end(key)
+            return cached[1]
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        result = digest.hexdigest()
+        if _v14d_file_signature(path) != signature:
+            raise HTTPException(status_code=409, detail="资源正在修改，请稍后重试。")
+        _V14D_HASH_CACHE[key] = (signature, result)
+        _V14D_HASH_CACHE.move_to_end(key)
+        while len(_V14D_HASH_CACHE) > 2048:
+            _V14D_HASH_CACHE.popitem(last=False)
+        return result
 
 
 def _v14d_game_safe_path(root: Path, relative_path: str) -> Path:
@@ -762,7 +791,7 @@ def _v14d_game_source_lights(source_manifest: dict) -> tuple[list[dict], list[st
     return lights, errors
 
 
-def _v14d_game_catalog(settings) -> tuple[dict, dict[str, Path]]:
+def _build_v14d_game_catalog(settings) -> tuple[dict, dict[str, Path]]:
     preview_root = settings.v14d_game_assets_root.resolve()
     mmd_root = getattr(settings, "v14d_game_model_root", settings.mmd_root_dir).resolve()
     model_relative = str(settings.v14d_game_model_relative_path).replace("\\", "/").strip("/")
@@ -869,13 +898,35 @@ def _v14d_game_catalog(settings) -> tuple[dict, dict[str, Path]]:
         "materialSource": {"url": "/assets/v14d-game/material-source", "sha256": source_manifest_sha256},
         "masks": masks,
     }
+    for entry in [payload["model"], payload["materialSource"], *textures, *ocio.values(), *masks]:
+        if entry.get("sha256"):
+            entry["url"] += "?v=" + entry["sha256"]
     return payload, asset_paths
 
 
+def _v14d_game_catalog(settings) -> tuple[dict, dict[str, Path]]:
+    key = (str(settings.v14d_game_assets_root.resolve()), str(getattr(settings, "v14d_game_model_root", settings.mmd_root_dir).resolve()), str(settings.v14d_game_model_relative_path))
+    with _V14D_CACHE_LOCK:
+        cached = _V14D_CATALOG_CACHE.get(key)
+        if cached:
+            payload, paths, signatures = cached
+            if all(_v14d_file_signature(path) == signature for path, signature in signatures):
+                _V14D_CATALOG_CACHE.move_to_end(key)
+                return copy.deepcopy(payload), paths.copy()
+        payload, paths = _build_v14d_game_catalog(settings)
+        signatures = [(path, _v14d_file_signature(path)) for path in set(paths.values())]
+        _V14D_CATALOG_CACHE[key] = (payload, paths, signatures)
+        _V14D_CATALOG_CACHE.move_to_end(key)
+        while len(_V14D_CATALOG_CACHE) > 16:
+            _V14D_CATALOG_CACHE.popitem(last=False)
+        return copy.deepcopy(payload), paths.copy()
+
+
 @router.get("/v14d-game/manifest")
-def get_v14d_game_manifest(request: Request):
+def get_v14d_game_manifest(request: Request, response: Response):
     settings = request.app.state.settings
     payload, _asset_paths = _v14d_game_catalog(settings)
+    response.headers["Cache-Control"] = "no-cache"
     return payload
 
 
@@ -897,8 +948,17 @@ def get_v14d_game_asset(asset_key: str, request: Request):
         raise HTTPException(status_code=404, detail="V14D 游戏外观资源未登记。")
     if not path.is_file() or payload["available"] is False:
         raise HTTPException(status_code=404, detail=payload["reason"] or "V14D game asset is unavailable.")
+    digest = _v14d_game_sha256(path)
+    version = request.query_params.get("v")
+    if version and version.lower() != digest:
+        raise HTTPException(status_code=409, detail="资源版本已变化，请刷新清单。", headers={"Cache-Control": "no-store"})
+    etag = '"' + digest + '"'
+    headers = {"ETag": etag, "Cache-Control": "private, max-age=31536000, immutable" if version else "private, no-cache"}
+    matches = [value.strip() for value in request.headers.get("if-none-match", "").split(",")]
+    if etag in matches or ("W/" + etag) in matches or "*" in matches:
+        return Response(status_code=304, headers=headers)
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    return FileResponse(path, media_type=media_type, filename=path.name)
+    return FileResponse(path, media_type=media_type, filename=path.name, headers=headers)
 
 
 @router.get("/mmd/models")

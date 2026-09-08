@@ -8,6 +8,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.responses import Response
+from starlette.concurrency import run_in_threadpool
 
 from app.models.chat import OpenClawReply
 from app.services.message_tts_reference import create_or_enqueue_message_tts_reference
@@ -352,7 +353,7 @@ async def list_messages(session_id: str, request: Request, x_user_id: str | None
     session = store.get_session(ctx["workspace"]["id"], ctx["account"]["id"], session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    messages = store.list_messages_for_chat(ctx["workspace"]["id"], ctx["account"]["id"], session_id)
+    messages = await run_in_threadpool(store.list_messages_for_chat_readonly, ctx["workspace"]["id"], ctx["account"]["id"], session_id)
     return {"items": [_message_response(message) for message in messages]}
 
 

@@ -63,3 +63,29 @@ def test_dedicated_model_root_does_not_require_general_library(tmp_path):
     client.app.state.settings.v14d_game_model_root = character.parent
     client.app.state.settings.mmd_root_dir = tmp_path / 'unrelated-library'
     assert client.get('/assets/v14d-game/manifest').json()['available'] is True
+
+def test_asset_requests_do_not_rehash_unchanged_model(tmp_path, monkeypatch):
+    client, _, character = make_client(tmp_path)
+    opened=[]
+    original=Path.open
+    def tracked(path,*args,**kwargs):
+        if path==character/'model.pmx':opened.append(path)
+        return original(path,*args,**kwargs)
+    monkeypatch.setattr(Path,'open',tracked)
+    manifest=client.get('/assets/v14d-game/manifest').json()
+    for entry in manifest['masks']:
+        assert client.get(entry['url']).status_code==200
+    assert len(opened)==1, '每个资源请求不应重新读取模型计算哈希'
+
+def test_versioned_resource_cache_and_changed_file(tmp_path):
+    client, assets, _ = make_client(tmp_path)
+    manifest=client.get('/assets/v14d-game/manifest').json()
+    url=manifest['masks'][0]['url']
+    assert '?v=' in url
+    response=client.get(url)
+    assert 'immutable' in response.headers.get('cache-control','')
+    assert client.get(url,headers={'If-None-Match':response.headers['etag']}).status_code==304
+    (assets/'mask0.png').write_bytes(b'changed mask bytes')
+    updated=client.get('/assets/v14d-game/manifest').json()
+    assert updated['masks'][0]['url']!=url
+    assert client.get(url).status_code==409

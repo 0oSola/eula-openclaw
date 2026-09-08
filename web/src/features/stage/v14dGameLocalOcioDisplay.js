@@ -14,7 +14,7 @@ async function sha256(bytes) {
 }
 
 async function readChecked(fetchImpl, url, expectedSha256) {
-  const response = await fetchImpl(url, { cache: "no-store" });
+  const response = await fetchImpl(url, { cache: "default" });
   if (!response?.ok) throw new Error("本机 OCIO 资源读取失败：" + url);
   const bytes = await response.arrayBuffer();
   if (expectedSha256 && (await sha256(bytes)) !== expectedSha256) {
