@@ -2,6 +2,8 @@
 
 ## 2026-09-08：V14D 游戏参考舞台实际外观迁移
 
+本机模型根目录可用V14D_GAME_MODEL_ROOT单独配置，默认仍沿用MMD_ROOT_DIR；不会改变其他模式的模型库。主目录当前本机配置指向D:/mmd，OCIO与mask缓存位于web/.scratch/v14d-head-preview。
+
 主会话接管并修复灰块交付。当前v14d-game通过v14dGameMaterials选择性复用cd973980冻结预览的材质工厂/头发分区/五张脸部遮罩，创建实际物理材质，并在共享MMD渲染循环中进行异常安全表情覆盖。六灯按源power和模型缩放/平移映射；本机OCIO只作用于角色画布，星空由现有CSS背景显示。舞台右上角增加外观微调，参数按用户与模型存本机，支持恢复截图默认。旧类型保留。
 
 资源路由新增material-source及五mask白名单，模型与资源字节核验SHA256；prepare-v14d-game-local-assets.mjs准备Git忽略缓存，第三方LUT不入public/发布包。API、网页默认参数与本地保存职责分开。实际舞台、VMD、遮罩切换、参数保存、相机、切回释放及缺mask负测通过，生产构建通过；这是本机工程接入，不是游戏视觉等价、登录联调或长期物理证书。详情docs/handoff/2026-09-08-v14d-game-migration-repair.md；下方较早的准备态和ec23资源挂载说明为历史检查点。

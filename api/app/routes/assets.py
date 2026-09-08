@@ -764,7 +764,7 @@ def _v14d_game_source_lights(source_manifest: dict) -> tuple[list[dict], list[st
 
 def _v14d_game_catalog(settings) -> tuple[dict, dict[str, Path]]:
     preview_root = settings.v14d_game_assets_root.resolve()
-    mmd_root = settings.mmd_root_dir.resolve()
+    mmd_root = getattr(settings, "v14d_game_model_root", settings.mmd_root_dir).resolve()
     model_relative = str(settings.v14d_game_model_relative_path).replace("\\", "/").strip("/")
     model_path = _v14d_game_safe_path(mmd_root, model_relative)
     manifest_path = _v14d_game_safe_path(preview_root / "assets", "manifest.json")
@@ -889,7 +889,7 @@ def get_v14d_game_asset(asset_key: str, request: Request):
         dependency_relative = requested_key[len("model/") :]
         dependency_parts = Path(dependency_relative.replace("\\", "/")).parts
         if dependency_parts and dependency_parts[0].casefold() in {name.casefold() for name in V14D_GAME_MODEL_DEPENDENCY_DIRS}:
-            dependency_root = Path(settings.mmd_root_dir).resolve() / Path(
+            dependency_root = Path(getattr(settings, "v14d_game_model_root", settings.mmd_root_dir)).resolve() / Path(
                 settings.v14d_game_model_relative_path
             ).parent
             path = _v14d_game_safe_path(dependency_root, dependency_relative)

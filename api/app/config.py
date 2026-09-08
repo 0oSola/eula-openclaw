@@ -64,6 +64,7 @@ class Settings:
     ndjson_compress_after_days: int
     mmd_root_dir: Path
     v14d_game_assets_root: Path
+    v14d_game_model_root: Path
     v14d_game_model_relative_path: str
     tts_service_enabled: bool
     tts_service_base_url: str
@@ -183,6 +184,11 @@ class Settings:
             )
         ).replace("\\", "/").strip("/")
 
+        v14d_game_model_root = _resolve_setting_path(
+            resolve_value("v14d_game_model_root", "V14D_GAME_MODEL_ROOT", str(mmd_root)),
+            base_dir=project_root,
+        )
+
         raw_greeting_index_path = str(
             resolve_value("openclaw_greeting_index_path", "OPENCLAW_GREETING_DASHBOARD_INDEX_PATH", "")
         ).strip()
@@ -242,6 +248,7 @@ class Settings:
             ),
             mmd_root_dir=mmd_root,
             v14d_game_assets_root=v14d_game_assets_root,
+            v14d_game_model_root=v14d_game_model_root,
             v14d_game_model_relative_path=v14d_game_model_relative_path,
             tts_service_enabled=_parse_bool(
                 resolve_value("tts_service_enabled", "TTS_SERVICE_ENABLED", False),

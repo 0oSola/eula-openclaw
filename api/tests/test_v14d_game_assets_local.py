@@ -57,3 +57,9 @@ def test_case_preserving_texture_and_unknown_path(tmp_path):
     assert client.get('/assets/v14d-game/model/textures/extra.png').status_code == 200
     assert client.get('/assets/v14d-game/model/private.txt').status_code == 404
     assert client.get('/assets/v14d-game/model/textures/%2e%2e/%2e%2e/secret').status_code in (400, 404)
+
+def test_dedicated_model_root_does_not_require_general_library(tmp_path):
+    client, _, character = make_client(tmp_path)
+    client.app.state.settings.v14d_game_model_root = character.parent
+    client.app.state.settings.mmd_root_dir = tmp_path / 'unrelated-library'
+    assert client.get('/assets/v14d-game/manifest').json()['available'] is True
