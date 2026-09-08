@@ -524,7 +524,12 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
           />
         ) : <div ref={containerRef} className="mio-stage-canvas" />}
         {renderClickRipples()}
-        <p ref={statusRef} className="mio-stage-status mio-stage-status--sr-only" aria-live="polite" hidden>
+        <p
+          ref={statusRef}
+          className={renderPipeline === "v14d-game" ? "mio-stage-status" : "mio-stage-status mio-stage-status--sr-only"}
+          aria-live="polite"
+          hidden={renderPipeline !== "v14d-game"}
+        >
           Initializing stage...
         </p>
       </section>

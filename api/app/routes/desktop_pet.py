@@ -18,7 +18,7 @@ _CODEX_REVIEWABLE_STATUSES = {"completed", "failed", "waiting_approval", "file_c
 
 class CompanionSharedConfigPayload(BaseModel):
     selected_model_path: str | None = Field(default=None, max_length=1000)
-    render_pipeline: Literal["classic", "hero-shot", "genshin", "mio-reference", "reze-npr", "reze-design", "k3", "reze-k3"] = "classic"
+    render_pipeline: Literal["classic", "hero-shot", "genshin", "mio-reference", "reze-npr", "reze-design", "k3", "reze-k3", "v14d-game"] = "classic"
     reze_stage_document: dict[str, object] | None = None
 
 

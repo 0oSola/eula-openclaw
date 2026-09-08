@@ -43,6 +43,17 @@ test("切换到非 Reze 管线时清空旧的舞台文档", () => {
   assert.equal(payload.reze_stage_document, null);
 });
 
+test("v14d-game 接入准备态不复用 Reze 场景文档", () => {
+  const payload = buildCompanionSharedConfigPayload({
+    selectedModelPath: "models/koleda.pmx",
+    renderPipeline: "v14d-game",
+    rezeStageDocument: { name: "stale-reze-document" },
+    rezeSceneDebugSettings: { backgroundColor: "#ffffff" },
+  });
+
+  assert.equal(payload.reze_stage_document, null);
+});
+
 test("桌面 Pet 保存请求超时时会中止请求并返回明确错误", async () => {
   await assert.rejects(
     saveCompanionSharedConfigWithTimeout(

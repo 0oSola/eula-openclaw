@@ -50,7 +50,8 @@ function readRenderPipeline(value: string | null): RenderPipeline {
     value === "reze-npr" ||
     value === "reze-design" ||
     value === "k3" ||
-    value === "reze-k3"
+    value === "reze-k3" ||
+    value === "v14d-game"
   ) {
     return value;
   }

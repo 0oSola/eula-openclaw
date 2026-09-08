@@ -48,7 +48,7 @@ def _normalize_message_visibility(value: str | None) -> str:
 _BRIDGE_ECHO_SUPPRESSION_WINDOW_SECONDS = 5 * 60
 _BRIDGE_DUPLICATE_SUPPRESSION_WINDOW_SECONDS = 30
 _BRIDGE_DUPLICATE_SYNC_SOURCES = {"realtime", "realtime_backfill"}
-COMPANION_RENDER_PIPELINES = ("classic", "hero-shot", "genshin", "mio-reference", "reze-npr", "reze-design", "k3", "reze-k3")
+COMPANION_RENDER_PIPELINES = ("classic", "hero-shot", "genshin", "mio-reference", "reze-npr", "reze-design", "k3", "reze-k3", "v14d-game")
 _COMPANION_RENDER_PIPELINE_SET = set(COMPANION_RENDER_PIPELINES)
 _COMPANION_RENDER_PIPELINE_SQL_VALUES = ", ".join(f"'{pipeline}'" for pipeline in COMPANION_RENDER_PIPELINES)
 _DESKTOP_PET_FIRST_PROMPT_PREVIEW_MAX_LENGTH = 240
@@ -310,7 +310,7 @@ class TraceStore:
                 user_id TEXT PRIMARY KEY,
                 selected_model_path TEXT,
                 render_pipeline TEXT NOT NULL DEFAULT 'classic'
-                    CHECK (render_pipeline IN ('classic', 'hero-shot', 'genshin', 'mio-reference', 'reze-npr', 'reze-design', 'k3', 'reze-k3')),
+                    CHECK (render_pipeline IN ('classic', 'hero-shot', 'genshin', 'mio-reference', 'reze-npr', 'reze-design', 'k3', 'reze-k3', 'v14d-game')),
                 reze_stage_document_json TEXT,
                 updated_at TEXT NOT NULL
             );
@@ -1019,6 +1019,20 @@ class TraceStore:
         if schema_sql and all(f"'{pipeline}'" in schema_sql for pipeline in COMPANION_RENDER_PIPELINES):
             return
 
+        legacy_columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(companion_shared_config)").fetchall()
+        }
+        has_reze_stage_document = "reze_stage_document_json" in legacy_columns
+        legacy_select = (
+            "user_id, selected_model_path, render_pipeline, reze_stage_document_json, updated_at"
+            if has_reze_stage_document
+            else "user_id, selected_model_path, render_pipeline, NULL AS reze_stage_document_json, updated_at"
+        )
+        legacy_rows = self._conn.execute(
+            f"SELECT {legacy_select} FROM companion_shared_config"
+        ).fetchall()
+
         self._conn.execute("DROP TABLE IF EXISTS companion_shared_config_next")
         self._conn.execute(
             f"""
@@ -1032,21 +1046,25 @@ class TraceStore:
             )
             """
         )
-        self._conn.execute(
-            f"""
-            INSERT INTO companion_shared_config_next (
-                user_id, selected_model_path, render_pipeline, reze_stage_document_json, updated_at
+        for legacy_row in legacy_rows:
+            raw_pipeline = legacy_row["render_pipeline"]
+            normalized_pipeline = raw_pipeline.strip().lower() if isinstance(raw_pipeline, str) else ""
+            if normalized_pipeline not in _COMPANION_RENDER_PIPELINE_SET:
+                normalized_pipeline = "classic"
+            self._conn.execute(
+                """
+                INSERT INTO companion_shared_config_next (
+                    user_id, selected_model_path, render_pipeline, reze_stage_document_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    legacy_row["user_id"],
+                    legacy_row["selected_model_path"],
+                    normalized_pipeline,
+                    legacy_row["reze_stage_document_json"],
+                    legacy_row["updated_at"] or _utc_now_iso(),
+                ),
             )
-            SELECT
-                user_id,
-                selected_model_path,
-                lower(trim(render_pipeline)),
-                NULL,
-                updated_at
-            FROM companion_shared_config
-            WHERE lower(trim(render_pipeline)) IN ({_COMPANION_RENDER_PIPELINE_SQL_VALUES})
-            """
-        )
         self._conn.execute("DROP TABLE companion_shared_config")
         self._conn.execute("ALTER TABLE companion_shared_config_next RENAME TO companion_shared_config")
 

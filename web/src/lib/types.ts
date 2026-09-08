@@ -253,7 +253,7 @@ export type MmdMotionAsset = {
   url: string;
 };
 
-export type RenderPipeline = "classic" | "hero-shot" | "genshin" | "mio-reference" | "reze-npr" | "reze-design" | "k3" | "reze-k3";
+export type RenderPipeline = "classic" | "hero-shot" | "genshin" | "mio-reference" | "reze-npr" | "reze-design" | "k3" | "reze-k3" | "v14d-game";
 
 export type CompanionSharedConfig = {
   user_id: string;

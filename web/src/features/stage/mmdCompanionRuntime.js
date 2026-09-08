@@ -13,6 +13,7 @@ import {
   isKoledaModelIdentifier,
   selectKoledaClosedEyeMorphNames,
 } from "./koledaDefaultAppearance.js";
+import { createV14dGameAppearanceAdapter } from "./v14dGameAppearanceAdapter.js";
 
 const FIXED_EMOTION_MORPH_HINTS = {
   happy: ["smile", "happy", "\u7b11", "\u5fae\u7b11", "\u7b11\u3044"],
@@ -397,6 +398,44 @@ const STAGE_PRESENTATION_PRESETS = {
     outline: { enabled: false, color: "#1b2130", opacity: 0.88, scale: 1.025 },
     backdrop: { enabled: false },
     postfx: { enabled: false },
+  },
+  "v14d-game": {
+    background: null,
+    fog: null,
+    camera: {
+      fov: 33,
+      position: [-2.075385, 0.017334, 46.985286],
+      target: [-2.075385, -2.771828, 0.642287],
+      minDistance: 6,
+      maxDistance: 60,
+      maxPolarAngle: Math.PI * 0.46,
+      locked: false,
+    },
+    character: {
+      targetHeight: 19.5,
+    },
+    lights: {
+      ambient: { color: 0xffffff, intensity: 0.78 },
+      hemisphere: { sky: "#f4f8ff", ground: "#5a6270", intensity: 0.6 },
+      key: { color: 0xffffff, intensity: 1.42, position: [-14, 20, 28] },
+      fill: { color: 0xffffff, intensity: 0.5, position: [16, 10, 18] },
+      rim: { color: 0xffffff, intensity: 0.36, position: [-10, 14, -18] },
+    },
+    shadowMapType: THREE.PCFShadowMap,
+    floor: {
+      kind: "shadowCatcher",
+      size: 44,
+      y: -9.75,
+      opacity: 0.2,
+    },
+    outline: { enabled: false, color: "#1b2130", opacity: 0.88, scale: 1.025 },
+    backdrop: { enabled: false },
+    postfx: { enabled: false },
+    appearance: {
+      phase: "preparation",
+      realAppearanceAvailable: false,
+      label: "接入准备：真实游戏外观未迁移",
+    },
   },
   "hero-shot": {
     background: "#061630",
@@ -1768,11 +1807,21 @@ export function tuneRezeNprMMDMaterial(material, rampTexture) {
   finalizeMMDMaterial(material, rampTexture);
 }
 
+function tuneV14dGamePreparationMaterial(material, rampTexture) {
+  if (!material) return;
+  const { needsCutout } = primeMMDMaterial(material);
+  if (needsCutout) material.alphaTest = Math.max(material.alphaTest || 0, 0.5);
+  if (needsCutout) material.side = THREE.DoubleSide;
+  material.userData = { ...(material.userData || {}), v14dGamePreparation: true };
+  finalizeMMDMaterial(material, rampTexture);
+}
+
 function tuneMaterialByPipeline(material, toonRampTexture, pipeline, presentation = null, skinRampTexture = null) {
   if (pipeline === "reze-npr" || pipeline === "reze-design") return tuneRezeNprMMDMaterial(material, toonRampTexture);
   if (pipeline === "hero-shot") return tuneHeroShotMMDMaterial(material, toonRampTexture);
   if (pipeline === "k3") return tuneK3MMDMaterial(material, toonRampTexture, skinRampTexture);
   if (pipeline === "genshin" || pipeline === "mio-reference") return tuneGenshinMMDMaterial(material, toonRampTexture, presentation);
+  if (pipeline === "v14d-game") return tuneV14dGamePreparationMaterial(material, toonRampTexture);
   return tuneClassicMMDMaterial(material, toonRampTexture);
 }
 
@@ -1838,6 +1887,7 @@ export class MMDCompanionRuntime {
     this.container = container;
     this.statusElement = statusElement;
     this.renderPipeline = renderPipeline;
+    this.appearanceAdapter = renderPipeline === "v14d-game" ? createV14dGameAppearanceAdapter() : null;
     this.cameraSnapshot = cameraSnapshot;
     this.clock = new THREE.Clock();
     this.loader = new MMDLoader();
@@ -1913,6 +1963,10 @@ export class MMDCompanionRuntime {
 
   setStatus(text) {
     if (this.statusElement) this.statusElement.textContent = text;
+  }
+
+  getAppearanceStatus() {
+    return this.appearanceAdapter?.getStatus?.() || null;
   }
 
   syncStageCanvasBox() {
@@ -2549,6 +2603,10 @@ export class MMDCompanionRuntime {
   }
 
   setupVisualPipeline(presentation) {
+    if (this.renderPipeline === "v14d-game") {
+      this.setupV14dGamePreparationPipeline(presentation);
+      return;
+    }
     if (this.renderPipeline === "genshin" || this.renderPipeline === "mio-reference") {
       this.setupGenshinPipeline(presentation);
       return;
@@ -2559,6 +2617,8 @@ export class MMDCompanionRuntime {
   setupClassicPipeline(_presentation) {}
 
   setupGenshinPipeline(_presentation) {}
+
+  setupV14dGamePreparationPipeline(_presentation) {}
 
   shouldUsePostFX(presentation = this.presentation) {
     return Boolean(presentation?.postfx?.enabled);
@@ -2654,6 +2714,7 @@ export class MMDCompanionRuntime {
   }
 
   clearModel() {
+    this.appearanceAdapter?.release?.();
     this.disposeCharacterOutline();
     this.disposeFaceDetails();
     this.materialDebugIndex.clear();
@@ -2729,12 +2790,17 @@ export class MMDCompanionRuntime {
     this.model = mesh;
     this.helper.add(mesh, { physics: this.hasPhysicsSupport });
     this.captureBones(mesh);
+    this.appearanceAdapter?.install?.({
+      runtime: this,
+      model: mesh,
+      presentation: this.presentation,
+    });
     this.getMaterialDebugEntries();
     this.attachFaceDetails(mesh, this.presentation);
     if (this.presentation?.outline?.enabled) {
       this.attachCharacterOutline(mesh, this.presentation);
     }
-    this.setStatus("Model ready.");
+    this.setStatus(this.appearanceAdapter?.getStatus?.().label || "Model ready.");
     // MMDLoader 会为 toonIndex 指向空贴图路径（如克莱妲 PMX 里的 'spa/'）的材质
     // 挂上永远加载失败的 gradientMap（image 为空），导致 MeshToonMaterial 的 direct
     // light 被 ramp 采样成 0，材质只剩环境光而发闷（眼睛的蓝色虹膜就是这样变黑的）。

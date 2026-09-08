@@ -333,7 +333,7 @@ function isRezeEditorPipeline(pipeline: RenderPipeline): boolean {
 }
 
 function normalizeRenderPipeline(value?: string): RenderPipeline {
-  if (value === "classic" || value === "hero-shot" || value === "genshin" || value === "mio-reference" || value === "reze-npr" || value === "reze-design" || value === "k3" || value === "reze-k3") {
+  if (value === "classic" || value === "hero-shot" || value === "genshin" || value === "mio-reference" || value === "reze-npr" || value === "reze-design" || value === "k3" || value === "reze-k3" || value === "v14d-game") {
     return value;
   }
   return "mio-reference";
@@ -433,6 +433,7 @@ const renderPipelineOptions: { value: RenderPipeline; label: string; description
   { value: "reze-npr", label: "Reze NPR", description: "reze-engine \u5b9e\u9a8c\u98ce\u683c" },
   { value: "reze-design", label: "Reze Design", description: "Reze \u706f\u5149\u00b7MIO \u661f\u6d77\u821e\u53f0" },
   { value: "reze-k3", label: "Reze K3", description: "Reze WebGPU \u590d\u523b\u00b7\u6750\u8d28\u4e0e\u573a\u666f" },
+  { value: "v14d-game", label: "V14D \u6e38\u620f\u53c2\u8003", description: "\u63a5\u5165\u51c6\u5907\uff1a\u771f\u5b9e\u6e38\u620f\u5916\u89c2\u672a\u8fc1\u79fb" },
 ];
 
 const MIO_REFERENCE_CAMERA_DEFAULT: MmdCameraSnapshot = {
