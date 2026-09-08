@@ -1,6 +1,7 @@
 "use client";
 
-import { ChangeEvent, PointerEvent, forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { ChangeEvent, PointerEvent, forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { V14dGameControls } from "./V14dGameControls";
 
 import { getModelDisplayLabel } from "@/features/stage/modelCatalog.js";
 import { shouldTriggerStageCharacterClick } from "@/features/stage/stageCharacterClick.js";
@@ -83,6 +84,8 @@ function absolutizeV14dGameManifest(manifest: any) {
   return {
     ...manifest,
     model: manifest?.model ? { ...manifest.model, url: toAbsolute(manifest.model.url) } : manifest?.model,
+    materialSource: manifest?.materialSource ? { ...manifest.materialSource, url: toAbsolute(manifest.materialSource.url) } : null,
+    masks: manifest?.masks?.map((entry: any) => ({ ...entry, url: toAbsolute(entry.url) })),
     textures: Array.isArray(manifest?.textures)
       ? manifest.textures.map((entry: any) => ({ ...entry, url: toAbsolute(entry.url) }))
       : manifest?.textures,
@@ -132,6 +135,7 @@ export type MMDStageHandle = {
 };
 
 type MMDStageProps = {
+  appearanceUserId?: string;
   interaction: StageInteraction;
   speaking: boolean;
   models: MmdModelAsset[];
@@ -171,6 +175,7 @@ type MMDStageProps = {
 };
 
 export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDStage({
+  appearanceUserId = "",
   interaction,
   speaking,
   models,
@@ -204,6 +209,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   const containerRef = useRef<HTMLDivElement | null>(null);
   const statusRef = useRef<HTMLParagraphElement | null>(null);
   const runtimeRef = useRef<any>(null);
+  const [appearanceRuntime,setAppearanceRuntime] = useState<any>(null);
   const webGpuStageRef = useRef<MMDStageHandle | null>(null);
   const currentInteractionRef = useRef(interaction);
   const currentSpeakingRef = useRef(speaking);
@@ -338,6 +344,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       });
       await runtime.init(toAbsolute(effectiveModelUrl));
       if (disposed) return;
+      if (renderPipeline === "v14d-game") setAppearanceRuntime(runtime);
       applyStageRuntimeState(runtime, {
         interaction: currentInteractionRef.current,
         speaking: currentSpeakingRef.current,
@@ -360,6 +367,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
         delete window.__mmdCompanionRuntime;
       }
       runtime?.dispose?.();
+      setAppearanceRuntime(null);
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
   }, [modelUrl, modelLabel, renderPipeline, selectedModelPath]);
@@ -569,6 +577,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
           />
         ) : <div ref={containerRef} className="mio-stage-canvas" />}
         {renderClickRipples()}
+        {renderPipeline === "v14d-game" ? <V14dGameControls runtime={appearanceRuntime} userId={appearanceUserId} modelPath={selectedModelPath} /> : null}
         <p
           ref={statusRef}
           className={renderPipeline === "v14d-game" ? "mio-stage-status" : "mio-stage-status mio-stage-status--sr-only"}

@@ -32,6 +32,27 @@ export function createV14dGameModelAsset(manifest) {
   };
 }
 
+export function normalizeV14dGameSettings(patch = {}) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("外观参数必须为对象");
+  for (const key of Object.keys(patch)) if (!Object.hasOwn(V14D_GAME_DEFAULT_SETTINGS, key)) throw new Error("未知外观参数：" + key);
+  const result = { ...V14D_GAME_DEFAULT_SETTINGS, ...patch };
+  for (const [key, low, high] of [["exposure", -2, 1], ["fabricDetail", 0, 2], ["legStructure", 0, 2], ["iris", 0, 2], ["hairMaskStrength", 0, 1], ["manualMask", 0, 4], ["rotation", -180, 180]]) {
+    const value = result[key];
+    if (typeof value !== "number" || !Number.isFinite(value) || value < low || value > high) throw new Error("外观参数越界：" + key);
+  }
+  if (!Number.isInteger(result.manualMask)) throw new Error("遮罩状态必须为整数");
+  for (const key of ["autoFace", "lightingEnabled", "hairMaskView", "hairDiskCandidate"]) if (typeof result[key] !== "boolean") throw new Error("外观开关必须为布尔值：" + key);
+  if (result.hairDiskCandidate) throw new Error("圆盘光实验未开放");
+  if (!["game/ocio", "game/builtin"].includes(result.display)) throw new Error("未知显示模式");
+  if (!["reference", "motion", "open", "closed"].includes(result.closedEye)) throw new Error("未知眼部模式");
+  if (result.smile !== null && (typeof result.smile !== "number" || !Number.isFinite(result.smile) || result.smile < 0 || result.smile > 1)) throw new Error("微笑权重无效");
+  return result;
+}
+
+export function v14dGameSettingsStorageKey(userId, modelPath) {
+  return "v14d-game-settings-v1:" + JSON.stringify([userId, modelPath]);
+}
+
 const REQUIRED_OCIO_KEYS = ["processor", "shader", "lut0", "lut1"];
 
 export function validateV14dGameManifest(manifest) {

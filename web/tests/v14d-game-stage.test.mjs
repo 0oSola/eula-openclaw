@@ -1,161 +1,30 @@
-import assert from "node:assert/strict";
-import test from "node:test";
-import * as THREE from "three";
-
-import { createV14dGameAppearanceAdapter } from "../src/features/stage/v14dGameAppearanceAdapter.js";
-import { getStagePresentationConfig } from "../src/features/stage/mmdCompanionRuntime.js";
-import { V14D_GAME_DEFAULT_SETTINGS } from "../src/features/stage/v14dGameAppearanceAssets.js";
-
-const validManifest = {
-  id: "fixture-v14d-game",
-  available: true,
-  sourceManifestSha256: "fixture-source-sha256",
-  model: {
-    url: "/assets/v14d-game/model/GirlsFrontline%20KoledaDefault.pmx",
-    relativePath: "克莱妲原皮/GirlsFrontline KoledaDefault.pmx",
-    sha256: "fixture-model-sha256",
-  },
-  textures: [
-    { key: "body-normal", url: "/assets/v14d-game/body-normal", sha256: "body-normal-sha256", kind: "normal", materialHints: ["body"] },
-    { key: "hair-specular", url: "/assets/v14d-game/hair-specular", sha256: "hair-specular-sha256", kind: "specular", materialHints: ["hair"] },
-  ],
-  ocio: {
-    processor: { url: "/assets/v14d-game/processor", sha256: "processor-sha256" },
-    shader: { url: "/assets/v14d-game/shader", sha256: "shader-sha256" },
-    lut0: { url: "/assets/v14d-game/lut0", sha256: "lut0-sha256" },
-    lut1: { url: "/assets/v14d-game/lut1", sha256: "lut1-sha256" },
-  },
-  lights: Array.from({ length: 6 }, (_, index) => ({
-    name: `fixture-light-${index}`,
-    type: "AREA",
-    shape: "DISK",
-    color: [1, 1, 1],
-    size: 2,
-    sizeY: 2,
-    power: 10,
-    matrix: [
-      [1, 0, 0, 0],
-      [0, 1, 0, 0],
-      [0, 0, 1, 0],
-      [0, 0, 0, 1],
-    ],
-  })),
-};
-
-function createFixtureModel() {
-  const bodyMaterial = new THREE.MeshStandardMaterial({ name: "BodySkin" });
-  const hairMaterial = new THREE.MeshStandardMaterial({ name: "HairA" });
-  const eyesPlusMaterial = new THREE.MeshStandardMaterial({ name: "Eyes+" });
-  const body = { name: "Body", material: bodyMaterial };
-  const hair = { name: "HairA", material: hairMaterial };
-  const eyesPlus = { name: "Eyes+", material: eyesPlusMaterial, visible: true };
-  const cape = { name: "Cth1-Cape", material: [], visible: false };
-  const nodes = [body, hair, eyesPlus, cape];
-  return {
-    name: "GirlsFrontline KoledaDefault",
-    userData: {},
-    traverse(callback) {
-      nodes.forEach(callback);
-    },
-    nodes,
-    bodyMaterial,
-    hairMaterial,
-    eyesPlusMaterial,
-    cape,
-  };
-}
-
-test("v14d-game 未安装时提供明确 idle 状态和独立默认配置", () => {
-  const adapter = createV14dGameAppearanceAdapter();
-
-  const status = adapter.getStatus();
-  assert.equal(status.pipeline, "v14d-game");
-  assert.equal(status.phase, "idle");
-  assert.equal(status.installed, false);
-  assert.equal(status.realAppearanceAvailable, false);
-  assert.equal(status.label, "V14D 游戏外观未安装");
-  assert.deepEqual(status.settings, V14D_GAME_DEFAULT_SETTINGS);
-  assert.equal(status.manifestId, null);
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {createHash} from 'node:crypto';
+import * as THREE from 'three';
+import {createV14dGameAppearanceAdapter} from '../src/features/stage/v14dGameAppearanceAdapter.js';
+import {createV14dGameMaterials} from '../src/features/stage/v14dGameMaterials.js';
+import {getStagePresentationConfig} from '../src/features/stage/mmdCompanionRuntime.js';
+import {V14D_GAME_DEFAULT_SETTINGS} from '../src/features/stage/v14dGameAppearanceAssets.js';
+const bytes=new TextEncoder().encode(JSON.stringify({lights:[]}));
+const sha=createHash('sha256').update(bytes).digest('hex');
+const entry={url:'http://local/source',sha256:sha};
+const manifest={available:true,id:'fixture',sourceManifestSha256:sha,model:{url:'/koleda.pmx',relativePath:'koleda.pmx',sha256:sha},textures:[{...entry,key:'texture',kind:'normal'}],ocio:Object.fromEntries(['processor','shader','lut0','lut1'].map(k=>[k,entry])),materialSource:entry,masks:Array.from({length:5},()=>entry),lights:Array.from({length:6},()=>({type:'AREA',shape:'DISK',color:[1,1,1],matrix:[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],size:1,sizeY:1,power:10}))};
+const runtime={renderer:{},v14dGameLights:Array(6).fill({})};
+const fetchImpl=async()=>new Response(bytes);
+test('默认状态和非目标模型拒绝',async()=>{const a=createV14dGameAppearanceAdapter();assert.equal(a.getStatus().realAppearanceAvailable,false);assert.deepEqual(a.getStatus().settings,V14D_GAME_DEFAULT_SETTINGS);assert.equal((await a.install({model:{name:'Other'},modelUrl:'/other.pmx'})).phase,'unsupported');});
+test('资源清单缺少遮罩时不能声明外观就绪',async()=>{const a=createV14dGameAppearanceAdapter({manifest:{...manifest,masks:[]}});const s=await a.install({model:{name:'koleda'},runtime});assert.equal(s.phase,'unavailable');assert.equal(s.realAppearanceAvailable,false);});
+test('材质工厂替换和释放恢复原材质引用',async()=>{const original=[new THREE.MeshToonMaterial()],replacement=[new THREE.MeshPhysicalMaterial()];let disposed=0;const a=createV14dGameAppearanceAdapter({manifest,fetchImpl,createMaterials:async()=>({materials:replacement,dispose(){disposed++;},evidence:()=>({maskCount:5}),draw:fn=>fn()})});const model={name:'koleda',material:original};assert.equal((await a.install({model,runtime})).phase,'ready');assert.equal(model.material,replacement);assert.equal(a.draw(()=>42),42);a.release();assert.equal(model.material,original);assert.equal(disposed,1);assert.equal(a.getStatus().realAppearanceAvailable,false);});
+test('销毁期间迟到材质不能挂回模型',async()=>{let finish,entered;const arrived=new Promise(r=>entered=r);const original=[];let disposed=0;const a=createV14dGameAppearanceAdapter({manifest,fetchImpl,createMaterials:()=>{entered();return new Promise(r=>finish=r);}});const model={name:'koleda',material:original};const pending=a.install({model,runtime});await arrived;a.release();finish({materials:[],dispose(){disposed++;}});await pending;assert.equal(model.material,original);assert.equal(disposed,1);assert.equal(a.getStatus().installed,false);});
+test('源材质哈希不符拒绝，不只检查清单存在',async()=>{const a=createV14dGameAppearanceAdapter({manifest,fetchImpl:async()=>new Response('wrong')});const s=await a.install({model:{name:'koleda'},runtime});assert.equal(s.phase,'unavailable');assert.match(s.reason,/哈希/);});
+test('真实工厂创建物理材质并临时覆盖表情，绘制异常也恢复',async()=>{
+ const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute([0,19,0,1,19,0,0,11,0],3));geometry.setIndex([0,1,2]);geometry.addGroup(0,3,0);
+ const map=new THREE.Texture({width:4,height:4}),original=[new THREE.MeshToonMaterial({name:'HairA',map}),new THREE.MeshToonMaterial({name:'Cth1-Top',map}),new THREE.MeshToonMaterial({name:'Face',map})];
+ const model=new THREE.Mesh(geometry,original),head=new THREE.Bone();head.name='頭';model.add(head);model.skeleton={bones:[head]};model.morphTargetDictionary={'まばたき':0,'口角上げ':1};model.morphTargetInfluences=[.2,.3];
+ const material={tint:[.8,.8,1],roughness:.34,specularLevel:.38,toonMix:.38,ramp:[{position:0,color:[.5,.5,.6]},{position:.4,color:[1,1,1]}],emissionBranch:'ramp'};
+ const source={lights:manifest.lights,materials:{HairA:material,Face:{...material,emissionBranch:'masked-face-color'}},referenceVisiblePolygonCounts:{}};
+ const factory=await createV14dGameMaterials({model,manifest:source,renderer:{capabilities:{getMaxAnisotropy:()=>8},getPixelRatio:()=>1},settings:{...V14D_GAME_DEFAULT_SETTINGS},loadTexture:async()=>new THREE.Texture({width:4,height:4}),maskEntries:manifest.masks,lights:[]});
+ assert.ok(factory.materials.every(m=>m.isMeshPhysicalMaterial));assert.equal(map.colorSpace,THREE.SRGBColorSpace);assert.ok(factory.materials[1].normalMap);assert.equal(factory.evidence().maskCount,5);
+ assert.throws(()=>factory.draw(()=>{assert.deepEqual(model.morphTargetInfluences,[1,.55]);throw Error('draw-failure');}),/draw-failure/);assert.deepEqual(model.morphTargetInfluences,[.2,.3]);factory.draw(()=>assert.deepEqual(model.morphTargetInfluences,[1,.3]),{speaking:true});factory.dispose();assert.equal(map.colorSpace,THREE.NoColorSpace);assert.equal(geometry.getAttribute('gameHairMask'),undefined);
 });
-
-test("v14d-game 明确拒绝非 Koleda 模型，不静默替换", async () => {
-  const adapter = createV14dGameAppearanceAdapter({ manifest: validManifest });
-  const status = await adapter.install({ model: { name: "OtherCharacter" }, modelUrl: "/models/other.pmx" });
-
-  assert.equal(status.phase, "unsupported");
-  assert.equal(status.realAppearanceAvailable, false);
-  assert.match(status.reason, /Koleda|克莱妲/);
-});
-
-test("v14d-game 有效清单可安装材质并在 release 后恢复", async () => {
-  const model = createFixtureModel();
-  const loadedTextures = [];
-  const adapter = createV14dGameAppearanceAdapter({
-    manifest: validManifest,
-    textureLoader: {
-      async loadAsync(url) {
-        const texture = new THREE.Texture();
-        texture.userData = { url };
-        texture.dispose = () => {
-          texture.userData.disposed = true;
-        };
-        loadedTextures.push(texture);
-        return texture;
-      },
-    },
-  });
-  const originalBodyMap = model.bodyMaterial.map;
-  const originalHairVisible = model.hairMaterial.visible;
-  const originalEyesVisible = model.eyesPlusMaterial.visible;
-
-  const status = await adapter.install({
-    model,
-    modelUrl: "http://127.0.0.1/assets/v14d-game/model/GirlsFrontline%20KoledaDefault.pmx",
-  });
-
-  assert.equal(status.phase, "ready");
-  assert.equal(status.realAppearanceAvailable, true);
-  assert.equal(status.installed, true);
-  assert.deepEqual(status.resources.textures, ["body-normal", "hair-specular"]);
-  assert.equal(model.bodyMaterial.normalMap, loadedTextures[0]);
-  assert.equal(model.hairMaterial.userData.v14dGameSpecularTextureKey, "hair-specular");
-  assert.equal(model.eyesPlusMaterial.visible, false);
-  assert.equal(model.cape.visible, true);
-
-  const released = adapter.release();
-  assert.equal(released.phase, "idle");
-  assert.equal(released.installed, false);
-  assert.equal(model.bodyMaterial.map, originalBodyMap);
-  assert.equal(model.hairMaterial.visible, originalHairVisible);
-  assert.equal(model.eyesPlusMaterial.visible, originalEyesVisible);
-  assert.equal(model.cape.visible, false);
-  assert.equal(loadedTextures.every((texture) => texture.userData.disposed === true), true);
-});
-
-test("v14d-game 缺少 OCIO 或资源身份时进入明确 unavailable", async () => {
-  const adapter = createV14dGameAppearanceAdapter({
-    manifest: { ...validManifest, ocio: { ...validManifest.ocio, lut1: null } },
-    textureLoader: { async loadAsync() { return new THREE.Texture(); } },
-  });
-  const status = await adapter.install({
-    model: { name: "KoledaDefault", traverse() {} },
-    modelUrl: "/models/KoledaDefault.pmx",
-  });
-
-  assert.equal(status.phase, "unavailable");
-  assert.equal(status.realAppearanceAvailable, false);
-  assert.match(status.reason, /OCIO|lut1/);
-});
-
-test("v14d-game 使用独立舞台配置，且旧 classic 配置保持不变", () => {
-  const game = getStagePresentationConfig("v14d-game");
-  const classic = getStagePresentationConfig("classic");
-
-  assert.equal(game.appearance.phase, "idle");
-  assert.equal(game.appearance.realAppearanceAvailable, false);
-  assert.equal(game.appearance.label, "V14D 游戏外观未安装");
-  assert.equal(game.background, null);
-  assert.equal(game.outline.enabled, false);
-  assert.equal(game.postfx.enabled, false);
-  assert.notDeepEqual(game, classic);
-});
+test('新模式保留透明背景且不改经典模式配置',()=>{const game=getStagePresentationConfig('v14d-game');assert.equal(game.background,null);assert.equal(game.postfx.enabled,false);assert.notDeepEqual(game,getStagePresentationConfig('classic'));});

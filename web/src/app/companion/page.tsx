@@ -3348,6 +3348,7 @@ export default function CompanionPage() {
           </section>
           <MMDStage
             ref={stageRef}
+            appearanceUserId={session?.userId || ""}
             chrome="bare"
             interaction={interaction}
             speaking={speaking}

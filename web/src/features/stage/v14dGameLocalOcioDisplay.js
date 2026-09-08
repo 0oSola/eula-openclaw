@@ -107,7 +107,7 @@ export async function createV14dGameLocalOcioDisplay({
     "void main(){",
     "vec4 hdr=texture(hdrTexture,vUv);",
     "vec3 straight=hdr.a>0.000001?hdr.rgb/hdr.a:vec3(0.0);",
-    "vec3 shown=displayMode==1 ? ocio_display(vec4(straight*exposureFactor,1.0)).rgb : vec3(0.0);",
+    "vec3 shown=displayMode==1 ? ocio_display(vec4(straight*exposureFactor,1.0)).rgb : sRGBTransferOETF(vec4(AgXToneMapping(straight),1.0)).rgb;",
     "displayColor=vec4(clamp(shown,0.0,1.0)*hdr.a,hdr.a);",
     "}",
   ].join("\n");
@@ -137,7 +137,7 @@ export async function createV14dGameLocalOcioDisplay({
   target.texture.generateMipmaps = false;
   let disposed = false;
 
-  function render(source, sourceCamera, width, height, exposure = -0.4) {
+  function render(source, sourceCamera, width, height, exposure = -0.4, mode = "game/ocio") {
     if (disposed) throw new Error("本机 OCIO 显示器已释放。");
     if (!Number.isFinite(exposure) || !Number.isFinite(2 ** exposure)) throw new Error("显示曝光非法。");
     if (target.width !== width || target.height !== height) target.setSize(width, height);
@@ -146,6 +146,8 @@ export async function createV14dGameLocalOcioDisplay({
     const previousExposure = renderer.toneMappingExposure;
     const previousOutputColorSpace = renderer.outputColorSpace;
     const previousDisplayExposure = uniforms.exposureFactor.value;
+    const previousBuiltinExposure = uniforms.toneMappingExposure.value;
+    const previousMode = uniforms.displayMode.value;
     try {
       renderer.toneMapping = THREE.NoToneMapping;
       renderer.toneMappingExposure = 1;
@@ -155,6 +157,8 @@ export async function createV14dGameLocalOcioDisplay({
       renderer.render(source, sourceCamera);
       uniforms.hdrTexture.value = target.texture;
       uniforms.exposureFactor.value = 2 ** exposure;
+      uniforms.toneMappingExposure.value = 2 ** exposure;
+      uniforms.displayMode.value = mode === "game/ocio" ? 1 : 0;
       renderer.setRenderTarget(previousTarget);
       renderer.render(displayScene, displayCamera);
     } finally {
@@ -163,6 +167,8 @@ export async function createV14dGameLocalOcioDisplay({
       renderer.toneMappingExposure = previousExposure;
       renderer.outputColorSpace = previousOutputColorSpace;
       uniforms.exposureFactor.value = previousDisplayExposure;
+      uniforms.toneMappingExposure.value = previousBuiltinExposure;
+      uniforms.displayMode.value = previousMode;
     }
   }
 

@@ -821,6 +821,18 @@ def _v14d_game_catalog(settings) -> tuple[dict, dict[str, Path]]:
 
     lights, light_errors = _v14d_game_source_lights(source_manifest)
     missing.extend(light_errors)
+    asset_paths["material-source"] = manifest_path
+    masks = []
+    for index, mask in enumerate(source_manifest.get("masks", [])):
+        filename = str(mask.get("file", ""))
+        mask_path = _v14d_game_safe_path(preview_root / "assets", filename)
+        key = f"face-mask-{index}"
+        asset_paths[key] = mask_path
+        if not mask_path.is_file():
+            missing.append(f"脸部遮罩缺失: {key}")
+        masks.append({"url": f"/assets/v14d-game/{key}", "sha256": _v14d_game_sha256(mask_path) if mask_path.is_file() else None})
+    if len(masks) != 5:
+        missing.append("脸部遮罩数量不是5")
 
     payload = {
         "id": "v14d-koleda-game-reference-local",
@@ -854,6 +866,8 @@ def _v14d_game_catalog(settings) -> tuple[dict, dict[str, Path]]:
         },
         "sourceSha256": source_manifest.get("sourceSha256"),
         "sourceManifestSha256": source_manifest_sha256,
+        "materialSource": {"url": "/assets/v14d-game/material-source", "sha256": source_manifest_sha256},
+        "masks": masks,
     }
     return payload, asset_paths
 
@@ -874,7 +888,7 @@ def get_v14d_game_asset(asset_key: str, request: Request):
     if path is None and requested_key.startswith("model/"):
         dependency_relative = requested_key[len("model/") :]
         dependency_parts = Path(dependency_relative.replace("\\", "/")).parts
-        if dependency_parts and dependency_parts[0] in V14D_GAME_MODEL_DEPENDENCY_DIRS:
+        if dependency_parts and dependency_parts[0].casefold() in {name.casefold() for name in V14D_GAME_MODEL_DEPENDENCY_DIRS}:
             dependency_root = Path(settings.mmd_root_dir).resolve() / Path(
                 settings.v14d_game_model_relative_path
             ).parent

@@ -68,4 +68,5 @@ MMD/*
 # Local third-party MMD assets
 MMD/audio/优菈的所有剧情和语音.优菈语音.1077401401.mp4
 .worktrees/
+web/.next-migration-repair/
 MMD/TTS model/

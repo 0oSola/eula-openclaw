@@ -1912,6 +1912,43 @@ export class MMDCompanionRuntime {
     this.cameraSnapshot = cameraSnapshot;
     this.clock = new THREE.Clock();
     this.loader = new MMDLoader();
+    if (renderPipeline === "v14d-game") {
+      const manager = new THREE.LoadingManager();
+      manager.setURLModifier((url) => url.replaceAll(String.fromCharCode(92), "/"));
+      this.v14dAssetWarnings = [];
+      this.v14dTexturesReady = new Promise((resolve) => { manager.onLoad = resolve; });
+      manager.onError = (url) => this.v14dAssetWarnings.push({ url, kind: "load-error" });
+      this.loader = new MMDLoader(manager);
+      this.loader.loadPMX = (url, onLoad, _onProgress, onError) => {
+        manager.itemStart(url);
+        fetch(url, { cache: "no-store" }).then(async (response) => {
+          if (!response.ok) throw new Error("PMX读取失败：" + response.status);
+          const buffer = await response.arrayBuffer();
+          const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", buffer))).map(v => v.toString(16).padStart(2, "0")).join("");
+          if (hash !== this.v14dGameManifest.model.sha256) throw new Error("PMX哈希与清单不符");
+          this.v14dModelSha256 = hash;
+          onLoad(this.loader._getParser().parsePmx(buffer, true));
+        }).catch(error => onError?.(error)).finally(() => manager.itemEnd(url));
+      };
+      const build = this.loader.meshBuilder.build.bind(this.loader.meshBuilder);
+      this.loader.meshBuilder.build = (data, ...args) => {
+        const materials = data.materials.map((m) => {
+          let result = m;
+          const env = data.textures[m.envTextureIndex]?.replaceAll(String.fromCharCode(92), "/");
+          const toon = data.textures[m.toonIndex]?.replaceAll(String.fromCharCode(92), "/");
+          if ((m.envFlag === 1 || m.envFlag === 2) && env?.endsWith("/")) {
+            this.v14dAssetWarnings.push({ material: m.name, optionalEnvironmentMap: env });
+            result = { ...result, envTextureIndex: -1 };
+          }
+          if (m.toonFlag === 0 && toon?.endsWith("/")) {
+            this.v14dAssetWarnings.push({ material: m.name, optionalToonMap: toon });
+            result = { ...result, toonFlag: 1, toonIndex: -1 };
+          }
+          return result;
+        });
+        return build({ ...data, materials }, ...args);
+      };
+    }
     this.loader.crossOrigin = "anonymous";
     this.helper = new MMDAnimationHelper({ afterglow: 1.1 });
     this.hasPhysicsSupport = typeof globalThis.Ammo !== "undefined";
@@ -1997,6 +2034,14 @@ export class MMDCompanionRuntime {
     if (stageHeight <= 0) return null;
 
     const stageWidth = stageElement?.clientWidth || this.container.clientWidth || 0;
+    if (this.renderPipeline === "v14d-game") {
+      const width = Math.max(1, stageWidth), height = Math.max(1, stageHeight);
+      this.container.style.width = width + "px";
+      this.container.style.height = height + "px";
+      this.container.style.minWidth = "0";
+      this.container.style.minHeight = "0";
+      return { width, height };
+    }
     const coverWidth = Math.max(
       stageWidth,
       stageHeight * STAGE_CANVAS_ASPECT_RATIO,
@@ -2233,18 +2278,19 @@ export class MMDCompanionRuntime {
         : Number(source.sizeY);
       const width = Math.max(0.0001, sourceWidth * scaleRatio);
       const height = Math.max(0.0001, sourceHeight * scaleRatio);
-      const intensity = Math.max(0, Number(source.power) || 0) * scaleRatio * scaleRatio;
       const color = Array.isArray(source.color) ? source.color : [1, 1, 1];
-      const light = new THREE.RectAreaLight(new THREE.Color(color[0], color[1], color[2]), intensity, width, height);
+      const light = new THREE.RectAreaLight(new THREE.Color().setRGB(...color), 1, width, height);
+      light.power = Number(source.power) * scaleRatio * scaleRatio;
+      light.name = source.name;
       const matrix = source.matrix;
       const convert = ([x, y, z]) => new THREE.Vector3(x, z, -y);
       const position = convert([matrix[0][3], matrix[1][3], matrix[2][3]]);
       const xAxis = convert([matrix[0][0], matrix[1][0], matrix[2][0]]);
       const yAxis = convert([matrix[0][1], matrix[1][1], matrix[2][1]]);
       const zAxis = convert([matrix[0][2], matrix[1][2], matrix[2][2]]);
-      light.position.copy(position.multiplyScalar(scaleRatio));
+      light.position.copy(position.multiplyScalar(scaleRatio)).add(this.model.position);
       light.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis));
-      light.layers.set(source.backgroundOnly ? 1 : 0);
+      light.layers.set(0);
       light.userData = {
         pipeline: "v14d-game",
         sourceIndex: index,
@@ -2805,7 +2851,7 @@ export class MMDCompanionRuntime {
       const width = size?.width || this.container.clientWidth;
       const height = size?.height || this.container.clientHeight;
       if (width === 0 || height === 0) return;
-      this.camera.aspect = STAGE_CANVAS_ASPECT_RATIO;
+      this.camera.aspect = this.renderPipeline === "v14d-game" ? width / height : STAGE_CANVAS_ASPECT_RATIO;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(width, height);
       this.composer?.setSize?.(width, height);
@@ -2910,6 +2956,7 @@ export class MMDCompanionRuntime {
     const mesh = await new Promise((resolve, reject) => {
       this.loader.load(effectiveModelUrl, resolve, undefined, reject);
     });
+    if (this.renderPipeline === "v14d-game") await this.v14dTexturesReady;
     if (this.destroyed) {
       disposeUnattachedMmdObject(mesh);
       return;
@@ -2923,7 +2970,7 @@ export class MMDCompanionRuntime {
       child.receiveShadow = true;
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       for (const material of materials) {
-        tuneMaterialByPipeline(material, this.toonRampTexture, this.renderPipeline, this.presentation, this.toonSkinRampTexture);
+        if (this.renderPipeline !== "v14d-game") tuneMaterialByPipeline(material, this.toonRampTexture, this.renderPipeline, this.presentation, this.toonSkinRampTexture);
         if (this.isKoledaModel && isKoledaMaskMaterialName(material?.name)) {
           material.visible = false;
           material.transparent = true;
@@ -3882,13 +3929,16 @@ export class MMDCompanionRuntime {
     if (this.renderPipeline === "v14d-game") {
       if (!this.v14dGameLocalOcioDisplay || !this.renderer || !this.scene || !this.camera) return;
       const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-      this.v14dGameLocalOcioDisplay.render(
+      const appearanceSettings = this.appearanceAdapter.getSettings();
+      const draw = () => this.v14dGameLocalOcioDisplay.render(
         this.scene,
         this.camera,
         Math.max(1, Math.round(size.x)),
         Math.max(1, Math.round(size.y)),
-        V14D_GAME_DEFAULT_SETTINGS.exposure,
+        appearanceSettings.exposure,
+        appearanceSettings.display,
       );
+      this.appearanceAdapter.draw(draw, { speaking: this.isSpeaking });
       return;
     }
     if (this.shouldUsePostFX()) {
