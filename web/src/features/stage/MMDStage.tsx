@@ -1,6 +1,8 @@
 "use client";
 
-import { ChangeEvent, PointerEvent, forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { ChangeEvent, PointerEvent, forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { resolveStageAssetUrl } from "./stageAssetUrls.js";
 import { V14dGameControls } from "./V14dGameControls";
 
 import { getModelDisplayLabel } from "@/features/stage/modelCatalog.js";
@@ -73,14 +75,7 @@ export function shouldCaptureStagePointer({
   return enableCharacterClickCapture && button === 0;
 }
 
-function toAbsolute(url: string): string {
-  if (!url) return "";
-  if (/^https?:\/\//i.test(url)) return url;
-  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
-  return `${baseUrl}${url.startsWith("/") ? url : `/${url}`}`;
-}
-
-function absolutizeV14dGameManifest(manifest: any) {
+function absolutizeV14dGameManifest(manifest: any, toAbsolute: (url: string) => string) {
   return {
     ...manifest,
     model: manifest?.model ? { ...manifest.model, url: toAbsolute(manifest.model.url) } : manifest?.model,
@@ -153,6 +148,8 @@ type MMDStageProps = {
   onCharacterClick?: (event: { clientX: number; clientY: number; stageRect: DOMRect }) => void;
   clickRipples?: StageClickRipple[];
   renderPipeline?: RenderPipeline;
+  assetApiBaseUrl?: string;
+  appearanceControlsPortal?: boolean;
   cameraSnapshot?: MmdCameraSnapshot | null;
   chrome?: "panel" | "bare";
   enableCharacterClickCapture?: boolean;
@@ -189,6 +186,8 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   onCharacterClick,
   clickRipples = [],
   renderPipeline = "classic",
+  assetApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000",
+  appearanceControlsPortal = false,
   cameraSnapshot = null,
   chrome = "panel",
   enableCharacterClickCapture = true,
@@ -206,6 +205,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
   v14dSkinVariant = "original",
   rezeTransparentBackground = false,
 }: MMDStageProps, ref) {
+  const toAbsolute = useCallback((url: string) => resolveStageAssetUrl(url, assetApiBaseUrl), [assetApiBaseUrl]);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const statusRef = useRef<HTMLParagraphElement | null>(null);
   const runtimeRef = useRef<any>(null);
@@ -320,7 +320,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
         const rawManifest = await response.json();
         const validation = validateV14dGameManifest(rawManifest);
         if (!validation.ok) throw new Error(validation.reason);
-        v14dGameManifest = absolutizeV14dGameManifest(rawManifest);
+        v14dGameManifest = absolutizeV14dGameManifest(rawManifest, toAbsolute);
         effectiveModelUrl = v14dGameManifest.model.url;
       } else if (!modelUrl) {
         throw new Error("No MMD models found.");
@@ -370,7 +370,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       setAppearanceRuntime(null);
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
-  }, [modelUrl, modelLabel, renderPipeline, selectedModelPath]);
+  }, [modelUrl, modelLabel, renderPipeline, selectedModelPath, toAbsolute]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -416,7 +416,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
       };
     }
     runtime.applyInteraction(interaction);
-  }, [interaction]);
+  }, [interaction, toAbsolute]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -456,7 +456,7 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [interaction, onInteractionComplete]);
+  }, [interaction, onInteractionComplete, toAbsolute]);
 
   function handleModelChange(event: ChangeEvent<HTMLSelectElement>) {
     onModelChange(event.target.value);
@@ -577,12 +577,14 @@ export const MMDStage = forwardRef<MMDStageHandle, MMDStageProps>(function MMDSt
           />
         ) : <div ref={containerRef} className="mio-stage-canvas" />}
         {renderClickRipples()}
-        {renderPipeline === "v14d-game" ? <V14dGameControls runtime={appearanceRuntime} userId={appearanceUserId} modelPath={selectedModelPath} /> : null}
+        {renderPipeline === "v14d-game" ? (appearanceControlsPortal
+          ? createPortal(<V14dGameControls runtime={appearanceRuntime} userId={appearanceUserId} modelPath={selectedModelPath} floating />, document.body)
+          : <V14dGameControls runtime={appearanceRuntime} userId={appearanceUserId} modelPath={selectedModelPath} />) : null}
         <p
           ref={statusRef}
           className={renderPipeline === "v14d-game" ? "mio-stage-status" : "mio-stage-status mio-stage-status--sr-only"}
           aria-live="polite"
-          hidden={renderPipeline !== "v14d-game"}
+          hidden={renderPipeline !== "v14d-game" || (appearanceControlsPortal && Boolean(appearanceRuntime))}
         >
           Initializing stage...
         </p>

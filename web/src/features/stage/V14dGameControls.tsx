@@ -10,9 +10,10 @@ const ranges=[
   ["hairMaskStrength","头发分区上色",0,1,0.05],
 ] as const;
 
-export function V14dGameControls({runtime,userId,modelPath}:{runtime:any;userId:string;modelPath:string}){
+export function V14dGameControls({runtime,userId,modelPath,floating=false}:{runtime:any;userId:string;modelPath:string;floating?:boolean}){
   const [values,setValues]=useState<any>({...V14D_GAME_DEFAULT_SETTINGS});
   const [message,setMessage]=useState("");
+  const [expanded,setExpanded]=useState(false);
   const storageKey=v14dGameSettingsStorageKey(userId,modelPath);
   useEffect(()=>{
     if(!runtime||runtime.destroyed)return;
@@ -26,8 +27,8 @@ export function V14dGameControls({runtime,userId,modelPath}:{runtime:any;userId:
     try{const next=runtime.appearanceAdapter.setSettings(patch);setValues(next);if(userId)localStorage.setItem(storageKey,JSON.stringify(next));setMessage(userId?"已保存在本机，按用户和模型隔离。":"未登录，不保存参数。");}
     catch(error){setMessage(error instanceof Error?error.message:String(error));}
   }
-  return <details data-testid="v14d-game-controls" style={{position:"absolute",right:12,top:12,zIndex:12,width:260,maxWidth:"calc(100% - 24px)",maxHeight:"70%",overflow:"auto",background:"rgba(12,20,36,.94)",color:"#dbeafe",border:"1px solid #54718d",borderRadius:10,padding:12,fontSize:13,pointerEvents:"auto"}} onPointerDown={event=>event.stopPropagation()}>
-    <summary style={{cursor:"pointer"}}>游戏参考 · 外观微调</summary>
+  return <details data-testid="v14d-game-controls" data-pet-interactive={floating || undefined} onToggle={event=>setExpanded(event.currentTarget.open)} style={{position:floating?"fixed":"absolute",left:floating?12:undefined,right:floating?undefined:12,top:12,zIndex:12,width:floating&&!expanded?"auto":260,maxWidth:"calc(100% - 24px)",maxHeight:"70%",overflow:"auto",background:"rgba(12,20,36,.94)",color:"#dbeafe",border:"1px solid #54718d",borderRadius:10,padding:12,fontSize:13,pointerEvents:"auto"}} onPointerDown={event=>event.stopPropagation()}>
+    <summary style={{cursor:"pointer"}}>{floating?"外观微调":"游戏参考 · 外观微调"}</summary>
     <fieldset disabled={!runtime} style={{border:0,padding:0,marginTop:10,display:"grid",gap:10}}>
       <label>显示变换<select aria-label="V14D显示变换" value={values.display} onChange={e=>change({display:e.target.value})} style={{width:"100%"}}><option value="game/ocio">本机 Blender OCIO</option><option value="game/builtin">内置 AgX（对照）</option></select></label>
       {ranges.map(([key,label,min,max,step])=><label key={key}>{label} <output>{Number(values[key]).toFixed(2)}</output><input aria-label={"V14D"+label} type="range" min={min} max={max} step={step} value={values[key]} onChange={e=>change({[key]:Number(e.target.value)})} style={{width:"100%"}}/></label>)}

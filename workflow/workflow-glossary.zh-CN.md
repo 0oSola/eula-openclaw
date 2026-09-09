@@ -1,5 +1,11 @@
 # 工作流术语表
 
+## 桌宠共享舞台接入字段
+
+- assetApiBaseUrl（舞台运行时资源 API 地址）：MMDStage 的可选地址输入，由桌宠主进程运行信息提供；覆盖该舞台的相对资源 URL 解析。未提供时网页仍使用构建配置。禁止把测试端口写死为生产默认地址。适用边界和验证见 docs/architecture/current-system-topology.md 的桌宠本机接入章节。
+- appearanceControlsPortal（外观控件跨容器显示）：桌宠把共享微调面板放到窗口拖动接收层上方；不是第二套渲染器，也不改变材质值。
+- data-pet-interactive（桌宠交互控件标记）：文档级拖动候选捕获遇到该标记时退出，让滑杆和按钮处理输入；不等同于关闭整个桌宠的拖动。
+
 ## V14D 本机资源版本缓存
 
 - v（资源内容版本号）：/assets/v14d-game文件URL携带的SHA256；仅内容匹配时允许长期私有缓存。

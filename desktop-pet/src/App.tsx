@@ -135,6 +135,7 @@ function describeApiRuntimeStatus(status: ApiRuntimeStatus | null): string {
 
 export function App() {
   const [apiBaseUrl, setApiBaseUrl] = useState("http://127.0.0.1:8000");
+  const [apiRuntimeResolved, setApiRuntimeResolved] = useState(false);
   const [apiRuntimeStatus, setApiRuntimeStatus] = useState<ApiRuntimeStatus | null>(null);
   const [apiRuntimeRetrying, setApiRuntimeRetrying] = useState(false);
   const [sharedConfig, setSharedConfig] = useState<CompanionSharedConfig>(DEFAULT_SHARED_CONFIG);
@@ -169,13 +170,18 @@ export function App() {
   const previousInteractionModeRef = useRef<PetInteractionMode>("window-drag");
 
   useEffect(() => {
-    window.desktopPet
-      ?.runtimeInfo()
+    const runtimeInfo = window.desktopPet?.runtimeInfo();
+    if (!runtimeInfo) {
+      setApiRuntimeResolved(true);
+      return;
+    }
+    runtimeInfo
       .then((info) => {
         setApiBaseUrl(info.apiBaseUrl);
         setApiRuntimeStatus(info.apiRuntimeStatus ?? null);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setApiRuntimeResolved(true));
   }, []);
 
   useEffect(() => {
@@ -342,10 +348,14 @@ export function App() {
   );
 
   const loadPetState = useCallback((options: { syncFeedback?: boolean } = {}) => {
+    if (!apiRuntimeResolved) return () => {};
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    Promise.all([api.getSharedConfig(), api.listModels(), api.listVmdAssets()])
+    api.getSharedConfig().then(async (config) => {
+      const [modelRows, motionRows] = await Promise.all([api.listModelsForConfig(config), api.listVmdAssets()]);
+      return [config, modelRows, motionRows] as const;
+    })
       .then(([nextSharedConfig, nextModels, nextVmdAssets]) => {
         if (cancelled) return;
         setSharedConfig(nextSharedConfig);
@@ -377,7 +387,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [api]);
+  }, [api, apiRuntimeResolved]);
 
   useEffect(() => loadPetState(), [loadPetState]);
 
@@ -738,6 +748,7 @@ export function App() {
   useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
       if (event.target instanceof Element && event.target.closest(".pet-panel, .pet-status-action")) return;
+      if (event.target instanceof Element && event.target.closest("[data-pet-interactive]")) return;
       if (event.target instanceof Element && event.target.closest(".pet-camera-save-exit")) return;
       if (event.target instanceof Element && event.target.closest(".pet-status-main")) return;
       if (event.button === 0) {
@@ -894,6 +905,9 @@ export function App() {
             modelUrl={api.toAbsoluteUrl(selectedModel.url)}
             modelLabel={getModelLabel(selectedModel)}
             renderPipeline={renderPipeline}
+            assetApiBaseUrl={apiBaseUrl}
+            appearanceUserId={DEFAULT_USER_ID}
+            appearanceControlsPortal
             rezeBackgroundEffect={rezeStageDocument.backgroundEffect}
             rezeGrade={rezeStageDocument.grade}
             rezeGradeIntensity={rezeStageDocument.gradeIntensity}

@@ -180,6 +180,22 @@ body {
   border: 0;
 }
 
+/* 外观未就绪时保留可见错误；不能被全高画布挤到窗口外。 */
+.pet-stage .mio-stage-status:not([hidden]) {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 80px;
+  margin: 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(12, 20, 36, 0.94);
+  color: #dbeafe;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
 .pet-status {
   position: fixed;
   z-index: 11;

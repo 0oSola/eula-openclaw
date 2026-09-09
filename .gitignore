@@ -70,3 +70,11 @@ MMD/audio/优菈的所有剧情和语音.优菈语音.1077401401.mp4
 .worktrees/
 web/.next-migration-repair/
 MMD/TTS model/
+
+# 本地发布包与发布目录中的语音视频，不纳入版本控制
+/release/mmd-portable-0.1.0-20260902-193631-682.zip
+/release/**/MMD/audio/优菈的所有剧情和语音.优菈语音.1077401401.mp4
+
+# Blender 本地实验工程及自动保存备份
+/experiments/**/*.blend
+/experiments/**/*.blend[0-9]*
