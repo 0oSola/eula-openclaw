@@ -253,12 +253,13 @@ export type MmdMotionAsset = {
   url: string;
 };
 
-export type RenderPipeline = "classic" | "hero-shot" | "genshin" | "mio-reference" | "reze-npr";
+export type RenderPipeline = "classic" | "hero-shot" | "genshin" | "mio-reference" | "reze-npr" | "reze-design" | "k3" | "reze-k3" | "v14d-game";
 
 export type CompanionSharedConfig = {
   user_id: string;
   selected_model_path: string | null;
   render_pipeline: RenderPipeline;
+  reze_stage_document: Record<string, unknown> | null;
   updated_at: string | null;
 };
 

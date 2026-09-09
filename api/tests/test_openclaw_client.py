@@ -290,6 +290,98 @@ def test_openclaw_codex_review_uses_review_agent_channel_and_session_key():
     assert '"management": {"importance": string | null' in request["body"]["input"]
 
 
+def test_openclaw_codex_knowledge_uses_skill_contract_agent_channel_and_session_key():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(
+            {
+                "path": request.url.path,
+                "headers": dict(request.headers),
+                "body": json.loads(request.content.decode("utf-8")),
+                "timeout": request.extensions.get("timeout"),
+            }
+        )
+        return httpx.Response(status_code=200, json={"output_text": '{"schema_version":1}'})
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = OpenClawClient(
+                base_url="http://openclaw.local",
+                token="secret-token",
+                model="openclaw",
+                agent_id="main",
+                message_channel="feishu",
+                timeout_seconds=15,
+                http_client=http_client,
+            )
+            return await client.generate_codex_knowledge(
+                user_id="admin-1",
+                session_key="codex-knowledge:codex:knowledge-session",
+                evidence_pack={"kind": "codex_knowledge_evidence_pack", "evidence": []},
+                skill_instructions="Return no_wiki or publishable Wiki candidates with code references.",
+                prompt_version="codex-knowledge-wiki-v2",
+                agent_id="codex-manager",
+                channel="codex-pet",
+                timeout_seconds=300,
+            )
+
+    result = asyncio.run(run_case())
+
+    assert result == '{"schema_version":1}'
+    assert len(calls) == 1
+    request = calls[0]
+    assert request["path"].endswith("/v1/responses")
+    assert request["headers"]["authorization"] == "Bearer secret-token"
+    assert request["headers"]["x-openclaw-agent-id"] == "codex-manager"
+    assert request["headers"]["x-openclaw-message-channel"] == "codex-pet"
+    assert request["headers"]["x-openclaw-session-key"] == "codex-knowledge:codex:knowledge-session"
+    assert request["body"]["model"] == "openclaw"
+    assert request["body"]["stream"] is False
+    assert request["body"]["user"] == "admin-1"
+    assert request["timeout"]["read"] == 300
+    assert "codex-session-knowledge-extraction skill" in request["body"]["input"]
+    assert "codex_knowledge_evidence_pack" in request["body"]["input"]
+    assert "Return no_wiki or publishable Wiki candidates with code references." in request["body"]["input"]
+    assert "codex-knowledge-wiki-v2" in request["body"]["input"]
+
+
+def test_openclaw_codex_knowledge_fallback_contract_uses_domain_knowledge_v2_schema():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode("utf-8"))
+        return httpx.Response(status_code=200, json={"output_text": '{"schema_version":1}'})
+
+    async def run_case():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            client = OpenClawClient(
+                base_url="http://openclaw.local",
+                token="",
+                model="openclaw",
+                timeout_seconds=15,
+                http_client=http_client,
+            )
+            await client.generate_codex_knowledge(
+                user_id="admin-1",
+                session_key="codex-knowledge:test",
+                evidence_pack={"kind": "codex_knowledge_evidence_pack"},
+                skill_instructions="",
+                prompt_version="codex-domain-knowledge-v3",
+                agent_id="codex-manager",
+                channel="codex-pet",
+            )
+
+    asyncio.run(run_case())
+
+    prompt = captured["body"]["input"]
+    assert "disposition, assessment, candidates, and rejected_items" in prompt
+    assert "Domain Knowledge v2" in prompt
+    assert "Return no_wiki" in prompt
+
+
 def test_openclaw_generates_speech_from_audio_speech_endpoint():
     calls = []
 

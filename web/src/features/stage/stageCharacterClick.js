@@ -3,6 +3,7 @@ import {
   CLICK_REACTION_VMD_CATEGORIES,
   filterVmdAssetsByCategories,
   getVmdAssetCategory,
+  isEmptyVmdAsset,
   isVmdAssetInCategory,
   resolveVmdPlaybackRate,
 } from "../mapping/vmdPreview.js";
@@ -25,12 +26,12 @@ function pickRandomItem(items, randomValue = Math.random()) {
 
 /** @param {any} asset */
 function isPlayableClickAsset(asset) {
-  return Boolean(asset?.url) && asset?.motion_profile?.companion_safe !== false;
+  return Boolean(asset?.url) && !isEmptyVmdAsset(asset) && asset?.motion_profile?.companion_safe !== false;
 }
 
 /** @param {any} asset */
 function hasPlayableClickVmdUrl(asset) {
-  return Boolean(asset?.url);
+  return Boolean(asset?.url) && !isEmptyVmdAsset(asset);
 }
 
 /** @param {any} asset */

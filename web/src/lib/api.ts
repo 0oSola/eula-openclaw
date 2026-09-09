@@ -60,9 +60,9 @@ function makeUrl(path: string): string {
 
 async function requestJSON<T>(
   path: string,
-  init: RequestInit & { userId?: string; traceId?: string } = {},
+  init: RequestInit & { userId?: string; traceId?: string; directApi?: boolean } = {},
 ): Promise<T> {
-  const { userId, traceId, headers, ...rest } = init;
+  const { userId, traceId, directApi = false, headers, ...rest } = init;
   const resolvedHeaders: Record<string, string> = {
     "Content-Type": "application/json",
     ...(headers as Record<string, string>),
@@ -72,7 +72,8 @@ async function requestJSON<T>(
     const traceHeaders = buildTraceHeaders(traceId || "", userId || "");
     Object.assign(resolvedHeaders, traceHeaders);
   }
-  const url = makeUrl(path);
+  const baseUrl = resolveRuntimeApiBaseUrl().replace(/\/$/, "");
+  const url = directApi ? `${baseUrl}${path.startsWith("/") ? path : `/${path}`}` : makeUrl(path);
   let response: Response;
   try {
     response = await fetch(url, {
@@ -280,12 +281,13 @@ export async function getLatestMotionContextExport(
 export async function getCompanionSharedConfig(userId: string): Promise<CompanionSharedConfig> {
   return requestJSON<CompanionSharedConfig>("/desktop-pet/shared-config", {
     headers: buildTraceHeaders("", userId),
+    directApi: true,
   });
 }
 
 export async function putCompanionSharedConfig(
   userId: string,
-  payload: { selected_model_path: string | null; render_pipeline: RenderPipeline },
+  payload: { selected_model_path: string | null; render_pipeline: RenderPipeline; reze_stage_document?: Record<string, unknown> | null },
   init: { signal?: AbortSignal } = {},
 ): Promise<CompanionSharedConfig> {
   return requestJSON<CompanionSharedConfig>("/desktop-pet/shared-config", {
@@ -293,6 +295,7 @@ export async function putCompanionSharedConfig(
     headers: buildTraceHeaders("", userId),
     body: JSON.stringify(payload),
     signal: init.signal,
+    directApi: true,
   });
 }
 
@@ -422,6 +425,20 @@ export async function listMmdModels(): Promise<MmdModelAsset[]> {
     method: "GET",
   });
   return payload.items || [];
+}
+
+export async function getV14dGameManifest(): Promise<{
+  available?: boolean;
+  reason?: string;
+  model?: {
+    url?: string;
+    relativePath?: string;
+    sha256?: string | null;
+    sizeBytes?: number;
+  };
+  [key: string]: unknown;
+}> {
+  return requestJSON("/assets/v14d-game/manifest", { method: "GET" });
 }
 
 export async function listMmdMotions(): Promise<MmdMotionAsset[]> {

@@ -12,11 +12,11 @@ function backendUrl(pathParts: string[], search: string): string {
 }
 
 function forwardHeaders(request: NextRequest): Headers {
-  const headers = new Headers(request.headers);
-  headers.delete("host");
-  headers.delete("connection");
-  headers.delete("content-length");
-  headers.delete("accept-encoding");
+  const headers = new Headers();
+  for (const name of ["accept", "authorization", "content-type", "range", "x-trace-id", "x-user-id"]) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
   return headers;
 }
 
@@ -29,8 +29,15 @@ async function proxyBackendRequest(request: NextRequest, context: { params: Prom
     cache: "no-store",
   };
   if (request.method !== "GET" && request.method !== "HEAD") {
-    init.body = request.body;
-    init.duplex = "half";
+    // Companion/Pet 配置是小型 JSON。Next 的 Request.body 流在 Windows Node
+    // 开发代理中偶发无法结束，导致 PUT 一直处于 pending；JSON 改为缓冲后再转发。
+    // 文件上传仍保留流式转发，避免把大型 VMD/贴图全部放入内存。
+    if ((request.headers.get("content-type") || "").toLowerCase().includes("application/json")) {
+      init.body = await request.arrayBuffer();
+    } else {
+      init.body = request.body;
+      init.duplex = "half";
+    }
   }
 
   try {

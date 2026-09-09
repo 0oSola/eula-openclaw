@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { getModelDisplayLabel, pickInitialModelSelection } from "../src/features/stage/modelCatalog.js";
+import { getModelDisplayLabel, pickInitialModelSelection, pickRememberedModelSelection } from "../src/features/stage/modelCatalog.js";
 
 test("pickInitialModelSelection prefers the requested relative path", () => {
   const models = [
@@ -53,6 +53,30 @@ test("pickInitialModelSelection falls back to the first model when preferred pat
 
 test("pickInitialModelSelection returns null for an empty catalog", () => {
   assert.equal(pickInitialModelSelection([], "Nemesis/GirlsFrontline NemesisGnosisDefault.pmx"), null);
+});
+
+test("pickRememberedModelSelection restores the last selected model when it still exists", () => {
+  const models = [
+    { relative_path: "优菈/优菈.pmx" },
+    { relative_path: "克莱妲/GirlsFrontline KoledaDefault.pmx" },
+  ];
+
+  assert.equal(
+    pickRememberedModelSelection(models, "克莱妲/GirlsFrontline KoledaDefault.pmx", "优菈/优菈.pmx")?.relative_path,
+    "克莱妲/GirlsFrontline KoledaDefault.pmx",
+  );
+});
+
+test("pickRememberedModelSelection falls back safely when the remembered model was removed", () => {
+  const models = [
+    { relative_path: "优菈/优菈.pmx" },
+    { relative_path: "克莱妲/GirlsFrontline KoledaDefault.pmx" },
+  ];
+
+  assert.equal(
+    pickRememberedModelSelection(models, "已删除/旧模型.pmx", "优菈/优菈.pmx")?.relative_path,
+    "优菈/优菈.pmx",
+  );
 });
 
 test("getModelDisplayLabel falls back to the parent folder when label is missing", () => {
